@@ -41,6 +41,8 @@ def _snapshot(fixture, *, migrated: bool, dirty: bool = False):
         },
         values=values,
         foreign_keys=fixture.BASE_FOREIGN_KEYS | {fixture.MANUAL_FOREIGN_KEY},
+        api_keys_type="jsonb" if migrated else "text",
+        api_keys_values=(fixture.LEGACY_API_KEYS_JSON,),
     )
 
 
@@ -141,6 +143,8 @@ def test_verifier_fails_closed_on_partial_or_laundered_outcome(damage: str) -> N
         column_types=column_types,
         values=values,
         foreign_keys=frozenset(foreign_keys),
+        api_keys_type=original.api_keys_type,
+        api_keys_values=original.api_keys_values,
     )
     with pytest.raises(AssertionError):
         fixture.assert_snapshot(damaged, "valid", "migrated")

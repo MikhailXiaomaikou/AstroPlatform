@@ -65,6 +65,26 @@ CITATION_VALIDATOR_HARDBLOCK = os.getenv("PROVENANCE_VALIDATOR_HARDBLOCK", "true
 _NUM = r"([-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?)"
 _UNIT = r"(?:\s*(?:±|\+/-)\s*[-+]?(?:\d+(?:\.\d+)?|\.\d+))?"  # optional ± err
 
+# B3: a refusal or rebuttal can still launder a number by repeating a fake
+# earlier-turn / pasted transcript value as a bare ``NUM ± NUM`` pair.  The
+# ordinary value_with_error rule deliberately requires a physical unit, so it
+# cannot see that shape.  Keep this rule context-bound: bare uncertainty pairs
+# are treated as claims only when the *same sentence* identifies an untrusted
+# text source.  The validator below makes these labels unconditionally
+# uncited, even if an unrelated current tool happens to return the same floats.
+_UNTRUSTED_CONTEXT_RE = re.compile(
+    r"\b(?:earlier|previous(?:ly)?|pasted|quoted|transcript|"
+    r"user(?:[\s\-_‑–—]+)(?:supplied|provided))\b",
+    re.I,
+)
+_UNTRUSTED_CONTEXT_VALUE_WITH_ERROR_RE = re.compile(
+    rf"{_NUM}\s*(?:±|\+\s*/\s*-|\+\s*-)\s*"
+    rf"([-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?)",
+    re.I,
+)
+_SENTENCE_BREAK_RE = re.compile(r'(?:\n+|[.!?](?:["\')\]]+)?\s+)')
+_UNTRUSTED_CONTEXT_LABEL = "untrusted_context_value_with_error"
+
 _PATTERNS: list[tuple[str, re.Pattern]] = [
     # Cosmology results are often rendered as Markdown tables.  A cell
     # separator may sit between the parameter (and its unit) and the numeric
@@ -458,8 +478,8 @@ class ValidationResult:
             if self.strict_mode else ""
         )
         return (
-            "The following numeric claims were NOT found in any tool_result "
-            "this turn and must be removed or replaced with "
+            "The following numeric claims are NOT supported by admissible "
+            "current-turn tool evidence and must be removed or replaced with "
             "'not determined by my tools':\n" + "\n".join(lines)
             + "\n\n" + universe_note + strict_note
         )
@@ -588,14 +608,111 @@ def _strip_thousands_separators(text: str) -> str:
 # already handled by `_NUM` and is left untouched.
 _SUPERSCRIPT_DIGITS = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻", "0123456789+-")
 _SCI_SUPERSCRIPT = re.compile(r"10\s*([⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]+)")
-# mantissa × 10^exp → mantissa e exp.  Product sign: × / x / X / · / ∙ / ⋅ / *.
-# Exponent introduced by ^ or **.  The mantissa must be a number, so prose
-# like "box 10^3" (x not preceded by a digit) never matches.
-_SCI_MANTISSA_POWER = re.compile(
-    r"([-+]?\d+(?:\.\d+)?)\s*[×✕⨯xX·∙⋅*]\s*10\s*(?:\^|\*\*)\s*([-+]?\d+)"
-)
+_SCI_PRODUCT_SIGNS = frozenset("×✕⨯xX·∙⋅*")
 # bare 10^exp with an implicit mantissa of 1 ("~10^8 M_sun")
 _SCI_BARE_POWER = re.compile(r"(?<![\d.eE])10\s*(?:\^|\*\*)\s*([-+]?\d+)")
+
+
+def _match_sci_mantissa_power(
+    text: str,
+    start: int,
+) -> tuple[int, str, str] | None:
+    """Parse ``mantissa × 10^exponent`` at ``start`` without backtracking.
+
+    This deliberately mirrors the former regex grammar while scanning each
+    component once.  The left boundary prevents a match from starting inside
+    a longer decimal, just like the old negative lookbehind.
+    """
+    size = len(text)
+    if start >= size or (
+        start > 0
+        and (text[start - 1].isdecimal() or text[start - 1] == ".")
+    ):
+        return None
+
+    index = start
+    if text[index] in "+-":
+        index += 1
+    integer_start = index
+    while index < size and text[index].isdecimal():
+        index += 1
+    if index == integer_start:
+        return None
+
+    if index < size and text[index] == ".":
+        fraction_start = index + 1
+        fraction_end = fraction_start
+        while fraction_end < size and text[fraction_end].isdecimal():
+            fraction_end += 1
+        if fraction_end > fraction_start:
+            index = fraction_end
+    mantissa_end = index
+
+    while index < size and text[index].isspace():
+        index += 1
+    if index >= size or text[index] not in _SCI_PRODUCT_SIGNS:
+        return None
+    index += 1
+
+    while index < size and text[index].isspace():
+        index += 1
+    if not text.startswith("10", index):
+        return None
+    index += 2
+
+    while index < size and text[index].isspace():
+        index += 1
+    if index < size and text[index] == "^":
+        index += 1
+    elif text.startswith("**", index):
+        index += 2
+    else:
+        return None
+
+    while index < size and text[index].isspace():
+        index += 1
+    exponent_start = index
+    if index < size and text[index] in "+-":
+        index += 1
+    exponent_digits = index
+    while index < size and text[index].isdecimal():
+        index += 1
+    if index == exponent_digits:
+        return None
+
+    return index, text[start:mantissa_end], text[exponent_start:index]
+
+
+def _replace_sci_mantissa_power_with_map(
+    text: str,
+    bmap: list[int] | None = None,
+) -> tuple[str, list[int]]:
+    """Normalize mantissa powers in one pass while preserving source offsets."""
+    if bmap is not None and len(bmap) != len(text) + 1:
+        raise ValueError("boundary map length must equal len(text) + 1")
+
+    out_chars: list[str] = []
+    out_map: list[int] = []
+    index = 0
+    while index < len(text):
+        parsed = _match_sci_mantissa_power(text, index)
+        if parsed is None:
+            out_chars.append(text[index])
+            if bmap is not None:
+                out_map.append(bmap[index])
+            index += 1
+            continue
+
+        end, mantissa, exponent = parsed
+        replacement = f"{mantissa}e{exponent}"
+        out_chars.append(replacement)
+        if bmap is not None:
+            out_map.extend([bmap[index]] * len(replacement))
+        index = end
+
+    if bmap is not None:
+        out_map.append(bmap[len(text)])
+    return "".join(out_chars), out_map
 
 
 def _normalize_sci_notation(text: str) -> str:
@@ -609,8 +726,9 @@ def _normalize_sci_notation(text: str) -> str:
     text = _SCI_SUPERSCRIPT.sub(
         lambda m: "10^" + m.group(1).translate(_SUPERSCRIPT_DIGITS), text
     )
-    # 2) mantissa × 10^exp → mantissa e exp
-    text = _SCI_MANTISSA_POWER.sub(r"\1e\2", text)
+    # 2) mantissa × 10^exp → mantissa e exp.  A single-pass parser avoids
+    # polynomial regex backtracking on long user-provided digit runs.
+    text, _ = _replace_sci_mantissa_power_with_map(text)
     # 3) leftover bare 10^exp → 1e exp
     text = _SCI_BARE_POWER.sub(r"1e\1", text)
     return text
@@ -690,9 +808,7 @@ def _transform_for_claims(text: str) -> tuple[str, list[int]]:
         text, bmap, _SCI_SUPERSCRIPT,
         lambda m: "10^" + m.group(1).translate(_SUPERSCRIPT_DIGITS),
     )
-    text, bmap = _apply_regex_with_map(
-        text, bmap, _SCI_MANTISSA_POWER, lambda m: f"{m.group(1)}e{m.group(2)}"
-    )
+    text, bmap = _replace_sci_mantissa_power_with_map(text, bmap)
     text, bmap = _apply_regex_with_map(
         text, bmap, _SCI_BARE_POWER, lambda m: f"1e{m.group(1)}"
     )
@@ -720,6 +836,22 @@ def _strip_markdown_code_with_map(text: str) -> tuple[str, list[int]]:
         text, bmap, re.compile(r"`[^`\n]*`"), lambda m: " "
     )
     return text, bmap
+
+
+def _sentence_context_for_span(text: str, start: int, end: int) -> str:
+    """Return the sentence-like region containing ``[start, end)``.
+
+    Sentence breaks require terminal punctuation followed by whitespace (or a
+    newline), so decimal points inside the uncertainty pair are not mistaken
+    for boundaries.  This is intentionally local: an untrusted marker in a
+    neighbouring sentence must not taint a current-tool result.
+    """
+    context_start = 0
+    for boundary in _SENTENCE_BREAK_RE.finditer(text, 0, start):
+        context_start = boundary.end()
+    next_boundary = _SENTENCE_BREAK_RE.search(text, end)
+    context_end = next_boundary.start() if next_boundary else len(text)
+    return text[context_start:context_end]
 
 
 def extract_claims(text: str) -> list[Claim]:
@@ -782,6 +914,28 @@ def extract_claims(text: str) -> list[Claim]:
                     start=bmap[span[0]],
                     end=bmap[span[1]],
                 ))
+
+    # B3: identify both halves of a bare uncertainty pair whose sentence says
+    # the value came from untrusted prose (earlier/previous/pasted/quoted/etc.).
+    # Append these even when a generic rule already saw the same span; the
+    # de-duplication priority below deliberately keeps the tainted label.
+    for match in _UNTRUSTED_CONTEXT_VALUE_WITH_ERROR_RE.finditer(text):
+        if not _UNTRUSTED_CONTEXT_RE.search(
+            _sentence_context_for_span(text, match.start(), match.end())
+        ):
+            continue
+        span = match.span()
+        for grp_idx in (1, 2):
+            value = float(match.group(grp_idx))
+            if not math.isfinite(value):
+                continue
+            claims.append(Claim(
+                label=f"{_UNTRUSTED_CONTEXT_LABEL}.g{grp_idx}",
+                raw=match.group(0).strip(),
+                value=value,
+                start=bmap[span[0]],
+                end=bmap[span[1]],
+            ))
     for match in _SPELLED_NUMBER_PATTERN.finditer(text):
         value = _spelled_number_to_float(match.group(1))
         if value is None or not math.isfinite(value):
@@ -799,12 +953,31 @@ def extract_claims(text: str) -> list[Claim]:
     # mas"); keep only the one with the wider span (= more context).
     if len(claims) <= 1:
         return claims
-    # Sort by span length descending so the widest-context claim wins.
-    claims_sorted = sorted(claims, key=lambda c: -(c.end - c.start))
+    # Tainted-context labels take priority over ordinary matches even when an
+    # ordinary unit-bearing pattern spans more text.  Otherwise a pasted
+    # ``71.43 ± 0.31 km/s`` could lose its fail-closed label during de-dup.
+    claims_sorted = sorted(
+        claims,
+        key=lambda c: (
+            not c.label.startswith(f"{_UNTRUSTED_CONTEXT_LABEL}."),
+            -(c.end - c.start),
+        ),
+    )
     kept: list[Claim] = []
     for c in claims_sorted:
         redundant = False
         for k in kept:
+            # Preserve both halves when central value and uncertainty happen
+            # to be numerically equal (``1 ± 1``): g1 and g2 are independent
+            # claims even though their value/span de-dup keys coincide.
+            if (
+                c.label.startswith(f"{_UNTRUSTED_CONTEXT_LABEL}.")
+                and k.label.startswith(f"{_UNTRUSTED_CONTEXT_LABEL}.")
+                and c.label != k.label
+                and c.start == k.start
+                and c.end == k.end
+            ):
+                continue
             # overlap + same value (<1e-9 absolute diff) → dedup
             if abs(c.value - k.value) < 1e-9 and not (c.end <= k.start or c.start >= k.end):
                 redundant = True
@@ -1502,6 +1675,13 @@ def validate_claims(
 
     uncited: list[Claim] = []
     for c in claims:
+        # B3: provenance is contextual, not merely numeric.  A number quoted
+        # from an earlier/previous/pasted/user-supplied transcript cannot be
+        # grounded by a coincidentally equal float in this turn's global pool.
+        # It must be omitted and, if needed, obtained from a fresh tool result.
+        if c.label.startswith(f"{_UNTRUSTED_CONTEXT_LABEL}."):
+            uncited.append(c)
+            continue
         param = _claim_cosmology_param(c)
         if param is not None:
             param_values = labeled.get(param, set())
@@ -1980,7 +2160,7 @@ _FULL_EXTERNAL_LIKELIHOOD_NONCLAIM_RE = re.compile(
 # before the bypass detector fires. Prevents false positives in other workflows.
 _LFR_CONTEXT_RE = re.compile(
     r"(?:"
-    r"\bL[' ]?\s*\[?\s*CII\s*\]?"               # L'[CII], L'CII, L [CII]
+    r"\bL'?\s*(?:\[\s*)?CII\s*\]?"               # L'[CII], L'CII, L [CII]
     r"|\bLFR\b"
     r"|luminosity[\s-]+FWHM"
     r"|L[- ]FWHM\s+relation"
@@ -1988,7 +2168,7 @@ _LFR_CONTEXT_RE = re.compile(
     r"|line[\s-]+(?:width|FWHM)[\s-]+(?:relation|fit)"
     r"|\[CII\][^.\n]{0,80}(?:fit|relation|regression)"
     r"|(?:fit|regression)[^.\n]{0,80}\[CII\]"
-    r"|\bL'\s*-?\s*FWHM"
+    r"|\bL'\s*(?:-\s*)?FWHM"
     r"|brightness[\s-]+temperature"
     r"|Solomon[\s-]?(?:1992|92)"
     r"|Carilli\s*(?:&|and)\s*Walter"
@@ -3378,9 +3558,12 @@ def build_regeneration_prompt(result: ValidationResult) -> str:
         "Rewrite your previous reply to:\n"
         "1. Remove every un-cited number listed above, OR replace it with "
         "the literal phrase 'not determined by my tools'.\n"
-        "2. Keep all correctly-cited numbers.\n"
-        "3. Do NOT call any tools again; just rewrite the prose.\n"
-        "4. Do NOT invent substitute numbers.\n"
+        "2. Never repeat a number from earlier, previous, pasted, quoted, "
+        "transcript, or user-supplied context, even while disclaiming it; "
+        "refer to it only as 'the unverified pasted value'.\n"
+        "3. Keep all correctly-cited current-turn numbers.\n"
+        "4. Do NOT call any tools again; just rewrite the prose.\n"
+        "5. Do NOT invent substitute numbers.\n"
         "Respond with only the corrected reply."
     )
 

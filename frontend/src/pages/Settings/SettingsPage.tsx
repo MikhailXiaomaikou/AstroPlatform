@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import {
   getOperationLog,
   clearOperationLog,
-  getStoredApiKeys,
-  writeStoredApiKeys,
+  getApiKeys,
+  saveApiKey,
+  deleteApiKey,
   getStoredAiProvider,
   getPreferredAiModelProfile,
   writeStoredAiProvider,
@@ -11,8 +12,6 @@ import {
   AI_MODEL_OPTIONS,
   DEFAULT_AI_PROVIDER,
   DEFAULT_AI_MODEL_BY_PROVIDER,
-  getApiKeysPersist,
-  setApiKeysPersist,
 } from "../../api/client";
 import type { ProviderMeta } from "../../api/client";
 
@@ -33,17 +32,6 @@ const CHAT_PROVIDERS: readonly string[] = (
     : ["anthropic", "openai", "deepseek"]
 );
 
-// M9: delegate to the sessionStorage-first helpers in client.ts so that keys
-// don't silently leak across browser restarts.  A "Remember this browser"
-// toggle below flips the astro_api_keys_persist flag to opt into localStorage.
-function getStoredKeys(): Record<string, string> {
-  return getStoredApiKeys();
-}
-
-function saveStoredKeys(keys: Record<string, string>) {
-  writeStoredApiKeys(keys);
-}
-
 function getStoredPreferredProvider(): string {
   return getStoredAiProvider() || DEFAULT_AI_PROVIDER;
 }
@@ -53,7 +41,10 @@ function getDefaultModel(provider: string): string {
 }
 
 export default function SettingsPage() {
-  const [keys, setKeys] = useState<Record<string, string>>(getStoredKeys);
+  // Values are masked server responses, never raw API keys.
+  const [keys, setKeys] = useState<Record<string, string>>({});
+  const [keysLoading, setKeysLoading] = useState(true);
+  const [keyMutationPending, setKeyMutationPending] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState(DEFAULT_AI_PROVIDER);
   const [preferredProvider, setPreferredProvider] = useState(getStoredPreferredProvider);
   const [preferredModel, setPreferredModel] = useState(() => (
@@ -62,16 +53,25 @@ export default function SettingsPage() {
   ));
   const [keyInput, setKeyInput] = useState("");
   const [message, setMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
-  const [persist, setPersist] = useState<boolean>(() => getApiKeysPersist());
-
-  const handlePersistToggle = (next: boolean) => {
-    setPersist(next);
-    setApiKeysPersist(next);
-  };
 
   useEffect(() => {
-    saveStoredKeys(keys);
-  }, [keys]);
+    let cancelled = false;
+    void getApiKeys()
+      .then((response) => {
+        if (cancelled) return;
+        setKeys(Object.fromEntries(
+          response.keys.map((item) => [item.provider, item.masked_key]),
+        ));
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setMessage({ type: "err", text: apiErrorMessage(error, "Could not load saved API keys.") });
+      })
+      .finally(() => {
+        if (!cancelled) setKeysLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   // PART Y Q3: persist provider on change. Resetting model to a valid
   // option for the new provider used to live here (set-state-in-effect
@@ -92,34 +92,46 @@ export default function SettingsPage() {
     }
   };
 
-  function handleSave(e: React.FormEvent) {
+  async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     const key = keyInput.trim();
     if (!key) return;
-    const next = { ...keys, [selectedProvider]: key };
-    setKeys(next);
-    if (CHAT_PROVIDERS.includes(selectedProvider as typeof CHAT_PROVIDERS[number])) {
-      setPreferredProvider(selectedProvider);
-      setPreferredModel(getPreferredAiModelProfile(selectedProvider) || getDefaultModel(selectedProvider));
+    setKeyMutationPending(true);
+    setMessage(null);
+    try {
+      const saved = await saveApiKey(selectedProvider, key);
+      setKeys((current) => ({ ...current, [selectedProvider]: saved.masked_key }));
+      if (CHAT_PROVIDERS.includes(selectedProvider as typeof CHAT_PROVIDERS[number])) {
+        setPreferredProvider(selectedProvider);
+        setPreferredModel(getPreferredAiModelProfile(selectedProvider) || getDefaultModel(selectedProvider));
+      }
+      setKeyInput("");
+      setMessage({ type: "ok", text: `${PROVIDERS[selectedProvider]?.name || selectedProvider} key saved securely.` });
+    } catch (error: unknown) {
+      setMessage({ type: "err", text: apiErrorMessage(error, "Could not save the API key.") });
+    } finally {
+      setKeyMutationPending(false);
     }
-    setKeyInput("");
-    setMessage({ type: "ok", text: `${PROVIDERS[selectedProvider]?.name || selectedProvider} key saved.` });
   }
 
-  function handleDelete(provider: string) {
-    const next = { ...keys };
-    delete next[provider];
-    setKeys(next);
-    if (preferredProvider === provider) {
-      const fallback = CHAT_PROVIDERS.find((candidate) => Boolean(next[candidate])) || DEFAULT_AI_PROVIDER;
-      selectProvider(fallback);
+  async function handleDelete(provider: string) {
+    setKeyMutationPending(true);
+    setMessage(null);
+    try {
+      await deleteApiKey(provider);
+      const next = { ...keys };
+      delete next[provider];
+      setKeys(next);
+      if (preferredProvider === provider) {
+        const fallback = CHAT_PROVIDERS.find((candidate) => Boolean(next[candidate])) || DEFAULT_AI_PROVIDER;
+        selectProvider(fallback);
+      }
+      setMessage({ type: "ok", text: `${PROVIDERS[provider]?.name || provider} key removed.` });
+    } catch (error: unknown) {
+      setMessage({ type: "err", text: apiErrorMessage(error, "Could not remove the API key.") });
+    } finally {
+      setKeyMutationPending(false);
     }
-    setMessage({ type: "ok", text: `${PROVIDERS[provider]?.name || provider} key removed.` });
-  }
-
-  function maskKey(key: string): string {
-    if (key.length <= 12) return key.slice(0, 3) + "..." + key.slice(-3);
-    return key.slice(0, 8) + "..." + key.slice(-4);
   }
 
   const configuredKeys = Object.entries(keys).filter(([, v]) => v);
@@ -137,13 +149,9 @@ export default function SettingsPage() {
         <div
           role="note"
           style={{
-            background: persist ? "rgba(34, 197, 94, 0.08)" : "rgba(255, 183, 0, 0.10)",
-            border: persist
-              ? "1px solid rgba(34, 197, 94, 0.35)"
-              : "1px solid rgba(255, 183, 0, 0.35)",
-            borderLeft: persist
-              ? "3px solid var(--color-green, #22c55e)"
-              : "3px solid #d99a00",
+            background: "rgba(34, 197, 94, 0.08)",
+            border: "1px solid rgba(34, 197, 94, 0.35)",
+            borderLeft: "3px solid var(--color-green, #22c55e)",
             padding: "0.55rem 0.8rem",
             borderRadius: 6,
             margin: "0 0 12px 0",
@@ -152,30 +160,11 @@ export default function SettingsPage() {
           }}
         >
           <div style={{ fontWeight: 600, marginBottom: 4 }}>
-            {persist ? "Keys persist in this browser" : "Keys are session-only by default"}
+            Keys are encrypted on the server
           </div>
           <div style={{ color: "var(--color-text-secondary)" }}>
-            {persist
-              ? "Your saved keys will survive a browser restart and stay in this browser's localStorage. Clear them with the Remove buttons below when you no longer need them."
-              : "Your saved keys live in sessionStorage and clear when this tab closes. Enable the toggle below to keep them across browser restarts."}
+            Raw keys are sent once over HTTPS, encrypted at rest, and never returned to this browser. Only masked values are shown below.
           </div>
-          <label
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 8,
-              marginTop: 8,
-              cursor: "pointer",
-              fontSize: "0.82rem",
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={persist}
-              onChange={(e) => handlePersistToggle(e.target.checked)}
-            />
-            Remember this browser (persist keys across restarts)
-          </label>
         </div>
         {IS_LOCAL_BROWSER && (
           <p className="settings-desc">
@@ -226,8 +215,12 @@ export default function SettingsPage() {
             {configuredKeys.map(([provider, key]) => (
               <div key={provider} className="settings-key-row">
                 <span className="settings-key-provider">{PROVIDERS[provider]?.name || provider}</span>
-                <code className="settings-key-masked">{maskKey(key)}</code>
-                <button className="btn-danger-sm" onClick={() => handleDelete(provider)}>
+                <code className="settings-key-masked">{key}</code>
+                <button
+                  className="btn-danger-sm"
+                  disabled={keyMutationPending}
+                  onClick={() => { void handleDelete(provider); }}
+                >
                   Remove
                 </button>
               </div>
@@ -241,24 +234,26 @@ export default function SettingsPage() {
             onChange={(e) => setSelectedProvider(e.target.value)}
             className="settings-select"
           >
-            {Object.entries(PROVIDERS).map(([id, meta]) => (
+            {Object.entries(PROVIDERS).filter(([id]) => id !== "local").map(([id, meta]) => (
               <option key={id} value={id}>
                 {meta.name}{keys[id] ? " (update)" : ""}
               </option>
             ))}
           </select>
           <input
-            type="text"
+            type="password"
             placeholder={PROVIDERS[selectedProvider]?.prefix + "..."}
             value={keyInput}
             onChange={(e) => setKeyInput(e.target.value)}
             className="settings-input"
             autoComplete="off"
           />
-          <button type="submit" className="btn-primary" disabled={!keyInput.trim()}>
+          <button type="submit" className="btn-primary" disabled={!keyInput.trim() || keyMutationPending}>
             {keys[selectedProvider] ? "Update" : "Save"}
           </button>
         </form>
+
+        {keysLoading && <p className="settings-desc">Loading saved keys...</p>}
 
         {message && (
           <p className={`settings-msg settings-msg-${message.type}`}>{message.text}</p>
@@ -269,6 +264,14 @@ export default function SettingsPage() {
       <OperationLogSection />
     </div>
   );
+}
+
+function apiErrorMessage(error: unknown, fallback: string): string {
+  if (error && typeof error === "object" && "response" in error) {
+    const detail = (error as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
+    if (typeof detail === "string" && detail.trim()) return detail;
+  }
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 function CoordinateConverter() {

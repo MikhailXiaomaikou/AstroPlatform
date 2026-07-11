@@ -197,9 +197,10 @@ async def _probe_url(url: str, timeout: float = 2.0) -> tuple[str, int]:
             if resp.status_code < 400:
                 return "ok", ms
             return f"http_{resp.status_code}", ms
-    except Exception as exc:
+    except Exception:
         ms = int((time.monotonic() - t0) * 1000)
-        return f"error: {exc}", ms
+        logger.warning("health/detailed: external URL probe failed", exc_info=True)
+        return "error", ms
 
 
 @router.get("/health/detailed")
@@ -220,8 +221,9 @@ async def health_detailed(_user: User = Depends(get_current_user)):
         async with async_session() as session:
             await session.execute(text("SELECT 1"))
         checks["database"] = {"status": "ok", "response_time_ms": int((time.monotonic() - t0) * 1000)}
-    except Exception as exc:
-        checks["database"] = {"status": f"error: {exc}", "response_time_ms": int((time.monotonic() - t0) * 1000)}
+    except Exception:
+        logger.warning("health/detailed: database probe failed", exc_info=True)
+        checks["database"] = {"status": "error", "response_time_ms": int((time.monotonic() - t0) * 1000)}
         overall = "degraded"
 
     # --- Redis ---
@@ -236,8 +238,9 @@ async def health_detailed(_user: User = Depends(get_current_user)):
             checks["redis"] = {"status": "ok", "response_time_ms": int((time.monotonic() - t0) * 1000)}
         finally:
             await r.aclose()
-    except Exception as exc:
-        checks["redis"] = {"status": f"error: {exc}", "response_time_ms": int((time.monotonic() - t0) * 1000)}
+    except Exception:
+        logger.warning("health/detailed: Redis probe failed", exc_info=True)
+        checks["redis"] = {"status": "error", "response_time_ms": int((time.monotonic() - t0) * 1000)}
         overall = "degraded"
 
     # --- Durable research-object storage ---
@@ -252,8 +255,9 @@ async def health_detailed(_user: User = Depends(get_current_user)):
             "backend": storage_result.get("backend"),
             "response_time_ms": int((time.monotonic() - t0) * 1000),
         }
-    except Exception as exc:
-        checks["storage"] = {"status": f"error: {exc}", "response_time_ms": int((time.monotonic() - t0) * 1000)}
+    except Exception:
+        logger.warning("health/detailed: storage probe failed", exc_info=True)
+        checks["storage"] = {"status": "error", "response_time_ms": int((time.monotonic() - t0) * 1000)}
         overall = "degraded"
 
     # --- External Astronomy Services (degraded does not affect overall if local is ok) ---

@@ -5,6 +5,21 @@
 
 import { type ReactNode } from "react";
 
+/**
+ * Markdown is untrusted content. Only absolute HTTP(S) links are clickable;
+ * everything else is rendered as text so the component does not depend on
+ * React's framework-level javascript: URL rewriting for XSS prevention.
+ */
+function safeHttpHref(rawHref: string): string | null {
+  try {
+    const url = new URL(rawHref.trim());
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
 /** Parse inline markdown: **bold**, *italic*, ~~strikethrough~~, `code`, [link](url) */
 function parseInline(text: string): ReactNode[] {
   const parts: ReactNode[] = [];
@@ -61,12 +76,14 @@ function parseInline(text: string): ReactNode[] {
         const closeP = text.indexOf(")", closeB + 2);
         if (closeP !== -1) {
           const label = text.substring(i + 1, closeB);
-          const href = text.substring(closeB + 2, closeP);
-          parts.push(
+          const href = safeHttpHref(text.substring(closeB + 2, closeP));
+          parts.push(href ? (
             <a key={key++} href={href} target="_blank" rel="noopener noreferrer" className="md-link">
               {label}
             </a>
-          );
+          ) : (
+            <span key={key++}>{label}</span>
+          ));
           i = closeP + 1;
           continue;
         }

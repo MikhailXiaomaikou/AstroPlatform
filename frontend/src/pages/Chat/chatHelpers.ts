@@ -110,6 +110,9 @@ export function serializeDisplayMessage(message: DisplayMessage) {
 }
 
 export function hasStoredAiKey(): boolean {
+  // Browser API-key persistence was removed. The helper remains as a narrow
+  // compatibility seam for ChatPage unit tests; production always receives
+  // an empty object from getStoredApiKeys().
   const keys = getStoredApiKeys();
   return Object.values(keys).some((v) => typeof v === "string" && v.trim().length > 0);
 }

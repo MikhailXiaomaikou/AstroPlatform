@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
 DATABASE_PREFIX = "astro_uuid_drill_"
 INVALID_USER_ID = "not-a-uuid"
+LEGACY_API_KEYS_JSON = '{"anthropic":"sk-legacy-drill-placeholder"}'
 
 BASE_TABLES = frozenset(
     {
@@ -194,6 +195,7 @@ SEED_ROWS = (
             "id": ROW_IDS["users"],
             "email": "uuid-drill@example.test",
             "password_hash": "not-a-real-password-hash",
+            "api_keys": LEGACY_API_KEYS_JSON,
         },
     ),
     (
@@ -312,6 +314,8 @@ class Snapshot:
     column_types: dict[tuple[str, str], str]
     values: dict[tuple[str, str], tuple[str, ...]]
     foreign_keys: frozenset[tuple[str, str, str, str, str, str, bool]]
+    api_keys_type: str
+    api_keys_values: tuple[str, ...]
 
 
 def safe_async_database_url(raw_url: str) -> tuple[str, str]:
@@ -514,6 +518,13 @@ async def seed_fixture(raw_url: str, scenario: str) -> None:
         async with engine.begin() as connection:
             await _assert_connected_database(connection, database)
             await _assert_complete_legacy_baseline(connection)
+            # Reproduce both historical production shapes: revision 002's
+            # VARCHAR UUIDs plus a manually added TEXT api_keys column.  The
+            # head upgrade must retain its contents while normalizing the
+            # encrypted storage column to JSONB.
+            await connection.execute(
+                text("ALTER TABLE public.users ADD COLUMN api_keys TEXT")
+            )
             await connection.execute(
                 text(
                     """
@@ -567,13 +578,49 @@ async def _read_values(
     return values
 
 
+async def _read_api_keys(
+    connection: AsyncConnection,
+) -> tuple[str, tuple[str, ...]]:
+    column_type = await connection.scalar(
+        text(
+            """
+            SELECT udt_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'users'
+              AND column_name = 'api_keys'
+            """
+        )
+    )
+    if column_type not in {"text", "jsonb"}:
+        raise AssertionError(f"Unexpected users.api_keys type: {column_type!r}")
+
+    if column_type == "jsonb":
+        value_sql = (
+            "CASE WHEN jsonb_typeof(api_keys) = 'string' "
+            "THEN api_keys #>> '{}' ELSE api_keys::text END"
+        )
+    else:
+        value_sql = "api_keys"
+    rows = await connection.execute(
+        text(
+            f"SELECT {value_sql} FROM users "
+            "WHERE api_keys IS NOT NULL ORDER BY id::text"
+        )
+    )
+    return str(column_type), tuple(str(row[0]) for row in rows)
+
+
 async def _read_snapshot(connection: AsyncConnection) -> Snapshot:
+    api_keys_type, api_keys_values = await _read_api_keys(connection)
     return Snapshot(
         revisions=await _read_revisions(connection),
         tables=await _read_tables(connection),
         column_types=await _read_column_types(connection),
         values=await _read_values(connection),
         foreign_keys=await _read_foreign_keys(connection),
+        api_keys_type=api_keys_type,
+        api_keys_values=api_keys_values,
     )
 
 
@@ -628,6 +675,15 @@ def assert_snapshot(snapshot: Snapshot, scenario: str, expectation: str) -> None
         )
     if snapshot.values != expected_values:
         raise AssertionError("UUID values or parent/child relationships changed")
+
+    expected_api_keys_type = "jsonb" if expectation == "migrated" else "text"
+    if snapshot.api_keys_type != expected_api_keys_type:
+        raise AssertionError(
+            "users.api_keys type was not normalized or rolled back correctly: "
+            f"{snapshot.api_keys_type!r}"
+        )
+    if snapshot.api_keys_values != (LEGACY_API_KEYS_JSON,):
+        raise AssertionError("Legacy users.api_keys contents changed during migration")
 
     _assert_expected_foreign_keys(
         snapshot.foreign_keys,

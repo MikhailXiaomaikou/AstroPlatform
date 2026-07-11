@@ -53,7 +53,7 @@ def _parse_trusted_proxy_mode(raw: str) -> int | str:
     if hops >= 1:
         return hops
     _quota_logger.warning(
-        "Invalid TRUSTED_PROXY_MODE %r; trusting only the socket peer", raw
+        "Invalid TRUSTED_PROXY_MODE; trusting only the socket peer"
     )
     return "none"
 

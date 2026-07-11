@@ -93,6 +93,20 @@ describe("Auth helper functions", () => {
     vi.clearAllMocks();
   });
 
+  it("purges legacy browser API keys instead of persisting new clear-text keys", async () => {
+    store["astro_api_keys"] = "legacy-local-secret";
+    store["astro_api_keys_persist"] = "1";
+    sessionStorage.setItem("astro_api_keys", "legacy-session-secret");
+    const { getStoredApiKeys, writeStoredApiKeys } = await import("../api/client");
+
+    writeStoredApiKeys({ anthropic: "sk-ant-new-secret" });
+
+    expect(getStoredApiKeys()).toEqual({});
+    expect(sessionStorage.getItem("astro_api_keys")).toBeNull();
+    expect(store["astro_api_keys"]).toBeUndefined();
+    expect(store["astro_api_keys_persist"]).toBeUndefined();
+  });
+
   it("isAuthenticated returns false when no token", async () => {
     const { isAuthenticated } = await import("../api/client");
     expect(isAuthenticated()).toBe(false);
@@ -360,6 +374,7 @@ describe("Auth helper functions", () => {
     const requestBody = JSON.parse(String(mockFetch.mock.calls[0][1]?.body || "{}"));
     expect(requestBody.context.api_provider).toBe("openai");
     expect(requestBody.context.model_profile).toBe("openai:gpt-5.5");
+    expect(requestBody.context.api_keys).toBeUndefined();
 
     vi.unstubAllGlobals();
   });

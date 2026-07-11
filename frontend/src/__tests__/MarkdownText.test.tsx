@@ -156,18 +156,36 @@ describe("MarkdownText", () => {
 
   // ── XSS prevention ──
 
-  it("does not render XSS in link tags", () => {
-    const content = '[Click me](javascript:alert("XSS"))';
-    const { container } = render(<MarkdownText content={content} />);
-    const link = container.querySelector("a.md-link") as HTMLAnchorElement;
-    expect(link).not.toBeNull();
-    // The link should exist but React prevents javascript: protocol by default.
-    // The href is set but React sanitizes it to an empty string or keeps it inert.
-    // Importantly, no script should be injected into the DOM.
-    const scripts = container.querySelectorAll("script");
-    expect(scripts.length).toBe(0);
-    // The link should have rel="noopener noreferrer" as a defense-in-depth measure
-    expect(link.rel).toContain("noopener");
-    expect(link.rel).toContain("noreferrer");
+  it.each([
+    "javascript:alert(1)",
+    "JaVaScRiPt:alert(1)",
+    "\tjavascript:alert(1)",
+    "data:text/html,<script>alert(1)</script>",
+    "vbscript:msgbox(1)",
+    "mailto:attacker@example.com",
+    "/relative/path",
+  ])("renders a non-HTTP(S) Markdown URL as inert text: %s", (unsafeUrl) => {
+    const { container } = render(<MarkdownText content={`[Click me](${unsafeUrl})`} />);
+
+    expect(container.querySelector("a.md-link")).toBeNull();
+    expect(screen.getByText("Click me")).toBeInTheDocument();
+    expect(container.querySelector("script")).toBeNull();
+  });
+
+  it("allows HTTPS and HTTP links only", () => {
+    const { container } = render(
+      <MarkdownText content="[Secure](https://example.com/path) [Plain](http://example.org)" />,
+    );
+    const links = Array.from(container.querySelectorAll("a.md-link")) as HTMLAnchorElement[];
+
+    expect(links.map((link) => link.href)).toEqual([
+      "https://example.com/path",
+      "http://example.org/",
+    ]);
+    for (const link of links) {
+      expect(link.target).toBe("_blank");
+      expect(link.rel).toContain("noopener");
+      expect(link.rel).toContain("noreferrer");
+    }
   });
 });

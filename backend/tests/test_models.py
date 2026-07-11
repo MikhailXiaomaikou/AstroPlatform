@@ -3,6 +3,7 @@
 import json
 import uuid
 
+from sqlalchemy.dialects import postgresql
 
 from app.models.schemas import (
     DataFile,
@@ -189,6 +190,19 @@ class TestEncryptedJSONType:
         legacy = {"anthropic": "sk-legacy"}
 
         assert td.process_result_value(json.dumps(legacy), None) == legacy
+
+    def test_legacy_postgresql_jsonb_object_still_reads(self):
+        td = EncryptedJSONType()
+        legacy = {"anthropic": "sk-legacy-jsonb"}
+
+        assert td.process_result_value(legacy, postgresql.dialect()) == legacy
+
+    def test_postgresql_uses_jsonb_for_ciphertext_binding(self):
+        td = EncryptedJSONType()
+
+        assert isinstance(
+            td.load_dialect_impl(postgresql.dialect()), postgresql.JSONB
+        )
 
     def test_invalid_ciphertext_returns_none(self):
         td = EncryptedJSONType()

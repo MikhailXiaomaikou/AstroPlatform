@@ -326,10 +326,10 @@ def submit_async_job(
 
     try:
         _dispatcher(tool_name, args, job_id)
-    except Exception as exc:
-        logger.warning("Celery dispatch failed for %s: %s", job_id, exc)
+    except Exception:
+        logger.warning("Celery dispatch failed for %s", job_id, exc_info=True)
         job["status"] = "failed"
-        job["error"] = f"Celery worker unavailable: {exc}"
+        job["error"] = "Background worker is temporarily unavailable."
         job["error_class"] = "celery_unavailable"
         job["completed_at"] = time.time()
         _JOBS_STORE.set(job_id, job, ttl=ttl)

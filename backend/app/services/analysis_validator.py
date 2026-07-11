@@ -184,7 +184,7 @@ def _has_positive_english_segment(text: str) -> bool:
 def _natural_language_words(segment: str) -> list[str]:
     """Exclude formula/unit fragments before applying the language threshold."""
 
-    without_math = re.sub(r"\$.*?\$|\\\([^)]*\\\)|\\\[[^]]*\\\]", " ", segment)
+    without_math = _strip_math_segments(segment)
     without_math = re.sub(r"\b[A-Za-z_]+\d+[A-Za-z_]*\b", " ", without_math)
     tokens = re.findall(
         r"(?<![\\\w])[^\W\d_]+(?:[-'][^\W\d_]+)*(?![\w])",
@@ -217,6 +217,56 @@ def _natural_language_words(segment: str) -> list[str]:
         if token.lower() not in scientific_units
         and not (token.isupper() and len(token) <= 4)
     ]
+
+
+def _strip_math_segments(text: str) -> str:
+    r"""Replace complete ``$...$`` / ``\(...\)`` / ``\[...\]`` spans linearly.
+
+    A regex that lets an opening delimiter occur inside its own repeated body
+    rescans the remaining suffix for every unmatched delimiter.  Paper JSON is
+    user-editable, so a long run of ``\(`` used to make language validation
+    quadratic.  This single-pass state machine preserves unmatched text and
+    replaces only complete math spans, matching the validator's prior contract
+    without regex backtracking.
+    """
+
+    output: list[str] = []
+    pending_start: int | None = None
+    closer: str | None = None
+    index = 0
+    while index < len(text):
+        if closer is not None:
+            if text.startswith(closer, index):
+                output.append(" ")
+                index += len(closer)
+                pending_start = None
+                closer = None
+            else:
+                index += 1
+            continue
+
+        if text[index] == "$":
+            pending_start = index
+            closer = "$"
+            index += 1
+            continue
+        if text.startswith(r"\(", index):
+            pending_start = index
+            closer = r"\)"
+            index += 2
+            continue
+        if text.startswith(r"\[", index):
+            pending_start = index
+            closer = r"\]"
+            index += 2
+            continue
+
+        output.append(text[index])
+        index += 1
+
+    if closer is not None and pending_start is not None:
+        output.append(text[pending_start:])
+    return "".join(output)
 
 
 def _language_claim_hash(paper_json: Mapping[str, Any]) -> str:

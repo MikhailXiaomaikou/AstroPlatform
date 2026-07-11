@@ -2,7 +2,7 @@
 // first-run API key prompt.
 // Moved verbatim from ChatPage.tsx (behavior-preserving split).
 import { useState } from "react";
-import { getStoredApiKeys, writeStoredApiKeys, writeStoredAiProvider } from "../../api/client";
+import { saveApiKey, writeStoredAiProvider } from "../../api/client";
 import type { DisplayMessage } from "./chatStorage";
 
 // F3.2: Honest-abstention card.  Rendered instead of raw markdown when
@@ -90,6 +90,8 @@ export function HonestAbstentionCard({
 export function ApiKeyPrompt({ onSaved }: { onSaved: () => void }) {
   const [keyInput, setKeyInput] = useState("");
   const [provider, setProvider] = useState<"anthropic" | "openai" | "deepseek">("anthropic");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const providerInfo: Record<string, { label: string; url: string; placeholder: string; rec?: boolean }> = {
     anthropic: { label: "Anthropic (Claude)", url: "https://console.anthropic.com/settings/keys", placeholder: "sk-ant-...", rec: true },
@@ -99,24 +101,38 @@ export function ApiKeyPrompt({ onSaved }: { onSaved: () => void }) {
 
   const info = providerInfo[provider];
 
-  function handleSave(e: React.FormEvent) {
+  async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     const key = keyInput.trim();
     if (!key) return;
-    // M9: route through the sessionStorage-first helper instead of writing
-    // straight to localStorage.  Keys no longer leak across browser
-    // restarts unless the user opts in via the persist flag.
-    const keys = getStoredApiKeys();
-    keys[provider] = key;
-    writeStoredApiKeys(keys);
-    writeStoredAiProvider(provider);
-    onSaved();
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await saveApiKey(provider, key);
+      writeStoredAiProvider(provider);
+      setKeyInput("");
+      onSaved();
+    } catch (error: unknown) {
+      const detail = error && typeof error === "object" && "response" in error
+        ? (error as { response?: { data?: { detail?: unknown } } }).response?.data?.detail
+        : null;
+      setSaveError(
+        typeof detail === "string" && detail.trim()
+          ? detail
+          : error instanceof Error && error.message
+            ? error.message
+            : "Could not save the API key.",
+      );
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
     <div className="chat-apikey-prompt">
       <h3>Configure API Key</h3>
       <p>To use the AI assistant, enter an API key from any supported provider.</p>
+      <p className="chat-apikey-hint">The key is encrypted on the server and is never stored in browser Storage.</p>
       <div className="chat-apikey-provider-select">
         {Object.entries(providerInfo).map(([key, p]) => (
           <button
@@ -137,17 +153,18 @@ export function ApiKeyPrompt({ onSaved }: { onSaved: () => void }) {
       </p>
       <form className="chat-apikey-form" onSubmit={handleSave}>
         <input
-          type="text"
+          type="password"
           value={keyInput}
           onChange={(e) => setKeyInput(e.target.value)}
           placeholder={info.placeholder}
           className="chat-apikey-input"
           autoComplete="off"
         />
-        <button type="submit" className="btn-primary" disabled={!keyInput.trim()}>
-          Save & Start
+        <button type="submit" className="btn-primary" disabled={!keyInput.trim() || saving}>
+          {saving ? "Saving..." : "Save & Start"}
         </button>
       </form>
+      {saveError && <p className="error-text" role="alert">{saveError}</p>}
     </div>
   );
 }

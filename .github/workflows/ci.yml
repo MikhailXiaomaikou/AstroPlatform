@@ -65,6 +65,8 @@ jobs:
         run: |
           cd frontend
           npm run build
+        env:
+          VITE_API_URL: http://localhost:8000
 
   frontend-e2e:
     needs: frontend-test

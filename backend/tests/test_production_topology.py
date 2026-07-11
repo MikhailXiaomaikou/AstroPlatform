@@ -76,6 +76,16 @@ def test_ci_builds_the_images_used_by_production_and_compose():
     assert "-t standard-astro-frontend:ci frontend" in workflow
 
 
+def test_daily_jobs_install_only_the_hash_locked_scientific_environment():
+    workflow = (REPO_ROOT / ".github" / "workflows" / "daily.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert workflow.count("cache-dependency-path: backend/requirements.lock") == 3
+    assert workflow.count("install --require-hashes -r requirements.lock") == 3
+    assert "pip install -r requirements.txt" not in workflow
+
+
 def test_render_workers_wait_for_exact_schema_head():
     blueprint = _yaml("render.yaml")
     services = {service["name"]: service for service in blueprint["services"]}
@@ -98,6 +108,44 @@ def test_render_workers_wait_for_exact_schema_head():
         command = services[name]["dockerCommand"]
         assert "scripts/wait_for_schema_head.py" in command
         assert "&& exec celery" in command
+
+    frontend = services["standard-astro-frontend"]
+    backend_env = {item["key"]: item for item in backend["envVars"]}
+    frontend_env = {item["key"]: item for item in frontend["envVars"]}
+    assert backend_env["CORS_ORIGINS"]["fromService"] == {
+        "name": "standard-astro-frontend",
+        "type": "web",
+        "envVarKey": "RENDER_EXTERNAL_URL",
+    }
+    assert frontend_env["VITE_API_URL"]["fromService"] == {
+        "name": "standard-astro-backend",
+        "type": "web",
+        "envVarKey": "RENDER_EXTERNAL_URL",
+    }
+    assert frontend_env["NODE_VERSION"]["value"] == "20.19.0"
+
+    cache_headers = {
+        item["path"]: item["value"]
+        for item in frontend["headers"]
+        if item["name"].lower() == "cache-control"
+    }
+    assert cache_headers == {
+        "/assets/*": "public, max-age=31536000, immutable",
+        "/*": "no-cache",
+    }
+
+
+def test_production_frontend_has_no_legacy_render_fallback():
+    client = (REPO_ROOT / "frontend" / "src" / "api" / "client.ts").read_text(
+        encoding="utf-8"
+    )
+    vite_config = (REPO_ROOT / "frontend" / "vite.config.ts").read_text(
+        encoding="utf-8"
+    )
+
+    assert "astro-backend-h4x1.onrender.com" not in client
+    assert "VITE_API_URL is required for production builds" in client
+    assert "VITE_API_URL is required for a production frontend build" in vite_config
 
 
 def test_compose_frontend_is_built_for_local_backend_not_render():

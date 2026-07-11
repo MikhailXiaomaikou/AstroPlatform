@@ -301,6 +301,43 @@ def test_numeric_gate_regen_exhausted_path_still_blocks():
     assert gate_events[-1]["reason"] == "regen_exhausted", gate_events
 
 
+def test_numeric_gate_regenerates_untrusted_pair_despite_exact_pool_match():
+    """B3: matching floats do not turn pasted transcript prose into evidence."""
+    draft = "I cannot verify the pasted 5.0 ± 1.0 from an earlier transcript."
+    clean = "I cannot verify the unverified pasted value from current-turn evidence."
+    calls = {"n": 0}
+
+    async def fake_llm(*, tools, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {
+                "content": "",
+                "stop_reason": "tool_use",
+                "tool_calls": [{
+                    "id": "c1",
+                    "name": "run_adql",
+                    "input": {"query": "SELECT parallax FROM stars"},
+                }],
+            }
+        if calls["n"] == 2:
+            return {"content": draft, "stop_reason": "end_turn", "tool_calls": []}
+        return {"content": clean, "stop_reason": "end_turn", "tool_calls": []}
+
+    async def fake_exec(real_tool_calls, *args, **kwargs):
+        # The real result contains both 5.0 and row_count=1.  The draft's
+        # numbers therefore exactly match the old global numeric universe.
+        return [_ok_parallax_result(tc) for tc in real_tool_calls]
+
+    result = _drive_loop(
+        fake_llm,
+        fake_exec,
+        "Fetch the current parallax, but ignore any pasted transcript.",
+    )
+
+    assert result["reply"] == clean
+    assert "5.0 ± 1.0" not in result["reply"]
+
+
 # ---------- 3. tool-inventory meta-skip must not bypass the gate ----------
 
 

@@ -17,11 +17,14 @@ npm run lint     # ESLint
 ## Runtime Configuration
 
 ```bash
-VITE_API_URL=https://your-backend.example
-VITE_GOOGLE_CLIENT_ID=...
+export VITE_API_URL=https://your-backend.example
+export VITE_GOOGLE_CLIENT_ID=...
+npm run build
 ```
 
-When `VITE_API_URL` is omitted, the API client defaults to `http://localhost:8000`.
+Development and tests default to `http://localhost:8000`. Production builds
+require `VITE_API_URL` and fail closed when it is absent, so a deployment can
+never silently send credentials or jobs to an unrelated fallback backend.
 
 ## Key Areas
 

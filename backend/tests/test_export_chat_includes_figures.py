@@ -298,6 +298,8 @@ def test_html_export_is_self_contained_and_includes_figures() -> None:
     assert "<!DOCTYPE html>" in body
     assert '<html lang="en">' in body
     assert "<title>Pleiades</title>" in body
+    assert "Content-Security-Policy" in body
+    assert "default-src 'none'" in body
 
     # Inline CSS, no external links
     assert "<style>" in body
@@ -318,13 +320,18 @@ def test_html_export_escapes_user_content_to_prevent_xss() -> None:
     """<script> tags in user input must be escaped and cannot land as executable JS."""
     client = _client()
     msgs = [{"role": "user", "content": "<script>alert(1)</script>"}]
-    resp = client.post("/api/export/report/html-from-chat", json={"messages": msgs, "title": "t"})
+    resp = client.post(
+        "/api/export/report/html-from-chat",
+        json={"messages": msgs, "title": "</title><script>alert(2)</script>"},
+    )
     assert resp.status_code == 200
     body = resp.text
     # Raw form must not appear
     assert "<script>alert(1)</script>" not in body
     # Escaped form must appear
     assert "&lt;script&gt;" in body
+    assert "</title><script>" not in body
+    assert "&lt;/title&gt;&lt;script&gt;" in body
 
 
 def test_html_export_includes_table_of_contents() -> None:

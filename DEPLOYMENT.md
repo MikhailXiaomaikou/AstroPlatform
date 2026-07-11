@@ -1,10 +1,16 @@
 # Standard Astro Deployment Guide
 
-Current production deploys use the Render blueprint in `render.yaml`.
+`render.yaml` defines the **target** production topology. As observed on
+2026-07-11, the current Render services (`astro-backend-h4x1` and
+`astro-frontend-tyfr`) predate this Blueprint and do not yet have its database
+migrations, persistent storage, Redis, or Celery workers. Do not sync the
+Blueprint directly: Render matches resources by exact name, so doing so would
+create a second stack instead of safely adopting the legacy services.
 
 ## Production Services
 
-The production Blueprint defines **5 services + 1 database** (`render.yaml` is the source of truth).
+The target production Blueprint defines **5 services + 1 database**
+(`render.yaml` is the source of truth for that target).
 
 | Service | Type | Purpose |
 |---|---|---|
@@ -32,8 +38,15 @@ Live URLs used by the current docs:
 - Backend: `https://astro-backend-h4x1.onrender.com`
 - Frontend: `https://astro-frontend-tyfr.onrender.com`
 
-Pushes to `main` deploy only after linked CI checks pass. Before the backend
-starts, Render runs `alembic upgrade head`; migration failure blocks the deploy.
+Before adoption, inventory and back up the existing database and files, test
+Alembic adoption against a clone, populate all `sync: false` variables, then
+choose either exact-name in-place adoption or a verified new-stack cutover.
+The current backend must also receive a stable `EVIDENCE_SIGNING_KEY` before
+deploy; generating a new value on each restart would invalidate evidence.
+
+Target-topology pushes to `main` deploy only after linked CI checks pass. Before
+the backend starts, Render runs `alembic upgrade head`; migration failure blocks
+the deploy.
 Render deploys workers independently, so worker and beat run the read-only
 `scripts/wait_for_schema_head.py` gate before Celery starts. They poll until the
 database exactly matches the Alembic head shipped in their image and exit after
@@ -130,14 +143,16 @@ metadata and are checked on every read.
 
 ## Frontend Environment
 
-Set these on `standard-astro-frontend`:
+Set these on `standard-astro-frontend` (the Blueprint derives the API URL from
+the backend's `RENDER_EXTERNAL_URL` automatically):
 
 ```bash
-VITE_API_URL=https://astro-backend-h4x1.onrender.com
+VITE_API_URL=https://<target-backend>.onrender.com
 VITE_GOOGLE_CLIENT_ID=...
 ```
 
-Render's static build receives the hosted `VITE_API_URL` above. The frontend
+Render's static build receives the hosted `VITE_API_URL` above. Production
+builds fail when it is absent; there is no hosted-backend fallback. The frontend
 Dockerfile defaults to `http://localhost:8000`, and Docker Compose repeats that
 value as an explicit build argument. Do not remove the Compose override: without
 it a local production-style browser test can silently exercise the hosted API.
@@ -148,11 +163,13 @@ After deploy:
 
 ```bash
 curl https://astro-backend-h4x1.onrender.com/health
+curl --fail https://astro-backend-h4x1.onrender.com/health/ready
 curl --fail https://astro-backend-h4x1.onrender.com/health/deep
 curl https://astro-backend-h4x1.onrender.com/metrics
 ```
 
-`/health` is liveness only. `/health/deep` blocks readiness unless the database
+`/health` is liveness only. Render's bounded traffic gate is `/health/ready`.
+The post-deploy acceptance check `/health/deep` fails unless the database
 is at the image's exact Alembic head, `/app/data` is a real fsync-writable mount,
 the configured object store passes a checksum-verified round trip, Redis answers,
 and at least one Celery worker replies. It must not be weakened to work around an

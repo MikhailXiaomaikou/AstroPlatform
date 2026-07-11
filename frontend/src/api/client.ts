@@ -1,10 +1,20 @@
 import axios from "axios";
 import { t } from "../i18n";
 
-const DEFAULT_PRODUCTION_API_URL = "https://astro-backend-h4x1.onrender.com";
-export const API_BASE_URL =
-  import.meta.env.VITE_API_URL ||
-  (import.meta.env.DEV || import.meta.env.MODE === "test" ? "http://localhost:8000" : DEFAULT_PRODUCTION_API_URL);
+function resolveApiBaseUrl(): string {
+  const configuredUrl = String(import.meta.env.VITE_API_URL || "").trim();
+  if (configuredUrl) {
+    return configuredUrl.replace(/\/$/, "");
+  }
+  if (import.meta.env.DEV || import.meta.env.MODE === "test") {
+    return "http://localhost:8000";
+  }
+  throw new Error(
+    "VITE_API_URL is required for production builds; refusing to send credentials to a fallback backend.",
+  );
+}
+
+export const API_BASE_URL = resolveApiBaseUrl();
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -1385,17 +1395,32 @@ export async function unpublishPaperDraft(paperId: string): Promise<PaperDraftRe
   return data;
 }
 
-// M9: prefer sessionStorage for API key material so keys do not persist
-// across browser restarts and shrink the XSS blast radius.  A user who
-// explicitly opts into "Remember this browser" can flip the
-// `astro_api_keys_persist` flag in localStorage; our helpers honour it by
-// writing to localStorage as well.  Reads check session first, then
-// localStorage, so existing deployments don't break — the first read after
-// upgrading "migrates" material into sessionStorage.
+// API keys are server-side secrets. The authenticated settings API stores
+// them in the Fernet-encrypted users.api_keys column and only returns masked
+// values. Browser Storage is deliberately not used: sessionStorage is still
+// readable by same-origin XSS, while localStorage also survives restarts.
 const API_KEYS_STORAGE = "astro_api_keys";
 const AI_PROVIDER_STORAGE = "astro_ai_provider";
 const AI_MODEL_PROFILE_STORAGE = "astro_ai_model_profile";
 const PERSIST_FLAG_STORAGE = "astro_api_keys_persist";
+
+function _clearLegacyBrowserApiKeys(): void {
+  try {
+    sessionStorage.removeItem(API_KEYS_STORAGE);
+  } catch {
+    /* ignore unavailable browser storage */
+  }
+  try {
+    localStorage.removeItem(API_KEYS_STORAGE);
+    localStorage.removeItem(PERSIST_FLAG_STORAGE);
+  } catch {
+    /* ignore unavailable browser storage */
+  }
+}
+
+// Purge clear-text values written by older releases as soon as this module is
+// evaluated. Users re-enter a key once; subsequent reads use the server API.
+_clearLegacyBrowserApiKeys();
 
 export const DEFAULT_AI_PROVIDER = isLocalNoAuthEnabledByEnv() ? "local" : "deepseek";
 
@@ -1431,14 +1456,6 @@ function isLocalBrowserRuntime(): boolean {
   return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "";
 }
 
-function _shouldPersist(): boolean {
-  try {
-    return localStorage.getItem(PERSIST_FLAG_STORAGE) === "1";
-  } catch {
-    return false;
-  }
-}
-
 function _readFirstDefined(key: string): string | null {
   try {
     const s = sessionStorage.getItem(key);
@@ -1456,72 +1473,22 @@ function _readFirstDefined(key: string): string | null {
 }
 
 export function writeStoredApiKeys(keys: Record<string, string>): void {
-  const payload = JSON.stringify(keys);
-  try {
-    sessionStorage.setItem(API_KEYS_STORAGE, payload);
-  } catch {
-    /* ignore */
-  }
-  if (_shouldPersist()) {
-    try {
-      localStorage.setItem(API_KEYS_STORAGE, payload);
-    } catch {
-      /* ignore */
-    }
-  } else {
-    try {
-      localStorage.removeItem(API_KEYS_STORAGE);
-    } catch {
-      /* ignore */
-    }
-  }
+  void keys;
+  _clearLegacyBrowserApiKeys();
 }
 
 export function getStoredApiKey(provider = "anthropic"): string | null {
-  const raw = _readFirstDefined(API_KEYS_STORAGE) || "{}";
-  try {
-    const keys = JSON.parse(raw);
-    return (keys && typeof keys === "object" && keys[provider]) || null;
-  } catch {
-    return null;
-  }
+  void provider;
+  return null;
 }
 
-/**
- * Whether stored API keys are currently set to survive a browser restart.
- * False (default) means keys live in sessionStorage and clear on tab close.
- */
 export function getApiKeysPersist(): boolean {
-  return _shouldPersist();
+  return false;
 }
 
-/**
- * Toggle whether API keys are persisted to localStorage across browser
- * restarts. Existing keys are migrated to/from localStorage so the toggle
- * takes effect immediately on the current key set (no need to re-enter).
- */
 export function setApiKeysPersist(persist: boolean): void {
-  try {
-    if (persist) {
-      localStorage.setItem(PERSIST_FLAG_STORAGE, "1");
-    } else {
-      localStorage.removeItem(PERSIST_FLAG_STORAGE);
-    }
-  } catch {
-    /* ignore */
-  }
-  // Re-write current keys with the new persistence preference so the
-  // setting takes effect for already-saved keys, not just future writes.
-  const raw = _readFirstDefined(API_KEYS_STORAGE);
-  if (!raw) return;
-  try {
-    const keys = JSON.parse(raw);
-    if (keys && typeof keys === "object") {
-      writeStoredApiKeys(keys);
-    }
-  } catch {
-    /* ignore */
-  }
+  void persist;
+  _clearLegacyBrowserApiKeys();
 }
 
 export function getStoredAiProvider(): string | null {
@@ -1539,18 +1506,10 @@ export function writeStoredAiProvider(provider: string): void {
   } catch {
     /* ignore */
   }
-  if (_shouldPersist()) {
-    try {
-      localStorage.setItem(AI_PROVIDER_STORAGE, value);
-    } catch {
-      /* ignore */
-    }
-  } else {
-    try {
-      localStorage.removeItem(AI_PROVIDER_STORAGE);
-    } catch {
-      /* ignore */
-    }
+  try {
+    localStorage.setItem(AI_PROVIDER_STORAGE, value);
+  } catch {
+    /* ignore */
   }
 }
 
@@ -1569,18 +1528,10 @@ export function writeStoredAiModelProfile(modelProfile: string): void {
   } catch {
     /* ignore */
   }
-  if (_shouldPersist()) {
-    try {
-      localStorage.setItem(AI_MODEL_PROFILE_STORAGE, value);
-    } catch {
-      /* ignore */
-    }
-  } else {
-    try {
-      localStorage.removeItem(AI_MODEL_PROFILE_STORAGE);
-    } catch {
-      /* ignore */
-    }
+  try {
+    localStorage.setItem(AI_MODEL_PROFILE_STORAGE, value);
+  } catch {
+    /* ignore */
   }
 }
 
@@ -1594,37 +1545,16 @@ export function getPreferredAiModelProfile(provider?: string | null): string | n
 }
 
 export function getStoredApiKeys(): Record<string, string> {
-  const raw = _readFirstDefined(API_KEYS_STORAGE) || "{}";
-  try {
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") {
-      return {};
-    }
-    const keys: Record<string, string> = {};
-    for (const [key, value] of Object.entries(parsed)) {
-      if (typeof key === "string" && typeof value === "string" && value.trim().length > 0) {
-        keys[key] = value;
-      }
-    }
-    return keys;
-  } catch {
-    return {};
-  }
+  return {};
 }
 
 export function getPreferredAiProvider(): string | null {
   const storedProvider = getStoredAiProvider();
-  const keys = getStoredApiKeys();
   const allowedProviders = isLocalBrowserRuntime()
     ? ["anthropic", "openai", "deepseek", "local"]
     : ["anthropic", "openai", "deepseek"];
   if (storedProvider && allowedProviders.includes(storedProvider)) {
     return storedProvider;
-  }
-  for (const provider of [DEFAULT_AI_PROVIDER, "openai", "anthropic"]) {
-    if (keys[provider]) {
-      return provider;
-    }
   }
   return DEFAULT_AI_PROVIDER;
 }
@@ -1696,14 +1626,12 @@ async function _sendChatMessageOnce(
   signal?: AbortSignal,
   onActions?: (actions: ChatAction[]) => void,
 ): Promise<ChatResponse> {
-  const apiKeys = getStoredApiKeys();
   const apiProvider = getPreferredAiProvider();
   const modelProfile = getPreferredAiModelProfile(apiProvider);
   const body = {
     messages,
     context: {
       ...context,
-      ...(Object.keys(apiKeys).length ? { api_keys: apiKeys } : {}),
       ...(apiProvider ? { api_provider: apiProvider } : {}),
       ...(modelProfile ? { model_profile: modelProfile } : {}),
     },

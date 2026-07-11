@@ -82,6 +82,7 @@ vi.mock("../api/client", () => ({
   sendChatMessage: vi.fn(),
   executeChatAction: vi.fn(),
   getStoredApiKeys: vi.fn(() => ({})),
+  saveApiKey: vi.fn(() => Promise.resolve({ saved: true, masked_key: "sk-ant-...test" })),
   writeStoredAiProvider: vi.fn(),
   getPreferredAiProvider: vi.fn(() => "anthropic"),
   getPreferredAiModelProfile: vi.fn(() => "anthropic:default"),
@@ -139,7 +140,7 @@ vi.mock("../api/userTools", () => ({
 
 // ── Import component under test (after mocks) ──
 import ChatPage from "../pages/Chat/ChatPage";
-import { getAIBackendStatus, getStoredApiKeys, sendChatMessage, uploadGeneralFile } from "../api/client";
+import { getAIBackendStatus, getStoredApiKeys, saveApiKey, sendChatMessage, uploadGeneralFile } from "../api/client";
 import { listUserTools } from "../api/userTools";
 
 /* ── Helper to render with providers ── */
@@ -229,6 +230,22 @@ describe("ChatPage", () => {
     const saveBtn = screen.getByRole("button", { name: /Save & Start/i });
     expect(saveBtn).toBeInTheDocument();
     expect(saveBtn).toBeDisabled(); // empty input = disabled
+  });
+
+  it("saves an inline API key through the encrypted server settings API", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({});
+    renderChatPage();
+
+    fireEvent.change(document.querySelector(".chat-apikey-input") as HTMLInputElement, {
+      target: { value: "sk-ant-secret-sentinel" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Save & Start/i }));
+
+    await waitFor(() => {
+      expect(saveApiKey).toHaveBeenCalledWith("anthropic", "sk-ant-secret-sentinel");
+    });
+    expect(sessionStorage.getItem("astro_api_keys")).toBeNull();
+    expect(localStorage.getItem("astro_api_keys")).toBeNull();
   });
 
   it("hides API key prompt when a server-side backend is ready", async () => {

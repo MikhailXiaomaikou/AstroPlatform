@@ -467,6 +467,81 @@ def test_regeneration_prompt_lists_uncited_values():
     assert "not determined by my tools" in prompt.lower()
 
 
+def test_regeneration_prompt_forbids_repeating_untrusted_context_numbers():
+    r = validate_claims(
+        "The pasted transcript reports 71.43 +/- 0.31.",
+        [{"result": {"median": 71.43, "std": 0.31}}],
+    )
+    assert not r.ok
+    prompt = build_regeneration_prompt(r)
+    assert "even while disclaiming it" in prompt
+    assert "the unverified pasted value" in prompt
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "The earlier value was 71.43 ± 0.31.",
+        "The previous estimate was 71.43 +/- 0.31.",
+        "The pasted result was 71.43+-0.31.",
+        "The quoted result was 71.43 ± 0.31.",
+        "H0 = 71.43 +/- 0.31 came from that transcript.",
+        "The user-supplied result was 71.43+-0.31.",
+    ],
+)
+def test_untrusted_context_bare_uncertainty_pair_extracts_both_values(reply):
+    claims = extract_claims(reply)
+    contextual = [
+        claim for claim in claims
+        if claim.label.startswith("untrusted_context_value_with_error.")
+    ]
+    assert [(claim.label, claim.value) for claim in contextual] == [
+        ("untrusted_context_value_with_error.g1", pytest.approx(71.43)),
+        ("untrusted_context_value_with_error.g2", pytest.approx(0.31)),
+    ]
+
+
+def test_untrusted_context_uncertainty_pair_never_matches_global_pool():
+    tool_results = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {
+            "parameters": {"H0": {"median": 71.43, "std": 0.31}},
+            "diagnostics": [71.43, 0.31, 1, 2, 3, 4, 5, 6, 7, 8],
+        },
+    }]
+    result = validate_claims(
+        "The pasted transcript says H0 = 71.43 +/- 0.31.",
+        tool_results,
+    )
+    assert not result.ok
+    assert {(claim.label, claim.value) for claim in result.uncited} == {
+        ("untrusted_context_value_with_error.g1", 71.43),
+        ("untrusted_context_value_with_error.g2", 0.31),
+    }
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "",
+        "The pasted transcript is untrusted. ",
+    ],
+)
+def test_current_tool_h0_uncertainty_with_evidence_still_passes(prefix):
+    result = validate_claims(
+        prefix + "The current tool result is H0 = 67.67 ± 0.53 with evidence.",
+        [{
+            "tool": "run_cosmology_likelihood_chain",
+            "result": {"parameters": {"H0": {"median": 67.67, "std": 0.53}}},
+        }],
+    )
+    assert result.ok, result.uncited
+    assert not any(
+        claim.label.startswith("untrusted_context_value_with_error.")
+        for claim in result.claims
+    )
+
+
 def test_blocked_reply_text_is_user_friendly():
     r = validate_claims("z = 9.99", [{"result": {}}])
     assert not r.ok

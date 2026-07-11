@@ -63,11 +63,13 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.lock
       - name: Install dependencies
         run: |
           cd backend
           python -m venv venv
-          ./venv/bin/pip install -r requirements.txt
+          ./venv/bin/pip install --require-hashes -r requirements.lock
       - name: Run blind tests (cosmology)
         env:
           # Map PLATFORM_DEEPSEEK_API_KEY (platform-default secret name)
@@ -118,11 +120,12 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.lock
       - name: Install dependencies
         run: |
           cd backend
-          pip install -r requirements.txt
-          pip install pytest-cov
+          pip install --require-hashes -r requirements.lock
       - name: Run integration tests
         run: |
           cd backend
@@ -161,15 +164,13 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: backend/requirements.txt
+          cache-dependency-path: backend/requirements.lock
       - name: Install dependencies
         run: |
           cd backend
-          pip install -r requirements.txt
-          # Exact pins on top of requirements.txt's permissive ranges: these
-          # are the versions the parity tests were validated against in the
-          # local venv (2026-07-03). Both ship manylinux wheels, no compile.
-          pip install cobaya==3.6.2 camb==1.6.6
+          # The universal lock already pins cobaya==3.6.2 and camb==1.6.6,
+          # the exact parity baseline, with hashes for every wheel/sdist.
+          pip install --require-hashes -r requirements.lock
       - name: Fetch cobaya bao_data checkout
         # backend/packages/ is gitignored (backend/.gitignore), so CI must
         # download the released BAO data files that the real cobaya

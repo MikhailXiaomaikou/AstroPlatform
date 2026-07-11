@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────
-# render.yaml — production topology managed as a Render Blueprint.
+# render.yaml — target production topology managed as a Render Blueprint.
 #
 # Production topology: 5 services + 1 database.
 #   - standard-astro-db (Basic-256mb)
@@ -93,7 +93,10 @@ services:
       - key: SANDBOX_BACKEND
         value: disabled
       - key: CORS_ORIGINS
-        value: https://astro-frontend-tyfr.onrender.com,https://standard-astro-frontend-tyfr.onrender.com
+        fromService:
+          name: standard-astro-frontend
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: GOOGLE_CLIENT_ID
@@ -292,15 +295,23 @@ services:
     buildCommand: cd frontend && npm ci && npm run build
     staticPublishPath: frontend/dist
     headers:
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
       - path: /*
         name: Cache-Control
-        value: public, max-age=3600
+        value: no-cache
     routes:
       - type: rewrite
         source: /*
         destination: /index.html
     envVars:
       - key: VITE_API_URL
-        value: https://astro-backend-h4x1.onrender.com
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: NODE_VERSION
+        value: "20.19.0"
       - key: VITE_GOOGLE_CLIENT_ID
         sync: false

@@ -155,6 +155,15 @@ def test_invalid_mode_fails_closed_to_socket_peer(monkeypatch):
     assert get_client_ip(request) == SOCKET_PEER
 
 
+def test_invalid_mode_log_does_not_echo_configuration_value(monkeypatch, caplog):
+    secret_like_value = "sk-sensitive-looking-config-value"
+    _set_mode(monkeypatch, secret_like_value)
+
+    assert get_client_ip(_req()) == SOCKET_PEER
+    assert "Invalid TRUSTED_PROXY_MODE" in caplog.text
+    assert secret_like_value not in caplog.text
+
+
 def test_negative_hop_count_fails_closed(monkeypatch):
     _set_mode(monkeypatch, "-1")
     request = _req({"X-Forwarded-For": SPOOFED})
