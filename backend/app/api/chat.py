@@ -100,7 +100,9 @@ from app.services.agent_runtime.summaries import _statistics_tool_grounded_summa
 from app.services.agent_runtime.summaries import _cosmology_requested_redshift  # noqa: F401
 from app.services.agent_runtime.summaries import _cosmology_max_z_coverage  # noqa: F401
 from app.services.agent_runtime.summaries import _cosmology_tool_grounded_summary  # noqa: F401
+from app.services.agent_runtime.summaries import _enforce_cosmology_dataset_identity  # noqa: F401
 from app.services.agent_runtime.summaries import _research_tool_grounded_summary  # noqa: F401
+from app.services.agent_runtime.summaries import _successful_research_report_export  # noqa: F401
 from app.services.agent_runtime.summaries import _tool_grounded_summary  # noqa: F401
 
 from app.services.agent_runtime.prompt_routing import _cosmology_dataset_keys_present  # noqa: F401
@@ -1366,6 +1368,29 @@ async def _run_orchestrated_chat(
 
     agent_results: list[dict] = []
     handoff = None
+
+    async def _forward_specialist_event(
+        event: dict,
+        specialist: str,
+    ) -> None:
+        if on_event is None:
+            return
+        if event.get("type") == "honest_abstention":
+            # A specialist abstention is intermediate evidence, not the final
+            # merged assistant state.  Forwarding it verbatim makes the
+            # frontend permanently prefer an abstention card over the later
+            # merged reply, so surface it only as merge-pending status.
+            await on_event({
+                "type": "status",
+                "message": (
+                    f"Research specialist {specialist} issued an honest "
+                    "abstention; the final research merge is still pending."
+                ),
+                "specialist_abstention": event.get("payload"),
+            })
+            return
+        await on_event(event)
+
     for index, agent_name in enumerate(agent_names):
         agent_runtime = orchestrator.get_agent_runtime(
             agent_name,
@@ -1374,6 +1399,20 @@ async def _run_orchestrated_chat(
         agent_messages = deepcopy(messages)
         if handoff is not None:
             agent_messages.append({"role": "user", "content": _build_agent_handoff_message(handoff)})
+
+        agent_abstention_event: dict = {}
+
+        async def specialist_event(
+            event: dict,
+            _agent_name: str = agent_name,
+            _abstention_event: dict = agent_abstention_event,
+        ) -> None:
+            if event.get("type") == "honest_abstention":
+                payload = event.get("payload")
+                if isinstance(payload, dict):
+                    _abstention_event["payload"] = dict(payload)
+            await _forward_specialist_event(event, _agent_name)
+
         loop_kwargs = {
             "system": str(runtime.get("base_system", "") or "") + "\n\n" + agent_runtime["system_prompt"],
             "messages": agent_messages,
@@ -1384,7 +1423,7 @@ async def _run_orchestrated_chat(
             "preferred_backend": preferred_backend,
             "user_id": user_id,
             "chat_session_id": chat_session_id,
-            "on_event": on_event,
+            "on_event": specialist_event if on_event is not None else None,
         }
         if _loop_accepts_model_profile:
             loop_kwargs["model_profile"] = model_profile
@@ -1400,6 +1439,12 @@ async def _run_orchestrated_chat(
                 "hit_deadline": result.get("hit_deadline", False),
                 "hit_iteration_cap": result.get("hit_iteration_cap", False),
                 "validation_summary": result.get("validation_summary"),
+                "honest_abstention": bool(
+                    result.get("honest_abstention")
+                    or agent_abstention_event.get("payload")
+                ),
+                "abstention_reason": result.get("abstention_reason"),
+                "abstention_payload": agent_abstention_event.get("payload"),
             }
         )
         if index < len(agent_names) - 1:
@@ -1421,6 +1466,84 @@ async def _run_orchestrated_chat(
     for result in agent_results:
         merged_actions.extend(result["actions"])
         merged_tool_results.extend(result.get("tool_results", []))
+
+    if agent_results and all(
+        bool(result.get("honest_abstention")) for result in agent_results
+    ):
+        abstention_payloads = [
+            result.get("abstention_payload")
+            for result in agent_results
+            if isinstance(result.get("abstention_payload"), dict)
+        ]
+
+        def _joined_abstention_field(field: str) -> str:
+            values: list[str] = []
+            for payload in abstention_payloads:
+                value = str(payload.get(field) or "").strip()
+                if value and value not in values:
+                    values.append(value)
+            return ", ".join(values)
+
+        reasons = {
+            str(
+                (result.get("abstention_payload") or {}).get("reason")
+                or result.get("abstention_reason")
+                or "no_tools"
+            )
+            for result in agent_results
+        }
+        final_abstention_reason = (
+            next(iter(reasons)) if len(reasons) == 1 else "mixed"
+        )
+        final_abstention_payload = {
+            "failed_tools": _joined_abstention_field("failed_tools"),
+            "empty_tools": _joined_abstention_field("empty_tools"),
+            "rationale": (
+                "All specialist agents honestly abstained; none produced "
+                "claimable tool-backed evidence for a merged conclusion."
+            ),
+            "suggested_next_step": _joined_abstention_field(
+                "suggested_next_step"
+            ),
+            "reason": final_abstention_reason,
+            "agent": "merged_orchestrator",
+        }
+        if on_event is not None:
+            try:
+                await on_event({
+                    "type": "honest_abstention",
+                    "payload": final_abstention_payload,
+                })
+            except Exception as exc:
+                logger.debug(
+                    "Final merged abstention event emission failed: %s", exc
+                )
+        return {
+            "reply": _render_abstention_card(
+                final_abstention_payload,
+                final_abstention_reason,
+            ),
+            "actions": merged_actions,
+            "tool_results": merged_tool_results,
+            "hit_deadline": any(
+                bool(result.get("hit_deadline")) for result in agent_results
+            ),
+            "hit_iteration_cap": any(
+                bool(result.get("hit_iteration_cap"))
+                for result in agent_results
+            ),
+            "honest_abstention": True,
+            "abstention_reason": final_abstention_reason,
+            "validation_summary": {
+                "schema_version": 1,
+                "numeric_gate": "not_run",
+                "citation_gate": "not_run",
+                "regen_count": 0,
+                "blocked": False,
+                "reason": "all_specialists_honest_abstention",
+                "interventions": [],
+            },
+        }
     merged_reply = await orchestrator.merge_responses(agent_results)
     if not merged_reply.strip():
         merged_reply = (
@@ -1455,9 +1578,36 @@ async def _run_orchestrated_chat(
     _merged_numeric_state = "not_run"
     _merged_citation_state = "not_run"
     _merged_blocked = False
+    _merged_dataset_identity_enforced = False
+    _merged_fact_check_failed = False
+    _merged_fact_check_no_safe_summary = False
+    _merged_report_export_failed = False
+    _merged_gate_interventions: list[dict] = []
+    _merged_fact_failure_notice = (
+        "Automatic fact verification of the merged research reply failed, "
+        "so no merged claim or report was cleared for use. Review the failed "
+        "Fact Check result and rerun verification before relying on it."
+    )
+    _merged_report_failure_notice = (
+        "Automatic merged research-report export failed. The tool-grounded "
+        "analysis remains visible, but the requested report artifact was not "
+        "created or cleared for use. Rerun export before treating the merged "
+        "workflow as complete."
+    )
     _merged_summary_reason: str | None = (
         None if merged_reply.strip() else "empty_merged_reply"
     )
+
+    async def _emit_merged_event(event: dict) -> None:
+        if on_event is not None:
+            try:
+                await on_event(event)
+            except Exception as exc:
+                logger.debug(
+                    "Merged automatic event emission failed for %s: %s",
+                    event.get("type"),
+                    exc,
+                )
 
     if merged_reply.strip():
         try:
@@ -1578,6 +1728,7 @@ async def _run_orchestrated_chat(
             else:
                 logger.warning("Merged-reply claim validation failed open: %s", exc)
 
+    _merged_fact_call_id: str | None = None
     if merged_research_workflow and merged_reply.strip():
         try:
             from app.services.research_program import verify_research_facts
@@ -1586,15 +1737,37 @@ async def _run_orchestrated_chat(
                 "tool_results": _compact_tool_results_for_evidence(merged_tool_results),
                 "final_reply": merged_reply,
             }
+            _merged_fact_call_id = f"auto_fact_check_{uuid.uuid4().hex}"
+            await _emit_merged_event({
+                "type": "tool_call",
+                "agent": "merged_orchestrator",
+                "tool": "verify_research_facts",
+                "input": {
+                    "tool_result_count": len(merged_tool_results),
+                    "final_reply_chars": len(merged_reply),
+                },
+                "automatic": True,
+            })
             fact_result = verify_research_facts(**fact_input)
+            if not isinstance(fact_result, dict):
+                raise TypeError("verify_research_facts returned a non-object result")
             fact_tool_result = {
-                "id": f"auto_fact_check_{uuid.uuid4().hex}",
+                "id": _merged_fact_call_id,
                 "tool": "verify_research_facts",
                 "input": fact_input,
                 "result": fact_result,
             }
             merged_tool_results.append(fact_tool_result)
             merged_actions.extend(_tool_results_to_actions([fact_tool_result]))
+            await _emit_merged_event({
+                "type": "tool_result",
+                "agent": "merged_orchestrator",
+                "tool": "verify_research_facts",
+                "result": fact_result,
+                "live": True,
+                "tool_call_id": _merged_fact_call_id,
+                "automatic": True,
+            })
             if fact_result.get("status") == "blocked":
                 # HOLD (mirror the single-agent path): keep the tool-grounded core
                 # + surface held claims as a footer instead of nuking the reply.
@@ -1621,6 +1794,13 @@ async def _run_orchestrated_chat(
                     # (mirrors the single-agent fact_verification mapping).
                     if _merged_numeric_state != "blocked":
                         _merged_numeric_state = "regenerated"
+                    if _merged_citation_state != "blocked":
+                        _merged_citation_state = "regenerated"
+                    _merged_gate_interventions.append({
+                        "gate": "fact_verification",
+                        "action": "downgraded_summary",
+                        "reason": "fact_check_held",
+                    })
                 else:
                     merged_reply = (
                         "The research run completed, but fact verification found "
@@ -1629,13 +1809,86 @@ async def _run_orchestrated_chat(
                         "before using the result."
                     )
                     _merged_numeric_state = "blocked"
+                    _merged_citation_state = "blocked"
                     _merged_blocked = True
+                    _merged_fact_check_no_safe_summary = True
+                    _merged_gate_interventions.append({
+                        "gate": "fact_verification",
+                        "action": "blocked",
+                        "reason": "fact_check_no_summary",
+                    })
         except Exception as exc:
-            logger.warning("Merged research fact verification skipped: %s", exc)
+            _merged_fact_check_failed = True
+            _merged_blocked = True
+            _merged_numeric_state = "blocked"
+            _merged_citation_state = "blocked"
+            _merged_summary_reason = "automatic_fact_check_failed"
+            if _merged_fact_call_id is None:
+                _merged_fact_call_id = f"auto_fact_check_{uuid.uuid4().hex}"
+            fact_failure_result = {
+                "success": False,
+                "__tool_status__": "FAILED",
+                "analysis_status": "FACT_CHECK_FAILED",
+                "status": "blocked",
+                "publication_ready": False,
+                "__do_not_claim__": True,
+                "error_class": "automatic_fact_check_failed",
+                "error": "Automatic merged fact verification failed.",
+                "fact_check_report": {
+                    "status": "blocked",
+                    "verified_claim_count": 0,
+                    "unsupported_claim_count": 0,
+                    "claims": [],
+                },
+            }
+            failed_fact_tool_result = {
+                "id": _merged_fact_call_id,
+                "tool": "verify_research_facts",
+                "input": {
+                    "tool_result_count": len(merged_tool_results),
+                    "final_reply_chars": len(merged_reply),
+                },
+                "result": fact_failure_result,
+            }
+            existing_fact_result = next(
+                (
+                    tr
+                    for tr in merged_tool_results
+                    if tr.get("id") == _merged_fact_call_id
+                ),
+                None,
+            )
+            if existing_fact_result is None:
+                merged_tool_results.append(failed_fact_tool_result)
+                merged_actions.extend(
+                    _tool_results_to_actions([failed_fact_tool_result])
+                )
+            else:
+                existing_fact_result.update(failed_fact_tool_result)
+            await _emit_merged_event({
+                "type": "tool_result",
+                "agent": "merged_orchestrator",
+                "tool": "verify_research_facts",
+                "result": fact_failure_result,
+                "live": True,
+                "tool_call_id": _merged_fact_call_id,
+                "automatic": True,
+            })
+            merged_reply = _merged_fact_failure_notice
+            _merged_gate_interventions.append({
+                "gate": "fact_verification",
+                "action": "blocked",
+                "reason": "automatic_fact_check_failed",
+            })
+            logger.warning(
+                "Merged research fact verification failed closed: %s", exc
+            )
 
-    if merged_research_workflow and not any(
-        tr.get("tool") == "export_research_report"
-        for tr in merged_tool_results
+    _merged_report_call_id: str | None = None
+    if (
+        merged_research_workflow
+        and not _merged_fact_check_failed
+        and not _merged_fact_check_no_safe_summary
     ):
         try:
             from app.services.research_program import export_research_report
@@ -1646,21 +1899,167 @@ async def _run_orchestrated_chat(
                 "tool_results": merged_tool_results,
                 "title": latest_research_user_text[:180] if latest_research_user_text else None,
             }
+            _merged_report_call_id = (
+                f"auto_research_report_{uuid.uuid4().hex}"
+            )
+            await _emit_merged_event({
+                "type": "tool_call",
+                "agent": "merged_orchestrator",
+                "tool": "export_research_report",
+                "input": {
+                    "tool_result_count": len(merged_tool_results),
+                    "title": report_input["title"],
+                    "report_scope": "merged",
+                },
+                "automatic": True,
+            })
             report_result = export_research_report(**report_input)
             report_tool_result = {
-                "id": f"auto_research_report_{uuid.uuid4().hex}",
+                "id": _merged_report_call_id,
                 "tool": "export_research_report",
                 "input": {
                     "research_plan": report_input["research_plan"],
                     "evidence_graph": report_input["evidence_graph"],
                     "title": report_input["title"],
+                    "report_scope": "merged",
                 },
                 "result": report_result,
             }
             merged_tool_results.append(report_tool_result)
             merged_actions.extend(_tool_results_to_actions([report_tool_result]))
+            await _emit_merged_event({
+                "type": "tool_result",
+                "agent": "merged_orchestrator",
+                "tool": "export_research_report",
+                "result": report_result,
+                "live": True,
+                "tool_call_id": _merged_report_call_id,
+                "automatic": True,
+            })
         except Exception as exc:
-            logger.warning("Merged research report export skipped: %s", exc)
+            _merged_report_export_failed = True
+            if _merged_report_call_id is None:
+                _merged_report_call_id = (
+                    f"auto_research_report_{uuid.uuid4().hex}"
+                )
+            report_failure_result = {
+                "success": False,
+                "__tool_status__": "FAILED",
+                "analysis_status": "REPORT_EXPORT_FAILED",
+                "publication_ready": False,
+                "__do_not_claim__": True,
+                "error_class": "automatic_report_export_failed",
+                "error": "Automatic merged research-report export failed.",
+            }
+            failed_report_tool_result = {
+                "id": _merged_report_call_id,
+                "tool": "export_research_report",
+                "input": {
+                    "tool_result_count": len(merged_tool_results),
+                    "title": (
+                        latest_research_user_text[:180]
+                        if latest_research_user_text
+                        else None
+                    ),
+                    "report_scope": "merged",
+                },
+                "result": report_failure_result,
+            }
+            existing_report_result = next(
+                (
+                    tr
+                    for tr in merged_tool_results
+                    if tr.get("id") == _merged_report_call_id
+                ),
+                None,
+            )
+            if existing_report_result is None:
+                merged_tool_results.append(failed_report_tool_result)
+                merged_actions.extend(
+                    _tool_results_to_actions([failed_report_tool_result])
+                )
+            else:
+                existing_report_result.update(failed_report_tool_result)
+            await _emit_merged_event({
+                "type": "tool_result",
+                "agent": "merged_orchestrator",
+                "tool": "export_research_report",
+                "result": report_failure_result,
+                "live": True,
+                "tool_call_id": _merged_report_call_id,
+                "automatic": True,
+            })
+            _report_failure_draft = merged_reply
+            merged_reply = (
+                merged_reply.rstrip()
+                + "\n\n---\n\n"
+                + _merged_report_failure_notice
+            )
+            _merged_numeric_state = "blocked"
+            _merged_citation_state = "blocked"
+            _merged_blocked = True
+            _merged_summary_reason = "automatic_report_export_failed"
+            _merged_gate_interventions.append({
+                "gate": "report_export",
+                "action": "blocked",
+                "reason": "automatic_report_export_failed",
+                "draft_changed": _report_failure_draft != merged_reply,
+            })
+            logger.warning("Merged research report export failed: %s", exc)
+
+    _merged_identity_draft = merged_reply
+    merged_reply, _merged_dataset_identity_enforced = (
+        _enforce_cosmology_dataset_identity(
+            merged_reply,
+            merged_tool_results,
+            latest_research_user_text,
+        )
+    )
+    if _merged_dataset_identity_enforced:
+        if _merged_fact_check_failed:
+            merged_reply += "\n\n---\n\n" + _merged_fact_failure_notice
+        if _merged_report_export_failed:
+            merged_reply += "\n\n---\n\n" + _merged_report_failure_notice
+        _merged_identity_action = "downgraded_summary"
+        _merged_identity_reason = "requested_release_mismatch"
+        try:
+            from app.services.claim_validator import (
+                blocked_reply_with_narrative,
+                validate_claims,
+            )
+
+            identity_validation = validate_claims(
+                merged_reply, merged_tool_results
+            )
+            if identity_validation.ok:
+                if _merged_numeric_state != "blocked":
+                    _merged_numeric_state = "regenerated"
+            else:
+                merged_reply = blocked_reply_with_narrative(
+                    identity_validation, merged_reply
+                )
+                _merged_numeric_state = "blocked"
+                _merged_blocked = True
+                _merged_identity_action = "blocked"
+                _merged_identity_reason = (
+                    "dataset_identity_claim_validation_failed"
+                )
+        except Exception as exc:
+            logger.exception(
+                "Merged dataset-identity summary validation failed: %s", exc
+            )
+            _merged_numeric_state = "blocked"
+            _merged_blocked = True
+            _merged_identity_action = "blocked"
+            _merged_identity_reason = "dataset_identity_validation_error"
+            merged_reply += (
+                "\n\n---\n\nDataset identity was corrected from the merged "
+                "tool outputs, but secondary claim validation failed. Treat "
+                "this reply as blocked until validation is rerun."
+            )
+            if not (_merged_fact_check_failed or _merged_report_export_failed):
+                _merged_summary_reason = "dataset_identity_validation_error"
+
     # Assemble the merged validation summary.  Top-level states describe the
     # SHIPPED merged prose (validated above against the union of tool
     # results); per-agent interventions are folded in so a member reply
@@ -1668,6 +2067,7 @@ async def _run_orchestrated_chat(
     # state is upgraded to "regenerated" when any member intervention
     # touched that gate family — understate rather than overstate.
     from app.services.agent_runtime.loop import (
+        _BLOCKING_GATE_ACTIONS,
         _CITATION_GATE_FAMILY,
         _NUMERIC_GATE_FAMILY,
         _VALIDATION_SUMMARY_MAX_INTERVENTIONS,
@@ -1677,11 +2077,32 @@ async def _run_orchestrated_chat(
         r.get("validation_summary") for r in agent_results
         if isinstance(r.get("validation_summary"), dict)
     ]
-    _member_interventions: list[dict] = []
+    _member_interventions: list[dict] = list(_merged_gate_interventions)
     for s in _member_summaries:
         for item in s.get("interventions") or []:
             if isinstance(item, dict):
                 _member_interventions.append(item)
+    if _merged_dataset_identity_enforced:
+        _member_interventions.append({
+            "gate": "dataset_identity",
+            "action": _merged_identity_action,
+            "reason": _merged_identity_reason,
+            "draft_changed": _merged_identity_draft != merged_reply,
+        })
+    unrecovered_member_report_failure = (
+        not _successful_research_report_export(merged_tool_results)
+        and any(
+            item.get("gate") == "report_export"
+            and item.get("action") in _BLOCKING_GATE_ACTIONS
+            for item in _member_interventions
+        )
+    )
+    if unrecovered_member_report_failure:
+        _merged_numeric_state = "blocked"
+        _merged_citation_state = "blocked"
+        _merged_blocked = True
+        if not _merged_summary_reason:
+            _merged_summary_reason = "member_report_export_failed"
     if _merged_numeric_state == "passed" and any(
         i.get("gate") in _NUMERIC_GATE_FAMILY for i in _member_interventions
     ):

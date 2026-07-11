@@ -35,6 +35,117 @@ COSMOLOGY_DATASET_FAMILY_ALIASES: dict[str, tuple[str, ...]] = {
 COSMOLOGY_PLUS_RELEASE_FAMILIES = frozenset({"pantheon"})
 
 
+def _dataset_mention_is_non_execution(
+    prompt: str,
+    start: int,
+    end: int,
+    *,
+    comparison_is_execution: bool = False,
+) -> bool:
+    """Ignore datasets explicitly excluded or mentioned only for explanation."""
+    before = str(prompt or "")[max(0, start - 96) : start].lower()
+    after = str(prompt or "")[end : end + 96].lower()
+    clause_before = re.split(r"[.;\n]|,\s*(?:and\s+)?", before)[-1]
+    clause_after = re.split(r"[.;\n]", after)[0]
+    execution_pattern = re.compile(
+        r"\b(?:run|use|execute|select|fit|analy[sz]e)\b"
+    )
+    execution_matches = list(execution_pattern.finditer(clause_before))
+
+    if re.search(r"\bwith\s+(?:and|/)\s*without\s*$", clause_before):
+        return False
+
+    if re.search(
+        r"\b(?:do\s+not|don't|never)\s+"
+        r"(?:run|use|execute|select|fit|analy[sz]e)\b[^.;\n]{0,48}$",
+        clause_before,
+    ):
+        return True
+    if re.search(r"\b(?:and\s+|but\s+)?not\s*$", clause_before):
+        return True
+    if re.search(
+        r"\b(?:without|do\s+not|don't|never|not\s+(?:be\s+)?)\b"
+        r"[^.;\n]{0,32}\b"
+        r"(?:run|use|execute|select|fit|analy[sz]e)(?:d|ing)?\b",
+        clause_after,
+    ):
+        return True
+
+    # Later anaphoric execution applies to datasets introduced earlier in an
+    # explanation: "compare A and B by running both".
+    if re.search(
+        r"\b(?:then\s+|by\s+)?(?:run(?:ning)?|us(?:e|ing)|execut(?:e|ing)|"
+        r"select(?:ing)?|fit(?:ting)?|analy[sz](?:e|ing))\s+"
+        r"(?:both|all|them|these|those|it|the\s+two)\b",
+        after,
+    ):
+        return False
+
+    exclusion_matches = list(re.finditer(
+        r"\b(?:without|excluding?|avoid(?:ing)?|rather\s+than|instead\s+of)\b",
+        clause_before,
+    ))
+    if exclusion_matches:
+        exclusion = exclusion_matches[-1]
+        executions_after_exclusion = [
+            match
+            for match in execution_matches
+            if match.start() > exclusion.end()
+        ]
+        exclusion_tail = clause_before[exclusion.end() :].lstrip()
+        directly_excluded_execution = bool(re.match(
+            r"(?:to\s+)?(?:run|use|execute|select|fit|analy[sz]e)\b",
+            exclusion_tail,
+        ))
+        if not executions_after_exclusion or directly_excluded_execution:
+            return True
+
+    explanation_verbs = (
+        r"explain|describe|discuss|mention|clarify"
+        if comparison_is_execution
+        else r"explain|describe|discuss|mention|clarify|compare|contrast|distinguish"
+    )
+    explain_matches = list(re.finditer(
+        rf"\b(?:{explanation_verbs})\b",
+        clause_before,
+    ))
+    if explain_matches and not execution_matches:
+        return True
+    if explain_matches and execution_matches:
+        last_explanation = explain_matches[-1]
+        last_execution = execution_matches[-1]
+        if last_explanation.start() > last_execution.end():
+            between = clause_before[
+                last_execution.end() : last_explanation.start()
+            ]
+            for aliases in COSMOLOGY_DATASET_FAMILY_ALIASES.values():
+                for alias in aliases:
+                    alias_pattern = re.escape(alias).replace(r"\ ", r"\s+")
+                    if re.search(
+                        rf"(?<![a-z0-9]){alias_pattern}(?![a-z0-9])",
+                        between,
+                    ):
+                        return True
+    comparison_context = clause_before + " " + clause_after
+    explicit_comparison_request = bool(re.search(
+        r"\b(?:compare|contrast)\b",
+        clause_before,
+    ))
+    if (
+        not execution_matches
+        and re.search(r"\b(?:same|different|differs?|equivalent)\b", comparison_context)
+        and not (comparison_is_execution and explicit_comparison_request)
+    ):
+        return True
+    if (
+        not comparison_is_execution
+        and not execution_matches
+        and re.search(r"\b(?:versus|vs)\b", comparison_context)
+    ):
+        return True
+    return False
+
+
 def _cosmology_prompt_mentions_dataset_family(
     prompt: str,
     family: str,
@@ -46,9 +157,34 @@ def _cosmology_prompt_mentions_dataset_family(
         if not include_canonical_short_name and alias == family:
             continue
         pattern = re.escape(alias).replace(r"\ ", r"\s+")
-        if re.search(rf"(?<![a-z0-9]){pattern}(?![a-z0-9])", prompt, re.IGNORECASE):
-            return True
+        for match in re.finditer(
+            rf"(?<![a-z0-9]){pattern}(?![a-z0-9])",
+            prompt,
+            re.IGNORECASE,
+        ):
+            if not _dataset_mention_is_non_execution(
+                prompt,
+                match.start(),
+                match.end(),
+                comparison_is_execution=True,
+            ):
+                return True
     return False
+
+
+def _cosmology_prompt_has_executable_pattern(
+    prompt: str,
+    pattern: str,
+) -> bool:
+    return any(
+        not _dataset_mention_is_non_execution(
+            prompt,
+            match.start(),
+            match.end(),
+            comparison_is_execution=True,
+        )
+        for match in re.finditer(pattern, prompt, re.IGNORECASE)
+    )
 
 
 def _cosmology_dataset_keys_present(tool_results: list[dict]) -> set[str]:
@@ -253,6 +389,20 @@ def _inline_statistics_tool_call_from_prompt(text: str) -> dict[str, Any] | None
 
 def _is_cosmology_likelihood_workflow(text: str) -> bool:
     prompt = str(text or "").lower()
+    pure_dataset_identity_question = (
+        bool(re.search(
+            r"\b(?:same|equivalent|different)\s+"
+            r"(?:datasets?|data\s+sets?|releases?|products?)\b",
+            prompt,
+        ))
+        and not re.search(
+            r"\b(?:run|use|execute|fit|analy[sz]e|compare|contrast|"
+            r"constrain|evaluate|assess)\b",
+            prompt,
+        )
+    )
+    if pure_dataset_identity_question:
+        return False
     dataset_tokens = (
         "bao", "baryon acoustic", "sn ia", "supernova", "pantheon",
         "des-sn", "union3", "cmb", "planck", "act dr6", "spt", "spt-3g", "sh0es",
@@ -507,13 +657,30 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
             keys.append("sdss_6df_bao")
         else:
             keys.append("desi_dr1_bao")
-    if any(tok in prompt for tok in ("pantheon", "supernova", "sn ia")) or re.search(r"\bsn\b", prompt):
+    pantheon_requested = _cosmology_prompt_mentions_dataset_family(
+        prompt, "pantheon"
+    ) or _cosmology_prompt_has_executable_pattern(
+        prompt, r"\b(?:supernova|sn\s+ia|sn)\b"
+    )
+    if pantheon_requested:
         keys.append("pantheon_plus")
-    if any(tok in prompt for tok in ("des-sn", "des sn", "des-5yr", "des 5yr", "desy5")):
+    if _cosmology_prompt_has_executable_pattern(
+        prompt, r"\b(?:des[ -]?sn|des[ -]?5yr|desy5)\b"
+    ):
         keys.append("des_sn5yr")
-    if "union3" in prompt or "unity" in prompt:
+    if _cosmology_prompt_has_executable_pattern(
+        prompt, r"\b(?:union3|unity)\b"
+    ):
         keys.append("union3")
-    if any(tok in prompt for tok in ("cmb", "planck")):
+    planck_named = bool(re.search(r"\bplanck\b", prompt, re.IGNORECASE))
+    planck_requested = _cosmology_prompt_mentions_dataset_family(
+        prompt, "planck"
+    )
+    generic_cmb_requested = (
+        not planck_named
+        and _cosmology_prompt_has_executable_pattern(prompt, r"\bcmb\b")
+    )
+    if planck_requested or generic_cmb_requested:
         keys.append("planck2018_compressed")
     if (
         not keys
@@ -522,12 +689,13 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
     ):
         keys.append("planck2018_compressed")
     if (
-        _cosmology_prompt_mentions_act(prompt)
-        or "cmb lensing" in prompt
-        or "cmb-lensing" in prompt
+        _cosmology_prompt_mentions_dataset_family(prompt, "act")
+        or _cosmology_prompt_has_executable_pattern(
+            prompt, r"\bcmb[ -]lensing\b"
+        )
     ):
         keys.append("act_dr6_lensing")
-    if _cosmology_prompt_mentions_spt(prompt):
+    if _cosmology_prompt_mentions_dataset_family(prompt, "spt"):
         keys.append("spt3g_cmb")
     kids_requested = _cosmology_prompt_mentions_dataset_family(prompt, "kids")
     # Bare "DES" also prefixes DES-SN, which is a distinct supernova product.
@@ -536,23 +704,35 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
     des_requested = _cosmology_prompt_mentions_dataset_family(
         prompt, "des", include_canonical_short_name=False
     )
-    des_requested = des_requested or bool(
-        re.search(r"\bdes[\s_-]+y\s*[0-9]+[a-z]?\b", prompt, re.IGNORECASE)
-        or re.search(
-            r"\bdes\b(?![\s-]*sn\b)[^\n]{0,48}\b(?:weak[ -]?lensing|cosmic[ -]?shear|3x2pt)\b",
+    des_requested = des_requested or (
+        _cosmology_prompt_has_executable_pattern(
             prompt,
-            re.IGNORECASE,
+            r"\bdes[\s_-]+y\s*[0-9]+[a-z]?\b",
+        )
+        or _cosmology_prompt_has_executable_pattern(
+            prompt,
+            r"\bdes\b(?![\s-]*sn\b)[^\n]{0,48}\b(?:weak[ -]?lensing|cosmic[ -]?shear|3x2pt)\b",
         )
     )
     hsc_requested = _cosmology_prompt_mentions_dataset_family(prompt, "hsc")
     specific_wl_requested = kids_requested or des_requested or hsc_requested
+    galaxy_weak_lensing_requested = _cosmology_prompt_has_executable_pattern(
+        prompt,
+        r"\bgalaxy\s+weak[ -]?lensing\b",
+    )
     if kids_requested:
         keys.append("kids1000_wl")
-    if des_requested or "galaxy weak lensing" in prompt:
+    if des_requested or (
+        galaxy_weak_lensing_requested and not specific_wl_requested
+    ):
         keys.append("des_y3_3x2pt")
     if hsc_requested:
         keys.append("hsc_y1_cosmic_shear")
-    if _cosmology_prompt_mentions_weak_lensing(prompt) and not specific_wl_requested:
+    generic_wl_requested = _cosmology_prompt_has_executable_pattern(
+        prompt,
+        r"\b(?:weak[ -]?lensing(?:\s+survey)?|galaxy\s+lensing|cosmic[ -]?shear)\b",
+    )
+    if generic_wl_requested and not specific_wl_requested:
         for key in ("kids1000_wl", "des_y3_3x2pt", "hsc_y1_cosmic_shear"):
             keys.append(key)
     if "chronometer" in prompt or re.search(r"\bcc\b", prompt):

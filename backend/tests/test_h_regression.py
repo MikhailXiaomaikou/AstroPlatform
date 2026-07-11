@@ -2147,8 +2147,10 @@ def test_orchestrator_runs_fact_check_and_report_for_merged_research_reply():
 
     src = inspect.getsource(chat._run_orchestrated_chat)
     assert "merged_research_workflow = _is_research_program_workflow" in src
-    assert "Merged research fact verification skipped" in src
-    assert "Merged research report export skipped" in src
+    assert "Merged research fact verification failed closed" in src
+    assert "Merged research report export failed" in src
+    assert '"status": "blocked"' in src
+    assert "and not _merged_fact_check_failed" in src
     assert '\"tool\": \"verify_research_facts\"' in src
     assert '\"tool\": \"export_research_report\"' in src
 

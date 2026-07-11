@@ -11,6 +11,7 @@ from typing import Any
 from app.services.agent_runtime.prompt_routing import (
     COSMOLOGY_DATASET_FAMILY_ALIASES,
     COSMOLOGY_PLUS_RELEASE_FAMILIES,
+    _dataset_mention_is_non_execution,
 )
 
 
@@ -376,8 +377,18 @@ def _markers_near_dataset_family(prompt: str, family: str) -> dict[str, set[str]
 
     matches = family_matches()
     for match in matches:
+        if _dataset_mention_is_non_execution(
+            prompt_text, match.start(), match.end()
+        ):
+            continue
         before = prompt_text[max(0, match.start() - 32) : match.start()]
         after = prompt_text[match.end() : match.end() + 64]
+        after = re.split(
+            r"[\(\[]\s*(?:not|without|excluding?|avoid(?:ing)?)\b",
+            after,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
         if family in COSMOLOGY_PLUS_RELEASE_FAMILIES and after.startswith("+"):
             # Survey names such as Pantheon+ may be immediately followed by a
             # companion label (Pantheon+SH0ES).  This is a release marker, not
@@ -751,6 +762,51 @@ def _cosmology_tool_grounded_summary(
     return "\n".join(lines) if len(lines) > 1 else None
 
 
+def _enforce_cosmology_dataset_identity(
+    reply: str,
+    tool_results: list[dict],
+    user_prompt: str,
+) -> tuple[str, bool]:
+    """Replace model prose when an executed release differs from the request.
+
+    Appending a correction is not sufficient: the draft may explicitly claim
+    that two differently named releases are equivalent.  In that case the
+    deterministic tool-grounded summary becomes the entire public reply, so the
+    contradicted narrative cannot survive above or below the correction.
+    """
+    disclosures = _cosmology_dataset_substitution_disclosures(
+        tool_results, user_prompt
+    )
+    if not disclosures:
+        return reply, False
+    safe_summary = _cosmology_tool_grounded_summary(tool_results, user_prompt)
+    if safe_summary:
+        return safe_summary, True
+    return (
+        "Dataset identity correction (tool-grounded):\n- "
+        + "\n- ".join(disclosures),
+        True,
+    )
+
+
+def _successful_research_report_export(tool_results: list[dict]) -> bool:
+    """Return true only when a report artifact actually completed."""
+    for item in tool_results:
+        if not isinstance(item, dict) or item.get("tool") != "export_research_report":
+            continue
+        result = item.get("result")
+        if not isinstance(result, dict) or result.get("success") is not True:
+            continue
+        statuses = {
+            str(result.get(key) or "").strip().upper()
+            for key in ("__tool_status__", "analysis_status", "status")
+        }
+        if statuses & {"FAILED", "ERROR", "BLOCKED", "CANCELLED", "TIMEOUT"}:
+            continue
+        return True
+    return False
+
+
 def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
     """Deterministic Research Mode summary that avoids unsupported numbers."""
     plan: dict[str, Any] | None = None
@@ -1000,7 +1056,8 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
     lines.extend(["", "Robustness"])
     if executed_not_ready_summaries:
         lines.append(
-            "- Executed but not claimable because publication requirements were not met: "
+            "- Executed but not claimable (`execution_level=executed_not_ready`) "
+            "because publication requirements were not met: "
             + "; ".join(executed_not_ready_summaries[:5])
             + ("." if len(executed_not_ready_summaries) <= 5 else f"; +{len(executed_not_ready_summaries) - 5} more.")
         )

@@ -67,11 +67,13 @@ from app.services.agent_runtime.runtime_config import (
 )
 from app.services.agent_runtime.summaries import (
     _cosmology_tool_grounded_summary,
+    _enforce_cosmology_dataset_identity,
     _line_fit_partial_from_result,
     _line_fit_publication_ready_from_result,
     _line_lfr_tool_grounded_summary,
     _line_measurement_count_from_result,
     _research_tool_grounded_summary,
+    _successful_research_report_export,
     _statistics_tool_grounded_summary,
     _tool_grounded_summary,
 )
@@ -132,12 +134,13 @@ def _active_research_focus() -> str:
 # Gates whose interventions concern numeric / quantitative claims.
 _NUMERIC_GATE_FAMILY = frozenset({
     "numeric_claims", "zero_data", "cjk_filter", "fact_verification",
-    "empty_reply_fallback",
+    "empty_reply_fallback", "dataset_identity", "report_export",
 })
 # Gates whose interventions concern citations / literature narrative.
 _CITATION_GATE_FAMILY = frozenset({
     "citation_methodology", "literature_prior", "unclassified_literature",
-    "unsupported_narrative", "cosmology_anchor",
+    "unsupported_narrative", "cosmology_anchor", "fact_verification",
+    "report_export",
 })
 _BLOCKING_GATE_ACTIONS = frozenset({"blocked", "annotated_blocked"})
 _VALIDATION_SUMMARY_MAX_INTERVENTIONS = 10
@@ -1167,7 +1170,14 @@ async def _run_agent_loop(
         abstention_text_in_prose = (
             "<tools_returned_nothing" in text or "<toolsreturnednothing" in text
         )
-        if abstention_text_in_prose:
+        structured_abstention_reply = (
+            _parse_abstention_tag(text) if abstention_text_in_prose else None
+        )
+        # Preserve a whole-reply structured tag for the canonical honest-
+        # abstention branch after the loop.  Only sanitize leaked tags that
+        # are embedded in ordinary prose; eagerly sanitizing every tag made
+        # the structured branch unreachable after a tool call.
+        if abstention_text_in_prose and structured_abstention_reply is None:
             text = _sanitize_tools_returned_nothing(text)
         if text:
             # Research/cosmology turns can produce draft prose immediately
@@ -1188,7 +1198,12 @@ async def _run_agent_loop(
                 })
             else:
                 text_parts.append(text)
-                await _emit({"type": "agent_text", "agent": agent_name, "content": text})
+                if structured_abstention_reply is None:
+                    await _emit({
+                        "type": "agent_text",
+                        "agent": agent_name,
+                        "content": text,
+                    })
         if tool_calls_in_turn and abstention_text_in_prose:
             break
         if not tool_calls_in_turn:
@@ -1679,21 +1694,59 @@ async def _run_agent_loop(
             abstention_payload.get("failed_tools", ""),
             abstention_payload.get("empty_tools", ""),
         )
-        clean_reply = _render_abstention_card(abstention_payload, reason)
+        abstention_card = _render_abstention_card(abstention_payload, reason)
+        identity_reply, abstention_identity_enforced = (
+            _enforce_cosmology_dataset_identity(
+                abstention_card, all_tool_results, latest_user_text
+            )
+        )
+        clean_reply = (
+            identity_reply + "\n\n---\n\n" + abstention_card
+            if abstention_identity_enforced
+            else abstention_card
+        )
+        visible_abstention_payload = dict(abstention_payload)
+        if abstention_identity_enforced:
+            # The frontend renders the structured abstention card instead of
+            # ``reply``.  Put the platform-authored, tool-grounded disclosure
+            # into the card's existing rationale field so it remains visible
+            # without trusting model-supplied numeric prose.
+            original_rationale = str(
+                visible_abstention_payload.get("rationale") or ""
+            ).strip()
+            visible_abstention_payload["rationale"] = "\n\n".join(
+                part for part in (original_rationale, identity_reply) if part
+            )
         if on_event is not None:
             try:
                 await on_event({
                     "type": "honest_abstention",
                     "payload": {
-                        **abstention_payload,
+                        **visible_abstention_payload,
                         "reason": reason,
                         "agent": agent_name,
+                        "reply_overridden_by_dataset_identity": (
+                            abstention_identity_enforced
+                        ),
                     },
                 })
             except Exception:
                 pass
         # Attach tool-result action cards as usual, then short-circuit out.
         actions.extend(_tool_results_to_actions(all_tool_results))
+        abstention_validation_summary = _not_run_validation_summary(
+            (
+                "honest_abstention_dataset_identity_disclosure"
+                if abstention_identity_enforced
+                else "honest_abstention"
+            )
+        )
+        if abstention_identity_enforced:
+            abstention_validation_summary["interventions"] = [{
+                "gate": "dataset_identity",
+                "action": "disclosed_substitution",
+                "reason": "requested_release_mismatch",
+            }]
         return {
             "reply": clean_reply,
             "actions": actions,
@@ -1704,7 +1757,7 @@ async def _run_agent_loop(
             "abstention_reason": reason,
             # The abstention card path skips the claim validator by design
             # (its prose is platform-written and claim-scrubbed above).
-            "validation_summary": _not_run_validation_summary("honest_abstention"),
+            "validation_summary": abstention_validation_summary,
         }
     if "<tools_returned_nothing" in clean_reply or "<toolsreturnednothing" in clean_reply:
         clean_reply = _sanitize_tools_returned_nothing(clean_reply)
@@ -2579,6 +2632,14 @@ async def _run_agent_loop(
     )
 
     held_reply_produced = False
+    fact_call_id: str | None = None
+    automatic_fact_check_failed = False
+    fact_check_no_safe_summary = False
+    fact_check_failure_notice = (
+        "Automatic fact verification failed, so no research claim or report "
+        "was cleared for use. Review the failed Fact Check result and rerun "
+        "verification before relying on this analysis."
+    )
     if research_mode_result_present and clean_reply.strip():
         try:
             from app.services.research_program import verify_research_facts
@@ -2591,14 +2652,34 @@ async def _run_agent_loop(
                 "tool_results": _compact_tool_results_for_evidence(all_tool_results),
                 "final_reply": clean_reply,
             }
+            fact_call_id = f"auto_fact_check_{uuid.uuid4().hex}"
+            await _emit({
+                "type": "tool_call",
+                "agent": agent_name,
+                "tool": "verify_research_facts",
+                "input": {
+                    "tool_result_count": len(all_tool_results),
+                    "final_reply_chars": len(clean_reply),
+                },
+                "automatic": True,
+            })
             fact_result = verify_research_facts(**fact_input)
             fact_tool_result = {
-                "id": f"auto_fact_check_{uuid.uuid4().hex}",
+                "id": fact_call_id,
                 "tool": "verify_research_facts",
                 "input": fact_input,
                 "result": fact_result,
             }
             all_tool_results.append(fact_tool_result)
+            await _emit({
+                "type": "tool_result",
+                "agent": agent_name,
+                "tool": "verify_research_facts",
+                "result": fact_result,
+                "live": True,
+                "tool_call_id": fact_call_id,
+                "automatic": True,
+            })
             if fact_result.get("status") == "blocked":
                 # HOLD instead of whole-reply nuke: keep the tool-grounded
                 # deterministic core (now incl. the cosmology/AP summary) and
@@ -2642,6 +2723,9 @@ async def _run_agent_loop(
                         "Check card and rerun the missing evidence path before "
                         "using the result."
                     )
+                    held_reply_produced = True
+                    fact_check_no_safe_summary = True
+                    fabrication_stats["blocked"] = True
                     await _gate_event(
                         "fact_verification", "blocked", reason="fact_check_no_summary",
                         details={"held_count": len(held_claims)},
@@ -2658,7 +2742,68 @@ async def _run_agent_loop(
                 except Exception:
                     pass
         except Exception as exc:
-            logger.warning("Research fact verification skipped: %s", exc)
+            automatic_fact_check_failed = True
+            held_reply_produced = True
+            fabrication_stats["blocked"] = True
+            fact_failure_result = {
+                "success": False,
+                "__tool_status__": "FAILED",
+                "analysis_status": "FACT_CHECK_FAILED",
+                "status": "blocked",
+                "publication_ready": False,
+                "__do_not_claim__": True,
+                "error_class": "automatic_fact_check_failed",
+                "error": "Automatic fact verification failed.",
+                "fact_check_report": {
+                    "status": "blocked",
+                    "verified_claim_count": 0,
+                    "unsupported_claim_count": 0,
+                    "claims": [],
+                },
+            }
+            if fact_call_id is None:
+                fact_call_id = f"auto_fact_check_{uuid.uuid4().hex}"
+            existing_fact_result = next(
+                (
+                    tr
+                    for tr in all_tool_results
+                    if tr.get("id") == fact_call_id
+                ),
+                None,
+            )
+            compact_failure_input = {
+                "tool_result_count": len(all_tool_results),
+                "final_reply_chars": len(clean_reply),
+            }
+            if existing_fact_result is None:
+                all_tool_results.append({
+                    "id": fact_call_id,
+                    "tool": "verify_research_facts",
+                    "input": compact_failure_input,
+                    "result": fact_failure_result,
+                })
+            else:
+                existing_fact_result["input"] = compact_failure_input
+                existing_fact_result["result"] = fact_failure_result
+            await _emit({
+                "type": "tool_result",
+                "agent": agent_name,
+                "tool": "verify_research_facts",
+                "result": fact_failure_result,
+                "live": True,
+                "tool_call_id": fact_call_id,
+                "automatic": True,
+            })
+            _fv_failure_draft = clean_reply
+            clean_reply = fact_check_failure_notice
+            await _gate_event(
+                "fact_verification",
+                "blocked",
+                reason="automatic_fact_check_failed",
+                draft=_fv_failure_draft,
+                final=clean_reply,
+            )
+            logger.warning("Research fact verification failed closed: %s", exc)
 
     if research_mode_result_present and not held_reply_produced:
         # Research Mode answers must be the evidence graph's public surface, not
@@ -2680,9 +2825,19 @@ async def _run_agent_loop(
                 draft=_rs_draft, final=clean_reply,
             )
 
-    if research_mode_result_present and not any(
-        tr.get("tool") == "export_research_report"
-        for tr in all_tool_results
+    report_call_id: str | None = None
+    automatic_report_export_failed = False
+    report_export_failure_notice = (
+        "Automatic research-report export failed. The tool-grounded analysis "
+        "above remains visible, but the requested report artifact was not "
+        "created or cleared for use. Rerun export before treating the workflow "
+        "as complete."
+    )
+    if (
+        research_mode_result_present
+        and not automatic_fact_check_failed
+        and not fact_check_no_safe_summary
+        and not _successful_research_report_export(all_tool_results)
     ):
         try:
             from app.services.research_program import export_research_report
@@ -2693,9 +2848,20 @@ async def _run_agent_loop(
                 "tool_results": all_tool_results,
                 "title": latest_user_text[:180] if latest_user_text else None,
             }
+            report_call_id = f"auto_research_report_{uuid.uuid4().hex}"
+            await _emit({
+                "type": "tool_call",
+                "agent": agent_name,
+                "tool": "export_research_report",
+                "input": {
+                    "tool_result_count": len(all_tool_results),
+                    "title": report_input["title"],
+                },
+                "automatic": True,
+            })
             report_result = export_research_report(**report_input)
             all_tool_results.append({
-                "id": f"auto_research_report_{uuid.uuid4().hex}",
+                "id": report_call_id,
                 "tool": "export_research_report",
                 "input": {
                     "research_plan": report_input["research_plan"],
@@ -2704,8 +2870,123 @@ async def _run_agent_loop(
                 },
                 "result": report_result,
             })
+            await _emit({
+                "type": "tool_result",
+                "agent": agent_name,
+                "tool": "export_research_report",
+                "result": report_result,
+                "live": True,
+                "tool_call_id": report_call_id,
+                "automatic": True,
+            })
         except Exception as exc:
-            logger.warning("Research report export skipped: %s", exc)
+            automatic_report_export_failed = True
+            report_failure_result = {
+                "success": False,
+                "__tool_status__": "FAILED",
+                "analysis_status": "REPORT_EXPORT_FAILED",
+                "publication_ready": False,
+                "__do_not_claim__": True,
+                "error_class": "automatic_report_export_failed",
+                "error": "Automatic research-report export failed.",
+            }
+            if report_call_id is None:
+                report_call_id = f"auto_research_report_{uuid.uuid4().hex}"
+            compact_report_input = {
+                "tool_result_count": len(all_tool_results),
+                "title": latest_user_text[:180] if latest_user_text else None,
+            }
+            existing_report_result = next(
+                (
+                    tr
+                    for tr in all_tool_results
+                    if tr.get("id") == report_call_id
+                ),
+                None,
+            )
+            if existing_report_result is None:
+                all_tool_results.append({
+                    "id": report_call_id,
+                    "tool": "export_research_report",
+                    "input": compact_report_input,
+                    "result": report_failure_result,
+                })
+            else:
+                existing_report_result["input"] = compact_report_input
+                existing_report_result["result"] = report_failure_result
+            await _emit({
+                "type": "tool_result",
+                "agent": agent_name,
+                "tool": "export_research_report",
+                "result": report_failure_result,
+                "live": True,
+                "tool_call_id": report_call_id,
+                "automatic": True,
+            })
+            _report_failure_draft = clean_reply
+            clean_reply = (
+                clean_reply.rstrip() + "\n\n---\n\n" + report_export_failure_notice
+            )
+            fabrication_stats["blocked"] = True
+            await _gate_event(
+                "report_export",
+                "blocked",
+                reason="automatic_report_export_failed",
+                draft=_report_failure_draft,
+                final=clean_reply,
+            )
+            logger.warning("Research report export failed: %s", exc)
+
+    # Dataset-release identity is a deterministic post-condition, not an LLM
+    # wording preference.  Run this after every regeneration/fact-check path so
+    # a non-empty draft cannot relabel the executed product as the release the
+    # user requested (F4: KiDS-Legacy DR5 versus KiDS-1000).
+    _identity_draft = clean_reply
+    identity_reply, identity_enforced = _enforce_cosmology_dataset_identity(
+        clean_reply, all_tool_results, latest_user_text
+    )
+    if identity_enforced:
+        clean_reply = identity_reply
+        if automatic_fact_check_failed:
+            clean_reply += "\n\n---\n\n" + fact_check_failure_notice
+        if automatic_report_export_failed:
+            clean_reply += "\n\n---\n\n" + report_export_failure_notice
+        identity_action = "downgraded_summary"
+        identity_reason = "requested_release_mismatch"
+        try:
+            from app.services.claim_validator import (
+                blocked_reply_with_narrative,
+                validate_claims,
+            )
+
+            identity_validation = validate_claims(clean_reply, all_tool_results)
+            if not identity_validation.ok:
+                clean_reply = blocked_reply_with_narrative(
+                    identity_validation, clean_reply
+                )
+                fabrication_stats["blocked"] = True
+                identity_action = "blocked"
+                identity_reason = "dataset_identity_claim_validation_failed"
+        except Exception as exc:
+            # Never fall back to the contradicted model draft, but do not mark
+            # the deterministic replacement as validated when the secondary
+            # claim validator itself is unavailable.
+            fabrication_stats["blocked"] = True
+            identity_action = "blocked"
+            identity_reason = "dataset_identity_validation_error"
+            clean_reply += (
+                "\n\n---\n\nDataset identity was corrected from this turn's "
+                "tool outputs, but secondary claim validation failed. Treat "
+                "this reply as blocked until validation is rerun."
+            )
+            logger.exception("Dataset-identity summary validation failed: %s", exc)
+        await _gate_event(
+            "dataset_identity",
+            identity_action,
+            reason=identity_reason,
+            draft=_identity_draft,
+            final=clean_reply,
+        )
 
     actions.extend(_tool_results_to_actions(all_tool_results))
 
