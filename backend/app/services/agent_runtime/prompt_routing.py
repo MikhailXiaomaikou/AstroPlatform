@@ -571,11 +571,27 @@ def _dataset_mention_execution_intent(
             # Coordinated mixed intent ("run and explain KiDS") still runs
             # the dataset.  Otherwise the later explanatory verb governs the
             # current mention ("use a glossary to discuss Planck") and wins.
-            if not re.fullmatch(
-                r"\s*(?:&|and(?:\s+then)?|then)"
-                r"(?:\s+(?:also|just|very|later|first|[a-z]+ly))*\s*",
-                between,
-            ):
+            coordination_tokens = between.strip().split()
+            if coordination_tokens[:2] == ["and", "then"]:
+                coordination_tokens = coordination_tokens[2:]
+                coordinated = True
+            elif coordination_tokens and coordination_tokens[0] in {
+                "&", "and", "then",
+            }:
+                coordination_tokens = coordination_tokens[1:]
+                coordinated = True
+            else:
+                coordinated = False
+            coordinated = coordinated and all(
+                token in {"also", "just", "very", "later", "first"}
+                or (
+                    token.isascii()
+                    and token.isalpha()
+                    and token.endswith("ly")
+                )
+                for token in coordination_tokens
+            )
+            if not coordinated:
                 return None
     comparison_context = clause_before + " " + clause_after
     if (
@@ -1819,11 +1835,20 @@ def _overlapping_separate_fit_groups(
         return []
     head = prompt[: separate_fits.start()]
     groups: list[list[str]] = []
-    cursor = 0
-    for part in re.split(r"\s+and\s+", head):
-        part_start = head.find(part, cursor)
-        part_end = part_start + len(part)
-        cursor = part_end
+    spans: list[tuple[int, int]] = []
+    part_start = 0
+    for conjunction in re.finditer(r"\band\b", head):
+        spans.append((part_start, conjunction.start()))
+        part_start = conjunction.end()
+    spans.append((part_start, len(head)))
+    for raw_start, raw_end in spans:
+        raw_part = head[raw_start:raw_end]
+        leading_space = len(raw_part) - len(raw_part.lstrip())
+        trailing_space = len(raw_part) - len(raw_part.rstrip())
+        part_start = raw_start + leading_space
+        part_end = raw_end - trailing_space
+        if part_start >= part_end:
+            continue
         group = _dataset_keys_named_in_span(
             prompt,
             part_start,
