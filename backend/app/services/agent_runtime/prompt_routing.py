@@ -9,6 +9,48 @@ import uuid
 from typing import Any
 
 
+# Shared canonical-family vocabulary for prompt routing and deterministic
+# release-disclosure summaries.  Keep expanded survey names here so a router
+# alias cannot silently bypass the downstream identity check.
+COSMOLOGY_DATASET_FAMILY_ALIASES: dict[str, tuple[str, ...]] = {
+    "act": ("act", "atacama cosmology telescope"),
+    "des": ("des y3", "des-y3", "dark energy survey", "des"),
+    "desi": ("desi", "dark energy spectroscopic instrument"),
+    "hsc": ("hsc", "hyper suprime-cam", "hyper suprime cam", "hyper suprime"),
+    "kids": (
+        "kids",
+        "kilo-degree survey",
+        "kilo degree survey",
+        "kilo-degree",
+        "kilo degree",
+    ),
+    "pantheon": ("pantheon",),
+    "planck": ("planck",),
+    "shoes": ("sh0es", "shoes"),
+    "spt": ("spt", "south pole telescope"),
+}
+
+# A bare infix plus normally joins datasets.  Only these canonical families
+# currently use an attached plus as part of the registered release identity.
+COSMOLOGY_PLUS_RELEASE_FAMILIES = frozenset({"pantheon"})
+
+
+def _cosmology_prompt_mentions_dataset_family(
+    prompt: str,
+    family: str,
+    *,
+    include_canonical_short_name: bool = True,
+) -> bool:
+    """Match a shared family alias without confusing DES with DESI."""
+    for alias in COSMOLOGY_DATASET_FAMILY_ALIASES.get(family, (family,)):
+        if not include_canonical_short_name and alias == family:
+            continue
+        pattern = re.escape(alias).replace(r"\ ", r"\s+")
+        if re.search(rf"(?<![a-z0-9]){pattern}(?![a-z0-9])", prompt, re.IGNORECASE):
+            return True
+    return False
+
+
 def _cosmology_dataset_keys_present(tool_results: list[dict]) -> set[str]:
     keys: set[str] = set()
 
@@ -487,15 +529,28 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
         keys.append("act_dr6_lensing")
     if _cosmology_prompt_mentions_spt(prompt):
         keys.append("spt3g_cmb")
-    specific_wl_requested = any(tok in prompt for tok in (
-        "kids", "kilo-degree", "des y3", "des-y3", "dark energy survey",
-        "hsc", "hyper suprime",
-    ))
-    if any(tok in prompt for tok in ("kids", "kilo-degree")):
+    kids_requested = _cosmology_prompt_mentions_dataset_family(prompt, "kids")
+    # Bare "DES" also prefixes DES-SN, which is a distinct supernova product.
+    # Keep the short alias for identity disclosure but require an explicit WL
+    # release/full survey name at the routing layer.
+    des_requested = _cosmology_prompt_mentions_dataset_family(
+        prompt, "des", include_canonical_short_name=False
+    )
+    des_requested = des_requested or bool(
+        re.search(r"\bdes[\s_-]+y\s*[0-9]+[a-z]?\b", prompt, re.IGNORECASE)
+        or re.search(
+            r"\bdes\b(?![\s-]*sn\b)[^\n]{0,48}\b(?:weak[ -]?lensing|cosmic[ -]?shear|3x2pt)\b",
+            prompt,
+            re.IGNORECASE,
+        )
+    )
+    hsc_requested = _cosmology_prompt_mentions_dataset_family(prompt, "hsc")
+    specific_wl_requested = kids_requested or des_requested or hsc_requested
+    if kids_requested:
         keys.append("kids1000_wl")
-    if any(tok in prompt for tok in ("des y3", "des-y3", "dark energy survey", "galaxy weak lensing")):
+    if des_requested or "galaxy weak lensing" in prompt:
         keys.append("des_y3_3x2pt")
-    if any(tok in prompt for tok in ("hsc", "hyper suprime")):
+    if hsc_requested:
         keys.append("hsc_y1_cosmic_shear")
     if _cosmology_prompt_mentions_weak_lensing(prompt) and not specific_wl_requested:
         for key in ("kids1000_wl", "des_y3_3x2pt", "hsc_y1_cosmic_shear"):

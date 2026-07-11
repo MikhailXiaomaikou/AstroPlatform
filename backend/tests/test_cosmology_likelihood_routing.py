@@ -681,6 +681,26 @@ def test_english_kids_s8_tension_prompt_routes_deterministically() -> None:
     ]
 
 
+def test_expanded_weak_lensing_family_names_share_routing_vocabulary() -> None:
+    from app.api.chat import _cosmology_dataset_keys_from_prompt
+
+    prompt = (
+        "Compare Kilo-Degree Survey Legacy DR5 cosmic shear with Dark Energy "
+        "Survey Y6 weak lensing."
+    )
+
+    assert _cosmology_dataset_keys_from_prompt(prompt) == [
+        "kids1000_wl",
+        "des_y3_3x2pt",
+    ]
+    assert _cosmology_dataset_keys_from_prompt("Run DES Y6 weak lensing.") == [
+        "des_y3_3x2pt"
+    ]
+    assert _cosmology_dataset_keys_from_prompt("Run DES cosmic shear.") == [
+        "des_y3_3x2pt"
+    ]
+
+
 def test_english_hsc_cosmic_shear_constraint_prompt_routes_deterministically() -> None:
     from app.api.chat import (
         _cosmology_dataset_keys_from_prompt,
@@ -837,6 +857,250 @@ def test_empty_cosmology_prose_fallback_summarizes_config_only_turn() -> None:
     assert "not publication-ready" in summary
     assert "cannot support H0/Omega_m/S8/tension" in summary
     assert "language model did not return" not in summary
+
+
+def test_cosmology_summary_discloses_requested_release_substitution() -> None:
+    """An explicit unregistered release must never inherit the selected
+    registry product's identity merely because both share a survey family."""
+    from app.api.chat import _cosmology_tool_grounded_summary
+
+    tool_results = [{
+        "tool": "list_cosmology_datasets",
+        "result": {"datasets": [{
+            "key": "kids1000_wl",
+            "display_name": "KiDS-1000 cosmic shear",
+            "version": "KiDS-1000 cosmic-shear likelihood / 2-point statistics",
+        }]},
+    }]
+    summary = _cosmology_tool_grounded_summary(
+        tool_results,
+        "Run KiDS-Legacy DR5 cosmic shear and state which release was run.",
+    )
+
+    assert summary is not None
+    assert "KiDS-1000 cosmic shear" in summary
+    assert "DR5" in summary and "Legacy" in summary
+    assert "not registered" in summary
+    assert "selected registered product(s) instead" in summary
+    assert "not to the requested release" in summary
+
+
+def test_cosmology_summary_release_disclosure_is_generic_and_not_spurious() -> None:
+    from app.api.chat import _cosmology_tool_grounded_summary
+
+    desi_results = [{
+        "tool": "list_cosmology_datasets",
+        "result": {"datasets": [{
+            "key": "desi_dr1_bao",
+            "display_name": "DESI DR1 BAO",
+            "version": "DESI 2024 Data Release 1",
+        }]},
+    }]
+    mismatch = _cosmology_tool_grounded_summary(
+        desi_results, "Run the DESI DR3 BAO registered likelihood."
+    )
+    assert mismatch is not None
+    assert "Dataset substitution disclosure" in mismatch
+    assert "DR3" in mismatch and "DESI DR1 BAO" in mismatch
+
+    exact = _cosmology_tool_grounded_summary(
+        [{
+            "tool": "list_cosmology_datasets",
+            "result": {"datasets": [{
+                "key": "kids1000_wl",
+                "display_name": "KiDS-1000 cosmic shear",
+                "version": "KiDS-1000 cosmic-shear likelihood",
+            }]},
+        }],
+        "Run KiDS-1000 cosmic shear.",
+    )
+    assert exact is not None
+    assert "Dataset substitution disclosure" not in exact
+
+    nearby_scientific_numbers = _cosmology_tool_grounded_summary(
+        [{
+            "tool": "list_cosmology_datasets",
+            "result": {"datasets": [{
+                "key": "kids1000_wl",
+                "display_name": "KiDS-1000 cosmic shear",
+                "version": "KiDS-1000 cosmic-shear likelihood",
+            }]},
+        }],
+        "Run KiDS cosmic shear with 1500 samples following the 2024 methods paper.",
+    )
+    assert nearby_scientific_numbers is not None
+    assert "Dataset substitution disclosure" not in nearby_scientific_numbers
+
+    pantheon_plus = _cosmology_tool_grounded_summary(
+        [{
+            "tool": "list_cosmology_datasets",
+            "result": {"datasets": [{
+                "key": "pantheon_plus",
+                "display_name": "Pantheon+ supernovae",
+                "version": "Pantheon Plus release",
+            }]},
+        }],
+        "Run Pantheon+ with the registered supernova likelihood.",
+    )
+    assert pantheon_plus is not None
+    assert "Dataset substitution disclosure" not in pantheon_plus
+
+    pantheon_plus_sh0es_mismatch = _cosmology_tool_grounded_summary(
+        [{
+            "tool": "list_cosmology_datasets",
+            "result": {"datasets": [{
+                "key": "pantheon18",
+                "display_name": "Pantheon 2018 supernovae",
+                "version": "2018 release",
+            }]},
+        }],
+        "Use Pantheon+SH0ES for the supernova branch.",
+    )
+    assert pantheon_plus_sh0es_mismatch is not None
+    assert "Dataset substitution disclosure" in pantheon_plus_sh0es_mismatch
+    assert "Plus" in pantheon_plus_sh0es_mismatch
+
+    with_release_marker = _cosmology_tool_grounded_summary(
+        desi_results, "Run DESI BAO with DR3 registered likelihood."
+    )
+    assert with_release_marker is not None
+    assert "Dataset substitution disclosure" in with_release_marker
+    assert "DR3" in with_release_marker
+
+    registered_but_not_run = _cosmology_tool_grounded_summary(
+        [{
+            "tool": "run_cosmology_likelihood_chain",
+            "result": {
+                "datasets_used": [{
+                    "key": "desi_dr1_bao",
+                    "display_name": "DESI DR1 BAO",
+                    "version": "Data Release 1",
+                }],
+                "datasets_not_run": [{
+                    "key": "desi_dr3_bao",
+                    "display_name": "DESI DR3 BAO",
+                    "version": "Data Release 3",
+                }],
+            },
+        }],
+        "Run DESI DR3 BAO.",
+    )
+    assert registered_but_not_run is not None
+    assert "Dataset substitution disclosure" in registered_but_not_run
+    assert "listed in `datasets_not_run` but was not executed" in registered_but_not_run
+    assert "not registered" not in registered_but_not_run
+
+    expanded_kids = _cosmology_tool_grounded_summary(
+        [{
+            "tool": "list_cosmology_datasets",
+            "result": {"datasets": [{
+                "key": "kids1000_wl",
+                "display_name": "KiDS-1000 cosmic shear",
+                "version": "KiDS-1000 cosmic-shear likelihood",
+            }]},
+        }],
+        "Run the Kilo-Degree Survey Legacy DR5 likelihood.",
+    )
+    assert expanded_kids is not None
+    assert "Dataset substitution disclosure" in expanded_kids
+    assert "Legacy" in expanded_kids and "DR5" in expanded_kids
+
+    expanded_des = _cosmology_tool_grounded_summary(
+        [{
+            "tool": "list_cosmology_datasets",
+            "result": {"datasets": [{
+                "key": "des_y3_3x2pt",
+                "display_name": "DES Y3 3x2pt",
+                "version": "DES Year 3",
+            }]},
+        }],
+        "Run the Dark Energy Survey Y6 likelihood.",
+    )
+    assert expanded_des is not None
+    assert "Dataset substitution disclosure" in expanded_des
+    assert "Y6" in expanded_des
+
+    infix_union = _cosmology_tool_grounded_summary(
+        [{
+            "tool": "list_cosmology_datasets",
+            "result": {"datasets": [
+                {
+                    "key": "desi_dr1_bao",
+                    "display_name": "DESI DR1 BAO",
+                    "version": "Data Release 1",
+                },
+                {
+                    "key": "planck2018_compressed",
+                    "display_name": "Planck 2018 compressed CMB",
+                    "version": "Planck 2018",
+                },
+            ]},
+        }],
+        "Run DESI+Planck.",
+    )
+    assert infix_union is not None
+    assert "Dataset substitution disclosure" not in infix_union
+
+    word_union = _cosmology_tool_grounded_summary(
+        desi_results,
+        "Run DESI plus Planck, using the legacy pipeline only for file conversion.",
+    )
+    assert word_union is not None
+    assert "Dataset substitution disclosure" not in word_union
+
+    used_is_authoritative = _cosmology_tool_grounded_summary(
+        [
+            {
+                "tool": "list_cosmology_datasets",
+                "result": {"datasets": [
+                    {
+                        "key": "desi_dr1_bao",
+                        "display_name": "DESI DR1 BAO",
+                        "version": "Data Release 1",
+                    },
+                    {
+                        "key": "desi_dr2_bao",
+                        "display_name": "DESI DR2 BAO",
+                        "version": "Data Release 2",
+                    },
+                ]},
+            },
+            {
+                "tool": "run_cosmology_likelihood_chain",
+                "result": {"datasets_used": [{
+                    "key": "desi_dr1_bao",
+                    "display_name": "DESI DR1 BAO",
+                    "version": "Data Release 1",
+                }]},
+            },
+        ],
+        "Run DESI DR2 BAO.",
+    )
+    assert used_is_authoritative is not None
+    assert "Dataset substitution disclosure" in used_is_authoritative
+    assert "registry selection but was not executed" in used_is_authoritative
+    assert "DESI DR1 BAO" in used_is_authoritative
+
+    same_family_multi_select = _cosmology_tool_grounded_summary(
+        [{
+            "tool": "list_cosmology_datasets",
+            "result": {"datasets": [
+                {
+                    "key": "des_y3_3x2pt",
+                    "display_name": "DES Y3 3x2pt weak lensing + clustering",
+                    "version": "DES Year 3",
+                },
+                {
+                    "key": "des_sn5yr",
+                    "display_name": "DES-SN 5YR",
+                    "version": "DES five-year supernova release",
+                },
+            ]},
+        }],
+        "Compare the selected DES Y3 product with the supernova branch.",
+    )
+    assert same_family_multi_select is not None
+    assert "Dataset substitution disclosure" not in same_family_multi_select
 
 
 def test_cosmology_summary_appends_out_of_coverage_caveat_for_beyond_z_request() -> None:
@@ -1095,6 +1359,23 @@ def test_research_summary_separates_executed_not_ready_from_config_only() -> Non
                         "execution_level": "config_only",
                         "warnings": ["Pantheon+ requires external Cobaya/CosmoSIS."],
                     },
+                    {
+                        "label": "BAO only",
+                        "publication_ready": False,
+                        "execution_level": "executed_not_ready",
+                        "result": {
+                            "chain_diagnostics": {
+                                "proposal_ess": 1310.0,
+                                "thresholds": {"ess_min": 400},
+                            },
+                            "publication_gate": {
+                                "reasons": [
+                                    "compressed_or_approximate_likelihood",
+                                    "fewer_than_four_independent_chains",
+                                ]
+                            },
+                        },
+                    },
                 ],
             },
         },
@@ -1106,6 +1387,10 @@ def test_research_summary_separates_executed_not_ready_from_config_only() -> Non
     assert "BAO + CMB · H0 median 67.28 · `Omega_m` median 0.3117 · S8 median 0.8317" in summary
     assert "Executed but not claimable" in summary
     assert "BAO + WL · ESS 105 below threshold 400" in summary
+    assert "BAO only · ESS 1310 meets threshold 400" in summary
+    assert "BAO only · ESS 1310 below threshold 400" not in summary
+    assert "`compressed_or_approximate_likelihood`" in summary
+    assert "`fewer_than_four_independent_chains`" in summary
     assert "Config-only or not-runnable branches" in summary
     assert "BAO + SN · Pantheon+ requires external Cobaya/CosmoSIS." in summary
     assert "BAO + WL" not in summary.split("Config-only or not-runnable branches:", 1)[-1]

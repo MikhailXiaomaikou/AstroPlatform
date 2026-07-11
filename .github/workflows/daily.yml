@@ -70,6 +70,16 @@ jobs:
           cd backend
           python -m venv venv
           ./venv/bin/pip install --require-hashes -r requirements.lock
+      - name: Initialize blind-test database
+        run: |
+          cd backend
+          # Blind cases exercise the durable research-record path.  Export one
+          # runner-temporary URL both to this shell and every following step so
+          # migrations and the runner cannot accidentally use different files.
+          export DATABASE_URL="sqlite+aiosqlite:///$RUNNER_TEMP/daily-blind.sqlite3"
+          echo "DATABASE_URL=$DATABASE_URL" >> "$GITHUB_ENV"
+          ./venv/bin/alembic upgrade head
+          ./venv/bin/alembic check
       - name: Run blind tests (cosmology)
         env:
           # Map PLATFORM_DEEPSEEK_API_KEY (platform-default secret name)

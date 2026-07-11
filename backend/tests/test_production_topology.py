@@ -86,6 +86,27 @@ def test_daily_jobs_install_only_the_hash_locked_scientific_environment():
     assert "pip install -r requirements.txt" not in workflow
 
 
+def test_daily_blind_runner_uses_migrated_isolated_database():
+    daily = _yaml(".github/workflows/daily.yml")
+    blind_job = daily["jobs"]["blind-tests"]
+
+    steps = blind_job["steps"]
+    step_index = {step.get("name"): index for index, step in enumerate(steps)}
+    migrate_step = steps[step_index["Initialize blind-test database"]]
+    migrate_command = migrate_step["run"]
+
+    assert (
+        'export DATABASE_URL="sqlite+aiosqlite:///$RUNNER_TEMP/daily-blind.sqlite3"'
+        in migrate_command
+    )
+    assert 'echo "DATABASE_URL=$DATABASE_URL" >> "$GITHUB_ENV"' in migrate_command
+    assert "./venv/bin/alembic upgrade head" in migrate_command
+    assert "./venv/bin/alembic check" in migrate_command
+    assert step_index["Initialize blind-test database"] < step_index[
+        "Run blind tests (cosmology)"
+    ]
+
+
 def test_render_workers_wait_for_exact_schema_head():
     blueprint = _yaml("render.yaml")
     services = {service["name"]: service for service in blueprint["services"]}
