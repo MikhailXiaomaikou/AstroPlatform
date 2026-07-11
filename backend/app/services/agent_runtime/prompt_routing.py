@@ -131,9 +131,20 @@ def _dataset_mention_is_non_execution(
         r"\b(?:compare|contrast)\b",
         clause_before,
     ))
+    dataset_identity_relation = bool(re.search(
+        r"\b(?:same|different|differs?|equivalent)\b[^.;\n]{0,32}"
+        r"\b(?:datasets?|data\s+sets?|releases?|products?)\b"
+        r"|\b(?:datasets?|data\s+sets?|releases?|products?)\b[^.;\n]{0,32}"
+        r"\b(?:same|different|differs?|equivalent)\b",
+        comparison_context,
+    ))
     if (
         not execution_matches
-        and re.search(r"\b(?:same|different|differs?|equivalent)\b", comparison_context)
+        # A scientific parameter may "differ" while the following dataset is
+        # still explicitly selected (for example, gamma vs GR using weak
+        # lensing).  Only treat the relation as non-execution when it actually
+        # describes dataset/release/product identity.
+        and dataset_identity_relation
         and not (comparison_is_execution and explicit_comparison_request)
     ):
         return True
