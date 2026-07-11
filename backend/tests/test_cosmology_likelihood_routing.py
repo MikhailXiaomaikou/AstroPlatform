@@ -896,6 +896,7 @@ def test_dataset_identity_guard_replaces_model_release_equivalence_claim() -> No
         "Are these the same releases: Planck and KiDS-1000?",
         "Is Planck different from KiDS-1000 under LCDM?",
         "Is Planck the same as KiDS-1000 under LCDM?",
+        "Under LCDM, is Planck, in this registry, the same dataset as KiDS-1000?",
     ):
         assert chat_module._is_cosmology_likelihood_workflow(
             identity_question
@@ -930,6 +931,25 @@ def test_dataset_identity_guard_replaces_model_release_equivalence_claim() -> No
     assert chat_module._cosmology_dataset_keys_from_prompt(
         "Run KiDS-1000 without using Planck under LCDM."
     ) == ["kids1000_wl"]
+    for exclusion_prompt in (
+        "Run KiDS-1000, not using Planck under LCDM.",
+        "Run KiDS-1000, never using Planck under LCDM.",
+        "Run KiDS-1000; do not be using Planck under LCDM.",
+        "Run KiDS-1000, do not use Planck under LCDM.",
+        "Run KiDS-1000 and do not use Planck under LCDM.",
+    ):
+        assert chat_module._cosmology_dataset_keys_from_prompt(
+            exclusion_prompt
+        ) == ["kids1000_wl"]
+
+    glossary_prompt = (
+        "We are using a glossary to discuss whether Planck differs from "
+        "KiDS-1000 under LCDM."
+    )
+    assert chat_module._cosmology_dataset_keys_from_prompt(glossary_prompt) == []
+    assert chat_module._cosmology_likelihood_build_calls_from_prompt(
+        glossary_prompt
+    ) == []
 
     tool_results = [{
         "tool": "list_cosmology_datasets",
@@ -1007,6 +1027,622 @@ def test_dataset_identity_guard_replaces_model_release_equivalence_claim() -> No
         assert mixed_intent_enforced is True, mixed_intent_prompt
         assert "same dataset" not in guarded
         assert "not registered" in guarded
+
+
+def test_dataset_intent_scope_separates_identity_execution_and_exclusion() -> None:
+    from app.api import chat as chat_module
+
+    for parameter_prompt in (
+        "Evaluate whether S8 differs between Planck and KiDS-1000 under LCDM.",
+        "Test whether Omega_m differs between Planck and KiDS-1000 under LCDM.",
+    ):
+        assert chat_module._is_cosmology_likelihood_workflow(parameter_prompt)
+        assert chat_module._cosmology_dataset_keys_from_prompt(
+            parameter_prompt
+        ) == ["planck2018_compressed", "kids1000_wl"]
+        assert chat_module._cosmology_likelihood_build_calls_from_prompt(
+            parameter_prompt
+        )[0]["input"]["dataset_keys"] == [
+            "planck2018_compressed",
+            "kids1000_wl",
+        ]
+
+    for identity_prompt in (
+        "Compare whether Planck and KiDS-1000 are different datasets under LCDM.",
+        "Evaluate whether Planck and KiDS-1000 datasets differ under LCDM.",
+    ):
+        assert not chat_module._is_cosmology_likelihood_workflow(identity_prompt)
+        assert chat_module._cosmology_dataset_keys_from_prompt(identity_prompt) == []
+        assert chat_module._cosmology_likelihood_build_calls_from_prompt(
+            identity_prompt
+        ) == []
+
+    for explanation_prompt in (
+        "Use a glossary to explain Planck constraints under LCDM.",
+        "Use documentation to discuss Planck constraints under LCDM.",
+        "For documentation only, describe Planck constraints under LCDM.",
+    ):
+        assert chat_module._cosmology_dataset_keys_from_prompt(
+            explanation_prompt
+        ) == []
+        assert chat_module._cosmology_likelihood_build_calls_from_prompt(
+            explanation_prompt
+        ) == []
+
+    for metadata_prompt in (
+        "What release is Planck 2018 under LCDM?",
+        "Which versions of Planck and KiDS are registered under LCDM?",
+        "List metadata for Planck and KiDS under LCDM.",
+        "What is the difference between Planck and KiDS datasets under LCDM?",
+        "Planck 在 LCDM 下是否可用？",
+    ):
+        assert not chat_module._is_cosmology_likelihood_workflow(metadata_prompt)
+        assert chat_module._cosmology_dataset_keys_from_prompt(metadata_prompt) == []
+        assert chat_module._cosmology_likelihood_build_calls_from_prompt(
+            metadata_prompt
+        ) == []
+
+    for metadata_plus_execution in (
+        "Use Planck if available under LCDM.",
+        "Run Planck and list its metadata under LCDM.",
+    ):
+        assert chat_module._is_cosmology_likelihood_workflow(
+            metadata_plus_execution
+        )
+        assert chat_module._cosmology_dataset_keys_from_prompt(
+            metadata_plus_execution
+        ) == ["planck2018_compressed"]
+
+    for prompt, expected in (
+        (
+            "Run and briefly explain Planck under LCDM.",
+            ["planck2018_compressed"],
+        ),
+        (
+            "Analyze and carefully discuss KiDS-1000 under LCDM.",
+            ["kids1000_wl"],
+        ),
+        (
+            "KiDS-1000 should not be used; run Planck under LCDM.",
+            ["planck2018_compressed"],
+        ),
+        (
+            "Planck 2018 should not be used; run KiDS-1000 under LCDM.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Run KiDS-1000 under LCDM; Planck should not be included.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Run KiDS-1000 under LCDM; Planck should be excluded.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Do not use Planck and run KiDS-1000 under LCDM.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Do not use KiDS-1000 and run Planck under LCDM.",
+            ["planck2018_compressed"],
+        ),
+        (
+            "Run KiDS-1000 except Planck under LCDM.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Run all registered weak-lensing datasets except DES Y3 under LCDM.",
+            ["kids1000_wl", "hsc_y1_cosmic_shear"],
+        ),
+        (
+            "Run KiDS-1000 without using Planck and include Pantheon+ under LCDM.",
+            ["pantheon_plus", "kids1000_wl"],
+        ),
+    ):
+        assert chat_module._cosmology_dataset_keys_from_prompt(prompt) == expected
+        assert chat_module._cosmology_likelihood_build_calls_from_prompt(
+            prompt
+        )[0]["input"]["dataset_keys"] == expected
+
+
+def test_dataset_identity_is_the_request_target_not_an_analysis_qualifier() -> None:
+    from app.api import chat as chat_module
+
+    for execution_prompt in (
+        "Run Planck and KiDS-1000 as different datasets under LCDM.",
+        "Use different datasets: Planck and KiDS-1000 under LCDM.",
+        "Fit LCDM to two different datasets: Planck and KiDS-1000.",
+        (
+            "Compare S8 constraints from Planck and KiDS-1000; these are "
+            "different datasets under LCDM."
+        ),
+        (
+            "Are Planck and KiDS-1000 different datasets? Then run both "
+            "under LCDM."
+        ),
+    ):
+        assert chat_module._is_cosmology_likelihood_workflow(execution_prompt)
+        assert chat_module._cosmology_dataset_keys_from_prompt(
+            execution_prompt
+        ) == ["planck2018_compressed", "kids1000_wl"]
+
+    for identity_prompt in (
+        "Under LCDM, are Planck and KiDS-1000 identical datasets?",
+        "Under LCDM, are Planck and KiDS-1000 distinct releases?",
+        "Do Planck and KiDS-1000 refer to the same data product under LCDM?",
+        "Is Planck just another name for KiDS-1000 under LCDM?",
+        "在 LCDM 下，Planck 和 KiDS-1000 是同一个数据集吗？",
+    ):
+        assert not chat_module._is_cosmology_likelihood_workflow(identity_prompt)
+        assert chat_module._cosmology_dataset_keys_from_prompt(identity_prompt) == []
+        assert chat_module._cosmology_likelihood_build_calls_from_prompt(
+            identity_prompt
+        ) == []
+
+    for parameter_prompt in (
+        "Do Planck and KiDS-1000 differ in S8 under LCDM?",
+        "Do Planck and KiDS-1000 differ in their Omega_m constraints under LCDM?",
+        "Are Planck and KiDS-1000 different in S8 under LCDM?",
+    ):
+        assert chat_module._is_cosmology_likelihood_workflow(parameter_prompt)
+        assert chat_module._cosmology_dataset_keys_from_prompt(
+            parameter_prompt
+        ) == ["planck2018_compressed", "kids1000_wl"]
+
+
+def test_named_exclusions_are_release_scoped_and_last_intent_wins() -> None:
+    from app.api import chat as chat_module
+
+    for prompt, expected in (
+        (
+            "Run DESI DR2 BAO except DESI DR1 under LCDM.",
+            ["desi_dr2_bao"],
+        ),
+        (
+            "Do not use DESI DR1; run DESI DR2 under LCDM.",
+            ["desi_dr2_bao"],
+        ),
+        (
+            "Run DESI DR1 but not DESI DR2 under LCDM.",
+            ["desi_dr1_bao"],
+        ),
+        (
+            "Run KiDS-1000, do not use DES Y3 under LCDM.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Run Pantheon+ but do not use Union3 under LCDM.",
+            ["pantheon_plus"],
+        ),
+        (
+            "Do not use Planck initially; then run Planck under LCDM.",
+            ["planck2018_compressed"],
+        ),
+        (
+            "Without Planck initially, later use Planck under LCDM.",
+            ["planck2018_compressed"],
+        ),
+        (
+            "Exclude KiDS-1000 first, but then include KiDS-1000 under LCDM.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Do not use Planck but instead run KiDS-1000 under LCDM.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Do not use Planck, but please run KiDS-1000 under LCDM.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Do not use Planck and subsequently run KiDS-1000 under LCDM.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Do not use Planck with KiDS-1000 and run KiDS-1000 under LCDM.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Exclude Planck from the KiDS-1000 fit; run KiDS-1000 under LCDM.",
+            ["kids1000_wl"],
+        ),
+    ):
+        assert chat_module._cosmology_dataset_keys_from_prompt(prompt) == expected
+
+
+def test_dataset_combination_structure_and_multilingual_negation_are_preserved() -> None:
+    from app.api import chat as chat_module
+
+    for prompt, expected_groups in (
+        (
+            "Run Planck with and without KiDS-1000 under LCDM.",
+            [
+                ["planck2018_compressed"],
+                ["planck2018_compressed", "kids1000_wl"],
+            ],
+        ),
+        (
+            "Run Planck and KiDS-1000 separately under LCDM.",
+            [["planck2018_compressed"], ["kids1000_wl"]],
+        ),
+        (
+            "Compare Planck and KiDS-1000 without combining them under LCDM.",
+            [["planck2018_compressed"], ["kids1000_wl"]],
+        ),
+        (
+            "Run KiDS-1000; Planck must not be combined under LCDM.",
+            [["planck2018_compressed"], ["kids1000_wl"]],
+        ),
+    ):
+        build_groups = [
+            call["input"]["dataset_keys"]
+            for call in chat_module._cosmology_likelihood_build_calls_from_prompt(
+                prompt
+            )
+        ]
+        run_groups = [
+            call["input"]["dataset_keys"]
+            for call in chat_module._cosmology_likelihood_run_calls_from_prompt(
+                prompt
+            )
+        ]
+        assert build_groups == expected_groups
+        assert run_groups == expected_groups
+
+    for prompt, expected in (
+        (
+            "Run KiDS-1000 without using Planck and add Pantheon+ under LCDM.",
+            ["pantheon_plus", "kids1000_wl"],
+        ),
+        (
+            "Run KiDS-1000 without using Planck and combine Pantheon+ under LCDM.",
+            ["pantheon_plus", "kids1000_wl"],
+        ),
+        (
+            "运行 KiDS-1000，不运行 Planck，在 LCDM 下。",
+            ["kids1000_wl"],
+        ),
+        (
+            "运行 KiDS-1000；Planck 不应被使用，在 LCDM 下。",
+            ["kids1000_wl"],
+        ),
+    ):
+        assert chat_module._cosmology_dataset_keys_from_prompt(prompt) == expected
+
+
+def test_identity_context_and_method_advice_do_not_start_likelihoods() -> None:
+    from app.api import chat as chat_module
+
+    for identity_prompt in (
+        "In this analysis, are Planck and KiDS-1000 the same dataset under LCDM?",
+        "Are Planck and KiDS-1000 versions of the same dataset under LCDM?",
+        "Are Planck and KiDS-1000 based on the same data product under LCDM?",
+        "Are Planck and KiDS-1000 two versions of one dataset under LCDM?",
+        (
+            "Use a glossary to determine whether Planck and KiDS-1000 are "
+            "the same dataset under LCDM."
+        ),
+        (
+            "Use documentation to verify whether Planck and KiDS-1000 use "
+            "the same data under LCDM."
+        ),
+    ):
+        assert not chat_module._is_cosmology_likelihood_workflow(identity_prompt)
+        assert chat_module._cosmology_dataset_keys_from_prompt(identity_prompt) == []
+        assert chat_module._cosmology_likelihood_build_calls_from_prompt(
+            identity_prompt
+        ) == []
+
+    for advice_prompt in (
+        "Should Planck and KiDS-1000 be combined under LCDM?",
+        "Is it okay to combine Planck and KiDS under LCDM?",
+        "May I combine Planck and KiDS under LCDM?",
+        "Should I use Planck and KiDS jointly under LCDM?",
+        "Are Planck and KiDS safe to combine under LCDM?",
+        "Would a joint Planck and KiDS fit double-count data under LCDM?",
+        (
+            "Would it be scientifically valid to combine Planck and "
+            "KiDS-1000 under LCDM?"
+        ),
+        (
+            "Discuss whether using Planck with KiDS-1000 under LCDM is "
+            "appropriate."
+        ),
+    ):
+        assert not chat_module._is_cosmology_likelihood_workflow(advice_prompt)
+        assert chat_module._cosmology_dataset_keys_from_prompt(advice_prompt) == []
+
+    explicit_execution = (
+        "I decided we should combine Planck and KiDS; please run under LCDM."
+    )
+    assert chat_module._is_cosmology_likelihood_workflow(explicit_execution)
+    assert chat_module._cosmology_dataset_keys_from_prompt(explicit_execution) == [
+        "planck2018_compressed",
+        "kids1000_wl",
+    ]
+
+    for parameter_prompt in (
+        "Do Planck and KiDS-1000 agree on H0 under LCDM?",
+        "Do Planck and KiDS-1000 disagree on S8 under LCDM?",
+        "Are Planck and KiDS-1000 the same in S8 under LCDM?",
+    ):
+        assert chat_module._is_cosmology_likelihood_workflow(parameter_prompt)
+        assert chat_module._cosmology_dataset_keys_from_prompt(
+            parameter_prompt
+        ) == ["planck2018_compressed", "kids1000_wl"]
+
+    for chinese_parameter_prompt in (
+        "Planck 和 KiDS 的 S8 是否不同？在 LCDM 下。",
+        "Planck 和 KiDS 的 H0 是否不同？在 LCDM 下。",
+        "Planck 和 KiDS 在 σ8 上是否相同？在 LCDM 下。",
+    ):
+        assert chat_module._is_cosmology_likelihood_workflow(
+            chinese_parameter_prompt
+        )
+        assert chat_module._cosmology_dataset_keys_from_prompt(
+            chinese_parameter_prompt
+        ) == ["planck2018_compressed", "kids1000_wl"]
+
+
+def test_neutral_mentions_and_family_overrides_preserve_last_scientific_intent() -> None:
+    from app.api import chat as chat_module
+
+    for prompt, expected in (
+        (
+            "Run Planck under LCDM, then explain Planck provenance.",
+            ["planck2018_compressed"],
+        ),
+        (
+            "Run Planck under LCDM; discuss Planck systematics.",
+            ["planck2018_compressed"],
+        ),
+        (
+            "Run Planck and KiDS-1000 under LCDM; explain how KiDS-1000 "
+            "differs from DES Y3.",
+            ["planck2018_compressed", "kids1000_wl"],
+        ),
+        (
+            "Run Planck, then do not use any CMB data under LCDM.",
+            [],
+        ),
+        (
+            "Do not use any CMB data, then run Planck under LCDM.",
+            ["planck2018_compressed"],
+        ),
+        (
+            "Run KiDS-1000, then exclude all weak-lensing data under LCDM.",
+            [],
+        ),
+        (
+            "Exclude all weak-lensing data, then run KiDS-1000 under LCDM.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Run weak-lensing datasets other than DES Y3 under LCDM.",
+            ["kids1000_wl", "hsc_y1_cosmic_shear"],
+        ),
+    ):
+        assert chat_module._cosmology_dataset_keys_from_prompt(prompt) == expected
+
+    reinclude_prompt = (
+        "Run all weak-lensing datasets except DES Y3; then run DES Y3 "
+        "separately under LCDM."
+    )
+    assert [
+        call["input"]["dataset_keys"]
+        for call in chat_module._cosmology_likelihood_build_calls_from_prompt(
+            reinclude_prompt
+        )
+    ] == [
+        ["kids1000_wl", "hsc_y1_cosmic_shear"],
+        ["des_y3_3x2pt"],
+    ]
+
+
+def test_release_alternatives_group_cues_and_multi_model_runs_remain_structured() -> None:
+    from app.api import chat as chat_module
+
+    for prompt, expected_keys in (
+        (
+            "Use DESI DR2 rather than DESI DR1 under LCDM.",
+            ["desi_dr2_bao"],
+        ),
+        (
+            "Use DESI DR1 rather than DESI DR2 under LCDM.",
+            ["desi_dr1_bao"],
+        ),
+        (
+            "Run DESI DR2 first, then use DESI DR1 instead under LCDM.",
+            ["desi_dr1_bao"],
+        ),
+    ):
+        assert chat_module._cosmology_dataset_keys_from_prompt(prompt) == expected_keys
+
+    for prompt in (
+        "Run DESI DR1 and DESI DR2 separately under LCDM.",
+        "Compare DESI DR1 versus DESI DR2 without combining them under LCDM.",
+        "Run DESI DR1 with and without DESI DR2 under LCDM.",
+    ):
+        assert [
+            call["input"]["dataset_keys"]
+            for call in chat_module._cosmology_likelihood_build_calls_from_prompt(
+                prompt
+            )
+        ] == [["desi_dr1_bao"], ["desi_dr2_bao"]]
+
+    for prompt, expected_groups in (
+        (
+            "Run Planck and KiDS-1000, never combine them, under LCDM.",
+            [["planck2018_compressed"], ["kids1000_wl"]],
+        ),
+        (
+            "Do not combine Planck and KiDS-1000; run them separately under LCDM.",
+            [["planck2018_compressed"], ["kids1000_wl"]],
+        ),
+        (
+            "Do not run Planck and KiDS-1000 separately; combine them under LCDM.",
+            [["planck2018_compressed", "kids1000_wl"]],
+        ),
+        (
+            "Run Planck and KiDS-1000 jointly under LCDM; report systematics separately.",
+            [["planck2018_compressed", "kids1000_wl"]],
+        ),
+        (
+            "运行 Planck 和 KiDS-1000，但不要组合它们，在 LCDM 下。",
+            [["planck2018_compressed"], ["kids1000_wl"]],
+        ),
+        (
+            "Run Planck with and without weak lensing under LCDM.",
+            [
+                ["planck2018_compressed"],
+                [
+                    "planck2018_compressed",
+                    "kids1000_wl",
+                    "des_y3_3x2pt",
+                    "hsc_y1_cosmic_shear",
+                ],
+            ],
+        ),
+        (
+            "Run Planck with and without an H0 prior under LCDM.",
+            [
+                ["planck2018_compressed"],
+                ["planck2018_compressed", "shoes_h0_riess22"],
+            ],
+        ),
+        (
+            "Run Planck with and without KiDS-1000; then add Pantheon+ "
+            "to both under LCDM.",
+            [
+                ["pantheon_plus", "planck2018_compressed"],
+                ["pantheon_plus", "planck2018_compressed", "kids1000_wl"],
+            ],
+        ),
+    ):
+        assert [
+            call["input"]["dataset_keys"]
+            for call in chat_module._cosmology_likelihood_build_calls_from_prompt(
+                prompt
+            )
+        ] == expected_groups
+
+    multi_model_prompt = (
+        "Run Planck with and without KiDS-1000 under LCDM and wCDM."
+    )
+    assert [
+        (call["input"]["model"], call["input"]["dataset_keys"])
+        for call in chat_module._cosmology_likelihood_run_calls_from_prompt(
+            multi_model_prompt
+        )
+    ] == [
+        ("lcdm", ["planck2018_compressed"]),
+        ("lcdm", ["planck2018_compressed", "kids1000_wl"]),
+        ("wcdm", ["planck2018_compressed"]),
+        ("wcdm", ["planck2018_compressed", "kids1000_wl"]),
+    ]
+
+
+def test_overlapping_joint_groups_remain_independent_likelihoods() -> None:
+    from app.api import chat as chat_module
+
+    for prompt, expected_groups in (
+        (
+            "Run Planck with KiDS jointly; separately run Pantheon with "
+            "DESI DR2 jointly under LCDM.",
+            [
+                ["planck2018_compressed", "kids1000_wl"],
+                ["pantheon_plus", "desi_dr2_bao"],
+            ],
+        ),
+        (
+            "Run Planck+KiDS and Planck+Pantheon as two separate fits "
+            "under LCDM.",
+            [
+                ["planck2018_compressed", "kids1000_wl"],
+                ["planck2018_compressed", "pantheon_plus"],
+            ],
+        ),
+        (
+            "Run Planck and KiDS jointly; then run KiDS and Pantheon "
+            "jointly under LCDM.",
+            [
+                ["planck2018_compressed", "kids1000_wl"],
+                ["kids1000_wl", "pantheon_plus"],
+            ],
+        ),
+        (
+            "Run Planck with and without KiDS; separately run Pantheon "
+            "under LCDM.",
+            [
+                ["planck2018_compressed"],
+                ["planck2018_compressed", "kids1000_wl"],
+                ["pantheon_plus"],
+            ],
+        ),
+        (
+            "Run DESI DR1 and DESI DR2 with and without Planck under LCDM.",
+            [
+                ["desi_dr1_bao"],
+                ["desi_dr1_bao", "planck2018_compressed"],
+                ["desi_dr2_bao"],
+                ["desi_dr2_bao", "planck2018_compressed"],
+            ],
+        ),
+    ):
+        assert [
+            call["input"]["dataset_keys"]
+            for call in chat_module._cosmology_likelihood_build_calls_from_prompt(
+                prompt
+            )
+        ] == expected_groups
+        assert [
+            call["input"]["dataset_keys"]
+            for call in chat_module._cosmology_likelihood_run_calls_from_prompt(
+                prompt
+            )
+        ] == expected_groups
+
+
+def test_with_without_lists_and_every_fit_modifiers_preserve_both_arms() -> None:
+    from app.api import chat as chat_module
+
+    for prompt, expected_groups in (
+        (
+            "Run Planck with/without both KiDS and Pantheon+ under LCDM.",
+            [
+                ["planck2018_compressed"],
+                [
+                    "planck2018_compressed",
+                    "kids1000_wl",
+                    "pantheon_plus",
+                ],
+            ],
+        ),
+        (
+            "Run Planck with and without KiDS, plus Pantheon in every fit "
+            "under LCDM.",
+            [
+                ["pantheon_plus", "planck2018_compressed"],
+                [
+                    "pantheon_plus",
+                    "planck2018_compressed",
+                    "kids1000_wl",
+                ],
+            ],
+        ),
+    ):
+        assert [
+            call["input"]["dataset_keys"]
+            for call in chat_module._cosmology_likelihood_build_calls_from_prompt(
+                prompt
+            )
+        ] == expected_groups
+        assert [
+            call["input"]["dataset_keys"]
+            for call in chat_module._cosmology_likelihood_run_calls_from_prompt(
+                prompt
+            )
+        ] == expected_groups
 
 
 def test_agent_loop_enforces_dataset_identity_after_nonempty_model_reply(
