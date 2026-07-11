@@ -894,6 +894,8 @@ def test_dataset_identity_guard_replaces_model_release_equivalence_claim() -> No
         "Under LCDM, are Planck and KiDS-1000 different datasets?",
         "Are Planck and KiDS-1000 equivalent products?",
         "Are these the same releases: Planck and KiDS-1000?",
+        "Is Planck different from KiDS-1000 under LCDM?",
+        "Is Planck the same as KiDS-1000 under LCDM?",
     ):
         assert chat_module._is_cosmology_likelihood_workflow(
             identity_question
@@ -921,6 +923,13 @@ def test_dataset_identity_guard_replaces_model_release_equivalence_claim() -> No
         "Run the executable cosmology likelihood chain with Planck, "
         "not DES Y3, under LCDM."
     ) == ["planck2018_compressed"]
+    assert chat_module._cosmology_dataset_keys_from_prompt(
+        "Evaluate whether S8 differs from GR using Planck and KiDS-1000 "
+        "under LCDM."
+    ) == ["planck2018_compressed", "kids1000_wl"]
+    assert chat_module._cosmology_dataset_keys_from_prompt(
+        "Run KiDS-1000 without using Planck under LCDM."
+    ) == ["kids1000_wl"]
 
     tool_results = [{
         "tool": "list_cosmology_datasets",

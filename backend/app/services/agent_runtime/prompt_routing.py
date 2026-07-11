@@ -48,7 +48,7 @@ def _dataset_mention_is_non_execution(
     clause_before = re.split(r"[.;\n]|,\s*(?:and\s+)?", before)[-1]
     clause_after = re.split(r"[.;\n]", after)[0]
     execution_pattern = re.compile(
-        r"\b(?:run|use|execute|select|fit|analy[sz]e)\b"
+        r"\b(?:run|us(?:e|ing)|execute|select|fit|analy[sz]e)\b"
     )
     execution_matches = list(execution_pattern.finditer(clause_before))
 
@@ -94,7 +94,7 @@ def _dataset_mention_is_non_execution(
         ]
         exclusion_tail = clause_before[exclusion.end() :].lstrip()
         directly_excluded_execution = bool(re.match(
-            r"(?:to\s+)?(?:run|use|execute|select|fit|analy[sz]e)\b",
+            r"(?:to\s+)?(?:run|us(?:e|ing)|execute|select|fit|analy[sz]e)\b",
             exclusion_tail,
         ))
         if not executions_after_exclusion or directly_excluded_execution:
@@ -131,20 +131,9 @@ def _dataset_mention_is_non_execution(
         r"\b(?:compare|contrast)\b",
         clause_before,
     ))
-    dataset_identity_relation = bool(re.search(
-        r"\b(?:same|different|differs?|equivalent)\b[^.;\n]{0,32}"
-        r"\b(?:datasets?|data\s+sets?|releases?|products?)\b"
-        r"|\b(?:datasets?|data\s+sets?|releases?|products?)\b[^.;\n]{0,32}"
-        r"\b(?:same|different|differs?|equivalent)\b",
-        comparison_context,
-    ))
     if (
         not execution_matches
-        # A scientific parameter may "differ" while the following dataset is
-        # still explicitly selected (for example, gamma vs GR using weak
-        # lensing).  Only treat the relation as non-execution when it actually
-        # describes dataset/release/product identity.
-        and dataset_identity_relation
+        and re.search(r"\b(?:same|different|differs?|equivalent)\b", comparison_context)
         and not (comparison_is_execution and explicit_comparison_request)
     ):
         return True
