@@ -40,6 +40,7 @@ evidence that a cosmological result is scientifically established.
 | SR-029 | Critical | Blocked chain/audit numbers and child cells in diagnostic matrix aggregates could re-enter the claim universe or timeout summary. | Use literal boolean taint sentinels, redact blocked posterior fields server-side, keep research/robustness aggregates permanently diagnostic, and suppress child-cell numbers whenever the parent is tainted.  AP geometry and published-constraint audits no longer self-certify publication. | Chain/audit laundering, blocked analytic posterior, AP wrapper, and tainted-timeout-summary regressions. |
 | SR-030 | High | Reproducibility receipts could be overwritten by stale tool-returned fields; `seed=0` could change inside a fitter; emcee/dynesty/time-series pipeline nodes did not consistently control their sampler or bootstrap RNG. | Re-stamp authoritative run/version/query fields and retain old receipts only as labelled upstream context; inject seeds before execution, derive stable per-node pipeline seeds, seed emcee and dynesty/resampling explicitly, preserve zero, and reject UltraNest where an isolated RNG is unavailable. | Forged-envelope, line-fit zero-seed, fit-RV, fit-isochrone, Bayesian pipeline, and Lomb-Scargle replay regressions. |
 | SR-031 | Critical | A cosmology central value could be certified by a coincidentally equal interval edge, uncertainty, proposal anchor, or unrelated parameter; dimensionless and Unicode-unit `value ± error` forms could also leave the error unchecked. | Maintain separate per-parameter universes for central estimates, lower/upper interval endpoints, and uncertainties; exclude context/proposal/tainted helpers; bind interval cues to the correct parameter and clause; and extract an adjacent uncertainty independently of physical-unit spelling. | Cross-statistic, cross-parameter, nested-taint, decimal-boundary, dimensionless-S8, Unicode-H0, and one-sigma-central regressions. |
+| SR-032 | Critical | Backtracking sentence/conclusion regexes could be driven superlinearly by untrusted prose, while naive period splitting let decimals such as `z=0.5` separate a dark-energy subject from its conclusion. | Replace both paths with linear sentence/token/span scans, incremental line accounting, decimal-aware boundaries, and the original 120-character semantic window. | Repeated-sentence and long-input scaling, decimal-bearing conclusion, long-intervening-clause, and TeX/Unicode `w_a` regressions; PR-head CodeQL open alerts: zero. |
 
 ## Platform publication-export gate after remediation
 
@@ -119,7 +120,7 @@ test claim.
 
 ## Verification performed
 
-- Scheduled core scientific suite (2026-07-12): **795 passed, 0 skipped, 0
+- Scheduled core scientific suite (2026-07-12): **798 passed, 0 skipped, 0
   failed** across 40 explicit test files; the JUnit anti-silent-skip guard
   passed.
 - Full backend regression suite (2026-07-10): **2871 passed, 3 skipped, 59
