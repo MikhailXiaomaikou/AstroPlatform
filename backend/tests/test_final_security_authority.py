@@ -116,6 +116,43 @@ def test_scientific_conclusion_sentence_scan_is_linear_on_long_spacing():
     assert len(violations) == 1
     assert violations[0].match_text == "Dark energy evolves."
 
+    repeated = "Dark energy evolves.\n" * 1_000
+    repeated_violations = scientific_conclusion_scope_violations(repeated, [])
+    assert len(repeated_violations) == 1_000
+    assert repeated_violations[0].line_number == 1
+    assert repeated_violations[-1].line_number == 1_000
+
+
+def test_dark_energy_conclusion_catalogue_handles_common_notation_linearly():
+    claims = (
+        "Dark energy evolves with redshift.",
+        "The fit favors time-varying dark energy.",
+        "The equation of state is dynamical.",
+        "We detect a nonzero time variation in the dark-energy equation of state.",
+        r"The fit finds non-zero $w_a$.",
+        r"The fit finds nonzero $w_a$.",
+        r"The fit finds $w_a$ is nonzero.",
+        r"The result has $w_a \neq 0$.",
+        r"The result has $w_a\neq0$.",
+        "The result has wₐ ≠ 0.",
+    )
+    assert all(scientific_conclusion_scope_violations(claim, []) for claim in claims)
+
+    bounded_insertion = "Dark energy " + ("a " * 25) + "evolves."
+    assert scientific_conclusion_scope_violations(bounded_insertion, [])
+
+    long_spacing = "Dark energy" + (" " * 100_000) + "evolves."
+    assert not scientific_conclusion_scope_violations(long_spacing, [])
+
+
+def test_decimal_points_do_not_split_scientific_conclusion_scope():
+    claims = (
+        "Dark energy at z=0.5 evolves.",
+        "Dark energy with w_a=-0.8 evolves.",
+        "The equation of state at z=0.5 is dynamical.",
+    )
+    assert all(scientific_conclusion_scope_violations(claim, []) for claim in claims)
+
 
 def test_expanded_headline_conclusions_require_exact_attestations():
     attacks = (

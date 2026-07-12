@@ -3321,20 +3321,144 @@ _MODEL_PREFERENCE_RE = re.compile(
     r"[^.\n;]{0,180}\b(?:favou?red|preferred|supported)\b",
     re.I,
 )
-_DARK_ENERGY_EVOLUTION_RE = re.compile(
-    r"(?:\bdark[-\s]+energy\b[^.\n;]{0,120}\b"
-    r"(?:evolv(?:e|es|ed|ing)|dynamical|time[-\s]?(?:varying|dependent)|"
-    r"var(?:y|ies|ied|iation))\b|"
-    r"\b(?:evolving|dynamical|time[-\s]?(?:varying|dependent))\s+dark[-\s]+energy\b|"
-    r"\bequation\s+of\s+state\b[^.\n;]{0,120}\b"
-    r"(?:evolv(?:e|es|ed|ing)|var(?:y|ies|ied|iation)|time[-\s]?dependent)\b|"
-    r"\b(?:non[-\s]?zero\s+)?time\s+variation\b[^.\n;]{0,120}"
-    r"\b(?:dark[-\s]+energy|equation\s+of\s+state)\b|"
-    r"\b(?:non[-\s]?zero\s+\$?\s*w\s*[_\{]?a\}?\s*\$?|"
-    r"\$?\s*w\s*[_\{]?a\}?\s*\$?\s+(?:differs?|deviates?)\s+from\s+zero|"
-    r"\$?\s*w\s*[_\{]?a\}?\s*(?:\\ne|\\neq|≠)\s*0\s*\$?)\b)",
-    re.I,
-)
+_ScientificToken = tuple[str, int, int]
+
+
+def _scientific_word_tokens(text: str) -> list[_ScientificToken]:
+    """Tokenize conclusion prose in one pass without backtracking regexes."""
+
+    tokens: list[_ScientificToken] = []
+    current: list[str] = []
+    current_start: int | None = None
+    current_end = 0
+    subscript_map = {"₀": "0", "ₐ": "a"}
+
+    def flush() -> None:
+        nonlocal current_end, current_start
+        if current:
+            tokens.append(("".join(current), current_start or 0, current_end))
+            current.clear()
+            current_start = None
+            current_end = 0
+
+    for index, raw_character in enumerate(text):
+        character = subscript_map.get(raw_character, raw_character.casefold())
+        if character.isalnum():
+            if current_start is None:
+                current_start = index
+            current.append(character)
+            current_end = index + 1
+        else:
+            flush()
+            if character == "≠":
+                tokens.append((character, index, index + 1))
+    flush()
+    return tokens
+
+
+def _spans_within(
+    left: list[tuple[int, int]],
+    right: list[tuple[int, int]],
+    *,
+    max_gap: int,
+) -> bool:
+    """Linear two-pointer proximity check for sorted character spans."""
+
+    left_index = 0
+    right_index = 0
+    while left_index < len(left) and right_index < len(right):
+        left_start, left_end = left[left_index]
+        right_start, right_end = right[right_index]
+        if left_end < right_start:
+            gap = right_start - left_end
+        elif right_end < left_start:
+            gap = left_start - right_end
+        else:
+            gap = 0
+        if gap <= max_gap:
+            return True
+        if left_end < right_start:
+            left_index += 1
+        else:
+            right_index += 1
+    return False
+
+
+def _dark_energy_evolution_claim(sentence: str) -> bool:
+    """Recognize strong dark-energy-evolution claims in linear time."""
+
+    token_records = _scientific_word_tokens(sentence)
+    tokens = [token for token, _, _ in token_records]
+    evolution_words = {
+        "evolve",
+        "evolves",
+        "evolved",
+        "evolving",
+        "dynamical",
+        "vary",
+        "varies",
+        "varied",
+        "variation",
+        "timevarying",
+        "timedependent",
+    }
+    subject_spans: list[tuple[int, int]] = []
+    evolution_spans: list[tuple[int, int]] = []
+    for index, token in enumerate(tokens):
+        if tokens[index : index + 2] == ["dark", "energy"]:
+            subject_spans.append(
+                (token_records[index][1], token_records[index + 1][2])
+            )
+        elif tokens[index : index + 3] == ["equation", "of", "state"]:
+            subject_spans.append(
+                (token_records[index][1], token_records[index + 2][2])
+            )
+        if token in evolution_words:
+            evolution_spans.append(
+                (token_records[index][1], token_records[index][2])
+            )
+        elif tokens[index : index + 2] in (
+            ["time", "varying"],
+            ["time", "dependent"],
+            ["time", "variation"],
+        ):
+            evolution_spans.append(
+                (token_records[index][1], token_records[index + 1][2])
+            )
+    if _spans_within(subject_spans, evolution_spans, max_gap=120):
+        return True
+
+    wa_spans: list[tuple[int, int]] = []
+    for index, token in enumerate(tokens):
+        if token == "wa":
+            wa_spans.append((index, 1))
+        elif token == "w" and index + 1 < len(tokens) and tokens[index + 1] == "a":
+            wa_spans.append((index, 2))
+
+    for start, width in wa_spans:
+        before = tokens[max(0, start - 2) : start]
+        after = tokens[start + width : start + width + 4]
+        if before[-2:] == ["non", "zero"] or before[-1:] == ["nonzero"]:
+            return True
+        if len(after) >= 3 and after[:3] in (
+            ["differ", "from", "zero"],
+            ["differs", "from", "zero"],
+            ["deviate", "from", "zero"],
+            ["deviates", "from", "zero"],
+            ["is", "non", "zero"],
+        ):
+            return True
+        if after[:2] == ["is", "nonzero"]:
+            return True
+        if len(after) >= 2 and after[:2] in (
+            ["ne", "0"],
+            ["neq", "0"],
+            ["≠", "0"],
+        ):
+            return True
+        if after[:1] in (["ne0"], ["neq0"]):
+            return True
+    return False
 _HUBBLE_TENSION_RESOLUTION_RE = re.compile(
     r"(?:\b(?:hubble|h\s*0)\s+tension\b[^.\n;]{0,140}\b"
     r"(?:resolv(?:e|es|ed)|alleviat(?:e|es|ed)|eliminat(?:e|es|ed)|"
@@ -3662,7 +3786,7 @@ def _strong_conclusion_from_sentence(sentence: str) -> dict[str, str | None] | N
         kind = "baseline_rejection"
     elif _MODEL_PREFERENCE_RE.search(sentence) or _ZH_MODEL_PREFERENCE_RE.search(sentence):
         kind = "extended_model_preference"
-    elif _DARK_ENERGY_EVOLUTION_RE.search(sentence) or _ZH_DARK_ENERGY_EVOLUTION_RE.search(sentence):
+    elif _dark_energy_evolution_claim(sentence) or _ZH_DARK_ENERGY_EVOLUTION_RE.search(sentence):
         kind = "dark_energy_evolution"
     if kind is None:
         return None
@@ -3715,6 +3839,14 @@ def _iter_scientific_sentence_spans(text: str) -> Iterable[tuple[int, str]]:
     for index, character in enumerate(text):
         if character not in _SCIENTIFIC_SENTENCE_TERMINATORS:
             continue
+        if (
+            character == "."
+            and index > 0
+            and index + 1 < len(text)
+            and text[index - 1].isdigit()
+            and text[index + 1].isdigit()
+        ):
+            continue
         # Match the prior catalogue's requirement that a segment contain at
         # least one non-terminator before its closing punctuation.
         if index > start:
@@ -3735,7 +3867,12 @@ def scientific_conclusion_scope_violations(
     stripped, stripped_map = _strip_markdown_code_with_map(reply)
     attestations = _validated_conclusion_attestations(tool_results)
     violations: list[CitationViolation] = []
+    original_cursor = 0
+    line_number = 1
     for start, sentence_span in _iter_scientific_sentence_spans(stripped):
+        original_start = stripped_map[start]
+        line_number += reply.count("\n", original_cursor, original_start)
+        original_cursor = original_start
         sentence = sentence_span.strip()
         claim = _strong_conclusion_from_sentence(sentence)
         if claim is None:
@@ -3751,7 +3888,7 @@ def scientific_conclusion_scope_violations(
             CitationViolation(
                 kind="cosmology_conclusion_without_matched_attestation",
                 match_text=sentence,
-                line_number=_line_number(reply, stripped_map[start]),
+                line_number=line_number,
             )
         )
     return violations
