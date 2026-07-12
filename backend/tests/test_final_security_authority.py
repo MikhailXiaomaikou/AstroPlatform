@@ -110,6 +110,13 @@ def test_strong_cosmology_synonyms_do_not_bypass_attestation_gate():
     assert all(scientific_conclusion_scope_violations(claim, []) for claim in claims)
 
 
+def test_scientific_conclusion_sentence_scan_is_linear_on_long_spacing():
+    reply = (" " * 100_000) + "Dark energy evolves."
+    violations = scientific_conclusion_scope_violations(reply, [])
+    assert len(violations) == 1
+    assert violations[0].match_text == "Dark energy evolves."
+
+
 def test_expanded_headline_conclusions_require_exact_attestations():
     attacks = (
         "The Hubble tension is resolved.",

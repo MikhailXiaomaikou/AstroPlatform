@@ -3705,6 +3705,25 @@ def _attestation_matches_claim(
     )
 
 
+_SCIENTIFIC_SENTENCE_TERMINATORS = frozenset(".。\n;；!?！？")
+
+
+def _iter_scientific_sentence_spans(text: str) -> Iterable[tuple[int, str]]:
+    """Yield sentence-like spans in one linear pass over untrusted text."""
+
+    start = 0
+    for index, character in enumerate(text):
+        if character not in _SCIENTIFIC_SENTENCE_TERMINATORS:
+            continue
+        # Match the prior catalogue's requirement that a segment contain at
+        # least one non-terminator before its closing punctuation.
+        if index > start:
+            yield start, text[start : index + 1]
+        start = index + 1
+    if start < len(text):
+        yield start, text[start:]
+
+
 def scientific_conclusion_scope_violations(
     reply: str,
     tool_results: Any,
@@ -3716,8 +3735,8 @@ def scientific_conclusion_scope_violations(
     stripped, stripped_map = _strip_markdown_code_with_map(reply)
     attestations = _validated_conclusion_attestations(tool_results)
     violations: list[CitationViolation] = []
-    for sentence_match in re.finditer(r"[^.。\n;；!?！？]+(?:[.。\n;；!?！？]|$)", stripped):
-        sentence = sentence_match.group(0).strip()
+    for start, sentence_span in _iter_scientific_sentence_spans(stripped):
+        sentence = sentence_span.strip()
         claim = _strong_conclusion_from_sentence(sentence)
         if claim is None:
             continue
@@ -3728,7 +3747,6 @@ def scientific_conclusion_scope_violations(
             for evidence_id in evidence_ids
         ):
             continue
-        start = sentence_match.start()
         violations.append(
             CitationViolation(
                 kind="cosmology_conclusion_without_matched_attestation",
