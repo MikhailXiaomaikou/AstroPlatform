@@ -72,16 +72,26 @@ def evaluate_alpha_class(
     text = _visible_text(platform_record)
     flags = _collect_flags(platform_record, text)
     hidden_status = _hidden_record_status(hidden)
+    evidence_manifest = _alpha_evidence_manifest(platform_record)
 
     criteria = {
-        "data_match": _terms_match(text, _expectation_terms(hidden, ("expected_datasets", "required_datasets", "datasets"))),
-        "method_match": _terms_match(text, _expectation_terms(hidden, ("expected_methods", "required_methods", "methods"))),
-        "model_match": _terms_match(text, _expectation_terms(hidden, ("expected_models", "required_models", "model_family"))),
-        "execution_ready": _execution_ready(platform_record, text),
-        "diagnostics_ready": _diagnostics_ready(platform_record, text),
-        "direction_compatible": _direction_compatible(text, hidden),
-        "numeric_compatible": _numeric_compatible(text, hidden),
-        "evidence_complete": _evidence_complete(platform_record, text),
+        "data_match": _terms_match(
+            _manifest_terms_text(evidence_manifest, "datasets"),
+            _expectation_terms(hidden, ("expected_datasets", "required_datasets", "datasets")),
+        ),
+        "method_match": _terms_match(
+            _manifest_terms_text(evidence_manifest, "methods"),
+            _expectation_terms(hidden, ("expected_methods", "required_methods", "methods")),
+        ),
+        "model_match": _terms_match(
+            _manifest_terms_text(evidence_manifest, "models"),
+            _expectation_terms(hidden, ("expected_models", "required_models", "model_family")),
+        ),
+        "execution_ready": _execution_ready(evidence_manifest),
+        "diagnostics_ready": _diagnostics_ready(evidence_manifest),
+        "direction_compatible": _direction_compatible(evidence_manifest, hidden),
+        "numeric_compatible": _numeric_compatible(evidence_manifest, hidden),
+        "evidence_complete": _evidence_complete(evidence_manifest),
     }
     why_not_a = _why_not_a(hidden_status, criteria, flags)
 
@@ -105,6 +115,9 @@ def evaluate_alpha_class(
         "paper_arxiv_id": hidden.get("arxiv_id"),
         "paper_title": hidden.get("title"),
         "anomaly_type": hidden.get("anomaly_type"),
+        "evidence_manifest_status": (
+            "trusted" if _trusted_alpha_manifest(evidence_manifest) else "missing_or_untrusted"
+        ),
     }
 
 
@@ -163,6 +176,45 @@ def _visible_text(platform_record: Mapping[str, Any]) -> str:
         platform_record.get("summary"),
     ]
     return "\n".join(str(piece) for piece in pieces if piece)
+
+
+def _alpha_evidence_manifest(platform_record: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Return the structured manifest used for strict-A grading.
+
+    Visible prose, UI visibility flags, and loose ``publication_ready`` booleans
+    are deliberately excluded: they can demonstrate a B-level route but cannot
+    prove paper-level agreement.
+    """
+
+    for key in ("scientific_evidence_manifest", "alpha_evidence_manifest"):
+        value = platform_record.get(key)
+        if isinstance(value, Mapping):
+            return value
+    return {}
+
+
+def _trusted_alpha_manifest(manifest: Mapping[str, Any]) -> bool:
+    from app.services.server_evidence import verify_scientific_attestation
+
+    return bool(
+        manifest.get("source") in {"server_attested", "human_attested"}
+        and verify_scientific_attestation(
+            dict(manifest),
+            expected_type="research_alpha",
+        )
+    )
+
+
+def _manifest_terms_text(manifest: Mapping[str, Any], key: str) -> str:
+    value = manifest.get(key)
+    values = value if isinstance(value, Iterable) and not isinstance(value, (str, bytes, Mapping)) else [value]
+    terms: list[str] = []
+    for item in values:
+        if isinstance(item, Mapping):
+            terms.extend(str(v) for v in item.values() if v is not None)
+        elif item is not None:
+            terms.append(str(item))
+    return " ".join(terms)
 
 
 def _collect_flags(platform_record: Mapping[str, Any], text: str) -> set[str]:
@@ -247,41 +299,99 @@ def _terms_match(text: str, terms: list[str]) -> str:
     return "missing"
 
 
-def _execution_ready(platform_record: Mapping[str, Any], text: str) -> bool:
-    if platform_record.get("publication_ready") is True:
-        return True
-    if platform_record.get("matrixVisible") and re.search(r"publication[-_ ]ready|ready cells?|executed analyses", text, re.I):
-        return True
-    return bool(re.search(r"publication[-_ ]ready\s*[:=]\s*true", text, re.I))
+def _execution_ready(manifest: Mapping[str, Any]) -> bool:
+    publication_gate = manifest.get("publication_gate")
+    adequacy = (
+        publication_gate.get("model_adequacy")
+        if isinstance(publication_gate, Mapping)
+        else None
+    )
+    return bool(
+        _trusted_alpha_manifest(manifest)
+        and isinstance(publication_gate, Mapping)
+        and publication_gate.get("eligible") is True
+        and isinstance(adequacy, Mapping)
+        and adequacy.get("eligible") is True
+        and adequacy.get("signature_verified") is True
+        and _is_sha256_id(adequacy.get("manifest_hash"))
+    )
 
 
-def _diagnostics_ready(platform_record: Mapping[str, Any], text: str) -> bool:
-    if platform_record.get("diagnostics_ready") is True:
-        return True
-    return bool(re.search(r"\bESS\b|R-?hat|acceptance|diagnostic|posterior", text, re.I))
+def _diagnostics_ready(manifest: Mapping[str, Any]) -> bool:
+    if not _trusted_alpha_manifest(manifest):
+        return False
+    diagnostics = manifest.get("diagnostics")
+    return bool(
+        isinstance(diagnostics, Mapping)
+        and str(diagnostics.get("status") or "").lower() in {"passed", "pass", "ok"}
+        and _is_sha256_id(diagnostics.get("evidence_id"))
+        and diagnostics.get("evidence_hash") == diagnostics.get("evidence_id")
+        and diagnostics.get("evidence_id") in (manifest.get("evidence_ids") or [])
+        and isinstance(diagnostics.get("metrics"), Mapping)
+        and bool(diagnostics.get("metrics"))
+    )
 
 
-def _evidence_complete(platform_record: Mapping[str, Any], text: str) -> bool:
-    if platform_record.get("evidence_complete") is True:
-        return True
-    if platform_record.get("factCheckVisible") and platform_record.get("matrixVisible"):
-        return True
-    return bool(re.search(r"evidence graph|fact check|tool[- ]run|citation|dataset", text, re.I))
+def _evidence_complete(manifest: Mapping[str, Any]) -> bool:
+    if not _trusted_alpha_manifest(manifest):
+        return False
+    evidence_ids = manifest.get("evidence_ids")
+    support_paths = manifest.get("claim_support_paths")
+    valid_ids = {
+        item
+        for item in evidence_ids or []
+        if isinstance(item, str) and _is_sha256_id(item)
+    }
+    return bool(
+        isinstance(evidence_ids, list)
+        and evidence_ids
+        and len(valid_ids) == len(evidence_ids)
+        and isinstance(support_paths, list)
+        and support_paths
+        and all(
+            isinstance(item, Mapping)
+            and isinstance(item.get("claim"), str)
+            and bool(item.get("claim").strip())
+            and item.get("evidence_id") in valid_ids
+            and isinstance(item.get("result_path"), str)
+            and bool(item.get("result_path").strip())
+            for item in support_paths
+        )
+    )
 
 
-def _direction_compatible(text: str, hidden: Mapping[str, Any]) -> str:
+def _direction_compatible(manifest: Mapping[str, Any], hidden: Mapping[str, Any]) -> str:
     expected_terms = _expectation_terms(hidden, ("expected_direction_terms", "acceptable_result_terms"))
     if not expected_terms:
         return "not_specified"
-    return _terms_match(text, expected_terms)
+    return _terms_match(_manifest_terms_text(manifest, "result_direction_terms"), expected_terms)
 
 
-def _numeric_compatible(text: str, hidden: Mapping[str, Any]) -> str:
+def _numeric_compatible(manifest: Mapping[str, Any], hidden: Mapping[str, Any]) -> str:
     expected_numbers = hidden.get("expected_numbers")
     if not expected_numbers:
         return "not_specified"
     if not isinstance(expected_numbers, list):
         return "missing"
+
+    observed_numbers = manifest.get("numbers")
+    observed_by_name: dict[str, float] = {}
+    if isinstance(observed_numbers, Mapping):
+        iterable = [
+            {"name": name, **(dict(value) if isinstance(value, Mapping) else {"value": value})}
+            for name, value in observed_numbers.items()
+        ]
+    elif isinstance(observed_numbers, list):
+        iterable = observed_numbers
+    else:
+        iterable = []
+    for item in iterable:
+        if not isinstance(item, Mapping):
+            continue
+        name = str(item.get("name") or item.get("parameter") or "").strip().lower()
+        value = _float_or_none(_first_present(item, ("value", "median", "mean")))
+        if name and value is not None:
+            observed_by_name[name] = value
 
     results: list[bool] = []
     for spec in expected_numbers:
@@ -291,7 +401,7 @@ def _numeric_compatible(text: str, hidden: Mapping[str, Any]) -> str:
         value = _float_or_none(_first_present(spec, ("value", "median", "expected")))
         if not name or value is None:
             continue
-        observed = _find_number_near_name(text, name)
+        observed = observed_by_name.get(name.lower())
         if observed is None:
             results.append(False)
             continue
@@ -322,7 +432,13 @@ def _why_not_a(hidden_status: str, criteria: Mapping[str, Any], flags: set[str])
             reasons.append(f"{key}=not_specified")
         if value in {False, "missing", "contradicted"}:
             reasons.append(f"{key}={value}")
-        elif key in {"data_match", "method_match", "model_match", "direction_compatible"} and value == "partial":
+        elif key in {
+            "data_match",
+            "method_match",
+            "model_match",
+            "direction_compatible",
+            "numeric_compatible",
+        } and value == "partial":
             reasons.append(f"{key}=partial")
     return reasons
 
@@ -332,7 +448,10 @@ def _fallback_grade(
     text: str,
     criteria: Mapping[str, Any],
 ) -> tuple[str, str]:
-    method_route = criteria["method_match"] in {"match", "partial", "not_specified"} and (
+    # B/C grading is intentionally less strict than A: visible routing and an
+    # honest scope gap are useful even when no signed scientific manifest was
+    # produced.  The manifest-only criteria above remain mandatory for A.
+    method_route = (
         bool(platform_record.get("researchPlanVisible"))
         or bool(platform_record.get("matrixVisible"))
         or bool(re.search(r"research plan|matrix|likelihood|dataset|scope gap", text, re.I))
@@ -426,6 +545,12 @@ def _float_or_none(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
+
+
+def _is_sha256_id(value: Any) -> bool:
+    if not isinstance(value, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
+        return False
+    return True
 
 
 def _first_present(mapping: Mapping[str, Any], keys: Iterable[str]) -> Any:

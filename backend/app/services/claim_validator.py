@@ -65,6 +65,22 @@ CITATION_VALIDATOR_HARDBLOCK = os.getenv("PROVENANCE_VALIDATOR_HARDBLOCK", "true
 _NUM = r"([-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?)"
 _UNIT = r"(?:\s*(?:±|\+/-)\s*[-+]?(?:\d+(?:\.\d+)?|\.\d+))?"  # optional ± err
 
+# Scientific replies commonly carry TeX spacing commands around ``\pm``.
+# Keep the grammar deliberately finite: whitespace, non-breaking ``~``, the
+# short spacing commands, and ``\quad``/``\qquad``.  Both trusted typed
+# extraction and untrusted-transcript detection use this exact separator so a
+# formatting variant cannot be accepted by one path and missed by the other.
+_SCIENTIFIC_SPACING = (
+    r"(?:\s|~|\\[,;:!]|\\[ \t]|\\(?:quad|qquad)(?![A-Za-z]))*"
+)
+_UNCERTAINTY_OPERATOR = (
+    rf"(?:±|\\pm(?![A-Za-z])|\+{_SCIENTIFIC_SPACING}/{_SCIENTIFIC_SPACING}[-−]|"
+    rf"\+{_SCIENTIFIC_SPACING}[-−])"
+)
+_UNCERTAINTY_SEPARATOR = (
+    rf"{_SCIENTIFIC_SPACING}{_UNCERTAINTY_OPERATOR}{_SCIENTIFIC_SPACING}"
+)
+
 # B3: a refusal or rebuttal can still launder a number by repeating a fake
 # earlier-turn / pasted transcript value as a bare ``NUM ± NUM`` pair.  The
 # ordinary value_with_error rule deliberately requires a physical unit, so it
@@ -78,8 +94,28 @@ _UNTRUSTED_CONTEXT_RE = re.compile(
     re.I,
 )
 _UNTRUSTED_CONTEXT_VALUE_WITH_ERROR_RE = re.compile(
-    rf"{_NUM}\s*(?:±|\+\s*/\s*-|\+\s*-)\s*"
+    rf"{_NUM}{_UNCERTAINTY_SEPARATOR}"
     rf"([-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?)",
+    re.I,
+)
+_ADJACENT_UNCERTAINTY_RE = re.compile(
+    rf"^{_UNCERTAINTY_SEPARATOR}"
+    r"([-+−]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?)",
+    re.I,
+)
+_UNCERTAINTY_SEPARATOR_RE = re.compile(_UNCERTAINTY_SEPARATOR, re.I)
+_SIGMA_DETECTION_CUE_RE = re.compile(
+    r"\b(?:detect(?:ed|ion)?|significan(?:ce|t)|reject(?:ed|ion)?|"
+    r"exclud(?:e|ed|es|ing|sion)|preference|evidence|tension|"
+    r"anomal(?:y|ies)|discrepanc(?:y|ies)|deviat(?:e|ed|es|ion)|"
+    r"excess(?:es)?|signal|offset|departure|difference|"
+    r"inconsisten(?:cy|t))\b",
+    re.I,
+)
+_SIGMA_INTERVAL_CUE_RE = re.compile(
+    r"\b(?:confidence|credible|interval|uncertaint(?:y|ies)|"
+    r"error(?:\s*bars?)?|posterior|constraint|hdi|quantile|percentile|"
+    r"lower|upper|bound|limit)\b",
     re.I,
 )
 _SENTENCE_BREAK_RE = re.compile(r'(?:\n+|[.!?](?:["\')\]]+)?\s+)')
@@ -186,6 +222,22 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     )),
     ("p_value", re.compile(
         rf"\bp\s*(?:=|<|>|≤|≥)\s*{_NUM}\b",
+        re.I,
+    )),
+    # Model-comparison prose rarely uses the label-colon shape. Cover both
+    # direct forms ("delta chi-squared is -4.6", "Δχ² = -4.6") and verb-first
+    # forms ("improves chi-squared by -4.6"). Without this, an unattested
+    # posterior-draw delta could evade the numeric gate simply by using "by".
+    ("chi_squared", re.compile(
+        rf"(?:\b(?:delta\s+|change\s+in\s+)?chi(?:[-\s]*(?:squared?|square)|\s*\^?\s*2|2)\b|"
+        rf"(?:Δ\s*)?χ\s*(?:²|\^?\s*2))"
+        rf"\s*(?:is|was|equals?|=|:|≈|~|of|by)?\s*{_NUM}\b",
+        re.I,
+    )),
+    ("chi_squared", re.compile(
+        rf"\b(?:improves?|improved|reduces?|reduced|changes?|changed)\s+"
+        rf"(?:the\s+)?(?:chi(?:[-\s]*(?:squared?|square)|\s*\^?\s*2|2)\b|"
+        rf"χ\s*(?:²|\^?\s*2))\s*(?:by|to|of|=|:)?\s*{_NUM}\b",
         re.I,
     )),
     ("correlation_r", re.compile(
@@ -854,6 +906,48 @@ def _sentence_context_for_span(text: str, start: int, end: int) -> str:
     return text[context_start:context_end]
 
 
+def _sigma_is_interval_marker(text: str, claim: Claim) -> bool:
+    """True when ``Nσ`` labels uncertainty coverage, not significance.
+
+    A bare ``1σ`` beside a parameter error bar is conventional interval
+    notation.  Treating it as an independent detection significance creates a
+    false unsupported claim.  Explicit detection/significance/tension cues
+    remain authoritative and keep the ordinary significance claim.
+    """
+
+    clause, claim_start, claim_end = _claim_clause(text, claim)
+
+    def distance_to_claim(start: int, end: int) -> int:
+        if end <= claim_start:
+            return claim_start - end
+        if start >= claim_end:
+            return start - claim_end
+        return 0
+
+    def nearest(pattern: re.Pattern[str]) -> int | None:
+        distances = [
+            distance_to_claim(match.start(), match.end())
+            for match in pattern.finditer(clause)
+        ]
+        return min(distances) if distances else None
+
+    detection_distance = nearest(_SIGMA_DETECTION_CUE_RE)
+    interval_distances = [
+        distance
+        for distance in (
+            nearest(_UNCERTAINTY_SEPARATOR_RE),
+            nearest(_SIGMA_INTERVAL_CUE_RE),
+        )
+        if distance is not None
+    ]
+    interval_distance = min(interval_distances, default=None)
+    if interval_distance is None:
+        return False
+    # Fail closed on a tie: an equally near detection cue means the sigma
+    # value still carries a significance interpretation and must be checked.
+    return detection_distance is None or interval_distance < detection_distance
+
+
 def extract_claims(text: str) -> list[Claim]:
     """Scan a reply for astronomical numeric claims.
 
@@ -878,6 +972,7 @@ def extract_claims(text: str) -> list[Claim]:
     # claim's start/end in original coordinates, because downstream redaction
     # (`_redact_uncited_phrases`) and line-number helpers slice the original
     # reply with these offsets.
+    original_text = text
     text, bmap = _transform_for_claims(text)
     claims: list[Claim] = []
     seen: set[tuple[int, int, float]] = set()
@@ -915,6 +1010,17 @@ def extract_claims(text: str) -> list[Claim]:
                     end=bmap[span[1]],
                 ))
 
+    # ``1σ`` in a confidence/uncertainty clause annotates interval coverage;
+    # it is not a second, detection-significance result.  Drop only that
+    # generic significance match, leaving the typed central/error claims (and
+    # explicit detection-significance wording) intact.
+    claims = [
+        claim
+        for claim in claims
+        if claim.label != "significance_sigma"
+        or not _sigma_is_interval_marker(original_text, claim)
+    ]
+
     # B3: identify both halves of a bare uncertainty pair whose sentence says
     # the value came from untrusted prose (earlier/previous/pasted/quoted/etc.).
     # Append these even when a generic rule already saw the same span; the
@@ -948,6 +1054,58 @@ def extract_claims(text: str) -> list[Claim]:
             end=bmap[match.end()],
         ))
 
+    # Parameter-specific patterns stop at the central value before a ``±``.
+    # Extract the adjacent error directly from that typed claim, independent
+    # of units. This covers dimensionless S8/Ωm/w parameters and standard
+    # Unicode units such as ``km s⁻¹ Mpc⁻¹`` that the generic unit catalogue
+    # cannot enumerate safely.
+    adjacent_uncertainties: list[Claim] = []
+    for central_claim in list(claims):
+        if not central_claim.label.startswith("cosmology_") or central_claim.label.endswith(
+            "_uncertainty"
+        ):
+            continue
+        tail = original_text[central_claim.end : central_claim.end + 96]
+        adjacent = _ADJACENT_UNCERTAINTY_RE.match(tail)
+        if adjacent is None:
+            continue
+        try:
+            error_value = float(adjacent.group(1).replace("−", "-"))
+        except ValueError:
+            continue
+        if not math.isfinite(error_value):
+            continue
+        error_end = central_claim.end + adjacent.end()
+        adjacent_uncertainties.append(
+            Claim(
+                label=f"{central_claim.label}_uncertainty",
+                raw=original_text[central_claim.start:error_end].strip(),
+                value=error_value,
+                start=central_claim.start,
+                end=error_end,
+            )
+        )
+    claims.extend(adjacent_uncertainties)
+
+    # A generic ``value ± error`` match spans only the number pair, while a
+    # parameter-specific cosmology match spans the label and central value.
+    # Preserve that parameter identity on the uncertainty half before overlap
+    # de-duplication so neither half can fall back to the flat numeric pool.
+    for claim in claims:
+        if claim.label != "value_with_error.g2":
+            continue
+        parameter_matches = [
+            candidate
+            for candidate in claims
+            if candidate.label.startswith("cosmology_")
+            and not candidate.label.endswith("_uncertainty")
+            and not (
+                claim.end <= candidate.start or claim.start >= candidate.end
+            )
+        ]
+        if len({candidate.label for candidate in parameter_matches}) == 1:
+            claim.label = f"{parameter_matches[0].label}_uncertainty"
+
     # L1: span-overlap dedup.  Two patterns may both match the same numeric
     # value at overlapping character ranges ("parallax is 9.00 mas" + "9.00
     # mas"); keep only the one with the wider span (= more context).
@@ -960,6 +1118,11 @@ def extract_claims(text: str) -> list[Claim]:
         claims,
         key=lambda c: (
             not c.label.startswith(f"{_UNTRUSTED_CONTEXT_LABEL}."),
+            0
+            if c.label.startswith("cosmology_")
+            else 2
+            if c.label == "value_with_error.g1"
+            else 1,
             -(c.end - c.start),
         ),
     )
@@ -976,6 +1139,15 @@ def extract_claims(text: str) -> list[Claim]:
                 and c.label != k.label
                 and c.start == k.start
                 and c.end == k.end
+            ):
+                continue
+            # The centre and uncertainty are separate scientific statistics,
+            # even for the edge case ``H0 = 1 ± 1`` where their values match.
+            if (
+                c.label.startswith("cosmology_")
+                and k.label.startswith("cosmology_")
+                and c.label.endswith("_uncertainty")
+                != k.label.endswith("_uncertainty")
             ):
                 continue
             # overlap + same value (<1e-9 absolute diff) → dedup
@@ -999,10 +1171,25 @@ def _is_tainted_synthetic_payload(payload: Any) -> bool:
         value = payload.get(key)
         if isinstance(value, str):
             status_values.append(value.strip().upper())
+    is_model_comparison = bool(
+        "comparison_valid" in payload
+        and any(key in payload for key in ("delta_chi2", "delta_aic", "delta_bic"))
+    )
+    model_comparison_unattested = bool(
+        is_model_comparison
+        and not (
+            payload.get("comparison_valid") is True
+            and payload.get("baseline_chi2_kind") == "likelihood_only_mle"
+            and payload.get("extended_chi2_kind") == "likelihood_only_mle"
+            and isinstance(payload.get("likelihood_fingerprint"), str)
+            and payload.get("likelihood_fingerprint", "").strip()
+        )
+    )
     return (
         payload.get("__do_not_claim__") is True
         or "SYNTHETIC" in status_values
         or "SIMULATED_DEMO" in status_values
+        or model_comparison_unattested
     )
 
 
@@ -1078,6 +1265,7 @@ _CITATION_KEYS_BLACKLIST: frozenset[str] = frozenset({
     # remaining emitters of the class.
     "sha256", "mean_sha256", "artifact_sha256", "runner_hash", "result_hash",
     "config_hash", "digest", "data_hash", "files_sha256",
+    "likelihood_fingerprint",
     # input_hash (build_evidence_graph node, _stable_hash of the model-supplied
     # input) is the same hex-digit-run class — and it is derived from
     # attacker-influenced input (2026-06-12 review #7/#11/#15).
@@ -1122,7 +1310,52 @@ _NON_EVIDENCE_KEYS: frozenset[str] = frozenset({
     # numeric_in_warnings_list_not_in_universe /
     # warnings_prose_with_structured_diagnostics_sibling_stays_claimable.
     "warnings",
+    # Dataset registry Gaussian records are provenance/configuration metadata.
+    # Their hand-entered posterior/proposal means must not ground a fresh
+    # constraint merely because a full registry entry appears in datasets_used.
+    "compressed_likelihood",
 })
+
+
+# A statistical record can be copied under several different envelope keys
+# (``compressed_likelihood``, ``registered_parameter_block``, a data-product
+# ``parse`` object, or a tension row).  Key-name blacklists alone therefore do
+# not establish that its numbers are evidence.  Posterior summaries and
+# proposal records retain their means/covariances for provenance and UI
+# context, but those numbers did not come from the current computation and
+# must never certify a fresh numerical claim.
+_CONTEXT_ONLY_STATISTICAL_ROLES: frozenset[str] = frozenset({
+    "published_posterior_summary",
+    "proposal_only",
+})
+_CONTEXT_ONLY_STATISTICAL_SCOPES: frozenset[str] = frozenset({
+    "context_only",
+    "literature_context",
+    "proposal_context",
+    "literature_context_metadata",
+    "proposal_context_metadata",
+    "registered_gaussian_context_only",
+})
+
+
+def _is_context_only_statistical_payload(payload: Any) -> bool:
+    """Whether a result subtree is statistical context rather than evidence."""
+
+    if not isinstance(payload, dict):
+        return False
+    role = str(payload.get("statistical_role") or "").strip().lower()
+    if role in _CONTEXT_ONLY_STATISTICAL_ROLES:
+        return True
+    for key in (
+        "statistical_scope",
+        "compressed_record_scope",
+        "anchor_scope",
+        "claim_scope",
+    ):
+        scope = str(payload.get(key) or "").strip().lower()
+        if scope in _CONTEXT_ONLY_STATISTICAL_SCOPES:
+            return True
+    return False
 
 
 # Cosmology-manifest result keys that may echo a model-authored legacy
@@ -1273,7 +1506,10 @@ def _iter_numeric_values(payload: Any, _in_blacklisted_key: bool = False) -> Ite
         if math.isfinite(v):
             yield v
     elif isinstance(payload, dict):
-        if _is_tainted_synthetic_payload(payload):
+        if (
+            _is_tainted_synthetic_payload(payload)
+            or _is_context_only_statistical_payload(payload)
+        ):
             return
         for key, val in payload.items():
             # L2: skip the entire systemic metadata field
@@ -1363,6 +1599,8 @@ _COSMO_PARAM_EXACT: dict[str, str] = {
     "h0": "H0", "omegam": "omegam", "sigma8": "sigma8", "s8": "S8",
     "w0": "w0", "wa": "wa", "w": "w", "rd": "rd", "mb": "M_B", "h0rd": "H0_rd",
     "ns": "ns", "tau": "tau", "ombh2": "ombh2", "omegabh2": "ombh2",
+    # Unit-bearing manifest key used by curated cosmology presets.
+    "h0kmsmpc": "H0", "h0kms1mpc1": "H0",
 }
 # Roots tried longest-first; a key resolves if it equals a root or is the root
 # followed by a known statistic suffix.
@@ -1374,20 +1612,152 @@ _COSMO_PARAM_ROOTS: tuple[tuple[str, str], ...] = (
 )
 _COSMO_STAT_SUFFIXES: frozenset[str] = frozenset({
     "", "median", "mean", "best", "low", "high", "value", "val",
+    "bestfit", "map", "mle", "mode", "estimate", "centralvalue",
     "1sigmalow", "1sigmahigh", "q16", "q84", "hdilow94", "hdihigh94", "std",
 })
 
+# A statement such as ``H0 = 68.8`` is a central-estimate claim.  It cannot be
+# certified by an HDI boundary, standard deviation, error bar, prior bound, or
+# another statistic merely because the number is close.  Uncertainty claims
+# are still checked by their own generic numeric pattern against the flat
+# universe; this set governs only parameter-labelled central values.
+_COSMO_CENTRAL_STAT_SUFFIXES: frozenset[str] = frozenset({
+    "",
+    "median",
+    "mean",
+    "best",
+    "bestfit",
+    "map",
+    "mle",
+    "mode",
+    "value",
+    "val",
+    "estimate",
+    "centralvalue",
+})
+_COSMO_CENTRAL_SUMMARY_KEYS: frozenset[str] = frozenset({
+    suffix for suffix in _COSMO_CENTRAL_STAT_SUFFIXES if suffix
+})
+_COSMO_ROW_CENTRAL_KEYS: frozenset[str] = frozenset({
+    "reproduced",
+    "reproducedvalue",
+})
 
-def _canonicalize_cosmology_param(name: Any) -> str | None:
+# Interval endpoints need their own typed universe.  A flat collection of all
+# values for a parameter cannot distinguish its posterior centre from an HDI
+# edge, and a flat collection of all tool numbers cannot distinguish S8's edge
+# from an unrelated observable.  These normalized field names cover the
+# result shapes emitted by the native likelihood and Cobaya runners; the
+# classifier below also accepts coverage-suffixed HDI/CI and quantile keys.
+_COSMO_INTERVAL_LOWER_KEYS: frozenset[str] = frozenset({
+    "low",
+    "lower",
+    "lowerbound",
+    "lowerlimit",
+    "loweredge",
+    "1sigmalow",
+    "onesigmalow",
+})
+_COSMO_INTERVAL_UPPER_KEYS: frozenset[str] = frozenset({
+    "high",
+    "upper",
+    "upperbound",
+    "upperlimit",
+    "upperedge",
+    "1sigmahigh",
+    "onesigmahigh",
+})
+_COSMO_INTERVAL_PAIR_KEYS: frozenset[str] = frozenset({
+    "interval",
+    "credibleinterval",
+    "confidenceinterval",
+    "posteriorinterval",
+    "quantiles",
+    "percentiles",
+    "1sigma",
+    "onesigma",
+    "1sigmainterval",
+    "onesigmainterval",
+})
+
+
+def _cosmology_interval_statistic_kind(statistic: Any) -> str | None:
+    """Classify a normalized result field as lower/upper/pair interval data."""
+
+    norm = re.sub(r"[^a-z0-9]", "", str(statistic).lower())
+    if norm in _COSMO_INTERVAL_LOWER_KEYS:
+        return "lower"
+    if norm in _COSMO_INTERVAL_UPPER_KEYS:
+        return "upper"
+    if norm in _COSMO_INTERVAL_PAIR_KEYS:
+        return "pair"
+
+    # hdi_low_94 / hdi_94_low / ci_lower_68 and their upper equivalents.
+    if re.fullmatch(r"(?:hdi|ci)(?:low|lower)\d*", norm) or re.fullmatch(
+        r"(?:hdi|ci)\d*(?:low|lower)", norm
+    ):
+        return "lower"
+    if re.fullmatch(r"(?:hdi|ci)(?:high|upper)\d*", norm) or re.fullmatch(
+        r"(?:hdi|ci)\d*(?:high|upper)", norm
+    ):
+        return "upper"
+    if re.fullmatch(r"(?:hdi|ci)\d*", norm):
+        return "pair"
+
+    # q16/q84, p025/p975, percentile03/percentile97, etc.  We only need the
+    # side of the median here; exact coverage remains attached to provenance.
+    quantile = re.fullmatch(r"(?:q|p|percentile)(\d{1,4})", norm)
+    if quantile:
+        percentile = int(quantile.group(1))
+        if percentile < 50:
+            return "lower"
+        if percentile > 50:
+            return "upper"
+    return None
+
+
+def _row_central_values(value: Any) -> Iterable[float]:
+    """Yield only the central element from a row-oriented result value."""
+
+    candidate = value[0] if isinstance(value, (list, tuple)) and value else value
+    if isinstance(candidate, dict) and (
+        _is_tainted_synthetic_payload(candidate)
+        or _is_context_only_statistical_payload(candidate)
+    ):
+        return
+    if isinstance(candidate, (int, float)) and not isinstance(candidate, bool):
+        number = float(candidate)
+        if math.isfinite(number):
+            yield number
+    elif isinstance(candidate, dict):
+        for key, nested in candidate.items():
+            key_norm = re.sub(r"[^a-z0-9]", "", str(key).lower())
+            if key_norm in _COSMO_CENTRAL_SUMMARY_KEYS:
+                yield from _row_central_values(nested)
+
+
+def _cosmology_param_and_statistic(name: Any) -> tuple[str, str] | None:
+    """Return ``(canonical_parameter, statistic_suffix)`` for a result key."""
+
     norm = re.sub(r"[^a-z0-9]", "", str(name).lower())
     if not norm:
         return None
     if norm in _COSMO_PARAM_EXACT:
-        return _COSMO_PARAM_EXACT[norm]
+        return _COSMO_PARAM_EXACT[norm], ""
     for root, canon in _COSMO_PARAM_ROOTS:
-        if norm.startswith(root) and norm[len(root):] in _COSMO_STAT_SUFFIXES:
-            return canon
+        if norm.startswith(root):
+            suffix = norm[len(root):]
+            if (
+                suffix in _COSMO_STAT_SUFFIXES
+                or _cosmology_interval_statistic_kind(suffix) is not None
+            ):
+                return canon, suffix
     return None
+
+
+def _canonicalize_cosmology_param(name: Any) -> str | None:
+    parsed = _cosmology_param_and_statistic(name)
+    return parsed[0] if parsed is not None else None
 
 
 # extract_claims already tags canonical-symbol cosmology claims with a
@@ -1407,6 +1777,10 @@ _CLAIM_LABEL_TO_COSMO_PARAM: dict[str, str] = {
     "cosmology_tau": "tau",
     "cosmology_ombh2": "ombh2",
 }
+_CLAIM_LABEL_TO_COSMO_UNCERTAINTY_PARAM: dict[str, str] = {
+    f"{label}_uncertainty": parameter
+    for label, parameter in _CLAIM_LABEL_TO_COSMO_PARAM.items()
+}
 
 
 def _claim_cosmology_param(claim: "Claim") -> str | None:
@@ -1415,17 +1789,35 @@ def _claim_cosmology_param(claim: "Claim") -> str | None:
     return _CLAIM_LABEL_TO_COSMO_PARAM.get(claim.label)
 
 
-def _build_cosmology_labeled_universe(payload: Any, out: dict[str, set[float]] | None = None) -> dict[str, set[float]]:
-    """Map each cosmology parameter to the set of numeric values the tools
-    actually produced for it (parameter dicts, derived_params, pairwise tensions,
-    and dataset compressed-spec means).  Harvested broadly so legitimate quotes
-    of a parameter's median / 1σ edge / published value all match."""
+def _claim_cosmology_uncertainty_param(claim: "Claim") -> str | None:
+    return _CLAIM_LABEL_TO_COSMO_UNCERTAINTY_PARAM.get(claim.label)
+
+
+def _build_cosmology_labeled_universe(
+    payload: Any,
+    out: dict[str, set[float]] | None = None,
+) -> dict[str, set[float]]:
+    """Map each cosmology parameter to claimable *central estimates*.
+
+    Parameter-labelled prose such as ``H0 = x`` asserts a central estimate.
+    Consequently this universe admits medians, means, best fits/MAP/MLE values,
+    and explicit scalar parameter values, but not HDI/quantile boundaries,
+    standard deviations, proposal anchors, or pairwise-context values.  Error
+    bars and interval claims are validated separately by their own numeric
+    patterns against the flat result universe.
+    """
     if out is None:
         out = {}
     if isinstance(payload, dict):
-        if _is_tainted_synthetic_payload(payload):
+        if (
+            _is_tainted_synthetic_payload(payload)
+            or _is_context_only_statistical_payload(payload)
+        ):
             return out
-        # Parallel parameters/mean(/covariance) list form (dataset specs).
+        # Parallel parameters/mean list form. Context/proposal records have
+        # already returned above, so only an admissible statistical result can
+        # contribute its declared mean here. Covariance-derived edges are not
+        # central estimates and are deliberately excluded.
         params = payload.get("parameters")
         mean = payload.get("mean")
         if (
@@ -1435,25 +1827,27 @@ def _build_cosmology_labeled_universe(payload: Any, out: dict[str, set[float]] |
             and params
             and all(isinstance(p, str) for p in params)
         ):
-            cov = payload.get("covariance")
             for i, pname in enumerate(params):
                 canon = _canonicalize_cosmology_param(pname)
-                if canon is None or isinstance(mean[i], bool) or not isinstance(mean[i], (int, float)):
+                if (
+                    canon is None
+                    or isinstance(mean[i], bool)
+                    or not isinstance(mean[i], (int, float))
+                ):
                     continue
-                m = float(mean[i])
-                bucket = out.setdefault(canon, set())
-                bucket.add(m)
-                try:
-                    var = float(cov[i][i])  # type: ignore[index]
-                    if var > 0:
-                        s = math.sqrt(var)
-                        bucket.add(m - s)
-                        bucket.add(m + s)
-                except Exception:
-                    pass
-        # A "parameter" field naming the quantity (pairwise_tensions rows).
+                value = float(mean[i])
+                if math.isfinite(value):
+                    out.setdefault(canon, set()).add(value)
+
+        # A ``parameter`` field can name a row-oriented central result. Only
+        # explicit central-statistic siblings qualify; value_a/value_b, delta,
+        # sigma, intervals, dataset ids, and diagnostic prose do not.
         named = payload.get("parameter") or payload.get("param")
-        ctx = _canonicalize_cosmology_param(named) if isinstance(named, str) else None
+        ctx = (
+            _canonicalize_cosmology_param(named)
+            if isinstance(named, str)
+            else None
+        )
         for key, val in payload.items():
             key_str = str(key).lower()
             if (
@@ -1462,21 +1856,395 @@ def _build_cosmology_labeled_universe(payload: Any, out: dict[str, set[float]] |
                 or key_str in _NON_EVIDENCE_KEYS
             ):
                 continue
-            canon_key = _canonicalize_cosmology_param(key)
-            if canon_key is not None:
+            if (
+                key_str in _COSMOLOGY_MANIFEST_KEYS
+                and _manifest_subtree_is_skippable(val)
+            ):
+                continue
+            parsed_key = _cosmology_param_and_statistic(key)
+            if parsed_key is not None:
+                canon_key, statistic = parsed_key
                 bucket = out.setdefault(canon_key, set())
-                for v in _iter_numeric_values(val):
-                    bucket.add(v)
-            elif ctx is not None and key not in {"parameter", "param"}:
-                bucket = out.setdefault(ctx, set())
-                for v in _iter_numeric_values(val):
-                    bucket.add(v)
+                if statistic in _COSMO_CENTRAL_STAT_SUFFIXES - {""}:
+                    bucket.update(_row_central_values(val))
+                elif statistic == "":
+                    if isinstance(val, (int, float)) and not isinstance(val, bool):
+                        value = float(val)
+                        if math.isfinite(value):
+                            bucket.add(value)
+                    elif isinstance(val, dict):
+                        for stat_key, stat_value in val.items():
+                            stat_norm = re.sub(
+                                r"[^a-z0-9]", "", str(stat_key).lower()
+                            )
+                            if stat_norm in _COSMO_CENTRAL_SUMMARY_KEYS:
+                                bucket.update(_row_central_values(stat_value))
+                # Do not recurse into a parameter summary: its interval/error
+                # fields belong to a different claim type.
+                continue
+            if ctx is not None and key not in {"parameter", "param"}:
+                stat_norm = re.sub(r"[^a-z0-9]", "", str(key).lower())
+                if stat_norm in _COSMO_CENTRAL_SUMMARY_KEYS:
+                    out.setdefault(ctx, set()).update(_row_central_values(val))
+                elif stat_norm in _COSMO_ROW_CENTRAL_KEYS:
+                    out.setdefault(ctx, set()).update(_row_central_values(val))
+                elif isinstance(val, (dict, list, tuple)):
+                    _build_cosmology_labeled_universe(val, out)
             else:
                 _build_cosmology_labeled_universe(val, out)
     elif isinstance(payload, (list, tuple)):
         for val in payload:
             _build_cosmology_labeled_universe(val, out)
     return out
+
+
+def _add_cosmology_interval_value(
+    bucket: dict[str, set[float]],
+    kind: str | None,
+    value: Any,
+) -> None:
+    """Add one typed interval field without harvesting unrelated statistics."""
+
+    if isinstance(value, dict) and (
+        _is_tainted_synthetic_payload(value)
+        or _is_context_only_statistical_payload(value)
+    ):
+        return
+    if kind in {"lower", "upper"}:
+        bucket[kind].update(_row_central_values(value))
+        return
+    if kind != "pair":
+        return
+    if isinstance(value, (list, tuple)):
+        finite = [
+            float(item)
+            for item in value
+            if isinstance(item, (int, float))
+            and not isinstance(item, bool)
+            and math.isfinite(float(item))
+        ]
+        if len(finite) >= 2:
+            bucket["lower"].add(finite[0])
+            bucket["upper"].add(finite[-1])
+        return
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            nested_kind = _cosmology_interval_statistic_kind(key)
+            if nested_kind in {"lower", "upper"}:
+                _add_cosmology_interval_value(bucket, nested_kind, nested)
+
+
+def _build_cosmology_interval_universe(
+    payload: Any,
+    out: dict[str, dict[str, set[float]]] | None = None,
+) -> dict[str, dict[str, set[float]]]:
+    """Map each cosmology parameter to lower/upper interval endpoints."""
+
+    if out is None:
+        out = {}
+    if isinstance(payload, dict):
+        if (
+            _is_tainted_synthetic_payload(payload)
+            or _is_context_only_statistical_payload(payload)
+        ):
+            return out
+        named = payload.get("parameter") or payload.get("param")
+        context_param = (
+            _canonicalize_cosmology_param(named)
+            if isinstance(named, str)
+            else None
+        )
+        for key, value in payload.items():
+            key_lower = str(key).lower()
+            if (
+                key_lower in _METADATA_KEYS_BLACKLIST
+                or key_lower in _CITATION_KEYS_BLACKLIST
+                or key_lower in _NON_EVIDENCE_KEYS
+            ):
+                continue
+            if (
+                key_lower in _COSMOLOGY_MANIFEST_KEYS
+                and _manifest_subtree_is_skippable(value)
+            ):
+                continue
+            parsed = _cosmology_param_and_statistic(key)
+            if parsed is not None:
+                parameter, statistic = parsed
+                bucket = out.setdefault(
+                    parameter, {"lower": set(), "upper": set()}
+                )
+                if statistic:
+                    _add_cosmology_interval_value(
+                        bucket,
+                        _cosmology_interval_statistic_kind(statistic),
+                        value,
+                    )
+                elif isinstance(value, dict):
+                    for summary_key, summary_value in value.items():
+                        _add_cosmology_interval_value(
+                            bucket,
+                            _cosmology_interval_statistic_kind(summary_key),
+                            summary_value,
+                        )
+                # Do not recurse inside a parameter summary. Its central,
+                # error, and interval fields have now been explicitly typed.
+                continue
+            if context_param is not None and key not in {"parameter", "param"}:
+                kind = _cosmology_interval_statistic_kind(key)
+                if kind is not None:
+                    bucket = out.setdefault(
+                        context_param, {"lower": set(), "upper": set()}
+                    )
+                    _add_cosmology_interval_value(bucket, kind, value)
+                    continue
+            _build_cosmology_interval_universe(value, out)
+    elif isinstance(payload, (list, tuple)):
+        for value in payload:
+            _build_cosmology_interval_universe(value, out)
+    return out
+
+
+_COSMO_UNCERTAINTY_KEYS: frozenset[str] = frozenset({
+    "std",
+    "sigma",
+    "error",
+    "err",
+    "uncertainty",
+    "stderr",
+    "standarderror",
+    "standarddeviation",
+})
+
+
+def _build_cosmology_uncertainty_universe(
+    payload: Any,
+    out: dict[str, set[float]] | None = None,
+) -> dict[str, set[float]]:
+    """Map parameters to symmetric uncertainty/error statistics only."""
+
+    if out is None:
+        out = {}
+    if isinstance(payload, dict):
+        if (
+            _is_tainted_synthetic_payload(payload)
+            or _is_context_only_statistical_payload(payload)
+        ):
+            return out
+        named = payload.get("parameter") or payload.get("param")
+        context_param = (
+            _canonicalize_cosmology_param(named)
+            if isinstance(named, str)
+            else None
+        )
+        for key, value in payload.items():
+            key_lower = str(key).lower()
+            if (
+                key_lower in _METADATA_KEYS_BLACKLIST
+                or key_lower in _CITATION_KEYS_BLACKLIST
+                or key_lower in _NON_EVIDENCE_KEYS
+            ):
+                continue
+            if (
+                key_lower in _COSMOLOGY_MANIFEST_KEYS
+                and _manifest_subtree_is_skippable(value)
+            ):
+                continue
+            parsed = _cosmology_param_and_statistic(key)
+            if parsed is not None:
+                parameter, statistic = parsed
+                if statistic in _COSMO_UNCERTAINTY_KEYS:
+                    out.setdefault(parameter, set()).update(
+                        _row_central_values(value)
+                    )
+                elif statistic == "" and isinstance(value, dict):
+                    for summary_key, summary_value in value.items():
+                        summary_norm = re.sub(
+                            r"[^a-z0-9]", "", str(summary_key).lower()
+                        )
+                        if summary_norm in _COSMO_UNCERTAINTY_KEYS:
+                            out.setdefault(parameter, set()).update(
+                                _row_central_values(summary_value)
+                            )
+                continue
+            if context_param is not None and key not in {"parameter", "param"}:
+                key_norm = re.sub(r"[^a-z0-9]", "", str(key).lower())
+                if key_norm in _COSMO_UNCERTAINTY_KEYS:
+                    out.setdefault(context_param, set()).update(
+                        _row_central_values(value)
+                    )
+                    continue
+            _build_cosmology_uncertainty_universe(value, out)
+    elif isinstance(payload, (list, tuple)):
+        for value in payload:
+            _build_cosmology_uncertainty_universe(value, out)
+    return out
+
+
+_COSMO_LOWER_BOUND_HINT_RE = re.compile(
+    r"\b(?:as\s+low\s+as|lower\s+(?:(?:hdi|(?:1|one)[-\s]?sigma)\s+)?"
+    r"(?:edge|bound|limit)|"
+    r"(?:q|quantile)\s*16|16(?:th)?\s+percentile|hdi\s+lower)\b",
+    re.IGNORECASE,
+)
+_COSMO_UPPER_BOUND_HINT_RE = re.compile(
+    r"\b(?:as\s+high\s+as|upper\s+(?:(?:hdi|(?:1|one)[-\s]?sigma)\s+)?"
+    r"(?:edge|bound|limit)|"
+    r"(?:q|quantile)\s*84|84(?:th)?\s+percentile|hdi\s+upper)\b",
+    re.IGNORECASE,
+)
+_COSMO_INTERVAL_HINT_RE = re.compile(
+    r"\b(?:edge|bound|limit|hdi|quantile|percentile|credible\s+interval|"
+    r"confidence\s+interval|(?:1|one)[-\s]?sigma)\b|1\s*σ",
+    re.IGNORECASE,
+)
+_COSMO_CENTRAL_CUE_RE = re.compile(
+    r"\b(?:central(?:\s+(?:result|estimate|value|constraint))?|median|mean|"
+    r"best[-\s]?fit|map|mle)\b",
+    re.IGNORECASE,
+)
+_CLAUSE_CONJUNCTION_RE = re.compile(r"\b(?:while|whereas|but)\b", re.IGNORECASE)
+_COSMO_PARAMETER_MENTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("H0", re.compile(r"(?<![A-Za-z0-9_])(?:H_?0|H₀)(?![A-Za-z0-9_])", re.I)),
+    ("omegam", re.compile(r"\b(?:omegam|omega[_\s-]?m|om0)\b|Ω_?m|Ωₘ", re.I)),
+    ("sigma8", re.compile(r"\b(?:sigma_?8)\b|σ_?8", re.I)),
+    ("S8", re.compile(r"(?<![A-Za-z0-9_])S_?8(?![A-Za-z0-9_])", re.I)),
+    ("w0", re.compile(r"(?<![A-Za-z0-9_])(?:w_?0|w₀)(?![A-Za-z0-9_])", re.I)),
+    ("wa", re.compile(r"(?<![A-Za-z0-9_])(?:w_?a|wₐ)(?![A-Za-z0-9_])", re.I)),
+    ("ombh2", re.compile(r"\b(?:ombh2|omega[_\s-]?b\s*h\^?2)\b|ω_?b", re.I)),
+    ("ns", re.compile(r"(?<![A-Za-z0-9_])(?:n_?s|nₛ)(?![A-Za-z0-9_])", re.I)),
+    ("tau", re.compile(r"(?<![A-Za-z0-9_])(?:tau|τ)(?![A-Za-z0-9_])", re.I)),
+)
+
+
+def _claim_clause(reply: str, claim: Claim) -> tuple[str, int, int]:
+    """Return the discourse clause containing a claim, preserving decimals."""
+
+    boundaries: list[tuple[int, int]] = [
+        match.span() for match in _SENTENCE_BREAK_RE.finditer(reply)
+    ]
+    boundaries.extend(
+        (index, index + 1)
+        for index, character in enumerate(reply)
+        if character in ";；。！？"
+    )
+    clause_start = max(
+        (end for start, end in boundaries if end <= claim.start),
+        default=0,
+    )
+    clause_end = min(
+        (start for start, end in boundaries if start >= claim.end),
+        default=len(reply),
+    )
+    sentence = reply[clause_start:clause_end]
+    claim_start = claim.start - clause_start
+    claim_end = claim.end - clause_start
+
+    conjunctions = list(_CLAUSE_CONJUNCTION_RE.finditer(sentence))
+    left_conjunction = max(
+        (match.end() for match in conjunctions if match.end() <= claim_start),
+        default=0,
+    )
+    right_conjunction = min(
+        (match.start() for match in conjunctions if match.start() >= claim_end),
+        default=len(sentence),
+    )
+    clause_start += left_conjunction
+    clause_end = clause_start + (right_conjunction - left_conjunction)
+    sentence = reply[clause_start:clause_end]
+    claim_start = claim.start - clause_start
+    claim_end = claim.end - clause_start
+    return sentence, claim_start, claim_end
+
+
+def _cosmology_interval_claim_direction(
+    reply: str,
+    claim: Claim,
+) -> str | None:
+    """Classify an explicitly stated lower/upper/unspecified interval edge."""
+
+    sentence, claim_start, claim_end = _claim_clause(reply, claim)
+    parameter = _claim_cosmology_param(claim)
+    mentions: list[tuple[str, float]] = []
+    for name, pattern in _COSMO_PARAMETER_MENTION_PATTERNS:
+        mentions.extend(
+            (name, (match.start() + match.end()) / 2.0)
+            for match in pattern.finditer(sentence)
+        )
+
+    def distance_to_claim(start: int, end: int) -> int:
+        if end <= claim_start:
+            return claim_start - end
+        if start >= claim_end:
+            return start - claim_end
+        return 0
+
+    def nearest(pattern: re.Pattern[str], *, bind_parameter: bool) -> int | None:
+        distances: list[int] = []
+        for match in pattern.finditer(sentence):
+            if bind_parameter and parameter is not None and mentions:
+                hint_center = (match.start() + match.end()) / 2.0
+                current_distance = min(
+                    (
+                        abs(position - hint_center)
+                        for name, position in mentions
+                        if name == parameter
+                    ),
+                    default=abs(((claim_start + claim_end) / 2.0) - hint_center),
+                )
+                other_distance = min(
+                    (
+                        abs(position - hint_center)
+                        for name, position in mentions
+                        if name != parameter
+                    ),
+                    default=math.inf,
+                )
+                if other_distance < current_distance:
+                    continue
+            distances.append(distance_to_claim(match.start(), match.end()))
+        return min(distances) if distances else None
+
+    lower_distance = nearest(_COSMO_LOWER_BOUND_HINT_RE, bind_parameter=True)
+    upper_distance = nearest(_COSMO_UPPER_BOUND_HINT_RE, bind_parameter=True)
+    interval_distance = nearest(_COSMO_INTERVAL_HINT_RE, bind_parameter=True)
+    central_distance = nearest(_COSMO_CENTRAL_CUE_RE, bind_parameter=False)
+
+    # A parameter value immediately followed by ``± error`` is a central
+    # estimate with an uncertainty, even when the surrounding prose calls it
+    # a "one-sigma constraint" or "confidence interval".  Those generic
+    # interval phrases describe the error bar; they must not reinterpret the
+    # central value as an interval endpoint.  An explicit lower/upper
+    # edge/bound/limit remains authoritative.
+    if (
+        _ADJACENT_UNCERTAINTY_RE.match(reply[claim.end : claim.end + 96])
+        and lower_distance is None
+        and upper_distance is None
+    ):
+        return None
+
+    closest_interval = min(
+        (
+            distance
+            for distance in (lower_distance, upper_distance, interval_distance)
+            if distance is not None
+        ),
+        default=None,
+    )
+    if central_distance is not None and (
+        closest_interval is None or central_distance <= closest_interval
+    ):
+        return None
+    if lower_distance is not None and (
+        upper_distance is None or lower_distance < upper_distance
+    ):
+        return "lower"
+    if upper_distance is not None and (
+        lower_distance is None or upper_distance < lower_distance
+    ):
+        return "upper"
+    if interval_distance is not None:
+        return "either"
+    return None
 
 
 _PUBLICATION_TYPED_RESULT_KEYS: dict[str, frozenset[str]] = {
@@ -1536,7 +2304,10 @@ def _build_publication_typed_universe(
     if out is None:
         out = {}
     if isinstance(payload, dict):
-        if _is_tainted_synthetic_payload(payload):
+        if (
+            _is_tainted_synthetic_payload(payload)
+            or _is_context_only_statistical_payload(payload)
+        ):
             return out
         for key, value in payload.items():
             key_lower = str(key).lower()
@@ -1544,6 +2315,11 @@ def _build_publication_typed_universe(
                 key_lower in _METADATA_KEYS_BLACKLIST
                 or key_lower in _CITATION_KEYS_BLACKLIST
                 or key_lower in _NON_EVIDENCE_KEYS
+            ):
+                continue
+            if (
+                key_lower in _COSMOLOGY_MANIFEST_KEYS
+                and _manifest_subtree_is_skippable(value)
             ):
                 continue
             key_norm = re.sub(r"[^a-z0-9]", "", key_lower)
@@ -1664,6 +2440,29 @@ def validate_claims(
     labeled = _build_cosmology_labeled_universe(claimable_nodes) if tool_results else {}
     if input_numbers:  # same structural anti-echo for the per-parameter buckets
         labeled = {param: (vals - input_numbers) for param, vals in labeled.items()}
+    interval_labeled = (
+        _build_cosmology_interval_universe(claimable_nodes)
+        if tool_results
+        else {}
+    )
+    if input_numbers:
+        interval_labeled = {
+            param: {
+                direction: values - input_numbers
+                for direction, values in buckets.items()
+            }
+            for param, buckets in interval_labeled.items()
+        }
+    uncertainty_labeled = (
+        _build_cosmology_uncertainty_universe(claimable_nodes)
+        if tool_results
+        else {}
+    )
+    if input_numbers:
+        uncertainty_labeled = {
+            param: values - input_numbers
+            for param, values in uncertainty_labeled.items()
+        }
     typed_universe: dict[str, set[float]] = {}
     if require_typed_scientific_match:
         typed_universe = _build_publication_typed_universe(claimable_nodes)
@@ -1682,14 +2481,35 @@ def validate_claims(
         if c.label.startswith(f"{_UNTRUSTED_CONTEXT_LABEL}."):
             uncited.append(c)
             continue
+        uncertainty_param = _claim_cosmology_uncertainty_param(c)
         param = _claim_cosmology_param(c)
-        if param is not None:
-            param_values = labeled.get(param, set())
-            if require_typed_scientific_match and not param_values:
+        if uncertainty_param is not None:
+            uncertainty_values = uncertainty_labeled.get(
+                uncertainty_param, set()
+            )
+            if not uncertainty_values or not _matches_any(
+                c.value, uncertainty_values, effective_tol
+            ):
+                uncited.append(c)
+        elif param is not None:
+            interval_direction = _cosmology_interval_claim_direction(reply, c)
+            if interval_direction is None:
+                param_values = labeled.get(param, set())
+            else:
+                buckets = interval_labeled.get(param, {})
+                if interval_direction == "either":
+                    param_values = set(buckets.get("lower", set())) | set(
+                        buckets.get("upper", set())
+                    )
+                else:
+                    param_values = set(buckets.get(interval_direction, set()))
+            # Parameter claims must match both parameter and statistic type.
+            # A centre cannot borrow an HDI edge; a lower/upper edge cannot
+            # borrow the median or opposite edge. Neither route falls back to
+            # the flat numeric universe.
+            if not param_values:
                 uncited.append(c)
             elif param_values and not _matches_any(c.value, param_values, effective_tol):
-                uncited.append(c)
-            elif not param_values and not _matches_any(c.value, universe, effective_tol):
                 uncited.append(c)
         elif require_typed_scientific_match and (
             typed_label := _publication_typed_claim_label(c)
@@ -2515,16 +3335,102 @@ _DARK_ENERGY_EVOLUTION_RE = re.compile(
     r"\$?\s*w\s*[_\{]?a\}?\s*(?:\\ne|\\neq|≠)\s*0\s*\$?)\b)",
     re.I,
 )
+_HUBBLE_TENSION_RESOLUTION_RE = re.compile(
+    r"(?:\b(?:hubble|h\s*0)\s+tension\b[^.\n;]{0,140}\b"
+    r"(?:resolv(?:e|es|ed)|alleviat(?:e|es|ed)|eliminat(?:e|es|ed)|"
+    r"remov(?:e|es|ed)|settle[sd]?)\b|"
+    r"\b(?:resolv(?:e|es|ed)|alleviat(?:e|es|ed)|eliminat(?:e|es|ed)|"
+    r"remov(?:e|es|ed)|settle[sd]?)\b[^.\n;]{0,140}"
+    r"\b(?:hubble|h\s*0)\s+tension\b)",
+    re.I,
+)
+_SPATIAL_CURVATURE_CONCLUSION_RE = re.compile(
+    r"(?:\b(?:spatial|cosmic|cosmological)\s+curvature\b|"
+    r"\b(?:omega|Ω)\s*[_\{]?k\}?\b|\bcurved\s+(?:cosmology|universe)\b)"
+    r"[^.\n;]{0,160}\b(?:favou?r(?:s|ed)?|prefer(?:s|red)?|supported?|"
+    r"detect(?:s|ed)?|non[-\s]?zero|deviat(?:e|es|ed)\s+from\s+zero|"
+    r"inconsistent\s+with\s+(?:a\s+)?flat|exclude[sd]?\s+(?:a\s+)?flat)\b|"
+    r"\b(?:favou?r(?:s|ed)?|prefer(?:s|red)?|evidence\s+for|support(?:s|ed)?)\b"
+    r"[^.\n;]{0,160}\b(?:spatial|cosmic|cosmological)\s+curvature\b",
+    re.I,
+)
+_NEUTRINO_MASS_DETECTION_RE = re.compile(
+    r"(?:\b(?:non[-\s]?zero|positive)\s+(?:sum\s+of\s+)?neutrino\s+mass(?:es)?\b"
+    r"[^.\n;]{0,140}\b(?:detect(?:s|ed)?|measur(?:e|es|ed)|favou?r(?:s|ed)?|"
+    r"prefer(?:s|red)?|supported?)\b|"
+    r"\b(?:detect(?:s|ed)?|evidence\s+for|support(?:s|ed)?|favou?r(?:s|ed)?)\b"
+    r"[^.\n;]{0,140}\b(?:non[-\s]?zero\s+)?(?:sum\s+of\s+)?"
+    r"neutrino\s+mass(?:es)?\b|"
+    r"\b(?:sum\s+of\s+)?neutrino\s+mass(?:es)?\b[^.\n;]{0,140}"
+    r"\b(?:is|are)\s+(?:non[-\s]?zero|detected|measured)\b)",
+    re.I,
+)
+_GENERAL_RELATIVITY_REJECTION_RE = re.compile(
+    r"(?:\b(?:general\s+relativity|GR)\b[^.\n;]{0,140}\b"
+    r"(?:rule[sd]?\s+out|exclude[sd]?|reject(?:ed|s)?|disfavou?r(?:ed|s)?|"
+    r"falsif(?:y|ies|ied)|fails?\s+(?:the\s+)?test)\b|"
+    r"\b(?:modified\s+gravity|deviation(?:s)?\s+from\s+(?:general\s+relativity|GR))\b"
+    r"[^.\n;]{0,140}\b(?:favou?r(?:s|ed)?|prefer(?:s|red)?|supported?|"
+    r"detect(?:s|ed)?)\b)",
+    re.I,
+)
 _NONASSERTIVE_COSMOLOGY_CONTEXT_RE = re.compile(
     r"\b(?:no\s+(?:statistically\s+significant\s+)?evidence|"
     r"insufficient\s+evidence|cannot\s+conclude|can't\s+conclude|"
     r"do(?:es)?\s+not\s+(?:show|support|establish|favour|favor)|"
-    r"failed?\s+to\s+(?:show|establish|detect)|"
+    r"do(?:es)?\s+not\s+(?:resolve|alleviate|eliminate|remove)|"
+    r"failed?\s+to\s+(?:show|establish|detect|resolve|alleviate)|"
     r"test(?:ed|ing)?\s+whether|investigat(?:e|ed|ing)\s+whether|"
-    r"ask(?:ed|ing)?\s+whether|may|might|could|hypothesis|forecast|"
-    r"not\s+ruled\s+out|consistent\s+with\s+zero|does\s+not\s+evolve)\b",
+    r"ask(?:ed|ing)?\s+whether|may|might|could|would|should|hypothesis|forecast|"
+    r"not\s+ruled\s+out|consistent\s+with\s+zero|does\s+not\s+evolve|"
+    r"(?:is|are|remains?)\s+unresolved|(?:is|are)\s+not\s+(?:resolved|detected))\b",
     re.I,
 )
+_ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE = re.compile(
+    r"(?:没有|并无|无)(?:统计显著|显著)?证据|证据不足|无法(?:得出|断定|证明)|"
+    r"不能(?:得出|断定|证明)|尚未|未能|是否|可能|或许|假设|预测|"
+    r"仍未解决|没有解决|未(?:探测|检测)到|与零一致|不随时间演化|未被排除"
+)
+_ZH_HUBBLE_TENSION_RESOLUTION_RE = re.compile(
+    r"(?:哈勃|H\s*0)张力[^。；;.!！？\n]{0,80}(?:已)?(?:解决|缓解|消除|解除|终结)|"
+    r"(?:解决|缓解|消除|解除|终结)[^。；;.!！？\n]{0,80}(?:哈勃|H\s*0)张力",
+    re.I,
+)
+_ZH_SPATIAL_CURVATURE_CONCLUSION_RE = re.compile(
+    r"(?:空间曲率|宇宙曲率|宇宙学曲率|Ω\s*[_\{]?k\}?|弯曲宇宙)"
+    r"[^。；;.!！？\n]{0,100}(?:支持|偏好|探测|检测|非零|不为零|偏离零|排除平直|排斥平直)|"
+    r"(?:支持|偏好|证据|探测|检测)[^。；;.!！？\n]{0,100}(?:空间曲率|宇宙曲率|宇宙学曲率)"
+)
+_ZH_NEUTRINO_MASS_DETECTION_RE = re.compile(
+    r"(?:中微子质量|中微子质量之和)[^。；;.!！？\n]{0,100}"
+    r"(?:探测|检测|测得|支持|偏好|非零|不为零)|"
+    r"(?:探测|检测|测得|支持|证据)[^。；;.!！？\n]{0,100}(?:非零)?中微子质量"
+)
+_ZH_GENERAL_RELATIVITY_REJECTION_RE = re.compile(
+    r"(?:广义相对论|广相)[^。；;.!！？\n]{0,100}"
+    r"(?:排除|否定|拒绝|不支持|证伪|未通过|失败)|"
+    r"(?:修正引力|修改引力)[^。；;.!！？\n]{0,100}(?:支持|偏好|证据|探测|检测)"
+)
+_ZH_DARK_ENERGY_EVOLUTION_RE = re.compile(
+    r"暗能量[^。；;.!！？\n]{0,100}(?:演化|变化|随时间|时间依赖|动态)|"
+    r"(?:演化|动态|随时间变化|时间依赖)暗能量"
+)
+_ZH_BASELINE_REJECTION_RE = re.compile(
+    r"(?:宇宙学常数|Λ\s*CDM|LCDM)[^。；;.!！？\n]{0,100}"
+    r"(?:被排除|排除|否定|拒绝|不支持|不相容|不一致)"
+)
+_ZH_MODEL_PREFERENCE_RE = re.compile(
+    r"(?:数据|结果|证据)[^。；;.!！？\n]{0,100}(?:支持|偏好)"
+    r"[^。；;.!！？\n]{0,60}(?:w0wa\s*CDM|w\s*CDM|CPL|动态暗能量|演化暗能量)",
+    re.I,
+)
+
+_CONCLUSION_CLAIM_SUBJECTS: dict[str, str] = {
+    "hubble_tension_resolution": "hubble_tension",
+    "spatial_curvature_preference": "spatial_curvature",
+    "neutrino_mass_detection": "neutrino_mass",
+    "general_relativity_rejection": "general_relativity",
+}
 
 
 def _normalize_cosmology_model(value: Any) -> str | None:
@@ -2538,6 +3444,14 @@ def _normalize_cosmology_model(value: Any) -> str | None:
         "w0wacdm": "w0wa_cdm",
         "w0wa": "w0wa_cdm",
         "cpl": "w0wa_cdm",
+        "oklcdm": "ok_lcdm",
+        "curvedlcdm": "ok_lcdm",
+        "lcdmmnu": "lcdm_mnu",
+        "massiveneutrinolcdm": "lcdm_mnu",
+        "gr": "gr",
+        "generalrelativity": "gr",
+        "modifiedgravity": "modified_gravity",
+        "mg": "modified_gravity",
     }
     return aliases.get(norm)
 
@@ -2562,6 +3476,26 @@ def _attestation_calibration_is_valid(attestation: dict[str, Any]) -> bool:
             )
         )
     return False
+
+
+def _attestation_comparison_type_is_valid(
+    attestation: dict[str, Any], claim_kind: str
+) -> bool:
+    comparison_type = str(attestation.get("comparison_type") or "")
+    if claim_kind == "hubble_tension_resolution":
+        return (
+            comparison_type
+            in {
+                "tension_consistency_test",
+                "simulation_calibrated_tension_consistency_test",
+            }
+            and attestation.get("independence_verified") is True
+            and attestation.get("resolution_criterion_verified") is True
+        )
+    return comparison_type in {
+        "likelihood_ratio",
+        "simulation_calibrated_likelihood_ratio",
+    }
 
 
 def _validated_conclusion_attestations(tool_results: Any) -> dict[str, dict[str, Any]]:
@@ -2631,6 +3565,14 @@ def _validated_conclusion_attestations(tool_results: Any) -> dict[str, dict[str,
                     continue
                 attestation_id = str(attestation.get("attestation_id") or "")
                 manifest_hash = str(attestation.get("manifest_sha256") or "")
+                claim_kind = str(attestation.get("claim_kind") or "")
+                required_subject = _CONCLUSION_CLAIM_SUBJECTS.get(claim_kind)
+                normalized_baseline = _normalize_cosmology_model(
+                    attestation.get("baseline_model")
+                )
+                normalized_alternative = _normalize_cosmology_model(
+                    attestation.get("alternative_model")
+                )
                 if (
                     attestation.get("schema_version")
                     != _CONCLUSION_ATTESTATION_SCHEMA_VERSION
@@ -2651,16 +3593,34 @@ def _validated_conclusion_attestations(tool_results: Any) -> dict[str, dict[str,
                     )
                     or str(attestation.get("likelihood_fingerprint") or "")
                     != result_likelihood_fingerprint
-                    or str(attestation.get("comparison_type") or "")
-                    not in {
-                        "likelihood_ratio",
-                        "simulation_calibrated_likelihood_ratio",
-                    }
+                    or not _attestation_comparison_type_is_valid(
+                        attestation, claim_kind
+                    )
                     or not _attestation_calibration_is_valid(attestation)
-                    or _normalize_cosmology_model(attestation.get("baseline_model"))
-                    is None
-                    or _normalize_cosmology_model(attestation.get("alternative_model"))
-                    is None
+                    or (
+                        required_subject is not None
+                        and str(attestation.get("claim_subject") or "")
+                        != required_subject
+                    )
+                    or (
+                        required_subject is None
+                        and (
+                            normalized_baseline is None
+                            or normalized_alternative is None
+                        )
+                    )
+                    or (
+                        claim_kind
+                        in {
+                            "spatial_curvature_preference",
+                            "neutrino_mass_detection",
+                            "general_relativity_rejection",
+                        }
+                        and (
+                            normalized_baseline is None
+                            or normalized_alternative is None
+                        )
+                    )
                 ):
                     continue
                 indexed[attestation_id] = attestation
@@ -2668,39 +3628,80 @@ def _validated_conclusion_attestations(tool_results: Any) -> dict[str, dict[str,
 
 
 def _strong_conclusion_from_sentence(sentence: str) -> dict[str, str | None] | None:
-    if not sentence or "?" in sentence or _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(sentence):
+    if (
+        not sentence
+        or "?" in sentence
+        or "？" in sentence
+        or _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(sentence)
+        or _ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(sentence)
+    ):
         return None
     kind: str | None = None
-    if _BASELINE_REJECTION_RE.search(sentence):
+    subject: str | None = None
+    baseline: str | None = None
+    alternative: str | None = None
+    if _HUBBLE_TENSION_RESOLUTION_RE.search(sentence) or _ZH_HUBBLE_TENSION_RESOLUTION_RE.search(sentence):
+        kind = "hubble_tension_resolution"
+        subject = "hubble_tension"
+    elif _SPATIAL_CURVATURE_CONCLUSION_RE.search(sentence) or _ZH_SPATIAL_CURVATURE_CONCLUSION_RE.search(sentence):
+        kind = "spatial_curvature_preference"
+        subject = "spatial_curvature"
+        baseline = "lcdm"
+        alternative = "ok_lcdm"
+    elif _NEUTRINO_MASS_DETECTION_RE.search(sentence) or _ZH_NEUTRINO_MASS_DETECTION_RE.search(sentence):
+        kind = "neutrino_mass_detection"
+        subject = "neutrino_mass"
+        baseline = "lcdm"
+        alternative = "lcdm_mnu"
+    elif _GENERAL_RELATIVITY_REJECTION_RE.search(sentence) or _ZH_GENERAL_RELATIVITY_REJECTION_RE.search(sentence):
+        kind = "general_relativity_rejection"
+        subject = "general_relativity"
+        baseline = "gr"
+        alternative = "modified_gravity"
+    elif _BASELINE_REJECTION_RE.search(sentence) or _ZH_BASELINE_REJECTION_RE.search(sentence):
         kind = "baseline_rejection"
-    elif _MODEL_PREFERENCE_RE.search(sentence):
+    elif _MODEL_PREFERENCE_RE.search(sentence) or _ZH_MODEL_PREFERENCE_RE.search(sentence):
         kind = "extended_model_preference"
-    elif _DARK_ENERGY_EVOLUTION_RE.search(sentence):
+    elif _DARK_ENERGY_EVOLUTION_RE.search(sentence) or _ZH_DARK_ENERGY_EVOLUTION_RE.search(sentence):
         kind = "dark_energy_evolution"
     if kind is None:
         return None
-    baseline = "lcdm" if _LCDM_RE.search(sentence) else None
-    alternative = (
-        "w0wa_cdm"
-        if _W0WA_RE.search(sentence)
-        else "wcdm"
-        if _WCDM_RE.search(sentence)
-        else None
-    )
-    return {"kind": kind, "baseline_model": baseline, "alternative_model": alternative}
+    if baseline is None and kind not in _CONCLUSION_CLAIM_SUBJECTS:
+        baseline = "lcdm" if _LCDM_RE.search(sentence) else None
+    if alternative is None and kind not in _CONCLUSION_CLAIM_SUBJECTS:
+        alternative = (
+            "w0wa_cdm"
+            if _W0WA_RE.search(sentence)
+            else "wcdm"
+            if _WCDM_RE.search(sentence)
+            else None
+        )
+    return {
+        "kind": kind,
+        "subject": subject,
+        "baseline_model": baseline,
+        "alternative_model": alternative,
+    }
 
 
 def _attestation_matches_claim(
     attestation: dict[str, Any], claim: dict[str, str | None]
 ) -> bool:
+    if str(attestation.get("claim_kind") or "") != claim.get("kind"):
+        return False
+    subject = claim.get("subject")
+    if subject is not None and str(attestation.get("claim_subject") or "") != subject:
+        return False
+    baseline = claim.get("baseline_model")
+    alternative = claim.get("alternative_model")
+    if baseline is None and alternative is None:
+        return subject is not None
     return (
-        str(attestation.get("claim_kind") or "") == claim.get("kind")
-        and claim.get("baseline_model") is not None
-        and claim.get("alternative_model") is not None
-        and _normalize_cosmology_model(attestation.get("baseline_model"))
-        == claim.get("baseline_model")
+        baseline is not None
+        and alternative is not None
+        and _normalize_cosmology_model(attestation.get("baseline_model")) == baseline
         and _normalize_cosmology_model(attestation.get("alternative_model"))
-        == claim.get("alternative_model")
+        == alternative
     )
 
 
@@ -2715,7 +3716,7 @@ def scientific_conclusion_scope_violations(
     stripped, stripped_map = _strip_markdown_code_with_map(reply)
     attestations = _validated_conclusion_attestations(tool_results)
     violations: list[CitationViolation] = []
-    for sentence_match in re.finditer(r"[^.\n;]+(?:[.\n;]|$)", stripped):
+    for sentence_match in re.finditer(r"[^.。\n;；!?！？]+(?:[.。\n;；!?！？]|$)", stripped):
         sentence = sentence_match.group(0).strip()
         claim = _strong_conclusion_from_sentence(sentence)
         if claim is None:
@@ -2736,6 +3737,40 @@ def scientific_conclusion_scope_violations(
             )
         )
     return violations
+
+
+def blocked_scientific_conclusion_reply_text(
+    violations: list[CitationViolation],
+) -> str:
+    """Return a claim-free replacement for an unsupported headline result.
+
+    Do not echo the rejected sentence here: the replacement itself is a public
+    chat exit, and repeating the unsupported conclusion under a warning banner
+    would still expose it as prose that users can quote out of context.
+    """
+
+    count = len(violations)
+    return (
+        "⚠ Scientific conclusion withheld: "
+        f"{count} strong qualitative conclusion{'s' if count != 1 else ''} "
+        "did not have an exact same-sentence reference to a matching, "
+        "publication-ready scientific conclusion attestation from this turn. "
+        "No headline conclusion is presented. Run the required calibrated "
+        "likelihood or tension analysis, then cite its evidence attestation in "
+        "the same sentence."
+    )
+
+
+def enforce_scientific_conclusion_gate(
+    reply: str,
+    tool_results: Any,
+) -> tuple[str, list[CitationViolation]]:
+    """Apply the reusable final-boundary gate for qualitative science claims."""
+
+    violations = scientific_conclusion_scope_violations(reply, tool_results)
+    if not violations:
+        return reply, []
+    return blocked_scientific_conclusion_reply_text(violations), violations
 
 
 def _full_external_likelihood_ready_available(tool_results: Any) -> bool:
@@ -3101,6 +4136,8 @@ def _payload_is_claimable_success(tool_name: str | None, result: dict[str, Any] 
         "run_cosmology_likelihood_chain",
         "run_cosmology_robustness_matrix",
         "run_cmb_rotation_likelihood",
+        "run_nested_sampler",
+        "run_research_matrix",
     }:
         # publication_ready is True only for chain_tier="publication".
         # chain_tier="exploratory" (2026-05-20) returns publication_ready=False

@@ -17,7 +17,12 @@ type DatasetEntry = {
   covariance?: { kind?: string; provided?: boolean; description?: string };
   citations?: Citation[];
   execution_mode?: string;
-  compressed_likelihood?: { parameters?: string[]; source_locator?: string };
+  compressed_likelihood?: {
+    parameters?: string[];
+    source_locator?: string;
+    statistical_role?: string;
+    source_prior?: string | null;
+  };
   data_products?: {
     product_type?: string;
     role?: string;
@@ -55,12 +60,30 @@ function fmtNumber(value: unknown, digits = 3): string {
 }
 
 function matrixRunLabel(row: Record<string, unknown>): string {
-  if (row.publication_ready) return "compressed posterior ready";
+  if (row.publication_ready) return "publication-ready numerical result";
   const level = String(row.execution_level || "not_available");
   if (level === "partial_dataset_run") return "partial posterior; some datasets not included";
-  if (level === "executed_not_ready") return "posterior attempted; diagnostics below threshold";
+  if (level === "executed_not_ready") return "numerical run withheld by scientific gate";
+  if (level === "context_only") return "literature context only; no likelihood run";
   if (level === "config_only") return "configuration only, no posterior run yet";
   return level.replace(/_/g, " ");
+}
+
+function gaussianRecordLabel(entry: DatasetEntry): string {
+  const role = entry.compressed_likelihood?.statistical_role;
+  if (role === "published_posterior_summary") return "literature posterior context";
+  if (role === "proposal_only") return "proposal-only context";
+  if (role === "external_prior") {
+    return entry.execution_mode === "compressed_gaussian"
+      ? "executable external prior"
+      : "external prior (configuration only)";
+  }
+  if (role === "likelihood_approximation") {
+    return entry.execution_mode === "compressed_gaussian"
+      ? "executable likelihood approximation"
+      : "likelihood approximation (configuration only)";
+  }
+  return "unclassified Gaussian record";
 }
 
 function statusTone(status: string | undefined): { label: string; color: string; bg: string; border: string } {
@@ -129,7 +152,7 @@ function DatasetList({ datasets }: { datasets: DatasetEntry[] }) {
             </div>
             {entry.compressed_likelihood ? (
               <div style={{ color: "var(--color-text-tertiary)", fontSize: "0.72rem", marginTop: 2 }}>
-                executable compressed params: {asArray<string>(entry.compressed_likelihood.parameters).join(", ")}
+                {gaussianRecordLabel(entry)}: {asArray<string>(entry.compressed_likelihood.parameters).join(", ")}
               </div>
             ) : null}
             {dataProducts.length ? (
@@ -183,7 +206,9 @@ export default function CosmologyLikelihoodPanel({ result }: { result: Record<st
         <strong style={{ color: "var(--color-text-primary)" }}>{title}</strong>
         {result.model ? <span>{String(result.model)}</span> : null}
         {hasConfig ? <Badge status="external_likelihood">config only</Badge> : null}
-        {result.analysis_status === "COMPRESSED_ROBUSTNESS_READY" ? <Badge status="ready">compressed results</Badge> : null}
+        {result.analysis_status === "ROBUSTNESS_MATRIX_DIAGNOSTIC" ? (
+          <Badge status="external_likelihood">diagnostic matrix</Badge>
+        ) : null}
         {isDataProduct && result.hash_verified === true ? <Badge status="ready">hash verified</Badge> : null}
         {isDataProduct && result.hash_verified === false ? <Badge status="external_likelihood">hash unpinned</Badge> : null}
         {result.dataset_count != null ? <span>{String(result.dataset_count)} datasets</span> : null}
@@ -233,7 +258,7 @@ export default function CosmologyLikelihoodPanel({ result }: { result: Record<st
             {result.hash_verified === true ? " · verified against registry" : ""}
             {result.hash_verified === false && product.sha256 ? " · mismatch with registry sha256" : ""}
           </div>
-          {parse.kind === "matrix" || parse.kind === "compressed_gaussian_likelihood" ? (() => {
+          {parse.kind === "matrix" || Array.isArray(parse.covariance_shape) ? (() => {
             const shape = asArray<number>(parse.shape ?? parse.covariance_shape);
             return (
               <div style={{ color: "var(--color-text-secondary)", fontSize: "0.74rem" }}>
@@ -267,7 +292,7 @@ export default function CosmologyLikelihoodPanel({ result }: { result: Record<st
                 <div style={{ marginTop: 3, color: row.publication_ready ? "#1b7f42" : "#8a5b00" }}>
                   {matrixRunLabel(row)}
                   {" · "}
-                  used {asArray<DatasetEntry>((row.result as Record<string, unknown>).datasets_used).length} compressed dataset(s)
+                  used {asArray<DatasetEntry>((row.result as Record<string, unknown>).datasets_used).length} dataset(s)
                 </div>
               ) : null}
               {row.result && typeof row.result === "object" ? (() => {

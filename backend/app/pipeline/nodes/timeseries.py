@@ -10,6 +10,9 @@ def timeseries_analysis(input_data: dict, params: dict) -> dict:
         min_period: float — minimum period to search in days (default 0.1)
         max_period: float — maximum period to search in days (default 100)
         n_frequencies: int — number of frequency grid points (default 10000)
+        fap_method: str — auto/bootstrap/baluev (default auto)
+        n_bootstrap: int — bootstrap trials when applicable (default 200)
+        random_seed: int — deterministic bootstrap seed
         time_col: str — key for time array in data (default "time")
         mag_col: str — key for magnitude array in data (default "mag")
         mag_err_col: str — key for magnitude error array in data (default "mag_err")
@@ -24,6 +27,10 @@ def timeseries_analysis(input_data: dict, params: dict) -> dict:
     min_period = params.get("min_period", 0.1)
     max_period = params.get("max_period", 100)
     n_frequencies = params.get("n_frequencies", 10000)
+    fap_method = params.get("fap_method", "auto")
+    n_bootstrap = params.get("n_bootstrap", 200)
+    raw_random_seed = params.get("random_seed")
+    random_seed = int(raw_random_seed) if raw_random_seed is not None else None
     time_col = params.get("time_col", "time")
     mag_col = params.get("mag_col", "mag")
     mag_err_col = params.get("mag_err_col", "mag_err")
@@ -45,6 +52,8 @@ def timeseries_analysis(input_data: dict, params: dict) -> dict:
         time, mag, mag_err=mag_err,
         min_period=min_period, max_period=max_period,
         n_frequencies=n_frequencies,
+        fap_method=fap_method, n_bootstrap=n_bootstrap,
+        random_seed=random_seed,
     )
 
     # Variability indices
@@ -61,6 +70,8 @@ def timeseries_analysis(input_data: dict, params: dict) -> dict:
         "best_period": period_result["best_period"],
         "best_power": period_result["best_power"],
         "fap": period_result["fap"],
+        "fap_method": period_result["fap_method"],
+        "random_seed": period_result.get("random_seed"),
         "top_periods": period_result["top_periods"],
     }
 
@@ -69,6 +80,7 @@ def timeseries_analysis(input_data: dict, params: dict) -> dict:
         "period_result": period_summary,
         "variability_indices": var_indices,
         "classification": classification,
+        "random_seed": period_result.get("random_seed"),
         "data": {
             **data,
             "phase": phases,

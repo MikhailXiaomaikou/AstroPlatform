@@ -84,15 +84,19 @@ phase-1 compressed-Gaussian description. Three execution classes now exist:
    and lensing — where extended-model axes (mnu, omegak) are genuinely
    sampled. The in-process compressed path hard-refuses ok_*/*_mnu model
    names rather than relabeling LambdaCDM-shaped chains.
-3. **Config-only / literature-typed entries** (weak-lensing branches,
-   scalar H0/BBN priors, ACT/SPT/PR4 lensing pending external packages):
-   these build guarded configs and robustness matrices but cannot support
-   posterior claims.
+3. **Role-approved scalar external measurements** (SH0ES/TRGB/CCHP/
+   megamaser H0, plus the flat-LCDM-only H0LiCOW scalar): these may enter the
+   preliminary Gaussian runner only within their declared model/overlap scope.
+4. **Literature-context / config-only entries** (published ACT/weak-lensing/SN
+   posterior summaries, proposal-only Planck parameter rows, BBN until an
+   omega_b-to-r_d forward model exists, and pending SPT/PR4 packages): these
+   can build guarded configs or provide cited context but never enter chi2 as
+   if they were independent likelihood factors.
 
 Chain results are claimable only with `publication_ready=true` and the
-matching `claim_scope` (compressed participation downgrades the scope to
-compressed-likelihood preliminary; chains over exclusively full-fidelity
-products carry `executable_full_fidelity_likelihoods`). Overlapping samples
+matching `claim_scope`; chains over exclusively full-fidelity products carry
+`executable_full_fidelity_likelihoods`, while priors/approximations remain
+explicitly preliminary. Overlapping samples
 declare reciprocal `do_not_combine_with` pairs (DESI vs SDSS/eBOSS BAO,
 the SN compilations among themselves); violating combinations block.
 

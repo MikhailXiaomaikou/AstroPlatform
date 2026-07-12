@@ -17,6 +17,7 @@ import numpy as np
 
 from app.services.cosmology_likelihoods.core import (
     CosmologyDatasetEntry,
+    compressed_rows_are_executable,
     _derived_s8_from_samples,
     _s8_is_derived,
 )
@@ -217,16 +218,18 @@ def compressed_entry_row_count(
 ) -> int:
     """Executed Gaussian rows for a compressed entry in the SAMPLING path.
 
-    The dp_flat branch executes the 4 correlated CHW2019 distance-prior rows
-    plus (when S8 is derivable) the derived-S8 row — 5 rows, not the entry's
-    4 spec parameters. BIC's ln(N) must count what was actually executed;
+    The dp_flat branch executes only the 4 correlated CHW2019 distance-prior
+    rows. The registry's H0/Omega_m/sigma8/S8 parameter rows are published
+    posterior summaries used for proposal/context and are not multiplied as a
+    second likelihood. BIC's ln(N) must count what was actually executed;
     keep this in lockstep with the branches of _compressed_chi2_samples."""
     spec = entry.compressed_likelihood
     if spec is None:
         return 0
     if entry.key == "planck2018_compressed" and "omegak" not in parameter_order:
-        s8_row = 1 if ("S8" in spec.parameters and _s8_is_derived(parameter_order)) else 0
-        return 4 + s8_row
+        return 4
+    if not compressed_rows_are_executable(entry):
+        return 0
     return len(spec.parameters)
 
 
@@ -250,10 +253,9 @@ def _compressed_chi2_samples(
             continue
         # Every FLAT model (LCDM included, 2026-07-07): execute the entry's
         # CLAIMED observables — the correlated CHW2019 (R, l_A, ombh2, ns)
-        # compressed CMB distance priors — plus the Planck-2018 S8
-        # growth-amplitude row applied on the derived S8 (the distance priors
-        # carry no clustering-amplitude information; the S8 row keeps sigma8
-        # anchored and is declared in the registry approximation text).
+        # compressed CMB distance priors. The registered Planck parameter rows
+        # are posterior summaries and must not be multiplied as an independent
+        # growth-amplitude likelihood.
         # Rationale unchanged from the extended-DE-only version this
         # generalizes: a hard H0/omegam parameter Gaussian pins the LCDM
         # projection and (for DE models) forbids the geometric slide along
@@ -268,13 +270,15 @@ def _compressed_chi2_samples(
         if dp_flat:
             try:
                 total += _planck_distance_prior_chi2(samples, parameter_order)
-                if derived_s8 is not None and "S8" in spec.parameters:
-                    j = list(spec.parameters).index("S8")
-                    s8_mean = float(np.asarray(spec.mean, dtype=float)[j])
-                    s8_var = float(np.asarray(spec.covariance, dtype=float)[j, j])
-                    total += (derived_s8 - s8_mean) ** 2 / s8_var
             except Exception as exc:
                 invalid_specs.append(f"{entry.key}: {exc}")
+            continue
+        if not compressed_rows_are_executable(entry):
+            invalid_specs.append(
+                f"{entry.key}: statistical_role={spec.statistical_role!r}, "
+                f"execution_mode={entry.execution_mode!r} is context-only and "
+                "cannot enter a joint likelihood"
+            )
             continue
         try:
             params = list(spec.parameters)

@@ -62,12 +62,13 @@ def test_representation_mismatch_pair_is_flagged_invalid():
     assert cmp["__do_not_claim__"] is True
 
 
-def test_same_representation_bao_planck_pair_is_now_valid():
-    """2026-07-07 upgrade contract: ΛCDM and wCDM both execute the correlated
-    CHW2019 distance priors on desi+planck, so the pair compares chi2 against
-    ONE likelihood and the verdict is no longer withheld. The wcdm fit is
-    exploratory (off-anchor frontier model), so the rendered verdict must
-    carry the exploratory caveat."""
+def test_same_representation_bao_planck_pair_withholds_preference_without_mle():
+    """Matching representations are necessary but not sufficient.
+
+    These runners report the minimum chi2 encountered among posterior draws;
+    they do not carry a converged likelihood-only MLE attestation.  Raw deltas
+    remain diagnostic, but model preference must be withheld.
+    """
     ds = ["desi_dr1_bao", "planck2018_compressed"]
     lcdm = run_likelihood_chain(model="lcdm", dataset_keys=ds, n_samples=400, random_seed=42)
     wcdm = run_likelihood_chain(
@@ -82,15 +83,16 @@ def test_same_representation_bao_planck_pair_is_now_valid():
     assert wcdm["chain_tier"] == "exploratory"
 
     cmp = compute_model_comparison(lcdm, wcdm)
-    assert cmp["comparison_valid"] is True
-    assert "comparison_warning" not in cmp
-    assert "__do_not_claim__" not in cmp
-    assert cmp["preferred"] in {"lcdm", "wcdm", "inconclusive"}
+    assert cmp["comparison_valid"] is False
+    assert cmp["preferred"] == "undetermined"
+    assert cmp["__do_not_claim__"] is True
+    assert "likelihood-only MLE" in cmp["comparison_warning"]
     assert cmp["n_extra_params"] == 1
-    assert "exploratory-tier" in cmp["verdict_caveat"]
+    assert cmp["baseline_chi2_kind"] == "posterior_draw_minimum"
+    assert cmp["extended_chi2_kind"] == "posterior_draw_minimum"
 
 
-def test_same_likelihood_pair_is_valid_with_one_extra_param():
+def test_same_likelihood_pair_still_needs_likelihood_only_mle():
     # DESI BAO + cosmic chronometers are model-INVARIANT representations (same
     # data vectors for lcdm and wcdm). Both chains take the emcee upgrade —
     # importance proposals collapse on this combo (lcdm too), and the validity
@@ -107,18 +109,54 @@ def test_same_likelihood_pair_is_valid_with_one_extra_param():
     assert lcdm["chain_tier"] != "blocked"
     assert wcdm["chain_tier"] != "blocked"
     cmp = compute_model_comparison(lcdm, wcdm)
-    assert cmp["comparison_valid"] is True
-    assert "comparison_warning" not in cmp
-    assert "__do_not_claim__" not in cmp
+    assert cmp["comparison_valid"] is False
+    assert cmp["preferred"] == "undetermined"
+    assert cmp["__do_not_claim__"] is True
+    assert "likelihood-only MLE" in cmp["comparison_warning"]
     assert cmp["n_extra_params"] == 1
-    assert cmp["preferred"] in {"lcdm", "inconclusive"}
-    # Tier transparency: the comparison carries both chain tiers, and an
-    # exploratory input (the NORMAL case for in-process extended models, which
-    # are all off-anchor today) forces a rendered caveat.
     assert cmp["baseline_chain_tier"] in {"publication", "exploratory"}
     assert cmp["extended_chain_tier"] in {"publication", "exploratory"}
-    if "exploratory" in {cmp["baseline_chain_tier"], cmp["extended_chain_tier"]}:
-        assert "exploratory-tier" in cmp["verdict_caveat"]
+
+
+def test_attested_likelihood_only_mle_pair_can_produce_preference():
+    """Positive path: explicit matched MLE evidence, never prose inference."""
+    baseline = {
+        "model": "lcdm",
+        "chain_tier": "publication",
+        "chain_diagnostics": {"ess_bulk": 1200.0},
+        "parameters": {"H0": {}, "omegam": {}},
+        "fit_statistics": {
+            "chi2": 100.0,
+            "aic": 104.0,
+            "bic": 110.0,
+            "n_parameters": 2,
+            "chi2_kind": "likelihood_only_mle",
+            "likelihood_only": True,
+            "optimizer_converged": True,
+            "likelihood_fingerprint": "sha256:matched-likelihood",
+        },
+    }
+    extended = {
+        "model": "wcdm",
+        "chain_tier": "publication",
+        "chain_diagnostics": {"ess_bulk": 1100.0},
+        "parameters": {"H0": {}, "omegam": {}, "w": {}},
+        "fit_statistics": {
+            "chi2": 94.0,
+            "aic": 100.0,
+            "bic": 109.0,
+            "n_parameters": 3,
+            "chi2_kind": "likelihood_only_mle",
+            "likelihood_only": True,
+            "optimizer_converged": True,
+            "likelihood_fingerprint": "sha256:matched-likelihood",
+        },
+    }
+    cmp = compute_model_comparison(baseline, extended)
+    assert cmp["comparison_valid"] is True
+    assert cmp["preferred"] == "wcdm"
+    assert cmp["likelihood_fingerprint"] == "sha256:matched-likelihood"
+    assert "__do_not_claim__" not in cmp
 
 
 def test_blocked_tier_input_invalidates_comparison():
@@ -199,34 +237,16 @@ def test_research_matrix_runs_flat_de_cells_with_comparison_discipline():
         assert isinstance(cell.get("result"), dict)
         assert isinstance(cell["result"].get("fit_statistics"), dict)
     assert m["model_comparisons"], "comparisons must fire for the matched-dataset pair"
-    # Since 2026-07-07 desi+planck shares ONE representation across flat
-    # models, so the matched-pair comparison MUST come back valid — a
-    # regression to the pre-fix all-invalid state must fail here, not pass
-    # through a lenient either-way branch.
-    assert any(c["comparison_valid"] for c in m["model_comparisons"]), (
-        "flat lcdm-vs-wcdm on desi+planck shares one representation since "
-        "2026-07-07; the matched-pair comparison must be valid"
-    )
-    # Rendering discipline stays unconditional: a valid verdict from an
-    # exploratory-tier extended fit must carry the caveat, and any invalid
-    # comparison must be withheld AND tainted out of the claimable universe.
+    # The live runners do not perform likelihood-only optimisation, so every
+    # comparison is diagnostic-only even when the likelihood representation is
+    # matched.
+    assert all(c["comparison_valid"] is False for c in m["model_comparisons"])
     for comparison in m["model_comparisons"]:
-        if comparison["comparison_valid"]:
-            assert comparison["preferred"] in {"lcdm", "wcdm", "inconclusive"}
-            if "exploratory" in {
-                comparison.get("baseline_chain_tier"),
-                comparison.get("extended_chain_tier"),
-            }:
-                assert "exploratory-tier" in comparison["verdict_caveat"]
-        else:
-            assert comparison["preferred"] == "undetermined"
-            assert comparison["__do_not_claim__"] is True
-    assert "comparison_valid=true" in m["__message_to_model__"]
-    assert "verdict_caveat" in m["__message_to_model__"]
-    # The "deltas are not model-preference evidence" warning is conditional
-    # on an invalid comparison actually being present.
-    if any(c["comparison_valid"] is False for c in m["model_comparisons"]):
-        assert any("not" in w and "model-preference" in w for w in m["warnings"])
+        assert comparison["preferred"] == "undetermined"
+        assert comparison["__do_not_claim__"] is True
+        assert "likelihood-only MLE" in comparison["comparison_warning"]
+    assert "comparison_valid=false" in m["__message_to_model__"]
+    assert any("not" in w and "model-preference" in w for w in m["warnings"])
 
 
 def test_research_matrix_anchor_flag_lands_on_matching_combo():

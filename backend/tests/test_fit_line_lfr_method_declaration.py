@@ -16,6 +16,8 @@ Core M2 contracts:
 
 from unittest.mock import patch
 
+import numpy as np
+
 from app.services.ai_tools import _exec_fit_line_lfr
 from app.services import result_provenance as _rp
 
@@ -175,6 +177,72 @@ def test_bayesian_requested_errs_available_runs_bayesian_in_m3(monkeypatch):
     assert mp["bayesian_n_draws"] == 16000
     assert mp["bayesian_converged"] is True
     assert mp["bayesian_publication_ready"] is True
+
+
+def test_seed_zero_reaches_linmix_and_is_reported(monkeypatch):
+    """JSON integer zero is a valid seed, not a request for the default."""
+    rows = _make_rows(6, with_err=True)
+    seen: dict[str, int] = {}
+
+    def fake_bayes(**kwargs):
+        seen["seed"] = kwargs["seed"]
+        return {
+            "method": "bayesian_xyerr_linmix",
+            "alpha_median": 8.5,
+            "alpha_hdi_94": [8.3, 8.7],
+            "beta_median": 1.2,
+            "beta_hdi_94": [1.0, 1.4],
+            "intrinsic_scatter_dex": 0.18,
+            "intrinsic_scatter_dex_hdi": [0.12, 0.25],
+            "parameters": {},
+            "n_draws_total": 16000,
+            "n_chains": 4,
+            "converged": True,
+            "publication_ready": True,
+            "package": "test double",
+            "reference": "Kelly 2007",
+        }
+
+    import app.services.bayesian_inference as bi
+
+    monkeypatch.setattr(bi, "kelly07_linmix_fit", fake_bayes)
+    with _patch_cache(rows):
+        out = _exec_fit_line_lfr(
+            {"fit_method_requested": "bayesian_xyerr", "seed": 0}
+        )
+
+    assert seen["seed"] == 0
+    assert out["seed"] == 0
+
+
+def test_seed_zero_reaches_subsample_bootstrap_and_is_reported(monkeypatch):
+    rows = _make_rows(6)
+    first_draws: list[int] = []
+
+    def fake_bootstrap(_x, _y, _n_boot, rng):
+        first_draws.append(int(rng.integers(0, 2**31 - 1)))
+        return np.asarray([0.9, 1.0, 1.1], dtype=float)
+
+    monkeypatch.setattr(
+        "app.services.ai_tools.line_fitting._bootstrap_ols_betas",
+        fake_bootstrap,
+    )
+    with _patch_cache(rows):
+        out = _exec_fit_line_lfr(
+            {
+                "fit_method_requested": "ols",
+                "seed": 0,
+                "subsample_splits": [
+                    {"name": "low", "z_max": 5.3},
+                    {"name": "high", "z_min": 5.3},
+                ],
+                "subsample_n_boot": 3,
+            }
+        )
+
+    expected_rng = np.random.default_rng(0)
+    assert first_draws[0] == int(expected_rng.integers(0, 2**31 - 1))
+    assert out["seed"] == 0
 
 
 def test_nonconverged_bayesian_fit_cannot_inherit_data_only_publication_ready(

@@ -979,6 +979,7 @@ def _runner_success(
     chain_meta: dict[str, Any],
     stdout_tail: str,
     data_verification: dict[str, Any] | None = None,
+    model_adequacy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from app.services.cosmology_likelihoods import (
         MODEL_LABELS,
@@ -992,7 +993,10 @@ def _runner_success(
     # otherwise claim_validator (which keys only on publication_ready) would let
     # its w0/wa be quoted as a published conclusion.
     off_anchor = chain_is_off_anchor(model_key, [entry.key for entry in entries])
-    from app.services.cosmology_likelihoods.verification import _assess_publication_gate
+    from app.services.cosmology_likelihoods.verification import (
+        _assess_publication_gate,
+        build_model_adequacy_subject,
+    )
 
     data_verified = bool(
         data_verification is not None and data_verification.get("hash_verified")
@@ -1016,6 +1020,14 @@ def _runner_success(
         and real_tau_likelihood_selected
         and not real_tau_likelihood_verified
     )
+    adequacy_subject = build_model_adequacy_subject(
+        model=model_key,
+        dataset_keys=[entry.key for entry in entries],
+        random_seed=seed,
+        summaries=summaries,
+        diagnostics=diagnostics,
+        data_verification=data_verification,
+    )
     publication_gate = _assess_publication_gate(
         cov_fidelity="full" if data_verified else None,
         # When the real low-l EE likelihood is absent, _build_cobaya_yaml uses
@@ -1031,6 +1043,8 @@ def _runner_success(
         ),
         per_parameter=diagnostics.get("per_parameter"),
         critical_parameters=list(summaries),
+        model_adequacy=model_adequacy,
+        model_adequacy_subject=adequacy_subject,
     )
     if off_anchor and "off_anchor_frontier" not in publication_gate["reasons"]:
         publication_gate["reasons"].append("off_anchor_frontier")
@@ -1082,6 +1096,9 @@ def _runner_success(
         n_parameters = len(summaries)
         fit_statistics = {
             "chi2": round(float(best_chi2), 6),
+            "chi2_kind": "posterior_draw_minimum",
+            "likelihood_only": False,
+            "optimizer_converged": False,
             "aic": round(float(best_chi2) + 2.0 * n_parameters, 6),
             "n_parameters": int(n_parameters),
             "chi2_source": chain_meta.get("best_chi2_note"),
@@ -1163,6 +1180,7 @@ def _runner_success(
                 "publication_ready": publication_ready,
                 "preliminary_ready": preliminary_ready,
                 "publication_gate": publication_gate,
+                "model_adequacy_subject": adequacy_subject,
                 "chain_meta": chain_meta,
                 "stdout_tail": stdout_tail,
                 "data_verification": data_verification,

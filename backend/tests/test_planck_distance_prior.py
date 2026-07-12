@@ -2,9 +2,10 @@
 
 Before this upgrade the entry CLAIMED observables (R, l_A, ombh2, ns) but on
 ΛCDM chains EXECUTED a diagonal (H0, Omega_m, sigma8, S8) parameter Gaussian.
-Now every flat model (ΛCDM included) executes the Chen-Huang-Wang 2019
-(arXiv:1808.05724) Table-I 4-dim correlated distance priors plus the S8
-growth row on derived S8.  These tests fail on the pre-fix code:
+Now every flat model (ΛCDM included) executes only the Chen-Huang-Wang 2019
+(arXiv:1808.05724) Table-I 4-dim correlated distance prior. The registry's
+H0/Omega_m/sigma8/S8 rows are posterior summaries used for proposals/context,
+never additional likelihood factors. These tests fail on the pre-fix code:
 
 - ΛCDM chi2 was the diagonal Gaussian, insensitive to ombh2/ns (tests 2, 3);
 - the sampled axes had no ombh2/ns for ΛCDM (test 4);
@@ -19,7 +20,6 @@ no-uncited-magic-numbers rule.
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from app.services.cosmology_likelihoods.cmb import (
     _PLANCK18_DP_CORR,
@@ -57,8 +57,7 @@ def _planck_entry():
 
 
 def _dp_chi2_reference(samples: np.ndarray, order: list[str], w0=-1.0, wa=0.0) -> np.ndarray:
-    """Independent re-computation of the expected chi2: CHW2019 4-dim
-    correlated prior + Planck S8 row on derived S8."""
+    """Independent re-computation of the CHW2019 4-dim distance-prior chi2."""
     sigma = np.asarray(CHW2019_TABLE1_SIGMA)
     cov = sigma[:, None] * sigma[None, :] * np.asarray(CHW2019_TABLE1_CORR)
     inv = np.linalg.inv(cov)
@@ -68,15 +67,7 @@ def _dp_chi2_reference(samples: np.ndarray, order: list[str], w0=-1.0, wa=0.0) -
     ns = samples[:, order.index("ns")]
     big_r, l_a, _ = _cmb_distance_priors(om, h0, obh2, w0=w0, wa=wa)
     resid = np.column_stack([big_r, l_a, obh2, ns]) - np.asarray(CHW2019_TABLE1_MEAN)
-    chi2 = np.einsum("ni,ij,nj->n", resid, inv, resid)
-    # S8 growth row from the registry spec (Planck VI Table 2 column).
-    spec = _planck_entry().compressed_likelihood
-    params = list(spec.parameters)
-    j = params.index("S8")
-    s8_mean = float(np.asarray(spec.mean)[j])
-    s8_var = float(np.asarray(spec.covariance)[j][j])
-    s8 = samples[:, order.index("sigma8")] * np.sqrt(om / 0.3)
-    return chi2 + (s8 - s8_mean) ** 2 / s8_var
+    return np.einsum("ni,ij,nj->n", resid, inv, resid)
 
 
 # ── 1. Production constants pinned to the paper ─────────────────────────────
@@ -122,12 +113,19 @@ def _lcdm_samples() -> np.ndarray:
     ])
 
 
-def test_lcdm_chi2_is_the_correlated_distance_prior_plus_s8_row():
+def test_lcdm_chi2_is_only_the_correlated_distance_prior():
     samples = _lcdm_samples()
     chi2, errors = _compressed_chi2_samples(samples, LCDM_ORDER, [_planck_entry()])
     assert errors == []
     expected = _dp_chi2_reference(samples, LCDM_ORDER)
     assert np.allclose(chi2, expected, rtol=1e-10), (chi2, expected)
+    moved_sigma8 = samples.copy()
+    moved_sigma8[:, LCDM_ORDER.index("sigma8")] += 0.2
+    moved_chi2, moved_errors = _compressed_chi2_samples(
+        moved_sigma8, LCDM_ORDER, [_planck_entry()]
+    )
+    assert moved_errors == []
+    assert np.allclose(moved_chi2, chi2, rtol=1e-12)
 
 
 def test_lcdm_chi2_responds_to_ombh2_and_ns():
@@ -152,7 +150,7 @@ def test_lcdm_sampling_parameter_order_includes_dp_axes():
         [_REGISTRY["desi_dr1_bao"]], [_planck_entry()]
     )
     assert "ombh2" in order and "ns" in order, order
-    assert "S8" not in order  # still derived, never sampled
+    assert "sigma8" not in order and "S8" not in order
 
 
 # ── 5. Missing distance-prior axes fail loud, never silently degrade ────────
@@ -191,24 +189,13 @@ def test_w0wa_chi2_uses_4dim_prior_with_ns():
 
 # ── 7. Curved models keep the parameter-summary path (defensive control) ────
 
-def test_curved_model_keeps_parameter_summary_path():
+def test_curved_model_refuses_proposal_only_parameter_summary_path():
     order = ["H0", "omegam", "sigma8", "omegak"]
     samples = np.array([[67.36, 0.3153, 0.8111, 0.01]])
     chi2, errors = _compressed_chi2_samples(samples, order, [_planck_entry()])
-    assert errors == []
-    spec = _planck_entry().compressed_likelihood
-    params = list(spec.parameters)
-    mean = np.asarray(spec.mean)
-    cov = np.asarray(spec.covariance)
-    # Diagonal spec Gaussian over (H0, omegam, sigma8) + S8 row on derived S8.
-    expected = 0.0
-    for name in ("H0", "omegam", "sigma8"):
-        j = params.index(name)
-        expected += (samples[0, order.index(name)] - mean[j]) ** 2 / cov[j][j]
-    j = params.index("S8")
-    derived = samples[0, order.index("sigma8")] * np.sqrt(samples[0, order.index("omegam")] / 0.3)
-    expected += (derived - mean[j]) ** 2 / cov[j][j]
-    assert chi2[0] == pytest.approx(expected, rel=1e-10)
+    assert len(errors) == 1
+    assert "proposal_only" in errors[0] and "context-only" in errors[0]
+    assert np.allclose(chi2, 0.0)
 
 
 # ── 8. Proposal moments are physically sensible (proposal-only helper) ──────
@@ -259,5 +246,7 @@ def test_lcdm_bao_cmb_recovers_h0_preliminary_tier():
     assert 0.0215 < obh2 < 0.0232, obh2
     ns = float(r["parameters"]["ns"]["median"])
     assert 0.95 < ns < 0.98, ns
-    # S8 remains derived-only (reported, never sampled).
-    assert "S8" in r["derived_params"]
+    # Distance priors carry geometry/baryon/tilt information, not a growth
+    # amplitude. The Planck VI sigma8/S8 posterior rows are context-only.
+    assert "sigma8" not in r["parameters"]
+    assert "S8" not in r["derived_params"]

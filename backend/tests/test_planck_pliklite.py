@@ -98,7 +98,27 @@ def test_bbn_only_stays_publication_blocked():
     r = cl.run_likelihood_chain(
         model="lcdm", dataset_keys=["bbn_ombh2_schoeneberg24"], n_samples=200, random_seed=42
     )
-    assert r.get("publication_ready") is not True
+    assert r["analysis_status"] == "NO_COMPRESSED_LIKELIHOOD"
+    assert r["publication_ready"] is False
+    assert r["datasets_used"] == []
+    assert r["__do_not_claim__"] is True
+
+
+def test_bao_plus_bbn_refuses_fake_cmb_free_h0_inference():
+    r = cl.run_likelihood_chain(
+        model="lcdm",
+        dataset_keys=["desi_dr1_bao", "bbn_ombh2_schoeneberg24"],
+        n_samples=1000,
+        random_seed=42,
+    )
+
+    assert r["chain_tier"] == "blocked"
+    assert r["__do_not_claim__"] is True
+    assert "parameters" not in r
+    assert {item["key"] for item in r["datasets_not_run"]} == {
+        "bbn_ombh2_schoeneberg24"
+    }
+    assert "requested_dataset_not_executed" in r["preliminary_reasons"]
 
 
 def test_pliklite_runtime_sha256_mismatch_blocks(monkeypatch, tmp_path):

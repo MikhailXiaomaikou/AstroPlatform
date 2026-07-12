@@ -110,7 +110,10 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Build backend production image
-        run: docker build --pull -t standard-astro-backend:ci backend
+        run: >-
+          docker build --pull
+          --build-arg TOOL_VERSION="$GITHUB_SHA"
+          -t standard-astro-backend:ci backend
       - name: Build frontend image
         run: >-
           docker build --pull

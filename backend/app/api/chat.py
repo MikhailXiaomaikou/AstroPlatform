@@ -1092,6 +1092,52 @@ async def chat_message_stream(
                 audit_trail if "audit_trail" in locals() else []
             )
             timeout_summary = _tool_grounded_timeout_summary(timeout_tool_results, timeout_s)
+            timeout_validation_summary = {
+                "schema_version": 1,
+                "numeric_gate": "not_run",
+                "citation_gate": "not_run",
+                "blocked": False,
+                "reason": "workflow_timeout_tool_grounded_fallback",
+            }
+            if timeout_summary.strip():
+                try:
+                    from app.services.claim_validator import (
+                        enforce_scientific_conclusion_gate,
+                    )
+
+                    timeout_summary, timeout_conclusion_violations = (
+                        enforce_scientific_conclusion_gate(
+                            timeout_summary, timeout_tool_results
+                        )
+                    )
+                    if timeout_conclusion_violations:
+                        timeout_validation_summary.update({
+                            "citation_gate": "blocked",
+                            "blocked": True,
+                            "reason": "scientific_conclusion_scope",
+                            "interventions": [{
+                                "gate": "scientific_conclusion_scope",
+                                "action": "blocked",
+                                "reason": "unmatched_conclusion_attestation",
+                            }],
+                        })
+                except Exception as exc:
+                    timeout_summary = (
+                        "The workflow timed out and scientific-conclusion "
+                        "validation could not complete. No scientific conclusion "
+                        "is cleared for display; review the tool cards and rerun."
+                    )
+                    timeout_validation_summary.update({
+                        "citation_gate": "blocked",
+                        "blocked": True,
+                        "reason": "scientific_conclusion_validation_error",
+                        "interventions": [{
+                            "gate": "scientific_conclusion_scope",
+                            "action": "blocked",
+                            "reason": "validation_error",
+                            "error_class": exc.__class__.__name__,
+                        }],
+                    })
             if timeout_summary.strip():
                 from app.services.server_evidence import append_server_evidence
 
@@ -1101,13 +1147,7 @@ async def chat_message_stream(
                     run_id=_agent_run_id,
                     assistant_reply=timeout_summary,
                     tool_results=timeout_tool_results,
-                    validation_summary={
-                        "schema_version": 1,
-                        "numeric_gate": "not_run",
-                        "citation_gate": "not_run",
-                        "blocked": False,
-                        "reason": "workflow_timeout_tool_grounded_fallback",
-                    },
+                    validation_summary=timeout_validation_summary,
                 )
                 logger.warning(
                     "AI workflow timed out after %ss; emitting tool-grounded "
@@ -2059,6 +2099,47 @@ async def _run_orchestrated_chat(
             )
             if not (_merged_fact_check_failed or _merged_report_export_failed):
                 _merged_summary_reason = "dataset_identity_validation_error"
+
+    # The merged prose is a new public reply and later deterministic fallbacks
+    # may replace text that was checked earlier.  Apply the same reusable
+    # qualitative-science gate once more at the final merged boundary.
+    try:
+        from app.services.claim_validator import (
+            enforce_scientific_conclusion_gate,
+        )
+
+        _merged_conclusion_draft = merged_reply
+        merged_reply, merged_conclusion_violations = (
+            enforce_scientific_conclusion_gate(
+                merged_reply, merged_tool_results
+            )
+        )
+        if merged_conclusion_violations:
+            _merged_citation_state = "blocked"
+            _merged_blocked = True
+            _merged_summary_reason = "scientific_conclusion_scope"
+            _merged_gate_interventions.append({
+                "gate": "scientific_conclusion_scope",
+                "action": "blocked",
+                "reason": "unmatched_conclusion_attestation",
+                "draft_changed": _merged_conclusion_draft != merged_reply,
+            })
+    except Exception as exc:
+        merged_reply = (
+            "Scientific-conclusion validation failed, so no qualitative "
+            "scientific conclusion is cleared for display. Review the current "
+            "tool evidence and rerun the validation step."
+        )
+        _merged_citation_state = "blocked"
+        _merged_blocked = True
+        _merged_summary_reason = "scientific_conclusion_validation_error"
+        _merged_gate_interventions.append({
+            "gate": "scientific_conclusion_scope",
+            "action": "blocked",
+            "reason": "validation_error",
+            "error_class": exc.__class__.__name__,
+        })
+        logger.exception("Merged scientific-conclusion gate failed closed")
 
     # Assemble the merged validation summary.  Top-level states describe the
     # SHIPPED merged prose (validated above against the union of tool

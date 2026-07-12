@@ -185,17 +185,29 @@ def bench_hubble_tension_planck18_vs_riess22() -> dict[str, Any]:
 
 
 def bench_alcock_paczynski_omega_m() -> dict[str, Any]:
-    """Alcock-Paczynski geometric test on DESI DR1 BAO → Ωm in [0.27, 0.36]."""
+    """AP numerical regression must remain a diagnostic-only constraint."""
     from app.services.cosmology_likelihoods import run_alcock_paczynski_test
     r = run_alcock_paczynski_test()
     om = float(r["omega_m_best"])
     chi2_dof = float(r["chi2_per_dof"])
+    numerical_pass = 0.27 < om < 0.36 and chi2_dof < 5.0
+    gate_ok = bool(
+        r.get("publication_ready") is False
+        and r.get("preliminary_ready") is True
+        and r.get("__do_not_claim__") is True
+    )
     return {
-        "pass": 0.27 < om < 0.36 and chi2_dof < 5.0,
+        "pass": bool(numerical_pass and gate_ok),
+        "numerical_regression_pass": numerical_pass,
+        "publication_gate_correct": gate_ok,
+        "scientific_publication_pass": False,
+        "validation_scope": "diagnostic_numerical_regression",
+        "publication_ready": bool(r.get("publication_ready")),
+        "preliminary_ready": bool(r.get("preliminary_ready")),
         "omega_m_best": round(om, 4),
         "chi2_per_dof": round(chi2_dof, 3),
         "n_pairs_used": int(r["n_redshift_pairs"]),
-        "target": "Ωm in [0.27, 0.36] + chi2/dof < 5",
+        "target": "Ωm in [0.27, 0.36] + chi2/dof < 5; AP remains diagnostic-only",
     }
 
 
@@ -391,38 +403,53 @@ def bench_dataset_z_coverage() -> dict[str, Any]:
 
 
 def bench_sn_omegam_compressed() -> dict[str, Any]:
-    """DES-SN5YR compressed + Union3 full-vector SN-only flat-ΛCDM Ωm (Tier 2A,
-    2026-05-29; union3 leg upgraded 2026-06-12).
+    """Union3 full-vector SN inference plus DES posterior-summary refusal.
 
-    Both SN datasets must recover their published flat-ΛCDM SN-only Ωm while
-    remaining explicitly preliminary: DES-SN5YR Ωm=0.352 (Abbott+2024, via the 1D
-    compressed Gaussian) and Union3 Ωm=0.356 (Rubin+2023 — now via the FULL
-    22-bin binned-distance likelihood, whose chi2 minimum sits at Ωm=0.3560
-    exactly; the 0.005 window catches both a data/parsing regression and a
-    distance-integral drift)."""
-    from app.services.cosmology_likelihoods import run_likelihood_chain
+    Union3 must recover its published flat-ΛCDM SN-only Ωm through the released
+    22-bin likelihood. DES-SN5YR's registered Ωm row is a posterior summary,
+    not a likelihood; the runner must keep it context-only instead of recreating
+    a pseudo-posterior from the paper's final number.
+    """
+    from app.services.cosmology_likelihoods import (
+        get_cosmology_dataset,
+        run_likelihood_chain,
+    )
 
     out: dict[str, Any] = {}
-    chains: dict[str, dict[str, Any]] = {}
-    numerical_ok = True
-    for key, expected in (("des_sn5yr", 0.352), ("union3", 0.356)):
-        r = run_likelihood_chain(model="lcdm", dataset_keys=[key], n_samples=4000, random_seed=42)
-        chains[key] = r
-        med = r.get("parameters", {}).get("omegam", {}).get("median")
-        used = [d.get("key") for d in r.get("datasets_used", [])]
-        good = (
-            r.get("success") is True
-            and key in used
-            and isinstance(med, (int, float))
-            and abs(med - expected) < 0.005
-        )
-        numerical_ok = numerical_ok and good
-        out[key] = {"omegam_median": round(med, 4) if isinstance(med, (int, float)) else None,
-                    "expected": expected, "tier": r.get("chain_tier")}
+    des = run_likelihood_chain(
+        model="lcdm", dataset_keys=["des_sn5yr"], n_samples=4000, random_seed=42
+    )
+    des_role = get_cosmology_dataset("des_sn5yr").compressed_likelihood
+    des_refused = bool(
+        des_role is not None
+        and des_role.statistical_role == "published_posterior_summary"
+        and des.get("analysis_status") == "NO_COMPRESSED_LIKELIHOOD"
+        and des.get("datasets_used") == []
+        and des.get("__do_not_claim__") is True
+    )
+    union = run_likelihood_chain(
+        model="lcdm", dataset_keys=["union3"], n_samples=4000, random_seed=42
+    )
+    med = union.get("parameters", {}).get("omegam", {}).get("median")
+    union_ok = bool(
+        "union3" in [d.get("key") for d in union.get("datasets_used", [])]
+        and isinstance(med, (int, float))
+        and abs(med - 0.356) < 0.005
+    )
+    out["des_sn5yr"] = {
+        "statistical_role": des_role.statistical_role if des_role else None,
+        "analysis_status": des.get("analysis_status"),
+        "context_only_refusal": des_refused,
+    }
+    out["union3"] = {
+        "omegam_median": round(med, 4) if isinstance(med, (int, float)) else None,
+        "expected": 0.356,
+        "tier": union.get("chain_tier"),
+    }
     return _preliminary_multi_benchmark_result(
-        numerical_pass=numerical_ok,
-        chain_results=chains,
-        target="des_sn5yr Ωm≈0.352 and union3 Ωm≈0.356; both preliminary in-process regressions",
+        numerical_pass=des_refused and union_ok,
+        chain_results={"union3": union},
+        target="DES-SN5YR posterior summary stays context-only; Union3 full vector recovers Ωm≈0.356",
         **out,
     )
 
@@ -431,13 +458,9 @@ def bench_sn_compressed_provenance() -> dict[str, Any]:
     """T1-U8a: SN-only chains certify honest provenance (2026-06-01; union3
     full-vector 2026-06-12).
 
-    Compressed SN-only chains (pantheon_plus, des_sn5yr by default) must stamp
-    cov_fidelity='literature_typed' (a hand-typed Gaussian, no released file to
-    checksum), remain preliminary, and NEVER over-claim 'full'/'diagonal'
-    or leave the fidelity unstamped (None). union3 now ALWAYS runs the released
-    22-bin binned-distance vector, so its honest grade is 'full' WITH the
-    verified covariance digest in artifact_sha256. Locks the T1-U6 fix so the
-    'fake receipt' SN hole cannot silently reopen in either direction."""
+    Pantheon+/DES-SN paper posterior rows must yield no numerical chain or fake
+    likelihood provenance. Union3 runs the released 22-bin vector and must
+    certify full fidelity with the verified covariance digest."""
     from app.services.cosmology_likelihoods import (
         load_verified_union3_data,
         run_likelihood_chain,
@@ -445,36 +468,40 @@ def bench_sn_compressed_provenance() -> dict[str, Any]:
 
     out: dict[str, Any] = {}
     chains: dict[str, dict[str, Any]] = {}
-    provenance_ok = True
+    context_ok = True
     for key in ("pantheon_plus", "des_sn5yr"):
         r = run_likelihood_chain(model="lcdm", dataset_keys=[key], n_samples=4000, random_seed=42)
         chains[key] = r
         prov = r.get("provenance", {}).get("cosmology_likelihood", {})
         fid = prov.get("cov_fidelity")
-        provenance_ok = provenance_ok and fid == "literature_typed"
+        refused = bool(
+            r.get("analysis_status") == "NO_COMPRESSED_LIKELIHOOD"
+            and r.get("datasets_used") == []
+            and r.get("__do_not_claim__") is True
+            and not prov.get("datasets_used")
+        )
+        context_ok = context_ok and refused
         out[key] = {
             "cov_fidelity": fid,
             "publication_ready": r.get("publication_ready"),
             "preliminary_ready": r.get("preliminary_ready"),
+            "context_only_refusal": refused,
         }
     r = run_likelihood_chain(model="lcdm", dataset_keys=["union3"], n_samples=4000, random_seed=42)
     chains["union3"] = r
     prov = r.get("provenance", {}).get("cosmology_likelihood", {})
     sha_ok = (prov.get("artifact_sha256") or {}).get("union3") == load_verified_union3_data("union3")["sha256"]
-    provenance_ok = provenance_ok and prov.get("cov_fidelity") == "full" and sha_ok
+    provenance_ok = prov.get("cov_fidelity") == "full" and sha_ok
     out["union3"] = {
         "cov_fidelity": prov.get("cov_fidelity"),
         "artifact_sha256_match": sha_ok,
         "publication_ready": r.get("publication_ready"),
         "preliminary_ready": r.get("preliminary_ready"),
     }
-    gate_by_chain = {
-        name: _preliminary_chain_gate_ok(result)
-        for name, result in chains.items()
-    }
-    gate_ok = all(gate_by_chain.values())
+    gate_by_chain = {"union3": _preliminary_chain_gate_ok(r)}
+    gate_ok = gate_by_chain["union3"]
     return {
-        "pass": bool(provenance_ok and gate_ok),
+        "pass": bool(context_ok and provenance_ok and gate_ok),
         "numerical_regression_pass": None,
         "provenance_regression_pass": bool(provenance_ok),
         "publication_gate_correct": gate_ok,
@@ -482,7 +509,7 @@ def bench_sn_compressed_provenance() -> dict[str, Any]:
         "scientific_publication_pass": False,
         "validation_scope": "preliminary_provenance_regression",
         **out,
-        "target": "compressed SN chains certify literature_typed; union3 certifies full + sha256; all remain preliminary",
+        "target": "Pantheon+/DES posterior summaries stay context-only; Union3 certifies full + sha256 and remains preliminary",
     }
 
 
@@ -609,13 +636,15 @@ def bench_model_comparison_delta() -> dict[str, Any]:
     2026-06-11; pair switched to non-blocked chains 2026-06-12).
 
     compute_model_comparison(lcdm, wcdm) on a model-invariant likelihood must
-    return finite deltas, exactly 1 extra parameter (w), and NOT prefer wCDM —
-    w≈-1 there, so the extra freedom buys no fit improvement and AIC favors the
-    simpler ΛCDM. Guards the formerly-hardcoded delta_chi²=0.0 placeholder.
+    return finite diagnostic deltas and exactly 1 extra parameter (w), while
+    withholding preference because these runners only report the minimum chi2
+    encountered among posterior draws.  That point is not an independently
+    optimised, converged likelihood-only MLE.  Guards both the formerly-
+    hardcoded delta_chi²=0.0 placeholder and the later AIC-overclaim regression.
 
     planck2018_compressed note (contract changed 2026-07-07): every FLAT
     model now executes the same CHW2019 correlated (R, l_A, ombh2, ns)
-    distance priors + derived-S8 row, so an lcdm-vs-wcdm pair on it IS
+    distance priors without posterior-summary growth rows, so an lcdm-vs-wcdm pair on it IS
     comparison_valid now. The representation-mismatch invalidity case is
     covered by synthetic-mismatch fixtures in
     tests/test_model_comparison_validity.py; this benchmark keeps the
@@ -627,8 +656,8 @@ def bench_model_comparison_delta() -> dict[str, Any]:
     benchmark was reading its verdict off exactly that one-effective-sample
     chain. Both chains take allow_emcee_fallback=True so the pair is genuinely
     non-blocked. All invalidity cases are locked by
-    tests/test_model_comparison_validity.py; the benchmark pins the VALID
-    same-likelihood comparison."""
+    tests/test_model_comparison_validity.py; the benchmark pins the honest
+    diagnostic-only same-likelihood comparison."""
     from app.services.cosmology_likelihoods import run_likelihood_chain, compute_model_comparison
 
     ds = ["desi_dr1_bao", "cosmic_chronometers"]
@@ -644,9 +673,11 @@ def bench_model_comparison_delta() -> dict[str, Any]:
     finite = all(cmp[k] is not None for k in ("delta_chi2", "delta_aic", "delta_bic"))
     numeric_ok = (
         finite
-        and cmp["comparison_valid"] is True
+        and cmp["comparison_valid"] is False
         and cmp["n_extra_params"] == 1
-        and cmp["preferred"] in {"lcdm", "inconclusive"}
+        and cmp["preferred"] == "undetermined"
+        and cmp.get("__do_not_claim__") is True
+        and "likelihood-only MLE" in str(cmp.get("comparison_warning") or "")
     )
     return _preliminary_multi_benchmark_result(
         numerical_pass=numeric_ok,
@@ -655,7 +686,10 @@ def bench_model_comparison_delta() -> dict[str, Any]:
         delta_aic=cmp["delta_aic"],
         n_extra_params=cmp["n_extra_params"],
         preferred=cmp["preferred"],
-        target="finite model-comparison deltas from preliminary chains; never a publication validation",
+        target=(
+            "finite diagnostic deltas from preliminary chains, with model "
+            "preference withheld until matched likelihood-only MLE attestations"
+        ),
     )
 
 
@@ -1004,27 +1038,18 @@ def bench_pantheon18_full_vector() -> dict[str, Any]:
 
 
 def bench_s8_derived_consistency() -> dict[str, Any]:
-    """S8 as a derived quantity, not a sampled column (1B, 2026-05-29).
+    """Planck/KiDS posterior summaries never become growth likelihoods.
 
-    Pins (1) S8 ≡ σ8·√(Ωm/0.3) holds at the reported medians for Planck (analytic
-    path) and BAO+Planck (importance path) — i.e. the sampler no longer explores
-    an independent S8; (2) the prod BAO+Planck order is 6-D
-    [H0,Ωm,rd,σ8,ombh2,ns] (distance-prior axes added 2026-07-07) with no
-    sampled S8; (3) Planck+KiDS has reweighted ESS≥400 and the KiDS S8 pulls
-    the derived S8 below the Planck-only value, while all paths stay preliminary.
+    The CHW2019 distance prior constrains geometry, ombh2, and ns only. Planck
+    sigma8/S8 and KiDS S8 are published posterior summaries: neither may enter
+    chi2 or appear as a derived constraint. Co-selecting KiDS must report a
+    partial dataset run and redact the blocked posterior.
     """
     from app.services.cosmology_likelihoods import (
         run_likelihood_chain,
         _sampling_parameter_order,
         get_cosmology_dataset,
     )
-
-    def derived_ok(r: dict[str, Any]) -> bool:
-        p = r.get("parameters", {})
-        s8, sig, om = p.get("S8"), p.get("sigma8"), p.get("omegam")
-        if not (s8 and sig and om):
-            return False
-        return abs(s8["median"] - sig["median"] * (om["median"] / 0.3) ** 0.5) < 0.005
 
     planck = run_likelihood_chain(model="lcdm", dataset_keys=["planck2018_compressed"],
                                   random_seed=42, n_samples=4000)
@@ -1037,28 +1062,39 @@ def bench_s8_derived_consistency() -> dict[str, Any]:
     prod_order = _sampling_parameter_order(
         [get_cosmology_dataset("desi_dr1_bao")], [get_cosmology_dataset("planck2018_compressed")]
     )
-    s8_planck = planck["parameters"]["S8"]["median"]
-    s8_kids = planck_kids["parameters"]["S8"]["median"]
+    used_kids = {d.get("key") for d in planck_kids.get("datasets_used", [])}
+    not_run_kids = {d.get("key") for d in planck_kids.get("datasets_not_run", [])}
     numeric_ok = (
-            derived_ok(planck)
-            and derived_ok(bao_planck)
-            and prod_order == ["H0", "omegam", "rd", "sigma8", "ombh2", "ns"]
-            and (planck_kids["chain_diagnostics"]["ess_bulk"] or 0) >= 400
-            and s8_kids < s8_planck
+        set(planck.get("parameters", {})) == {"H0", "omegam", "ombh2", "ns"}
+        and set(bao_planck.get("parameters", {})) == {"H0", "omegam", "rd", "ombh2", "ns"}
+        and prod_order == ["H0", "omegam", "rd", "ombh2", "ns"]
+        and used_kids == {"planck2018_compressed"}
+        and "kids1000_wl" in not_run_kids
+        and planck_kids.get("chain_tier") == "blocked"
+        and planck_kids.get("__do_not_claim__") is True
+        and "parameters" not in planck_kids
     )
-    return _preliminary_multi_benchmark_result(
-        numerical_pass=numeric_ok,
-        chain_results={
-            "planck": planck,
-            "bao_planck": bao_planck,
-            "planck_kids": planck_kids,
-        },
-        prod_bao_planck_order=prod_order,
-        s8_planck=round(s8_planck, 4),
-        s8_planck_kids=round(s8_kids, 4),
-        planck_kids_ess=planck_kids["chain_diagnostics"]["ess_bulk"],
-        target="S8 identity + 6-D order + KiDS shift are numerical-only; all paths preliminary",
-    )
+    gate_by_chain = {
+        "planck": _preliminary_chain_gate_ok(planck),
+        "bao_planck": _preliminary_chain_gate_ok(bao_planck),
+        "planck_kids_blocked": bool(
+            planck_kids.get("publication_ready") is False
+            and planck_kids.get("chain_tier") == "blocked"
+        ),
+    }
+    return {
+        "pass": bool(numeric_ok and all(gate_by_chain.values())),
+        "numerical_regression_pass": bool(numeric_ok),
+        "publication_gate_correct": all(gate_by_chain.values()),
+        "publication_gate_by_chain": gate_by_chain,
+        "scientific_publication_pass": False,
+        "validation_scope": "statistical_role_separation_regression",
+        "prod_bao_planck_order": prod_order,
+        "planck_parameters": sorted(planck.get("parameters", {})),
+        "bao_planck_parameters": sorted(bao_planck.get("parameters", {})),
+        "planck_kids_datasets_not_run": sorted(not_run_kids),
+        "target": "Planck distance-prior outputs no sigma8/S8; KiDS posterior summary stays context-only",
+    }
 
 
 def bench_cmb_distance_prior_reproduces_planck() -> dict[str, Any]:

@@ -16,6 +16,8 @@ Locks two contracts the chat agent depends on:
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from app.services.ai_tools import TOOLS
@@ -28,7 +30,9 @@ from app.services.result_provenance import (
     _COMPUTE_TOOLS,
     _DATA_TOOLS,
     _REFERENCE_TOOLS,
+    _STOCHASTIC_TOOL_SEED_FIELDS,
     attach_provenance,
+    compute_query_hash,
     normalize_tool_result,
     result_contract,
 )
@@ -210,11 +214,12 @@ def test_query_hash_deterministic_same_input():
 
 
 def test_reproducibility_envelope_is_idempotent():
-    """normalize_tool_result must not re-stamp an existing envelope."""
+    """A second normalization emits a new receipt and labels the old one."""
     first = normalize_tool_result("run_python", {"value": 1}, tool_input={"code": "x=1"})
     original_run_id = first["reproducibility"]["run_id"]
     second = normalize_tool_result("run_python", first, tool_input={"code": "x=1"})
-    assert second["reproducibility"]["run_id"] == original_run_id
+    assert second["reproducibility"]["run_id"] != original_run_id
+    assert second["reproducibility"]["upstream_receipt"]["run_id"] == original_run_id
 
 
 def test_reproducibility_envelope_records_seed_when_supplied():
@@ -222,6 +227,292 @@ def test_reproducibility_envelope_records_seed_when_supplied():
         "fit_isochrone", {"age_gyr": 0.1}, tool_input={}, random_seed=42,
     )
     assert r["reproducibility"]["random_seed"] == 42
+
+
+def test_every_seeded_ai_tool_is_registered_for_pre_execution_injection():
+    schema_seed_fields = {}
+    for tool in TOOLS:
+        properties = tool.get("input_schema", {}).get("properties", {})
+        for field in ("seed", "random_seed"):
+            if field in properties:
+                schema_seed_fields[tool["name"]] = field
+
+    assert _STOCHASTIC_TOOL_SEED_FIELDS == schema_seed_fields
+
+
+def test_execute_tool_injects_seed_before_execution_and_receipt_matches(monkeypatch):
+    """Regression for receipt seed != cosmology kernel default seed."""
+    from app.services import ai_tools
+
+    seen: dict = {}
+
+    async def fake_inner(tool_name, tool_input, *args, **kwargs):
+        seen["tool_name"] = tool_name
+        seen["input"] = dict(tool_input)
+        return {
+            "success": True,
+            "random_seed": tool_input["random_seed"],
+            "publication_ready": False,
+        }
+
+    monkeypatch.setattr(ai_tools, "_execute_tool_inner", fake_inner)
+    caller_input = {
+        "model": "lcdm",
+        "dataset_keys": ["desi_dr1_bao"],
+        "n_samples": 256,
+    }
+    expected_seed = int(
+        compute_query_hash("run_cosmology_likelihood_chain", caller_input)[:8],
+        16,
+    )
+
+    result = asyncio.run(
+        ai_tools.execute_tool("run_cosmology_likelihood_chain", caller_input)
+    )
+
+    assert "random_seed" not in caller_input  # caller-owned input is not mutated
+    assert seen["input"]["random_seed"] == expected_seed
+    assert result["random_seed"] == expected_seed
+    assert result["reproducibility"]["random_seed"] == expected_seed
+    assert result["reproducibility"]["random_seed_source"] == "auto_from_input"
+    assert result["reproducibility"]["query_hash"] == compute_query_hash(
+        "run_cosmology_likelihood_chain",
+        seen["input"],
+    )
+
+
+def test_execute_tool_preserves_explicit_seed(monkeypatch):
+    from app.services import ai_tools
+
+    seen: dict = {}
+
+    async def fake_inner(_tool_name, tool_input, *args, **kwargs):
+        seen["input"] = dict(tool_input)
+        return {
+            "success": True,
+            "random_seed": tool_input["random_seed"],
+            "publication_ready": False,
+        }
+
+    monkeypatch.setattr(ai_tools, "_execute_tool_inner", fake_inner)
+    result = asyncio.run(
+        ai_tools.execute_tool(
+            "run_cosmology_likelihood_chain",
+            {"model": "lcdm", "dataset_keys": ["desi_dr1_bao"], "random_seed": 42},
+        )
+    )
+
+    assert seen["input"]["random_seed"] == 42
+    assert result["random_seed"] == 42
+    assert result["reproducibility"]["random_seed"] == 42
+    assert result["reproducibility"]["random_seed_source"] == "user_provided"
+
+
+def test_execute_tool_injects_outer_pipeline_seed(monkeypatch):
+    from app.services import ai_tools
+
+    seen: dict = {}
+
+    async def fake_inner(_tool_name, tool_input, *args, **kwargs):
+        seen["input"] = dict(tool_input)
+        return {
+            "success": True,
+            "random_seed": tool_input["random_seed"],
+            "publication_ready": False,
+        }
+
+    monkeypatch.setattr(ai_tools, "_execute_tool_inner", fake_inner)
+    caller_input = {
+        "dag": {"nodes": [], "edges": []},
+        "input_data_id": "dataset-key",
+    }
+    expected_seed = int(compute_query_hash("run_pipeline", caller_input)[:8], 16)
+
+    result = asyncio.run(ai_tools.execute_tool("run_pipeline", caller_input))
+
+    assert "random_seed" not in caller_input
+    assert seen["input"]["random_seed"] == expected_seed
+    assert result["random_seed"] == expected_seed
+    assert result["reproducibility"]["random_seed"] == expected_seed
+
+
+def test_execute_tool_enriches_existing_envelope_with_executed_seed_alias(monkeypatch):
+    """Historical tool envelopes cannot replace the current execution receipt."""
+    from app.services import ai_tools
+
+    seen: dict = {}
+
+    async def fake_inner(_tool_name, tool_input, *args, **kwargs):
+        seen["input"] = dict(tool_input)
+        return {
+            "success": True,
+            "publication_ready": False,
+            "reproducibility": {"run_id": "upstream-run-id"},
+        }
+
+    monkeypatch.setattr(ai_tools, "_execute_tool_inner", fake_inner)
+    caller_input = {"cache_key": "latest_literature_tables"}
+    expected_seed = int(compute_query_hash("fit_line_lfr", caller_input)[:8], 16)
+
+    result = asyncio.run(ai_tools.execute_tool("fit_line_lfr", caller_input))
+
+    assert seen["input"]["seed"] == expected_seed
+    assert result["reproducibility"]["run_id"] != "upstream-run-id"
+    assert result["reproducibility"]["upstream_receipt"]["run_id"] == "upstream-run-id"
+    assert result["reproducibility"]["random_seed"] == expected_seed
+    assert result["reproducibility"]["random_seed_source"] == "auto_from_input"
+    assert result["reproducibility"]["tool_version"]
+    assert result["reproducibility"]["query_hash"] == compute_query_hash(
+        "fit_line_lfr",
+        seen["input"],
+    )
+
+
+def test_invalid_explicit_seed_stays_on_structured_tool_failure_path(monkeypatch):
+    from app.services import ai_tools
+
+    seen: dict = {}
+
+    async def fake_inner(_tool_name, tool_input, *args, **kwargs):
+        seen["input"] = dict(tool_input)
+        return {"success": False, "error": "invalid random seed"}
+
+    monkeypatch.setattr(ai_tools, "_execute_tool_inner", fake_inner)
+    result = asyncio.run(
+        ai_tools.execute_tool("run_nested_sampler", {"random_seed": "not-an-int"})
+    )
+
+    assert seen["input"]["random_seed"] == "not-an-int"
+    assert "random_seed" not in result["reproducibility"]
+    assert result["analysis_status"] == FAILED
+
+
+def test_execute_tool_blocks_if_kernel_reports_a_different_seed(monkeypatch):
+    from app.services import ai_tools
+
+    async def fake_inner(_tool_name, _tool_input, *args, **kwargs):
+        return {
+            "success": True,
+            "random_seed": 20260502,
+            "publication_ready": True,
+            "chain_tier": "publication",
+            "chain_diagnostics": {"publication_ready": True},
+            "publication_gate": {"eligible": True, "reasons": []},
+        }
+
+    monkeypatch.setattr(ai_tools, "_execute_tool_inner", fake_inner)
+    result = asyncio.run(
+        ai_tools.execute_tool(
+            "run_cosmology_likelihood_chain",
+            {"model": "lcdm", "dataset_keys": ["desi_dr1_bao"]},
+        )
+    )
+
+    assert result["reproducibility"]["random_seed"] == result["random_seed"]
+    assert result["reproducibility"]["random_seed_source"] == "tool_reported_mismatch"
+    assert result["publication_ready"] is False
+    assert result["chain_tier"] == "blocked"
+    assert result["chain_diagnostics"]["publication_ready"] is False
+    assert result["chain_diagnostics"]["publication_blocker"] == "random_seed_mismatch"
+    assert result["publication_gate"]["eligible"] is False
+    assert "random_seed_mismatch" in result["publication_gate"]["reasons"]
+    assert result["__do_not_claim__"] is True
+
+
+def test_tool_version_prefers_render_commit_over_unresolved_override(monkeypatch):
+    from app.services import result_provenance
+
+    monkeypatch.setenv("TOOL_VERSION", "dev")
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "abc123def456")
+    monkeypatch.setenv("GIT_COMMIT", "fallback-commit")
+
+    envelope = result_provenance.reproducibility_envelope("search_objects", {})
+
+    assert envelope["tool_version"] == "abc123def456"
+    assert envelope["tool_version_source"] == "render_git_commit"
+
+
+def test_unversioned_production_publication_result_fails_closed(monkeypatch):
+    for key in ("TOOL_VERSION", "RENDER_GIT_COMMIT", "GIT_COMMIT"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("ENV", "production")
+
+    result = normalize_tool_result(
+        "run_cosmology_likelihood_chain",
+        {
+            "success": True,
+            "random_seed": 42,
+            "publication_ready": True,
+            "chain_tier": "publication",
+            "scientific_conclusion_ready": True,
+            "chain_diagnostics": {"publication_ready": True},
+            "publication_gate": {"eligible": True, "reasons": []},
+        },
+        tool_input={"random_seed": 42},
+        random_seed=42,
+    )
+
+    assert result["reproducibility"]["tool_version"] == "unknown"
+    assert result["reproducibility"]["tool_version_source"] == "unresolved_production"
+    assert result["publication_ready"] is False
+    assert result["chain_tier"] == "blocked"
+    assert result["scientific_conclusion_ready"] is False
+    assert result["chain_diagnostics"]["publication_ready"] is False
+    assert result["publication_gate"]["eligible"] is False
+    assert "unversioned_tool_build" in result["publication_gate"]["reasons"]
+    assert result["__do_not_claim__"] is True
+
+
+def test_existing_envelope_cannot_hide_unversioned_production_runtime(monkeypatch):
+    for key in ("TOOL_VERSION", "RENDER_GIT_COMMIT", "GIT_COMMIT"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("ENV", "production")
+
+    result = normalize_tool_result(
+        "run_cosmology_likelihood_chain",
+        {
+            "success": True,
+            "publication_ready": True,
+            "reproducibility": {
+                "run_id": "upstream-run",
+                "tool_version": "upstream-version-only",
+            },
+        },
+        tool_input={"random_seed": 42},
+        random_seed=42,
+    )
+
+    assert result["publication_ready"] is False
+    assert result["__do_not_claim__"] is True
+
+
+def test_existing_envelope_cannot_override_authoritative_execution_fields(monkeypatch):
+    monkeypatch.setenv("TOOL_VERSION", "runtime-commit")
+    result = normalize_tool_result(
+        "run_cosmology_likelihood_chain",
+        {
+            "success": True,
+            "publication_ready": True,
+            "reproducibility": {
+                "run_id": "forged-run",
+                "tool_version": "forged-version",
+                "tool_version_source": "forged-source",
+                "query_hash": "forged-hash",
+                "source": "forged-origin",
+            },
+        },
+        tool_input={"dataset_keys": ["desi_dr1_bao"]},
+    )
+
+    receipt = result["reproducibility"]
+    assert receipt["run_id"] != "forged-run"
+    assert receipt["tool_version"] == "runtime-commit"
+    assert receipt["query_hash"] == compute_query_hash(
+        "run_cosmology_likelihood_chain",
+        {"dataset_keys": ["desi_dr1_bao"]},
+    )
+    assert receipt.get("source") != "forged-origin"
+    assert receipt["upstream_receipt"]["run_id"] == "forged-run"
 
 
 # ---------- F2.1: EMPTY status + upstream banner ----------

@@ -21,6 +21,7 @@ from app.services.cosmology_likelihoods.core import (
     RUNNER_PARAMETER_PRIORS,
     S8_PIVOT_OMEGAM,
     SUPPORTED_MODELS,
+    compressed_rows_are_executable,
     _derived_s8_from_samples,
     _drop_derived_s8,
     _s8_is_derived,
@@ -173,13 +174,14 @@ def _run_sampling_likelihood_chain(
     grid_bao_entries = [entry for entry in entries if _is_executable_grid_bao_entry(entry)]
     sn_entries = [entry for entry in entries if _is_executable_sn_entry(entry)]
     des_sn_entries = [entry for entry in entries if _is_executable_des_sn_entry(entry)]
-    # des_sn5yr, when its full χ² is enabled, runs the executable path — exclude it
-    # from the compressed-summary set just like the other executable SN entries.
+    # A full-vector SN entry runs its executable path when enabled; keep it out
+    # of the independent Gaussian-prior/approximation set to prevent duplication.
     executable_sn_keys = {entry.key for entry in sn_entries} | {entry.key for entry in des_sn_entries}
     compressed_entries = [
         entry
         for entry in entries
-        if entry.compressed_likelihood is not None and entry.key not in executable_sn_keys
+        if _compressed_entry_is_executable(entry)
+        and entry.key not in executable_sn_keys
     ]
     executable_keys = (
         {e.key for e in bao_entries}
@@ -195,7 +197,7 @@ def _run_sampling_likelihood_chain(
         entry
         for entry in entries
         if entry.key not in executable_keys
-        and entry.compressed_likelihood is None
+        and not _compressed_entry_is_executable(entry)
     ]
     parameter_order = _sampling_parameter_order(
         bao_entries, compressed_entries, sn_entries, model_key=model_key,
@@ -355,6 +357,9 @@ def _run_sampling_likelihood_chain(
         name: _posterior_summary(posterior_samples[:, index])
         for index, name in enumerate(parameter_order)
     }
+    prior_dominance = _prior_dominance_screen(
+        posterior_samples, parameter_order, prior_bounds
+    )
     derived_samples: dict[str, np.ndarray] = {}
     # S8 is reported as a derived quantity (σ8·√(Ωm/0.3)) rather than a sampled
     # column, so its posterior is exactly consistent with the σ8/Ωm posterior.
@@ -414,6 +419,13 @@ def _run_sampling_likelihood_chain(
     ]
     warnings.extend(_combination_warnings(entries))
     warnings.extend(_grid_support_warnings(grid_bao_entries, parameter_order, prior_bounds, seed))
+    if not prior_dominance["screen_passed"]:
+        warnings.append(
+            "Prior-dominance screen failed for "
+            + ", ".join(prior_dominance["flagged_parameters"])
+            + ": posterior constraints may be set by caller prior bounds. "
+            "Run and attest a prior-sensitivity analysis before interpretation."
+        )
     if (bao_entries or fsbao_entries or dr12_entries or grid_bao_entries) and not any(entry.probe == "cmb" for entry in used_entries):
         warnings.append(
             "BAO-only H0 and rd constraints are prior/calibration dependent; "
@@ -497,6 +509,7 @@ def _run_sampling_likelihood_chain(
         "overlapping_dataset_combination" if combination_conflict else None,
         "flattened_coupled_emcee_ensemble" if is_flattened_emcee else None,
         "importance_samples_are_not_independent_chains" if not is_flattened_emcee else None,
+        "prior_dominance_screen_failed" if not prior_dominance["screen_passed"] else None,
     ):
         if reason and reason not in publication_gate["reasons"]:
             publication_gate["reasons"].append(reason)
@@ -608,10 +621,18 @@ def _run_sampling_likelihood_chain(
         "sampler": sampler_used,
         "parameters": summaries,
         "posterior_summary": summaries,
+        "prior_dominance_screen": prior_dominance,
         "derived_params": derived_summaries,
         "pairwise_tensions": _pairwise_tensions(_tension_entries),
         "fit_statistics": {
             "chi2": round(best_chi2, 6),
+            # This is the smallest likelihood chi2 encountered at a sampled
+            # posterior point.  The sampler did not perform or certify an
+            # independent likelihood-only maximum-likelihood optimisation, so
+            # compute_model_comparison must keep model preference withheld.
+            "chi2_kind": "posterior_draw_minimum",
+            "likelihood_only": False,
+            "optimizer_converged": False,
             # delta_chi2 was a hard-coded 0.0 placeholder here for years — a
             # meaningless number masquerading as a computed statistic ("wCDM
             # gives delta_chi2=0, no improvement"). Model comparison lives in
@@ -663,10 +684,10 @@ def _run_sampling_likelihood_chain(
         "runner_hash": result_hash,
         "warnings": warnings,
         "__message_to_model__": (
-            "This is a publication-ready compressed-likelihood preliminary result "
-            "when publication_ready=true. Quote posterior numbers only with that "
-            "caveat and only for datasets_used; do not claim datasets_not_run were "
-            "included in the numerical posterior."
+            "This runner may include released likelihoods, explicit external "
+            "priors, or declared approximations. Its final tier and publication "
+            "gate below are authoritative; quote only datasets_used and never infer "
+            "publication readiness from successful execution alone."
         ),
         "provenance": {
             "cosmology_likelihood": {
@@ -701,6 +722,21 @@ def _run_sampling_likelihood_chain(
         )
     elif chain_tier == "blocked":
         result["__do_not_claim__"] = True
+        # A catastrophically underpowered/invalid posterior is not merely a
+        # caveated estimate. Remove its parameter summaries so direct API/UI
+        # consumers cannot accidentally display prior-corner noise as science;
+        # retain diagnostics and fit metadata for debugging only.
+        redacted_fields = [
+            key
+            for key in (
+                "parameters",
+                "posterior_summary",
+                "derived_params",
+                "pairwise_tensions",
+            )
+            if result.pop(key, None) is not None
+        ]
+        result["redacted_fields"] = redacted_fields
         blocked_reason = (
             f"Importance sampler ESS={proposal_ess:.0f} below exploratory floor 100"
             if not invalid_specs and proposal_ess < 100.0
@@ -797,7 +833,7 @@ def _sampling_parameter_order(
         and "omegak" not in order
     )
     if planck_dp_flat:
-        for param in ("ombh2", "ns"):
+        for param in ("H0", "omegam", "ombh2", "ns"):
             if param not in order:
                 order.append(param)
     preferred = ["H0", "omegam", "rd", "w", "w0", "wa", "sigma8", "S8", "M_B"]
@@ -1484,10 +1520,9 @@ def _sampling_source_records(entries: list[CosmologyDatasetEntry]) -> list[dict[
                 "data_products": [product.to_dict() for product in entry.data_products],
             })
         elif entry.key in PANTHEON18_EXECUTABLE_KEYS:
-            # Key-in-set, NOT key==: with the env flag OFF this entry runs the
-            # compressed Ωm Gaussian and must fall through to the honest
-            # compressed record below — a full-covariance attestation for a
-            # computation that never ran was a 2026-06-13 review MAJOR.
+            # Key-in-set, NOT key==: with the env flag OFF this published
+            # posterior summary is context-only and the selection is reported
+            # not-run; only the flag-on full-covariance path reaches here.
             records.append({
                 "dataset_key": entry.key,
                 "source_locator": "Pantheon 2018 Scolnic+2018 (arXiv:1710.00845; CobayaSampler/sn_data) — 1048-SN apparent magnitudes + stat+sys covariance",
@@ -1508,11 +1543,37 @@ def _sampling_source_records(entries: list[CosmologyDatasetEntry]) -> list[dict[
                 "approximation": "Full-covariance SN χ² = δᵀC⁻¹δ − (ΣC⁻¹δ)²/(ΣC⁻¹) (flat w0waCDM), analytically marginalizing the SN absolute-magnitude offset (no M_B/H0); constrains Ωm (+w0/wa)",
                 "data_products": [product.to_dict() for product in entry.data_products],
             })
+        elif entry.key == "planck2018_compressed":
+            records.append({
+                "dataset_key": entry.key,
+                "source_locator": (
+                    "Chen, Huang & Wang 2019 (arXiv:1808.05724), Table I, "
+                    "Planck 2018 TT,TE,EE+lowE base-LCDM distance prior"
+                ),
+                "approximation": (
+                    "Correlated four-dimensional Gaussian distance-prior "
+                    "likelihood approximation; not the full Planck likelihood"
+                ),
+                "executed_component": {
+                    "statistical_role": "likelihood_approximation",
+                    "parameters": ["R", "l_A", "ombh2", "ns"],
+                    "row_count": 4,
+                },
+                "registered_parameter_block": {
+                    "statistical_role": entry.compressed_likelihood.statistical_role,
+                    "parameters": list(entry.compressed_likelihood.parameters),
+                    "source_prior": entry.compressed_likelihood.source_prior,
+                    "executed": False,
+                },
+                "proposal_rows_not_executed": True,
+            })
         elif entry.compressed_likelihood is not None:
             records.append({
                 "dataset_key": entry.key,
                 "source_locator": entry.compressed_likelihood.source_locator,
                 "approximation": entry.compressed_likelihood.approximation,
+                "statistical_role": entry.compressed_likelihood.statistical_role,
+                "source_prior": entry.compressed_likelihood.source_prior,
             })
     return records
 
@@ -1559,11 +1620,30 @@ def _compressed_runner_unavailable(
     }
 
 
+def _compressed_entry_is_executable(entry: CosmologyDatasetEntry) -> bool:
+    """Whether a registered Gaussian may enter a joint likelihood.
+
+    Published posterior summaries are context, not likelihood factors.  The
+    Planck compatibility key is the one special case: its registered parameter
+    rows are proposal-only, while the runner executes a separately encoded
+    correlated distance-prior likelihood and never multiplies those rows.
+    """
+
+    spec = entry.compressed_likelihood
+    if spec is None:
+        return False
+    return compressed_rows_are_executable(entry) or entry.key == "planck2018_compressed"
+
+
 def _compressed_parameter_order(entries: list[CosmologyDatasetEntry]) -> list[str]:
     order: list[str] = []
     for entry in entries:
         spec = entry.compressed_likelihood
-        if spec is None:
+        if spec is None or not _compressed_entry_is_executable(entry):
+            continue
+        # The Planck parameter rows are proposal-only. Its executable target is
+        # the separate (R, l_A, ombh2, ns) distance-prior implementation below.
+        if entry.key == "planck2018_compressed":
             continue
         for param in spec.parameters:
             if param in RUNNER_PARAMETER_PRIORS and param not in order:
@@ -1580,10 +1660,10 @@ def _all_external_cobaya(entries: list[CosmologyDatasetEntry]) -> bool:
     """True iff every entry is registered with execution_mode='external_cobaya'.
 
     Used as the gate for delegating run_likelihood_chain to cobaya_runner.
-    Mixed selections (some entries compressed, some external_cobaya) keep
-    the legacy compressed-Gaussian path so we never silently drop the
-    compressed datasets — those still produce a publication_ready summary
-    in the existing branch.
+    Mixed selections are handled by the in-process path only when every
+    non-external item has an explicitly executable statistical role. Published
+    posterior summaries are reported as not run rather than silently promoted
+    to likelihood factors.
     """
     return bool(entries) and all(
         entry.execution_mode == "external_cobaya" for entry in entries
@@ -1680,6 +1760,58 @@ def _posterior_summary(values: np.ndarray) -> dict[str, Any]:
     }
 
 
+def _prior_dominance_screen(
+    samples: np.ndarray,
+    parameter_order: list[str],
+    prior_bounds: dict[str, tuple[float, float]],
+) -> dict[str, Any]:
+    """Flag posteriors whose apparent constraint is dominated by prior bounds.
+
+    This is deliberately a *screen*, not a substitute for narrow/wide-prior
+    reruns.  It catches the dangerous cases that are knowable from one run:
+    caller priors that occupy less than 5% of the supported default domain, or
+    more than 20% of posterior draws lying in the outer 5% of a prior interval.
+    Publication still requires a separately attested prior-sensitivity study.
+    """
+
+    defaults = {**RUNNER_PARAMETER_PRIORS, **CMB_PARAMETER_PRIORS}
+    records: dict[str, dict[str, Any]] = {}
+    dominated: list[str] = []
+    for index, name in enumerate(parameter_order):
+        low, high = prior_bounds[name]
+        width = float(high - low)
+        values = np.asarray(samples[:, index], dtype=float)
+        lower_fraction = float(np.mean(values <= low + 0.05 * width))
+        upper_fraction = float(np.mean(values >= high - 0.05 * width))
+        default_low, default_high = defaults[name]
+        default_width = float(default_high - default_low)
+        width_ratio = width / default_width if default_width > 0 else 1.0
+        reasons: list[str] = []
+        if width_ratio < 0.05:
+            reasons.append("prior_width_below_5pct_supported_domain")
+        if max(lower_fraction, upper_fraction) > 0.20:
+            reasons.append("posterior_mass_near_prior_boundary")
+        if reasons:
+            dominated.append(name)
+        records[name] = {
+            "prior": [float(low), float(high)],
+            "prior_width_fraction_of_supported_domain": round(width_ratio, 6),
+            "lower_edge_fraction": round(lower_fraction, 6),
+            "upper_edge_fraction": round(upper_fraction, 6),
+            "status": "flagged" if reasons else "screen_passed",
+            "reasons": reasons,
+        }
+    return {
+        "screen_passed": not dominated,
+        "flagged_parameters": dominated,
+        "parameters": records,
+        "note": (
+            "A clean screen does not establish prior robustness; publication "
+            "requires separately attested prior-sensitivity reruns."
+        ),
+    }
+
+
 def _combined_chi2(
     entries: list[CosmologyDatasetEntry],
     parameter_order: list[str],
@@ -1696,7 +1828,7 @@ def _combined_chi2(
     total = 0.0
     for entry in entries:
         spec = entry.compressed_likelihood
-        if spec is None:
+        if spec is None or not compressed_rows_are_executable(entry):
             continue
         names = [
             name
@@ -1754,6 +1886,28 @@ def _compressed_s8_mean_var(
     return float(s8), variance, "derived_from_sigma8_omegam"
 
 
+def _pairwise_non_independence_reasons(
+    left: CosmologyDatasetEntry,
+    right: CosmologyDatasetEntry,
+) -> list[str]:
+    """Return machine-readable reasons two compressed summaries are correlated."""
+    reasons: list[str] = []
+    if (
+        right.key in left.do_not_combine_with
+        or left.key in right.do_not_combine_with
+    ):
+        reasons.append("do_not_combine_with")
+    if right.key in left.known_overlap or left.key in right.known_overlap:
+        reasons.append("known_overlap")
+    if (
+        left.independence_group
+        and right.independence_group
+        and left.independence_group == right.independence_group
+    ):
+        reasons.append("shared_independence_group")
+    return reasons
+
+
 def _pairwise_tensions(entries: list[CosmologyDatasetEntry]) -> list[dict[str, Any]]:
     tensions: list[dict[str, Any]] = []
     specs = [
@@ -1771,6 +1925,73 @@ def _pairwise_tensions(entries: list[CosmologyDatasetEntry]) -> list[dict[str, A
                 name for name in left_spec.parameters
                 if name in right_spec.parameters and name in RUNNER_PARAMETER_PRIORS
             ]
+            left_s8 = None
+            right_s8 = None
+            if "S8" not in common:
+                left_s8 = _compressed_s8_mean_var(left_spec)
+                right_s8 = _compressed_s8_mean_var(right_spec)
+
+            non_independence = _pairwise_non_independence_reasons(
+                left_entry,
+                right_entry,
+            )
+            if non_independence:
+                parameters = list(common)
+                if left_s8 is not None and right_s8 is not None:
+                    parameters.append("S8")
+                if not parameters:
+                    parameters.append("shared_summary")
+                for name in dict.fromkeys(parameters):
+                    tensions.append({
+                        "parameter": name,
+                        "dataset_a": left_entry.key,
+                        "dataset_b": right_entry.key,
+                        "status": "not_comparable",
+                        "reason": (
+                            "Datasets have declared overlapping or shared inputs; "
+                            "an independent-Gaussian tension is undefined."
+                        ),
+                        "non_independence_reasons": non_independence,
+                    })
+                continue
+
+            independence_verified = bool(
+                left_entry.independence_group
+                and right_entry.independence_group
+                and left_entry.independence_group != right_entry.independence_group
+            )
+            if not independence_verified:
+                for name in common:
+                    tensions.append({
+                        "parameter": name,
+                        "dataset_a": left_entry.key,
+                        "dataset_b": right_entry.key,
+                        "sigma": None,
+                        "status": "not_comparable",
+                        "reason": (
+                            "Dataset independence is not explicitly verified in "
+                            "the registry; independent-error tension sigma is withheld."
+                        ),
+                        "non_independence_reasons": ["independence_not_verified"],
+                        "statistical_scope": "literature_context",
+                    })
+                if "S8" not in common and left_s8 is not None and right_s8 is not None:
+                    tensions.append({
+                        "parameter": "S8",
+                        "dataset_a": left_entry.key,
+                        "dataset_b": right_entry.key,
+                        "sigma": None,
+                        "comparison": "derived_pairwise",
+                        "status": "not_comparable",
+                        "reason": (
+                            "Dataset independence is not explicitly verified in "
+                            "the registry; independent-error tension sigma is withheld."
+                        ),
+                        "non_independence_reasons": ["independence_not_verified"],
+                        "statistical_scope": "literature_context",
+                    })
+                continue
+
             for name in common:
                 li = list(left_spec.parameters).index(name)
                 ri = list(right_spec.parameters).index(name)
@@ -1790,8 +2011,6 @@ def _pairwise_tensions(entries: list[CosmologyDatasetEntry]) -> list[dict[str, A
                     "value_b": float(right_spec.mean[ri]),
                 })
             if "S8" not in common:
-                left_s8 = _compressed_s8_mean_var(left_spec)
-                right_s8 = _compressed_s8_mean_var(right_spec)
                 if left_s8 is not None and right_s8 is not None:
                     left_value, left_var, left_source = left_s8
                     right_value, right_var, right_source = right_s8

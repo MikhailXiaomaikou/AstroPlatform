@@ -199,6 +199,7 @@ jobs:
           test -f packages/data/bao_data/sdss_DR16_LYAUTO_BAO_DMDHgrid.txt
           test -f packages/data/bao_data/sdss_DR16_LYxQSO_BAO_DMDHgrid.txt
           test -f packages/data/bao_data/sdss_DR12Consensus_bao.dat
+          sha256sum -c scripts/cobaya/bao_data.sha256
       - name: Run cobaya parity tests
         run: |
           cd backend

@@ -66,6 +66,186 @@ PUBLICATION_MIN_INDEPENDENT_CHAINS = 4
 PUBLICATION_RHAT_MAX = 1.01
 PUBLICATION_ESS_MIN = 400.0
 _PUBLICATION_COV_FIDELITIES = frozenset({"diagonal", "full"})
+PUBLICATION_REQUIRED_ADEQUACY_CHECKS = (
+    "prior_predictive_check",
+    "posterior_predictive_check",
+    "prior_sensitivity",
+    "systematics_robustness",
+    "simulation_recovery",
+    "independent_reproduction",
+)
+
+
+def build_model_adequacy_subject(
+    *,
+    model: str,
+    dataset_keys: list[str] | tuple[str, ...],
+    random_seed: int,
+    summaries: dict[str, Any],
+    diagnostics: dict[str, Any],
+    data_verification: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build the exact run subject to which adequacy evidence must bind."""
+
+    from app.services.server_evidence import scientific_content_hash
+
+    result_fingerprint = scientific_content_hash(
+        {
+            "summaries": summaries,
+            "diagnostics": diagnostics,
+            "data_verification": data_verification or {},
+        }
+    )
+    return {
+        "model": str(model),
+        "dataset_keys": sorted(str(key) for key in dataset_keys),
+        "random_seed": int(random_seed),
+        "result_fingerprint": result_fingerprint,
+    }
+
+
+def build_model_adequacy_attestation(
+    *,
+    subject: dict[str, Any],
+    evidence_by_check: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Create a signed, inline-evidence model-adequacy attestation.
+
+    This server-side constructor is the only supported green path.  Every
+    required check is bound to the exact run subject, hashed independently,
+    and then covered by the manifest HMAC.
+    """
+
+    from app.services.server_evidence import (
+        build_scientific_attestation,
+        scientific_content_hash,
+    )
+
+    if not isinstance(subject, dict) or not subject:
+        raise ValueError("model-adequacy subject is required")
+    subject_hash = scientific_content_hash(subject)
+    checks: dict[str, dict[str, Any]] = {}
+    for name in PUBLICATION_REQUIRED_ADEQUACY_CHECKS:
+        supplied = evidence_by_check.get(name)
+        if not isinstance(supplied, dict) or not supplied:
+            raise ValueError(f"missing adequacy evidence for {name}")
+        evidence = {
+            **supplied,
+            "check": name,
+            "status": "passed",
+            "subject_hash": subject_hash,
+        }
+        evidence_hash = scientific_content_hash(evidence)
+        checks[name] = {
+            "status": "passed",
+            "evidence_id": evidence_hash,
+            "evidence_hash": evidence_hash,
+            "evidence": evidence,
+        }
+    return build_scientific_attestation(
+        attestation_type="model_adequacy",
+        payload={
+            "source": "server_attested",
+            "subject": subject,
+            "subject_hash": subject_hash,
+            "checks": checks,
+        },
+    )
+
+
+def _assess_model_adequacy(
+    model_adequacy: dict[str, Any] | None,
+    *,
+    expected_subject: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Validate a server-attested model-adequacy manifest.
+
+    Convergence answers whether a sampler explored its target distribution; it
+    does not show that the target model can reproduce the observations, is
+    robust to reasonable priors/systematics, or has been independently
+    reproduced.  Publication eligibility therefore needs a separate manifest
+    whose checks point to durable evidence records.  Loose caller booleans are
+    intentionally insufficient.
+    """
+
+    manifest = model_adequacy if isinstance(model_adequacy, dict) else {}
+    checks = manifest.get("checks")
+    checks = checks if isinstance(checks, dict) else {}
+    reasons: list[str] = []
+    from app.services.server_evidence import (
+        scientific_content_hash,
+        verify_scientific_attestation,
+    )
+
+    if manifest.get("source") not in {"server_attested", "human_attested"}:
+        reasons.append("model_adequacy_attestation_missing")
+    signature_verified = verify_scientific_attestation(
+        manifest,
+        expected_type="model_adequacy",
+    )
+    if not signature_verified:
+        reasons.append("model_adequacy_signature_unverified")
+    manifest_hash = manifest.get("manifest_hash")
+    if (
+        not isinstance(manifest_hash, str)
+        or not manifest_hash.startswith("sha256:")
+        or len(manifest_hash) != 71
+    ):
+        reasons.append("model_adequacy_manifest_hash_missing")
+
+    subject = manifest.get("subject")
+    subject_hash = manifest.get("subject_hash")
+    expected_subject_hash = (
+        scientific_content_hash(expected_subject)
+        if isinstance(expected_subject, dict) and expected_subject
+        else None
+    )
+    if not isinstance(subject, dict) or not subject:
+        reasons.append("model_adequacy_subject_missing")
+    elif subject_hash != scientific_content_hash(subject):
+        reasons.append("model_adequacy_subject_hash_mismatch")
+    if expected_subject_hash is None:
+        reasons.append("model_adequacy_subject_unbound")
+    elif subject_hash != expected_subject_hash:
+        reasons.append("model_adequacy_subject_mismatch")
+
+    observed: dict[str, str] = {}
+    for name in PUBLICATION_REQUIRED_ADEQUACY_CHECKS:
+        record = checks.get(name)
+        record = record if isinstance(record, dict) else {}
+        status = str(record.get("status") or "missing").lower()
+        evidence_id = record.get("evidence_id")
+        evidence_hash = record.get("evidence_hash")
+        evidence = record.get("evidence")
+        passed = bool(
+            status in {"passed", "pass", "ok"}
+            and isinstance(evidence_id, str)
+            and evidence_id.strip()
+            and isinstance(evidence_hash, str)
+            and evidence_id == evidence_hash
+            and isinstance(evidence, dict)
+            and evidence_hash == scientific_content_hash(evidence)
+            and evidence.get("check") == name
+            and evidence.get("status") == "passed"
+            and evidence.get("subject_hash") == subject_hash
+        )
+        observed[name] = "passed" if passed else status
+        if not passed:
+            reasons.append(f"{name}_missing_or_failed")
+
+    return {
+        "eligible": not reasons,
+        "reasons": reasons,
+        "required_checks": list(PUBLICATION_REQUIRED_ADEQUACY_CHECKS),
+        "observed": observed,
+        "manifest_hash": manifest_hash if isinstance(manifest_hash, str) else None,
+        "source": manifest.get("source"),
+        "signature_verified": signature_verified,
+        "subject_hash": subject_hash if isinstance(subject_hash, str) else None,
+        "subject_matches_run": bool(
+            expected_subject_hash is not None and subject_hash == expected_subject_hash
+        ),
+    }
 
 
 def _assess_publication_gate(
@@ -76,6 +256,8 @@ def _assess_publication_gate(
     per_parameter: dict[str, dict[str, Any]] | None,
     critical_parameters: list[str] | tuple[str, ...],
     assess_data_likelihood: bool = True,
+    model_adequacy: dict[str, Any] | None = None,
+    model_adequacy_subject: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return the shared, machine-readable cosmology publication decision.
 
@@ -83,7 +265,11 @@ def _assess_publication_gate(
     numbers": inputs must be machine-bound rather than hand typed; the executed
     likelihood must not be a compressed/approximate substitute; and every
     critical sampled parameter must pass rank-normalized R-hat and bulk-ESS on
-    at least four genuinely independent chains.
+    at least four genuinely independent chains.  Those conditions establish
+    numerical reproducibility only.  Final publication eligibility additionally
+    requires a server/human-attested model-adequacy manifest covering predictive
+    checks, prior/systematics sensitivity, simulation recovery, and independent
+    reproduction.
 
     The returned reason codes are deliberately stable API fields.  Callers may
     still expose a scientifically useful preliminary posterior when this gate is
@@ -153,12 +339,25 @@ def _assess_publication_gate(
                 reasons.append(code)
 
     # Preserve order while protecting callers from duplicate reason codes.
-    reasons = list(dict.fromkeys(reasons))
+    numerical_reasons = list(dict.fromkeys(reasons))
+    numerical_eligible = not numerical_reasons
+    adequacy = _assess_model_adequacy(
+        model_adequacy,
+        expected_subject=model_adequacy_subject,
+    )
+    # Gate sequentially: do not bury a numerical failure under six downstream
+    # adequacy failures.  The adequacy object remains visible as the next stage.
+    reasons = list(numerical_reasons)
+    if numerical_eligible:
+        reasons.extend(adequacy["reasons"])
     return {
         "eligible": not reasons,
+        "numerical_eligible": numerical_eligible,
         "reasons": reasons,
+        "numerical_reasons": numerical_reasons,
         "parameter_failures": parameter_failures,
         "critical_parameters": critical,
+        "model_adequacy": adequacy,
         "thresholds": {
             "min_independent_chains": PUBLICATION_MIN_INDEPENDENT_CHAINS,
             "rhat_method": "rank",

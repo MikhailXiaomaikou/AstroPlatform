@@ -129,30 +129,35 @@ def test_npz_binary_product_refused_not_parsed_as_text():
     assert "parse" not in out  # no fabricated parsed table
 
 
-# ── T1-U6c: executed compressed-Gaussian summaries certify 'literature_typed' ──
-# A hand-typed Gaussian summary is honestly 'literature_typed' (no released file),
-# never None.  This generalizes to ALL compressed probes (SN + CMB), which is what
-# keeps the U6b None-gate from blocking a legitimate compressed chain.
+# ── T1-U6c: published posterior summaries are context-only ──────────────
+# A source paper's posterior mean/covariance already contains that analysis's
+# priors and nuisance marginalisation. It must be reported as not run, rather
+# than relabelled as a hand-typed likelihood with ``literature_typed`` fidelity.
 
-def test_sn_compressed_only_chain_is_literature_typed():
-    r = run_likelihood_chain(model="lcdm", dataset_keys=["pantheon_plus"], n_samples=2000, random_seed=42)
+def _assert_context_only_summary_is_not_executed(dataset_key: str):
+    r = run_likelihood_chain(
+        model="lcdm", dataset_keys=[dataset_key], n_samples=2000, random_seed=42
+    )
     prov = r["provenance"]["cosmology_likelihood"]
-    assert prov["cov_fidelity"] == "literature_typed"
+    assert r["analysis_status"] == "NO_COMPRESSED_LIKELIHOOD"
     assert r["publication_ready"] is False
-    assert r["preliminary_ready"] is True
-    assert r["chain_tier"] == "exploratory"
-    assert "literature_typed_input" in r["preliminary_reasons"]
+    assert r["chain_tier"] == "blocked"
+    assert r["__do_not_claim__"] is True
+    assert "parameters" not in r
+    assert prov["datasets_used"] == []
+    assert prov["datasets_not_run"] == [dataset_key]
+    assert "cov_fidelity" not in prov
+    assert any("context-only" in warning for warning in r["warnings"])
+    return r
 
 
-def test_des_compressed_is_literature_typed():
-    # (union3 left this group 2026-06-12: its full 22-bin vector is always on
-    # and certifies 'full' — see test_union3_full_vector_certifies_full.)
-    r = run_likelihood_chain(model="lcdm", dataset_keys=["des_sn5yr"], n_samples=2000, random_seed=42)
-    prov = r["provenance"]["cosmology_likelihood"]
-    assert prov["cov_fidelity"] == "literature_typed"
-    assert r["publication_ready"] is False
-    assert r["preliminary_ready"] is True
-    assert r["chain_tier"] == "exploratory"
+def test_sn_published_posterior_summary_is_context_only():
+    _assert_context_only_summary_is_not_executed("pantheon_plus")
+
+
+def test_des_published_posterior_summary_is_context_only():
+    # Union3 is not context-only: its released 22-bin vector runs by default.
+    _assert_context_only_summary_is_not_executed("des_sn5yr")
 
 
 def test_union3_full_vector_certifies_full():
@@ -176,12 +181,26 @@ def test_cmb_compressed_is_literature_typed_not_none():
     assert r["provenance"]["cosmology_likelihood"]["cov_fidelity"] == "literature_typed"
 
 
-def test_compressed_summary_never_labeled_full_or_diagonal():
-    # union3 is no longer in this group (2026-06-12): it executes the full
-    # 22-bin vector by default, so 'full' is its honest grade.
-    for ds in ("pantheon_plus", "des_sn5yr", "planck2018_compressed"):
-        r = run_likelihood_chain(model="lcdm", dataset_keys=[ds], n_samples=2000, random_seed=42)
-        assert r["provenance"]["cosmology_likelihood"]["cov_fidelity"] not in ("full", "diagonal"), ds
+def test_context_summaries_are_refused_but_planck_distance_prior_runs():
+    for dataset_key in ("pantheon_plus", "des_sn5yr"):
+        _assert_context_only_summary_is_not_executed(dataset_key)
+
+    # Planck is the explicit exception: its registered H0/Omega_m/sigma8/S8
+    # block remains proposal-only, while the separately encoded CHW2019
+    # (R, l_A, ombh2, ns) distance-prior likelihood is executable.
+    r = run_likelihood_chain(
+        model="lcdm",
+        dataset_keys=["planck2018_compressed"],
+        n_samples=2000,
+        random_seed=42,
+    )
+    prov = r["provenance"]["cosmology_likelihood"]
+    assert prov["datasets_used"] == ["planck2018_compressed"]
+    assert prov["cov_fidelity"] == "literature_typed"
+    source = prov["compressed_sources"][0]
+    assert source["executed_component"]["statistical_role"] == "likelihood_approximation"
+    assert source["registered_parameter_block"]["statistical_role"] == "proposal_only"
+    assert source["registered_parameter_block"]["executed"] is False
 
 
 def test_full_sn_path_entry_verifies_as_full(monkeypatch):
@@ -209,11 +228,19 @@ def test_none_cov_fidelity_blocks_publication_sampling_path(monkeypatch):
 
 def test_none_cov_fidelity_blocks_publication_inline_path(monkeypatch):
     monkeypatch.setattr(cl, "_aggregate_cov_fidelity", lambda entries: (None, {}))
-    r = run_likelihood_chain(model="lcdm", dataset_keys=["pantheon_plus"], n_samples=2000, random_seed=42)
+    # Use an executable external prior. Pantheon+/DES posterior summaries are
+    # context-only and correctly refuse execution before fidelity aggregation.
+    r = run_likelihood_chain(
+        model="lcdm",
+        dataset_keys=["shoes_h0_riess22"],
+        n_samples=2000,
+        random_seed=42,
+    )
     prov = r["provenance"]["cosmology_likelihood"]
     assert prov["cov_fidelity"] is None
     assert r["publication_ready"] is False
-    assert r["chain_tier"] != "publication"
+    assert r["chain_tier"] == "blocked"
+    assert r["__do_not_claim__"] is True
 
 
 # ── Moresco 2020 CC full covariance (2026-06-05): a NEW 'full' hz entry, the
@@ -573,13 +600,14 @@ def test_desi_dr2_unverified_refuses_chi2(monkeypatch):
 
 
 def test_desi_dr2_with_des_sn5yr_recovers_evolving_dark_energy(monkeypatch):
-    # The headline: DESI DR2 BAO + DES-SN5YR full likelihood + BBN ωb prior under
+    # The headline: DESI DR2 BAO + DES-SN5YR full likelihood with freely sampled
+    # r_d under
     # w0waCDM recovers the evolving-dark-energy preference (w0 > -1 AND wa < 0),
     # near DESI DR2 + SN published w0≈-0.75 / wa≈-0.7 (arXiv:2503.14738).
     monkeypatch.setattr(cl, "DES_SN5YR_EXECUTABLE_KEYS", {"des_sn5yr"})
     r = run_likelihood_chain(
         model="w0wa_cdm",
-        dataset_keys=["desi_dr2_bao", "des_sn5yr", "bbn_ombh2_schoeneberg24"],
+        dataset_keys=["desi_dr2_bao", "des_sn5yr"],
         n_samples=4000, random_seed=42, allow_emcee_fallback=True,
     )
     w0 = r["parameters"]["w0"]["median"]
@@ -588,3 +616,4 @@ def test_desi_dr2_with_des_sn5yr_recovers_evolving_dark_energy(monkeypatch):
     assert wa < 0.0, f"wa={wa} not negative (no evolving-DE preference)"
     # the SN term is actually in the joint fit, not dropped
     assert r["fit_statistics"]["chi2"] > 1000
+    assert "bbn_ombh2_schoeneberg24" not in r["dataset_keys"]

@@ -2,12 +2,7 @@
 
 from __future__ import annotations
 
-import math
-
-import pytest
-
-
-def test_analytic_runner_enforces_hard_prior_on_every_reported_interval():
+def test_narrow_caller_prior_is_flagged_and_blocked():
     from app.services.cosmology_likelihoods import run_likelihood_chain
 
     low, high = 67.3, 67.4
@@ -21,22 +16,16 @@ def test_analytic_runner_enforces_hard_prior_on_every_reported_interval():
 
     assert result["success"] is True
     assert result["publication_ready"] is False
-    assert result["preliminary_ready"] is True
-    h0 = result["parameters"]["H0"]
-    for key in ("mean", "median", "hdi_low_94", "hdi_high_94"):
-        assert low <= h0[key] <= high, (key, h0[key])
-    assert h0["hdi_94"][0] >= low
-    assert h0["hdi_94"][1] <= high
-    prior_sampling = result["chain_diagnostics"]["prior_sampling"]
-    assert prior_sampling["method"] == "exact_box_rejection"
-    assert 0.0 < prior_sampling["acceptance_rate"] < 1.0
+    assert result["preliminary_ready"] is False
+    assert result["chain_tier"] == "blocked"
+    assert result["__do_not_claim__"] is True
+    assert "parameters" not in result
+    assert result["prior_dominance_screen"]["screen_passed"] is False
+    assert "H0" in result["prior_dominance_screen"]["flagged_parameters"]
 
 
-def test_planck_analytic_s8_is_derived_once_not_independently_reweighted():
-    from app.services.cosmology_likelihoods import (
-        get_cosmology_dataset,
-        run_likelihood_chain,
-    )
+def test_planck_posterior_rows_are_proposal_only_not_reported_constraints():
+    from app.services.cosmology_likelihoods import run_likelihood_chain
 
     result = run_likelihood_chain(
         model="lcdm",
@@ -45,32 +34,17 @@ def test_planck_analytic_s8_is_derived_once_not_independently_reweighted():
         random_seed=123,
     )
 
-    spec = get_cosmology_dataset("planck2018_compressed").compressed_likelihood
-    assert spec is not None
-    names = list(spec.parameters)
-    om = float(spec.mean[names.index("omegam")])
-    sigma8 = float(spec.mean[names.index("sigma8")])
-    om_std = math.sqrt(float(spec.covariance[names.index("omegam")][names.index("omegam")]))
-    sigma8_std = math.sqrt(
-        float(spec.covariance[names.index("sigma8")][names.index("sigma8")])
-    )
-    # Delta-method variance for S8=sigma8*sqrt(Omega_m/0.3), using exactly
-    # the diagonal Omega_m/sigma8 Gaussian that the analytic path executes.
-    d_sigma8 = math.sqrt(om / 0.3)
-    d_om = sigma8 / (2.0 * math.sqrt(0.3 * om))
-    expected_std = math.sqrt(
-        (d_sigma8 * sigma8_std) ** 2 + (d_om * om_std) ** 2
-    )
-
     assert result["publication_ready"] is False
     assert result["preliminary_ready"] is True
-    assert result["parameters"]["S8"]["std"] == pytest.approx(
-        expected_std, rel=0.08
-    )
-    # The old extra S8 Gaussian shrank this to about 0.0086.
-    assert result["parameters"]["S8"]["std"] > 0.0105
-    assert result["fit_statistics"]["n_constraints"] == 3
-    assert any("not multiplied" in warning for warning in result["warnings"])
+    assert set(result["parameters"]) == {"H0", "omegam", "ombh2", "ns"}
+    assert "sigma8" not in result["parameters"]
+    assert "S8" not in result["derived_params"]
+    assert result["fit_statistics"]["n_constraints"] == 4
+    source = result["provenance"]["cosmology_likelihood"]["compressed_sources"][0]
+    assert source["executed_component"]["statistical_role"] == "likelihood_approximation"
+    assert source["executed_component"]["parameters"] == ["R", "l_A", "ombh2", "ns"]
+    assert source["registered_parameter_block"]["statistical_role"] == "proposal_only"
+    assert source["proposal_rows_not_executed"] is True
 
 
 def test_tiny_far_tail_prior_fails_closed_instead_of_leaking_gaussian_draws():
@@ -88,4 +62,4 @@ def test_tiny_far_tail_prior_fails_closed_instead_of_leaking_gaussian_draws():
     assert result["publication_ready"] is False
     assert result["__do_not_claim__"] is True
     assert "parameters" not in result
-    assert "too little posterior mass" in " ".join(result["warnings"])
+    assert "ESS=1.0 below publication threshold" in " ".join(result["warnings"])

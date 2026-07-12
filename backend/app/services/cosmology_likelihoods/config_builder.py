@@ -120,7 +120,7 @@ def build_robustness_matrix(
 
     for label, keys in base_combos:
         variants = [(label, keys)]
-        if include_h0_prior:
+        if include_h0_prior and _can_add_shoes_h0_prior(keys):
             variants.append((label + " + SH0ES H0", keys + ["shoes_h0_riess22"]))
         for variant_label, variant_keys in variants:
             config = build_likelihood_config(
@@ -335,6 +335,15 @@ def _combination_warnings(entries: list[CosmologyDatasetEntry]) -> list[str]:
                 "robustness alternatives, not a joint fit."
             )
     return msgs
+
+
+def _can_add_shoes_h0_prior(dataset_keys: list[str]) -> bool:
+    """Whether SH0ES can be added without duplicating a calibrated branch."""
+    if "shoes_h0_riess22" in dataset_keys:
+        return False
+    candidate_keys = [*dataset_keys, "shoes_h0_riess22"]
+    entries = [get_cosmology_dataset(key) for key in candidate_keys]
+    return not _combination_warnings(entries)
 
 
 def _selection_warnings(entries: list[CosmologyDatasetEntry]) -> list[str]:

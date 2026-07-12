@@ -3068,6 +3068,36 @@ def test_research_summary_separates_executed_not_ready_from_config_only() -> Non
     assert "BAO + WL" not in summary.split("Config-only or not-runnable branches:", 1)[-1]
 
 
+def test_tainted_research_matrix_summary_never_emits_cell_numbers() -> None:
+    from app.api.chat import _research_tool_grounded_summary
+
+    summary = _research_tool_grounded_summary([
+        {
+            "tool": "run_research_matrix",
+            "result": {
+                "publication_ready": False,
+                "__do_not_claim__": True,
+                "matrix": [
+                    {
+                        "label": "BAO + CMB",
+                        "publication_ready": True,
+                        "result": {
+                            "parameters": {"H0": {"median": 67.28}},
+                            "chain_diagnostics": {"ess_bulk": 901, "rhat": 1.001},
+                        },
+                    }
+                ],
+            },
+        }
+    ])
+
+    assert summary is not None
+    assert "BAO + CMB" in summary
+    assert "67.28" not in summary
+    assert "901" not in summary
+    assert "1.001" not in summary
+
+
 def test_research_summary_formats_config_only_dataset_dicts_for_users() -> None:
     from app.api.chat import _research_tool_grounded_summary
 
@@ -3117,7 +3147,7 @@ def test_research_summary_formats_config_only_dataset_dicts_for_users() -> None:
     summary = _research_tool_grounded_summary(tool_results)
 
     assert summary is not None
-    assert "No publication-ready compressed-likelihood baseline completed this turn." in summary
+    assert "No publication-ready direct likelihood result completed this turn." in summary
     assert "Planck PR4/NPIPE EB/TB polarization-rotation products (planck_pr4_ebtb_rotation)" in summary
     assert "ACT DR6 EB/TB polarization-rotation products (act_dr6_ebtb_rotation)" in summary
     assert "{'key':" not in summary

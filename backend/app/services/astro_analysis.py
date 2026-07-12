@@ -450,6 +450,8 @@ def fit_isochrone(
         "method": method,
         "errors_source": errors_source,
     }
+    if method == "mcmc" or compute_errors:
+        fit_result["random_seed"] = int(seed)
 
     # --- Monte Carlo error propagation ---
     if compute_errors:
@@ -522,7 +524,10 @@ def fit_isochrone(
             fit_result["mcmc_error"] = "emcee or corner not installed"
             return fit_result
 
-        rng = np.random.default_rng(seed)
+        # emcee draws proposals from a legacy NumPy RandomState.  Use one
+        # deterministic stream for both walker initialization and sampler
+        # proposals; seeding p0 alone is not sufficient for replayability.
+        rng = np.random.RandomState(int(seed))
 
         def _log_prob(params):
             log_age, met, dm, av = params
@@ -550,6 +555,7 @@ def fit_isochrone(
         p0[:, 3] = np.clip(p0[:, 3], av_range[0], av_range[1])
 
         sampler = emcee.EnsembleSampler(n_walkers, ndim, _log_prob)
+        sampler.random_state = rng.get_state()
         logger.info("Running MCMC: %d walkers, %d steps, %d burn-in",
                      n_walkers, n_steps, n_burn)
         sampler.run_mcmc(p0, n_steps, progress=False)
@@ -583,7 +589,6 @@ def fit_isochrone(
         fit_result["acceptance_fraction"] = round(
             float(np.mean(sampler.acceptance_fraction)), 4
         )
-
         # Corner plot
         import matplotlib
         matplotlib.use("Agg")
@@ -2107,6 +2112,11 @@ def lomb_scargle_period(time, mag, mag_err=None, min_period=0.1, max_period=100,
         "fap": fap_at_best,
         "fap_level": fap_label,
         "fap_method": method,
+        "random_seed": (
+            int(random_seed)
+            if method == "bootstrap" and random_seed is not None
+            else None
+        ),
         "fap_warnings": fap_warnings,
         # L2-b: reliable threshold raised from n>=20 to n>=50, reflecting VanderPlas 2015
         "reliable": bool(fap_at_best < 0.01 and len(t) >= 50),

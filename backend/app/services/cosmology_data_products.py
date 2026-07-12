@@ -230,6 +230,10 @@ def _compressed_likelihood_data_product(
         "measurement_vector",
         "covariance",
         "compressed_gaussian_likelihood",
+        "published_posterior_summary",
+        "proposal_summary",
+        "external_gaussian_prior",
+        "compressed_likelihood_approximation",
     }
     if not requested <= allowed:
         return None
@@ -238,7 +242,7 @@ def _compressed_likelihood_data_product(
     positive_diagonal = bool(symmetric and np.all(np.diag(cov) > 0))
     positive_definite = _is_positive_definite(cov)
     finite = bool(np.all(np.isfinite(cov)) and np.all(np.isfinite(np.asarray(spec.mean, dtype=float))))
-    publication_ready = bool(finite and symmetric and positive_definite)
+    structure_valid = bool(finite and symmetric and positive_definite)
     warnings = []
     if not symmetric:
         warnings.append("Registered compressed covariance is not symmetric.")
@@ -246,18 +250,67 @@ def _compressed_likelihood_data_product(
         warnings.append("Registered compressed covariance has non-positive diagonal entries.")
     if symmetric and positive_diagonal and not positive_definite:
         warnings.append("Registered compressed covariance is not positive-definite.")
+    warnings.append(
+        "Registry-only Gaussian record: structural validation does not make "
+        "this hand-entered, non-hash-bound product scientifically publication-ready."
+    )
+    role_metadata = {
+        "published_posterior_summary": {
+            "product_type": "published_posterior_summary",
+            "product_role": "literature_context",
+            "source": "dataset_registry.published_posterior_summary",
+            "claim_scope": "literature_context_metadata",
+        },
+        "proposal_only": {
+            "product_type": "proposal_summary",
+            "product_role": "proposal_context",
+            "source": "dataset_registry.proposal_summary",
+            "claim_scope": "proposal_context_metadata",
+        },
+        "external_prior": {
+            "product_type": "external_gaussian_prior",
+            "product_role": "external_prior",
+            "source": "dataset_registry.external_prior",
+            "claim_scope": "registered_external_prior_metadata",
+        },
+        "likelihood_approximation": {
+            "product_type": "compressed_likelihood_approximation",
+            "product_role": "likelihood_approximation",
+            "source": "dataset_registry.likelihood_approximation",
+            "claim_scope": "registered_likelihood_approximation_metadata",
+        },
+    }.get(
+        spec.statistical_role,
+        {
+            "product_type": "unclassified_gaussian_record",
+            "product_role": "unclassified",
+            "source": "dataset_registry.unclassified_gaussian_record",
+            "claim_scope": "unclassified_registry_metadata",
+        },
+    )
     return {
-        "success": True,
-        "__tool_status__": "COMPLETED" if publication_ready else "PARTIAL",
-        "analysis_status": "COSMOLOGY_COMPRESSED_DATA_PRODUCT_READY" if publication_ready else "COSMOLOGY_DATA_PRODUCT_PARTIAL",
-        "publication_ready": publication_ready,
+        "success": structure_valid,
+        "__tool_status__": "COMPLETED" if structure_valid else "PARTIAL",
+        "analysis_status": (
+            "COSMOLOGY_COMPRESSED_RECORD_READY"
+            if structure_valid
+            else "COSMOLOGY_DATA_PRODUCT_PARTIAL"
+        ),
+        "structure_valid": structure_valid,
+        "data_product_valid": structure_valid,
+        "validation_scope": "registry_structure_only",
+        "publication_ready": False,
+        "scientific_publication_ready": False,
+        "publication_readiness_reason": (
+            "registry_only_compressed_summary_not_hash_bound"
+        ),
         "dataset_key": entry.key,
         "dataset_display_name": entry.display_name,
         "dataset_version": entry.version,
         **_z_coverage_fields(entry),
         "product": {
-            "product_type": "compressed_gaussian_likelihood",
-            "role": "compressed_likelihood",
+            "product_type": role_metadata["product_type"],
+            "role": role_metadata["product_role"],
             "url": entry.source_url,
             "format": "registry mean/covariance",
             "description": spec.approximation,
@@ -265,12 +318,14 @@ def _compressed_likelihood_data_product(
             "rows": len(spec.parameters),
             "sha256": None,
         },
-        "source": "dataset_registry.compressed_likelihood",
+        "source": role_metadata["source"],
         "hash_verified": False,
         "parse": {
             "parse_success": True,
-            "kind": "compressed_gaussian_likelihood",
+            "kind": role_metadata["product_type"],
             "parameters": list(spec.parameters),
+            "statistical_role": spec.statistical_role,
+            "source_prior": spec.source_prior,
             "mean": list(spec.mean),
             "units": dict(spec.units),
             "covariance_shape": list(cov.shape),
@@ -286,16 +341,23 @@ def _compressed_likelihood_data_product(
             "warnings": warnings,
         },
         "warnings": [
-            "Registry compressed likelihood vector; use as data-product provenance, not a posterior by itself.",
+            "Registry Gaussian record; its statistical_role controls whether it is context, a prior, or an approximation.",
             *warnings,
         ],
         "citations": [citation.to_dict() for citation in entry.citations],
-        "claim_scope": "registered_compressed_likelihood_data_product",
+        "claim_scope": role_metadata["claim_scope"],
         "__message_to_model__": (
-            "This exposes a registered compressed Gaussian mean/covariance summary. "
-            "It can support claims about available compressed data vectors, but "
-            "posterior/tension claims require run_cosmology_likelihood_chain."
+            "This exposes a registered Gaussian mean/covariance record with an "
+            "explicit statistical role. "
+            "Its structure is valid only when structure_valid=true; it is registry-only, "
+            "not hash-bound, and never publication-ready. Do not use its numeric rows "
+            "to support scientific claims; posterior/tension claims require a "
+            "scientifically eligible, data-bound likelihood runner."
         ),
+        "__do_not_claim__": True,
+        "do_not_claim_reasons": [
+            "Registry-only Gaussian values are not hash-bound scientific evidence."
+        ],
     }
 
 

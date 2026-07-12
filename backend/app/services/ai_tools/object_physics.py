@@ -282,12 +282,19 @@ async def _exec_fit_rv_orbit(inp: dict) -> dict:
                     return float(lp) + jprior
 
                 rng_seed = int(random_seed) if random_seed is not None else 2024
-                rng = _np.random.default_rng(rng_seed)
+                # emcee uses NumPy's legacy RandomState internally.  Seeding
+                # only the initial walker cloud leaves proposal draws tied to
+                # ambient global state, so repeated runs can still diverge.
+                # Continue one deterministic RandomState stream from p0 into
+                # emcee itself.
+                rng = _np.random.RandomState(rng_seed)
                 p0 = init + 1e-3 * rng.standard_normal((n_walkers, n_dim)) * _np.abs(init + 1e-6)
                 sampler = emcee.EnsembleSampler(n_walkers, n_dim, _log_prob)
+                sampler.random_state = rng.get_state()
                 sampler.run_mcmc(p0, n_steps, progress=False)
                 chain = sampler.get_chain(discard=n_burn, flat=True)
                 mcmc_results["ran_mcmc"] = True
+                mcmc_results["random_seed"] = rng_seed
                 mcmc_results["n_samples"] = int(chain.shape[0])
 
                 try:
@@ -321,7 +328,7 @@ async def _exec_fit_rv_orbit(inp: dict) -> dict:
         fm_kg = P_sec * (K ** 3) * ((1 - ecc ** 2) ** 1.5) / (2 * _np.pi * G)
         fm_msun = fm_kg / 1.989e30
 
-        return {
+        result = {
             "period_days": round(float(P), 4),
             "semi_amplitude_ms": round(float(K), 2),
             "eccentricity": round(float(ecc), 4),
@@ -334,6 +341,14 @@ async def _exec_fit_rv_orbit(inp: dict) -> dict:
             "mcmc": mcmc_results,
             "reference": "Fulton+ 2018 PASP 130, 044504; Hilditch 2001 Eq 2.53 for mass function",
         }
+        if use_mcmc:
+            # Report the seed requested for the stochastic stage even when
+            # emcee is unavailable, so the execution receipt remains auditable.
+            try:
+                result["random_seed"] = int(random_seed) if random_seed is not None else 2024
+            except (TypeError, ValueError):
+                pass
+        return result
 
     loop = _aio.get_running_loop()
     try:

@@ -15,6 +15,7 @@ import numpy as np
 
 from app.services.cosmology_likelihoods.core import (
     MODEL_LABELS,
+    compressed_rows_are_executable,
     _derived_s8_from_samples,
     _s8_gaussian_constraints,
     _s8_is_derived,
@@ -25,6 +26,7 @@ from app.services.cosmology_likelihoods.registry import (
 )
 
 from app.services.cosmology_likelihoods.config_builder import (
+    _can_add_shoes_h0_prior,
     _collect_citations,
     _combination_warnings,
     _config_hash,
@@ -56,10 +58,12 @@ from app.services.cosmology_likelihoods.verification import (
 from app.services.cosmology_likelihoods.sampling import (
     _all_external_cobaya,
     _cobaya_parameter_order,
+    _compressed_entry_is_executable,
     _compressed_parameter_order,
     _compressed_runner_unavailable,
     _pairwise_tensions,
     _posterior_summary,
+    _prior_dominance_screen,
     _run_sampling_likelihood_chain,
     _sanitize_runner_priors,
 )
@@ -123,14 +127,11 @@ def _draw_box_truncated_gaussian(
 
 
 def _analytic_s8_constraints(entries: list[Any]) -> list[tuple[float, float]]:
-    """Independent derived-S8 rows used by the analytic Gaussian runner.
+    """Independent executable derived-S8 likelihood rows for the analytic path.
 
-    Planck's registered S8 number is computed from the same Omega_m/sigma8
-    posterior summary already present in that compressed block.  Treating it as
-    an additional independent Gaussian narrows the CMB-only S8 posterior by
-    roughly 25 percent.  Keep it for derived reporting/tension tables and for
-    the separate distance-prior sampling path, but do not multiply it into the
-    analytic CMB-only posterior a second time.
+    The entry list is role-filtered before reaching this helper.  Planck's
+    parameter block is proposal-only and routed to the separate distance-prior
+    sampler, so it remains excluded defensively here as well.
     """
     independent_entries = [
         entry for entry in entries if entry.key != "planck2018_compressed"
@@ -153,7 +154,7 @@ def _analytic_combined_chi2(
     total = 0.0
     for entry in entries:
         spec = entry.compressed_likelihood
-        if spec is None:
+        if spec is None or not compressed_rows_are_executable(entry):
             continue
         names = [
             name
@@ -190,6 +191,7 @@ def _analytic_constraint_count(entries: list[Any]) -> int:
         )
         for entry in entries
         if entry.compressed_likelihood is not None
+        and compressed_rows_are_executable(entry)
     )
 
 
@@ -207,13 +209,17 @@ def compute_model_comparison(
     read off ΔAIC on a Jeffreys-like scale (|ΔAIC|<2 inconclusive).
 
     Validity guards (all fail closed to preferred='undetermined' while still
-    reporting the factual deltas, and stamp __do_not_claim__ on the output so
+    reporting descriptive deltas, and stamp __do_not_claim__ on the output so
     the deltas cannot support reply claims): a chain_tier='blocked' input —
     its chi2 is not evidence (ESS collapse, no prior support, unverifiable
     rows); an input whose chain tier or ESS cannot be established
     (convergence unverified); and a representation mismatch — sampled axes
     differing beyond the extended model's own parameters mean the two chi2
-    came from different likelihoods.
+    came from different likelihoods; and, critically, both chi2 values must
+    come from converged likelihood-only maximum-likelihood optimisations with
+    the same explicit likelihood fingerprint.  A minimum over posterior draws
+    is a useful diagnostic but is not an MLE and cannot support AIC/BIC model
+    preference.
 
     Valid verdicts additionally carry baseline/extended chain-tier fields and,
     when either input is exploratory-tier (today every in-process extended
@@ -267,9 +273,29 @@ def compute_model_comparison(
         ess = _finite(diags.get("proposal_ess"))
         if ess is None:
             ess = _finite(diags.get("ess_bulk"))
+        fit_statistics = result.get("fit_statistics")
+        fit_statistics = fit_statistics if isinstance(fit_statistics, dict) else {}
+        chi2_kind = fit_statistics.get("chi2_kind")
+        likelihood_fingerprint = fit_statistics.get("likelihood_fingerprint")
+        if not likelihood_fingerprint:
+            likelihood_fingerprint = result.get("likelihood_fingerprint")
+        mle_attested = bool(
+            chi2_kind == "likelihood_only_mle"
+            and fit_statistics.get("likelihood_only") is True
+            and fit_statistics.get("optimizer_converged") is True
+            and isinstance(likelihood_fingerprint, str)
+            and likelihood_fingerprint.strip()
+        )
         return {
             "tier": tier if isinstance(tier, str) else None,
             "ess": ess,
+            "chi2_kind": chi2_kind if isinstance(chi2_kind, str) else None,
+            "likelihood_fingerprint": (
+                likelihood_fingerprint.strip()
+                if isinstance(likelihood_fingerprint, str)
+                else None
+            ),
+            "mle_attested": mle_attested,
         }
 
     quality = {
@@ -331,7 +357,35 @@ def compute_model_comparison(
                 "delta_chi2/delta_aic are not a valid model comparison."
             )
 
-    if comparison_warning is not None or delta_aic is None:
+    if comparison_warning is None:
+        unattested_mle_inputs = [
+            label for label, q in quality.items() if not q["mle_attested"]
+        ]
+        if unattested_mle_inputs:
+            comparison_warning = (
+                "model preference is withheld because the "
+                + " and ".join(unattested_mle_inputs)
+                + " fit(s) do not carry a converged likelihood-only MLE "
+                "attestation and explicit likelihood fingerprint. A minimum "
+                "chi2 observed among posterior draws is not a maximum-"
+                "likelihood optimisation and cannot support AIC/BIC preference."
+            )
+        elif (
+            quality["baseline"]["likelihood_fingerprint"]
+            != quality["extended"]["likelihood_fingerprint"]
+        ):
+            comparison_warning = (
+                "the baseline and extended fits carry different likelihood "
+                "fingerprints, so their chi2/AIC/BIC values are not a matched "
+                "model comparison."
+            )
+        elif delta_aic is None:
+            comparison_warning = (
+                "AIC is unavailable on at least one side; no model-preference "
+                "verdict can be computed."
+            )
+
+    if comparison_warning is not None:
         preferred = "undetermined"
     elif delta_aic < -2.0:
         preferred = ext_model
@@ -352,13 +406,21 @@ def compute_model_comparison(
         "extended_chain_tier": quality["extended"]["tier"],
         "baseline_ess": quality["baseline"]["ess"],
         "extended_ess": quality["extended"]["ess"],
+        "baseline_chi2_kind": quality["baseline"]["chi2_kind"],
+        "extended_chi2_kind": quality["extended"]["chi2_kind"],
+        "likelihood_fingerprint": (
+            quality["baseline"]["likelihood_fingerprint"]
+            if comparison_warning is None
+            else None
+        ),
         "convention": "delta = extended - baseline; negative favors the extended model; |delta_aic|<2 is inconclusive",
     }
     if comparison_warning is not None:
         out["comparison_warning"] = comparison_warning
         # The deltas stay visible for diagnostics, but they were computed from
-        # at least one fit whose chi2 is not evidence (or from two different
-        # likelihoods) — they must never support a reply claim.
+        # at least one fit whose chi2 is not an attested likelihood-only MLE
+        # (or from two different likelihoods) — they must never support a reply
+        # claim.
         out["__do_not_claim__"] = True
     else:
         exploratory_inputs = [
@@ -386,12 +448,12 @@ def run_likelihood_chain(
 ) -> dict[str, Any]:
     """Run the phase-1 compressed Gaussian cosmology likelihood.
 
-    This combines registry entries with explicit ``CompressedLikelihoodSpec``
-    summaries and the DESI DR1 public Gaussian BAO mean/covariance products.
-    Full external likelihood packages are reported as not-run unless a dataset
-    has an explicit registered compression.  Pantheon+ defaults to such an
-    SN compressed-preliminary path; the full covariance χ² runner is opt-in
-    via PANTHEON_PLUS_FULL_CHI2_ENABLED.
+    This combines executable registry likelihood approximations/external priors
+    with released, verified in-process data products. Published posterior
+    summaries are context/proposal records and never enter the joint chi-square.
+    Planck's separately encoded distance-prior approximation is routed through
+    the sampling path. Full SN vectors run only when their explicit feature gate
+    is enabled (Union3's released binned vector is executable by default).
     """
     model_key = _validate_model(model)
     entries = _validate_dataset_selection(model_key, dataset_keys)
@@ -399,6 +461,7 @@ def run_likelihood_chain(
     sample_count = max(256, min(int(n_samples or 4000), 20000))
     if any(
         _is_executable_bao_entry(entry)
+        or entry.key == "planck2018_compressed"
         or _is_executable_cc_entry(entry)
         or _is_executable_rsd_entry(entry)
         or _is_executable_fsbao_entry(entry)
@@ -442,15 +505,19 @@ def run_likelihood_chain(
             sampler="mcmc",
         )
 
-    compressed_entries = [entry for entry in entries if entry.compressed_likelihood is not None]
-    skipped_entries = [entry for entry in entries if entry.compressed_likelihood is None]
+    compressed_entries = [entry for entry in entries if _compressed_entry_is_executable(entry)]
+    skipped_entries = [entry for entry in entries if not _compressed_entry_is_executable(entry)]
 
     if not compressed_entries:
         return _compressed_runner_unavailable(
             model_key=model_key,
             entries=entries,
             seed=seed,
-            reason="No selected dataset has a registered compressed Gaussian likelihood.",
+            reason=(
+                "No selected dataset has an executable compressed likelihood or "
+                "external prior. Published posterior summaries are context-only "
+                "and cannot be multiplied as likelihood factors."
+            ),
         )
 
     if model_key != "lcdm":
@@ -538,11 +605,10 @@ def run_likelihood_chain(
         )
 
     rng = np.random.default_rng(seed)
-    # Apply any derived-S8 (σ8·√(Ωm/0.3)) constraints by importance-reweighting
-    # the hard-prior-truncated Gaussian proposal.  Independent WL rows are
-    # folded in here on the derived value.  The Planck S8 summary is deliberately
-    # excluded because it is derived from the same Omega_m/sigma8 posterior rows
-    # already in the Planck block; multiplying it again double-counts CMB data.
+    # Apply any role-approved derived-S8 likelihood constraints by importance-
+    # reweighting the hard-prior-truncated Gaussian proposal. Published WL and
+    # Planck posterior-summary rows are filtered before this path and therefore
+    # cannot be silently multiplied as likelihoods.
     s8_constraints = _analytic_s8_constraints(compressed_entries)
     s8_ess: float | None = None
     try:
@@ -578,6 +644,7 @@ def run_likelihood_chain(
         name: _posterior_summary(samples[:, index])
         for index, name in enumerate(parameter_order)
     }
+    prior_dominance = _prior_dominance_screen(samples, parameter_order, prior_bounds)
     if _s8_is_derived(parameter_order):
         summaries["S8"] = _posterior_summary(
             _derived_s8_from_samples(samples, parameter_order)
@@ -599,6 +666,13 @@ def run_likelihood_chain(
         "Compressed Gaussian summary likelihood; use as preliminary consistency check, not full external likelihood.",
     ]
     warnings.extend(_combination_warnings(entries))
+    if not prior_dominance["screen_passed"]:
+        warnings.append(
+            "Prior-dominance screen failed for "
+            + ", ".join(prior_dominance["flagged_parameters"])
+            + ": posterior constraints may be set by caller prior bounds. "
+            "Run and attest a prior-sensitivity analysis before interpretation."
+        )
     if skipped_entries:
         warnings.append(
             "Datasets not run in compressed phase: "
@@ -623,7 +697,7 @@ def run_likelihood_chain(
             "floor; S8-combined posterior is exploratory only."
         )
 
-    # Every executed compressed summary is a hand-typed Gaussian -> 'literature_typed'
+    # Every executed hand-typed Gaussian prior/approximation is literature-typed
     # (no released file to checksum); stamp it so a compressed-only chain is never
     # left with an unstamped (None) fidelity the publication gate would ignore.
     cov_fidelity, artifact_sha256, fidelity_ok = _finalize_cov_fidelity(
@@ -653,6 +727,7 @@ def run_likelihood_chain(
         "off_anchor_frontier" if off_anchor else None,
         "overlapping_dataset_combination" if combination_conflict else None,
         "analytic_draws_are_not_independent_chains",
+        "prior_dominance_screen_failed" if not prior_dominance["screen_passed"] else None,
     ):
         if reason and reason not in publication_gate["reasons"]:
             publication_gate["reasons"].append(reason)
@@ -710,6 +785,7 @@ def run_likelihood_chain(
         "sampler": "compressed_gaussian_analytic",
         "parameters": summaries,
         "posterior_summary": summaries,
+        "prior_dominance_screen": prior_dominance,
         "derived_params": {
             name: summaries[name]
             for name in ("S8", "sigma8", "omegam", "H0")
@@ -718,6 +794,11 @@ def run_likelihood_chain(
         "pairwise_tensions": tensions,
         "fit_statistics": {
             "chi2": round(float(chi2), 6),
+            # Analytic/truncated posterior evaluation is not an independently
+            # certified likelihood-only maximum-likelihood optimisation.
+            "chi2_kind": "posterior_point_evaluation",
+            "likelihood_only": False,
+            "optimizer_converged": False,
             # delta_chi2 placeholder removed (2026-06-12) — see the sampling
             # runner's fit_statistics note; use compute_model_comparison.
             "aic": round(float(aic), 6),
@@ -760,10 +841,10 @@ def run_likelihood_chain(
         "runner_hash": result_hash,
         "warnings": warnings,
         "__message_to_model__": (
-            "This is a publication-ready compressed-Gaussian preliminary result, "
-            "not a full external likelihood run. You may quote posterior/tension "
-            "numbers only with that caveat and only for datasets_used; do not "
-            "claim that datasets_not_run were included in the numerical posterior."
+            "This is a compressed-Gaussian diagnostic, not a full external "
+            "likelihood run. Its final tier and publication gate below are "
+            "authoritative; never infer publication readiness from successful "
+            "execution alone."
         ),
         "provenance": {
             "cosmology_likelihood": {
@@ -780,6 +861,10 @@ def run_likelihood_chain(
                         "source_locator": entry.compressed_likelihood.source_locator
                         if entry.compressed_likelihood else None,
                         "approximation": entry.compressed_likelihood.approximation
+                        if entry.compressed_likelihood else None,
+                        "statistical_role": entry.compressed_likelihood.statistical_role
+                        if entry.compressed_likelihood else None,
+                        "source_prior": entry.compressed_likelihood.source_prior
                         if entry.compressed_likelihood else None,
                     }
                     for entry in compressed_entries
@@ -800,6 +885,19 @@ def run_likelihood_chain(
         )
     elif not publication_ready:
         result["__do_not_claim__"] = True
+        # Match the sampling runner's fail-closed contract.  A blocked analytic
+        # posterior is prior-corner/debug output, not a caveated estimate; do
+        # not send its numerical summaries to API/UI consumers.
+        result["redacted_fields"] = [
+            key
+            for key in (
+                "parameters",
+                "posterior_summary",
+                "derived_params",
+                "pairwise_tensions",
+            )
+            if result.pop(key, None) is not None
+        ]
         # bug_011 fix: per-tier rewrite of __message_to_model__ — the
         # publication-tier text ("you may quote posterior/tension numbers")
         # contradicts the chain_tier=blocked / __do_not_claim__ guardrail.
@@ -862,6 +960,7 @@ def run_robustness_matrix(
         combos.extend([
             (label + " + SH0ES H0", keys + ["shoes_h0_riess22"])
             for label, keys in list(combos)
+            if _can_add_shoes_h0_prior(keys)
         ])
 
     matrix: list[dict[str, Any]] = []
@@ -881,7 +980,23 @@ def run_robustness_matrix(
                 cell_status = "runnable"
             else:
                 _as = str(run.get("analysis_status") or "").upper()
-                if "NO_COMPRESSED" in _as or "MISSING" in _as:
+                used = run.get("datasets_used") or []
+                not_run = run.get("datasets_not_run") or []
+                context_only_selection = all(
+                    (
+                        (entry := get_cosmology_dataset(key)).compressed_likelihood
+                        is not None
+                        and entry.compressed_likelihood.statistical_role
+                        in {"published_posterior_summary", "proposal_only"}
+                        and key != "planck2018_compressed"
+                    )
+                    for key in keys
+                )
+                if used and not_run:
+                    cell_status = "partial_dataset_run"
+                elif context_only_selection:
+                    cell_status = "context_only"
+                elif "NO_COMPRESSED" in _as or "MISSING" in _as:
                     cell_status = "missing_likelihood"
                 elif run.get("execution_status") == "not_run" or "CONFIG" in _as:
                     cell_status = "config_only"
@@ -892,6 +1007,10 @@ def run_robustness_matrix(
             execution_level = (
                 "compressed_preliminary"
                 if cell_status == "runnable"
+                else "partial_dataset_run"
+                if cell_status == "partial_dataset_run"
+                else "context_only"
+                if cell_status == "context_only"
                 else "executed_not_ready"
                 if cell_status == "executed_not_ready"
                 else "config_only"
@@ -924,32 +1043,43 @@ def run_robustness_matrix(
         row["label"] for row in matrix if row.get("status") == "executed_not_ready"
     ]
     matrix_message = (
-        "Summarize only cells with publication_ready=true as compressed preliminary "
-        "results. For non-runnable cells, say the external likelihood/config is still needed."
+        "Summarize numerical constraints only for cells with publication_ready=true. "
+        "For context_only cells, state that registered paper posterior rows were not "
+        "run as likelihoods; for partial_dataset_run cells, name every dataset_not_run."
     )
     if not_ready_labels:
         matrix_message += (
-            " Cells marked executed_not_ready ran but their importance-sampling ESS fell "
-            "below the publication floor (typically 3+ probe products). Do not quote those "
-            "cells directly; to obtain a quotable posterior for one, call "
-            "run_cosmology_likelihood_chain on that single dataset combination — it "
-            "auto-upgrades to compressed-emcee (~11 s) and can reach publication-ready ESS."
+            " Cells marked executed_not_ready ran numerically but failed one or more "
+            "scientific publication-gate requirements (which may include data fidelity, "
+            "independent-chain diagnostics, prior/systematics checks, or model adequacy). "
+            "A single rerun or flattened emcee ensemble cannot by itself make them "
+            "publication-ready; inspect each cell's publication_gate reasons."
         )
     return {
         "success": True,
-        "__tool_status__": "COMPLETED" if ready_cells else "PARTIAL",
-        "analysis_status": "COMPRESSED_ROBUSTNESS_READY" if ready_cells else "PARTIAL",
-        "publication_ready": bool(ready_cells),
-        "claim_scope": "compressed_likelihood_preliminary",
+        "__tool_status__": "PARTIAL",
+        "analysis_status": "ROBUSTNESS_MATRIX_DIAGNOSTIC",
+        # This aggregate mixes branches with different execution and gate
+        # states.  It can report coverage/readiness counts, but cannot launder
+        # any child posterior into a top-level scientific constraint.
+        "publication_ready": False,
+        "__do_not_claim__": True,
+        "claim_scope": "robustness_matrix_diagnostic",
         "model": model_key,
         "matrix_size": len(matrix),
         "ready_cells": len(ready_cells),
         "include_weak_lensing": bool(include_weak_lensing),
         "matrix": matrix,
         "warnings": [
-            "Robustness matrix uses compressed Gaussian summaries where available; config-only cells are not numerical evidence.",
+            "Robustness matrix runs only released likelihood paths and role-approved "
+            "priors/approximations; posterior-summary and config-only cells are not "
+            "numerical evidence.",
         ],
-        "__message_to_model__": matrix_message,
+        "__message_to_model__": (
+            matrix_message
+            + " The aggregate is diagnostic-only; use a direct signed result "
+            "for any numerical scientific claim."
+        ),
     }
 
 
@@ -1077,12 +1207,21 @@ def run_alcock_paczynski_test(
         "chi2_min": round(chi2_min, 4),
         "chi2_per_dof": round(chi2_min / n_dof, 4),
         "z_pairs": z_pairs_payload,
-        # Conditional on the sha256 verification above — an unverified file
-        # already returned a loud refusal before reaching this point.
-        "publication_ready": bool(verified.get("hash_verified")),
+        # A pinned input establishes data integrity, not model adequacy,
+        # predictive validity, prior/systematics robustness, or independent
+        # reproduction.  This grid diagnostic is therefore never a standalone
+        # publication authority.
+        "publication_ready": False,
+        "preliminary_ready": bool(verified.get("hash_verified")),
+        "__do_not_claim__": True,
         "claim_scope": "alcock_paczynski_geometric_omega_m",
         "data_origin": "real_archive",
         "analysis_status": "ALCOCK_PACZYNSKI_READY",
+        "__message_to_model__": (
+            "This is an AP-only flat-LCDM geometry diagnostic from a pinned "
+            "DESI data product. Do not present its Omega_m grid interval as a "
+            "publication-ready constraint without the unified adequacy gate."
+        ),
         "citations": [
             {
                 "label": "Alcock & Paczynski geometric test",

@@ -103,24 +103,51 @@ def test_external_cobaya_runner_applies_off_anchor_gate():
         },
     }
     verified = {"hash_verified": True, "files_sha256": {}, "mismatches": []}
+    from app.services.cosmology_likelihoods.verification import (
+        PUBLICATION_REQUIRED_ADEQUACY_CHECKS,
+        build_model_adequacy_attestation,
+        build_model_adequacy_subject,
+    )
+
+    def adequacy_for(model, selected_entries, summaries):
+        subject = build_model_adequacy_subject(
+            model=model,
+            dataset_keys=[entry.key for entry in selected_entries],
+            random_seed=42,
+            summaries=summaries,
+            diagnostics=good_diag,
+            data_verification=verified,
+        )
+        return build_model_adequacy_attestation(
+            subject=subject,
+            evidence_by_check={
+                name: {"artifact_id": f"test:{name}"}
+                for name in PUBLICATION_REQUIRED_ADEQUACY_CHECKS
+            },
+        )
     entries = [
         get_cosmology_dataset(k)
         for k in ("desi_dr1_bao", "pantheon_plus", "planck2018_compressed")
     ]
+    extended_summaries = {"w0": {"median": -0.83}, "wa": {"median": -0.75}}
     r = _runner_success(
         model_key="w0wa_cdm", entries=entries, seed=42, sampler="mcmc",
-        summaries={"w0": {"median": -0.83}, "wa": {"median": -0.75}},
+        summaries=extended_summaries,
         diagnostics=good_diag, chain_meta={}, stdout_tail="",
         data_verification=verified,
+        model_adequacy=adequacy_for("w0wa_cdm", entries, extended_summaries),
     )
     assert r["publication_ready"] is False
     assert r["off_anchor_review_required"] is True
 
+    lcdm_entries = [get_cosmology_dataset("desi_dr1_bao")]
+    lcdm_summaries = {"omegam": {"median": 0.30}}
     r2 = _runner_success(
-        model_key="lcdm", entries=[get_cosmology_dataset("desi_dr1_bao")], seed=42,
-        sampler="mcmc", summaries={"omegam": {"median": 0.30}},
+        model_key="lcdm", entries=lcdm_entries, seed=42,
+        sampler="mcmc", summaries=lcdm_summaries,
         diagnostics=good_diag, chain_meta={}, stdout_tail="",
         data_verification=verified,
+        model_adequacy=adequacy_for("lcdm", lcdm_entries, lcdm_summaries),
     )
     assert r2["publication_ready"] is True
     assert r2["off_anchor_review_required"] is False

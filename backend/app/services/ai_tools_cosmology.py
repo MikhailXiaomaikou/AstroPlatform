@@ -266,16 +266,18 @@ COSMOLOGY_TOOL_SCHEMAS = [
     {
         "name": "run_cosmology_likelihood_chain",
         "description": (
-            "Run the phase-1 compressed Gaussian observational-cosmology likelihood "
-            "for registered datasets that include published mean/covariance summaries. "
-            "This can produce citeable preliminary H0/Omega_m/sigma8/S8/tension results "
-            "only when publication_ready=true. It does not run full external ACT/"
+            "Run registered in-process observational-cosmology likelihoods, approved "
+            "external priors/likelihood approximations, and verified released data "
+            "products. Published posterior-summary and proposal-only Gaussian rows are "
+            "literature context and are reported in datasets_not_run, never multiplied "
+            "into chi-square. Numerical outputs are exploratory unless the complete "
+            "publication and model-adequacy gate is attested. It does not run full ACT/"
             "weak-lensing likelihood packages — EXCEPT the vendored Planck 2018 CMB "
             "likelihoods (planck_2018_highl_TTTEEE_lite / planck_2018_lowl_TT / "
             "planck_2018_lowl_EE / planck_2018_lensing), which dispatch to the "
             "external Cobaya path when EXTERNAL_COBAYA_ENABLED=true (off by default; "
-            "that path genuinely samples omegak/mnu). Datasets without compressed "
-            "summaries are reported as datasets_not_run."
+            "that path genuinely samples omegak/mnu). Datasets without an executable "
+            "likelihood path are reported as datasets_not_run."
         ),
         "input_schema": {
             "type": "object",
@@ -287,7 +289,7 @@ COSMOLOGY_TOOL_SCHEMAS = [
                         "ok_wcdm", "ok_w0wa_cdm", "lcdm_mnu",
                         "w0wa_cdm_mnu",
                     ],
-                    "description": "Cosmological model family. Phase-1 compressed execution is publication-ready for lcdm only.",
+                    "description": "Cosmological model family. Curvature/neutrino extensions require the external CMB path; in-process outputs remain non-publication without the full gate.",
                 },
                 "dataset_keys": {
                     "type": "array",
@@ -338,17 +340,17 @@ COSMOLOGY_TOOL_SCHEMAS = [
     {
         "name": "run_nested_sampler",
         "description": (
-            "Run a controlled dynesty nested sampler on typed Gaussian likelihood "
-            "summaries. Use this for evidence/posterior diagnostics when a paper "
+            "Run a diagnostic controlled dynesty sampler on typed Gaussian records. "
+            "Use this for numerical workflow diagnostics when a paper "
             "requires nested sampling but the likelihood can be represented as "
             "bounded parameters plus mean/covariance summaries. It never executes "
             "user Python or raw Cobaya YAML. Caller-supplied Gaussian values remain "
-            "non-citeable diagnostics: publication_ready can become true only when "
-            "each block includes a dataset_key and its parameter order, mean, and "
-            "full covariance exactly match that registered dataset, and dynesty "
-            "reaches its requested stopping criterion. Even then it must be "
-            "described as controlled Gaussian nested-sampling, not a full external "
-            "likelihood."
+            "non-citeable diagnostics. Exact registry matching verifies provenance "
+            "only for external-prior/likelihood-approximation roles; published "
+            "posterior summaries remain context-only. This tool always returns "
+            "publication_ready=false because it has no full-likelihood and model-"
+            "adequacy attestation; do not quote its logZ or Bayes factors as research "
+            "conclusions."
         ),
         "input_schema": {
             "type": "object",
@@ -367,7 +369,8 @@ COSMOLOGY_TOOL_SCHEMAS = [
                         "Single Gaussian likelihood with parameters, mean, "
                         "covariance, and optional dataset_key. Citation/source_url "
                         "strings supplied by the caller are not trusted; dataset_key "
-                        "is verified against the registered numeric likelihood."
+                        "is verified against the registered numeric record and its "
+                        "statistical role."
                     ),
                 },
                 "likelihoods": {
@@ -375,7 +378,7 @@ COSMOLOGY_TOOL_SCHEMAS = [
                     "items": {"type": "object"},
                     "description": (
                         "Optional list of Gaussian likelihood blocks to multiply; "
-                        "each needs an exact registered dataset_key match to be citeable. "
+                        "exact dataset matches remain diagnostic and never become citeable. "
                         "Duplicate blocks or blocks sharing a dataset/source/citation "
                         "are rejected because independence is not established."
                     ),
@@ -439,7 +442,7 @@ COSMOLOGY_TOOL_SCHEMAS = [
                 "supernova_sets": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "SN dataset alternatives. Default: Pantheon+; pass DES-SN5YR (compressed Omega_m Gaussian) / Union3 (full in-process 22-bin binned-distance likelihood) explicitly for comparison branches.",
+                    "description": "SN alternatives. Pantheon+/DES-SN5YR posterior summaries are context-only unless their full-vector feature gates are enabled; Union3 has a released in-process 22-bin likelihood.",
                 },
                 "include_h0_prior": {
                     "type": "boolean",
@@ -461,8 +464,9 @@ COSMOLOGY_TOOL_SCHEMAS = [
         "name": "run_cosmology_robustness_matrix",
         "description": (
             "Execute the standard observational-cosmology robustness matrix using "
-            "registered compressed Gaussian likelihoods where available. Config-only "
-            "cells remain non-runnable and must be described as needing external chains."
+            "verified released likelihood paths and role-approved priors/approximations. "
+            "Published posterior-summary and config-only cells remain non-runnable and "
+            "must be described as literature context or needing external chains."
         ),
         "input_schema": {
             "type": "object",
@@ -479,7 +483,7 @@ COSMOLOGY_TOOL_SCHEMAS = [
                 "supernova_sets": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "SN dataset alternatives. Default: Pantheon+; pass DES-SN5YR (compressed Omega_m Gaussian) / Union3 (full in-process 22-bin binned-distance likelihood) explicitly for comparison branches.",
+                    "description": "SN alternatives. Pantheon+/DES-SN5YR posterior summaries are context-only unless full-vector feature gates are enabled; Union3 has a released in-process 22-bin likelihood.",
                 },
                 "include_h0_prior": {
                     "type": "boolean",

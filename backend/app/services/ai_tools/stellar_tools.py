@@ -79,6 +79,10 @@ TOOL_SCHEMAS = [
                     "enum": ["grid", "mcmc"],
                     "description": "Fitting method: 'grid' (default, fast) or 'mcmc' (slow, with uncertainties)",
                 },
+                "random_seed": {
+                    "type": "integer",
+                    "description": "Seed used for deterministic MCMC walker initialization and emcee proposals.",
+                },
             },
         },
     },
@@ -352,6 +356,7 @@ async def _exec_fit_isochrone(inp: dict) -> dict:
     bp_rp = inp.get("bp_rp", [])
     abs_mag = inp.get("abs_mag", [])
     method = inp.get("method", "grid")
+    random_seed = int(inp.get("random_seed", 42))
 
     # Discard string values (AI sometimes passes variable names)
     if bp_rp and isinstance(bp_rp, list) and bp_rp and isinstance(bp_rp[0], str):
@@ -526,6 +531,7 @@ async def _exec_fit_isochrone(inp: dict) -> dict:
             av_range=av_r if av_r is not None else av_range,
             n_grid_age=n_age,
             n_grid_met=n_met,
+            seed=random_seed,
         )
 
     try:
@@ -565,6 +571,7 @@ async def _exec_fit_isochrone(inp: dict) -> dict:
                 result[k] = f"[truncated: {len(v)} elements]"
         if av_warning:
             result.setdefault("warnings", []).append(av_warning)
+        result["random_seed"] = random_seed
         return result
     except (asyncio.TimeoutError, Exception) as exc:
         logger.warning("PARSEC isochrone fitting failed (%s), using turnoff estimation", exc)

@@ -160,7 +160,7 @@ async def test_pantheon_table_header_maps_declared_columns_by_name():
 
 
 @pytest.mark.asyncio
-async def test_load_cosmology_data_product_exposes_registered_compressed_likelihood():
+async def test_load_cosmology_data_product_labels_posterior_summary_as_context():
     from app.services.cosmology_data_products import load_cosmology_data_product
 
     result = await load_cosmology_data_product(
@@ -169,11 +169,18 @@ async def test_load_cosmology_data_product_exposes_registered_compressed_likelih
         allow_network=False,
     )
 
-    assert result["analysis_status"] == "COSMOLOGY_COMPRESSED_DATA_PRODUCT_READY"
-    assert result["publication_ready"] is True
-    assert result["parse"]["kind"] == "compressed_gaussian_likelihood"
+    assert result["analysis_status"] == "COSMOLOGY_COMPRESSED_RECORD_READY"
+    assert result["structure_valid"] is True
+    assert result["data_product_valid"] is True
+    assert result["validation_scope"] == "registry_structure_only"
+    assert result["publication_ready"] is False
+    assert result["scientific_publication_ready"] is False
+    assert result["hash_verified"] is False
+    assert result["parse"]["kind"] == "published_posterior_summary"
+    assert result["product"]["role"] == "literature_context"
     assert "S8" in result["parse"]["parameters"]
-    assert result["claim_scope"] == "registered_compressed_likelihood_data_product"
+    assert result["claim_scope"] == "literature_context_metadata"
+    assert result["__do_not_claim__"] is True
 
 
 @pytest.mark.asyncio
@@ -191,13 +198,9 @@ async def test_load_cosmology_data_product_reports_unavailable_without_network_o
     assert result["publication_ready"] is False
 
 
-def test_compressed_likelihood_runner_combines_planck_act_and_wl_s8_constraints():
-    """The runner still combines all five compressed entries mechanically,
-    but since 2026-07-07 planck2018_compressed x act_dr6_lensing is a
-    declared double-count pair (both carry Planck lensing), so this
-    selection must come back warned and NOT publication-ready — the
-    pre-fix version of this test pinned publication_ready=True on exactly
-    that double-count."""
+def test_published_posterior_summaries_are_not_multiplied_as_likelihoods():
+    """ACT/WL posterior summaries stay context-only; only Planck's separately
+    encoded distance-prior approximation is executed."""
     from app.services.cosmology_likelihoods import run_likelihood_chain
 
     result = run_likelihood_chain(
@@ -219,15 +222,110 @@ def test_compressed_likelihood_runner_combines_planck_act_and_wl_s8_constraints(
     joined = " ".join(result["warnings"])
     assert "must not be co-added" in joined
     assert "planck2018_compressed" in joined and "act_dr6_lensing" in joined
-    # The combining machinery itself is unchanged:
-    assert set(result["parameters"]) >= {"H0", "omegam", "sigma8", "S8"}
-    assert result["parameters"]["S8"]["median"] == pytest.approx(0.804, abs=0.02)
-    # 2026-06-12: rhat is honestly None on the in-process runner (no MCMC
-    # chains exist; the old hard-coded 1.0 was a never-computed statistic).
-    assert result["chain_diagnostics"]["rhat"] is None
-    assert result["fit_statistics"]["aic"] > 0
-    assert any(item["parameter"] == "S8" for item in result["pairwise_tensions"])
-    assert len(result["datasets_used"]) == 5
+    assert {item["key"] for item in result["datasets_used"]} == {
+        "planck2018_compressed"
+    }
+    assert {item["key"] for item in result["datasets_not_run"]} >= {
+        "act_dr6_lensing",
+        "kids1000_wl",
+        "des_y3_3x2pt",
+        "hsc_y1_cosmic_shear",
+    }
+    assert result["chain_tier"] == "blocked"
+    assert result["__do_not_claim__"] is True
+    assert "parameters" not in result
+
+
+@pytest.mark.parametrize(
+    "dataset_key",
+    [
+        "pantheon_plus",
+        "des_sn5yr",
+        "pantheon18",
+        "act_dr6_lensing",
+        "kids1000_wl",
+        "des_y3_3x2pt",
+        "hsc_y1_cosmic_shear",
+    ],
+)
+def test_published_posterior_summary_cannot_run_as_joint_likelihood(dataset_key):
+    from app.services.cosmology_likelihoods import (
+        get_cosmology_dataset,
+        run_likelihood_chain,
+    )
+
+    entry = get_cosmology_dataset(dataset_key)
+    assert entry.compressed_likelihood is not None
+    assert entry.compressed_likelihood.statistical_role == "published_posterior_summary"
+    result = run_likelihood_chain(model="lcdm", dataset_keys=[dataset_key], n_samples=256)
+    assert result["analysis_status"] == "NO_COMPRESSED_LIKELIHOOD"
+    assert result["publication_ready"] is False
+    assert result["__do_not_claim__"] is True
+    assert result["datasets_used"] == []
+    assert {item["key"] for item in result["datasets_not_run"]} == {dataset_key}
+
+
+def test_registry_audit_rejects_invalid_role_and_missing_source_prior():
+    from dataclasses import replace
+
+    from app.services.cosmology_likelihoods import get_cosmology_dataset
+    from scripts.audit_registry import _audit_entry
+
+    entry = get_cosmology_dataset("kids1000_wl")
+    assert entry.compressed_likelihood is not None
+    invalid_role = replace(
+        entry,
+        compressed_likelihood=replace(
+            entry.compressed_likelihood,
+            statistical_role="posterior_but_trust_me",  # type: ignore[arg-type]
+        ),
+    )
+    missing_prior = replace(
+        entry,
+        compressed_likelihood=replace(
+            entry.compressed_likelihood,
+            source_prior=None,
+        ),
+    )
+
+    assert any("invalid statistical_role" in issue for issue in _audit_entry(invalid_role))
+    assert any("must disclose source_prior" in issue for issue in _audit_entry(missing_prior))
+
+
+def test_compressed_execution_policy_fails_closed_by_statistical_role():
+    from app.services.cosmology_likelihoods import get_cosmology_dataset
+    from app.services.cosmology_likelihoods.sampling import (
+        _compressed_entry_is_executable,
+    )
+
+    for key in ("kids1000_wl", "pantheon_plus", "act_dr6_lensing"):
+        assert _compressed_entry_is_executable(get_cosmology_dataset(key)) is False
+    assert _compressed_entry_is_executable(
+        get_cosmology_dataset("shoes_h0_riess22")
+    ) is True
+    # The proposal-only parameter block is not executed; this key is the one
+    # explicit exception because its separately encoded CHW2019 distance-prior
+    # likelihood is dispatched by the sampling runner.
+    planck = get_cosmology_dataset("planck2018_compressed")
+    assert planck.compressed_likelihood is not None
+    assert planck.compressed_likelihood.statistical_role == "proposal_only"
+    assert _compressed_entry_is_executable(planck) is True
+
+
+def test_low_level_chi2_helpers_cannot_bypass_context_only_role():
+    import numpy as np
+
+    from app.services.cosmology_likelihoods import (
+        _combined_chi2,
+        _s8_gaussian_constraints,
+        get_cosmology_dataset,
+    )
+    from app.services.cosmology_likelihoods.cmb import compressed_entry_row_count
+
+    kids = get_cosmology_dataset("kids1000_wl")
+    assert _combined_chi2([kids], ["S8"], np.asarray([0.9])) == 0.0
+    assert _s8_gaussian_constraints([kids]) == []
+    assert compressed_entry_row_count(kids, ["S8"]) == 0
 
 
 def test_pairwise_tensions_compare_direct_s8_to_derived_sigma8_omegam():
@@ -256,12 +354,14 @@ def test_pairwise_tensions_compare_direct_s8_to_derived_sigma8_omegam():
         key="wl_s8",
         display_name="WL S8",
         probe="weak_lensing",
+        independence_group="independent_wl_fixture",
         compressed_likelihood=CompressedLikelihoodSpec(
             parameters=("S8",),
             mean=(0.760,),
             covariance=((0.02**2,),),
             source_locator="test",
             approximation="test",
+            statistical_role="likelihood_approximation",
         ),
         **base_kwargs,
     )
@@ -269,6 +369,7 @@ def test_pairwise_tensions_compare_direct_s8_to_derived_sigma8_omegam():
         key="cmb_sigma8_omegam",
         display_name="CMB sigma8/Omega_m",
         probe="cmb",
+        independence_group="independent_cmb_fixture",
         observables=("sigma8", "omegam"),
         units={"sigma8": "dimensionless", "omegam": "dimensionless"},
         compressed_likelihood=CompressedLikelihoodSpec(
@@ -277,6 +378,7 @@ def test_pairwise_tensions_compare_direct_s8_to_derived_sigma8_omegam():
             covariance=((0.01**2, 0.0), (0.0, 0.01**2)),
             source_locator="test",
             approximation="test",
+            statistical_role="likelihood_approximation",
         ),
         **{k: v for k, v in base_kwargs.items() if k not in {"observables", "units"}},
     )
@@ -289,6 +391,74 @@ def test_pairwise_tensions_compare_direct_s8_to_derived_sigma8_omegam():
     assert s8["value_b_source"] == "derived_from_sigma8_omegam"
     assert s8["value_b"] == pytest.approx(0.810)
     assert s8["sigma"] > 1.0
+
+
+def test_pairwise_tensions_do_not_quantify_declared_overlap() -> None:
+    from app.services.cosmology_likelihoods import (
+        _pairwise_tensions,
+        get_cosmology_dataset,
+    )
+
+    tensions = _pairwise_tensions([
+        get_cosmology_dataset("planck2018_compressed"),
+        get_cosmology_dataset("act_dr6_lensing"),
+    ])
+
+    assert {item["parameter"] for item in tensions} == {"H0", "sigma8", "S8"}
+    assert all(item["status"] == "not_comparable" for item in tensions)
+    assert all("do_not_combine_with" in item["non_independence_reasons"] for item in tensions)
+    assert all("sigma" not in item and "delta" not in item for item in tensions)
+
+
+def test_pairwise_tensions_withhold_sigma_when_independence_is_not_verified() -> None:
+    from app.services.cosmology_likelihoods import (
+        _pairwise_tensions,
+        get_cosmology_dataset,
+    )
+
+    tensions = _pairwise_tensions([
+        get_cosmology_dataset("kids1000_wl"),
+        get_cosmology_dataset("hsc_y1_cosmic_shear"),
+    ])
+
+    assert len(tensions) == 1
+    assert tensions[0]["parameter"] == "S8"
+    assert tensions[0]["status"] == "not_comparable"
+    assert tensions[0]["sigma"] is None
+    assert tensions[0]["non_independence_reasons"] == [
+        "independence_not_verified"
+    ]
+
+
+def test_pairwise_tensions_respect_known_overlap_and_independence_group() -> None:
+    from dataclasses import replace
+
+    from app.services.cosmology_likelihoods import (
+        _pairwise_tensions,
+        get_cosmology_dataset,
+    )
+
+    base_left = get_cosmology_dataset("kids1000_wl")
+    base_right = get_cosmology_dataset("des_y3_3x2pt")
+    cases = (
+        (
+            replace(base_left, key="known_left", known_overlap=("known_right",)),
+            replace(base_right, key="known_right"),
+            "known_overlap",
+        ),
+        (
+            replace(base_left, key="group_left", independence_group="shared_wl"),
+            replace(base_right, key="group_right", independence_group="shared_wl"),
+            "shared_independence_group",
+        ),
+    )
+    for left, right, reason in cases:
+        tensions = _pairwise_tensions([left, right])
+        assert len(tensions) == 1
+        assert tensions[0]["parameter"] == "S8"
+        assert tensions[0]["status"] == "not_comparable"
+        assert reason in tensions[0]["non_independence_reasons"]
+        assert "sigma" not in tensions[0]
 
 
 def test_desi_dr1_bao_data_product_runner_produces_preliminary_chain():
@@ -357,7 +527,7 @@ def test_compressed_likelihood_runner_refuses_extended_model_publication_claims(
 
     assert result["publication_ready"] is False
     assert result["__do_not_claim__"] is True
-    assert "extended-model parameters" in result["warnings"][0]
+    assert "neutrino-mass" in result["warnings"][0]
 
 
 def test_likelihood_builder_emits_guarded_cobaya_and_cosmosis_config():
@@ -449,15 +619,60 @@ def test_robustness_matrix_generates_bao_sn_cmb_h0_variants():
 
     assert matrix["success"] is True
     assert matrix["publication_ready"] is False
-    assert matrix["matrix_size"] == 22
+    assert matrix["matrix_size"] == 18
     assert "BAO only" in labels
     assert "BAO only + SH0ES H0" in labels
     assert "SN only" in labels
     assert "CMB only" in labels
     assert "Pantheon+ + CMB" in labels
     assert "BAO + Pantheon+" in labels
-    assert "BAO + Pantheon+ + CMB + SH0ES H0" in labels
+    assert "BAO + Pantheon+ + CMB + SH0ES H0" not in labels
+    assert not any(
+        {"pantheon_plus", "shoes_h0_riess22"} <= set(row["dataset_keys"])
+        for row in matrix["matrix"]
+    )
+    assert any(
+        "union3" in row["dataset_keys"]
+        and "shoes_h0_riess22" in row["dataset_keys"]
+        for row in matrix["matrix"]
+    )
     assert all(row["requires_chain_run"] for row in matrix["matrix"])
+
+
+def test_executed_robustness_matrix_omits_overlapping_shoes_cells(
+    monkeypatch,
+) -> None:
+    import app.services.cosmology_likelihoods.runners as runners_module
+
+    monkeypatch.setattr(
+        runners_module,
+        "run_likelihood_chain",
+        lambda **_kwargs: {
+            "publication_ready": False,
+            "analysis_status": "CONFIG_READY",
+            "execution_status": "not_run",
+            "warnings": [],
+        },
+    )
+    matrix = runners_module.run_robustness_matrix(
+        model="lcdm",
+        supernova_sets=["pantheon_plus"],
+        include_h0_prior=True,
+        n_samples=256,
+    )
+
+    assert matrix["publication_ready"] is False
+    assert matrix["__do_not_claim__"] is True
+    assert matrix["analysis_status"] == "ROBUSTNESS_MATRIX_DIAGNOSTIC"
+    assert matrix["matrix_size"] == 10
+    assert not any(
+        {"pantheon_plus", "shoes_h0_riess22"} <= set(row["dataset_keys"])
+        for row in matrix["matrix"]
+    )
+    assert any(
+        row["dataset_keys"] == ["desi_dr1_bao", "shoes_h0_riess22"]
+        for row in matrix["matrix"]
+    )
 
 
 def test_executed_robustness_matrix_only_adds_weak_lensing_when_requested():
@@ -494,7 +709,9 @@ async def test_bao_bin_anomaly_ai_tool_wraps_ap_diagnostic():
     )
 
     assert result["success"] is True
-    assert result["publication_ready"] is True
+    assert result["publication_ready"] is False
+    assert result["preliminary_ready"] is True
+    assert result["__do_not_claim__"] is True
     assert result["analysis_status"] == "ALCOCK_PACZYNSKI_READY"
     assert result["n_redshift_pairs"] >= 5
     assert result["provenance"]["alcock_paczynski"]["input_dataset"] == "desi_dr1_bao"
@@ -512,11 +729,16 @@ def test_compressed_runner_reports_no_executable_likelihood_reason():
     )
 
     assert result["publication_ready"] is False
-    assert result["analysis_status"] == "PARTIAL"
+    assert result["analysis_status"] == "NO_COMPRESSED_LIKELIHOOD"
+    assert result["__do_not_claim__"] is True
+    assert "Published posterior summaries" in result["warnings"][0]
     assert result["chain_tier"] == "blocked"
-    assert [entry["key"] for entry in result["datasets_used"]] == ["pantheon_plus"]
-    assert [entry["key"] for entry in result["datasets_not_run"]] == ["spt3g_cmb"]
-    assert "Datasets not run in compressed phase" in result["warnings"][1]
+    assert result["datasets_used"] == []
+    assert {entry["key"] for entry in result["datasets_not_run"]} == {
+        "pantheon_plus",
+        "spt3g_cmb",
+    }
+    assert "Published posterior summaries" in " ".join(result["warnings"])
 
 
 @pytest.mark.asyncio
@@ -566,7 +788,7 @@ async def test_ai_tool_wrappers_expose_registry_and_config_guardrails():
     assert chain["publication_ready"] is False
     assert chain["preliminary_ready"] is True
     assert "literature_typed_input" in chain["preliminary_reasons"]
-    assert set(chain["parameters"]) >= {"H0", "omegam", "sigma8", "S8"}
+    assert set(chain["parameters"]) == {"H0", "omegam", "ombh2", "ns"}
 
 
 # ── PART AI follow-up: spec papers #12-#15 H0 ladder + SPT-3G CMB ──────
@@ -596,12 +818,18 @@ def test_h0licow_h0_prior_registered_with_symmetric_sigma() -> None:
 
     entry = get_cosmology_dataset("h0licow_h0")
     cl = entry.compressed_likelihood
+    assert entry.applicable_models == ("lcdm",)
     assert cl.mean == (73.3,)
     assert cl.covariance == ((1.75 ** 2,),)
     arxivs = [c.arxiv for c in entry.citations if c.arxiv]
     assert "1907.04869" in arxivs
     # The approximation field must explicitly state sigma is symmetrized (to avoid reviewers assuming a true 1D Gaussian)
     assert "symmetr" in cl.approximation.lower()
+
+    from app.services.cosmology_likelihoods import _validate_dataset_selection
+
+    with pytest.raises(ValueError, match="not applicable to wcdm"):
+        _validate_dataset_selection("wcdm", ["h0licow_h0"])
 
 
 def test_megamaser_pesce20_h0_prior_registered() -> None:
@@ -638,24 +866,23 @@ def test_spt3g_cmb_external_likelihood_registered() -> None:
     assert "kappa" in entry.nuisance_parameters
 
 
-def test_all_4_h0_anchors_share_observable_and_models() -> None:
-    """All 4 H0 anchors (TRGB / SH0ES / H0LiCOW / Megamaser) must
-    expose H0 as the sole observable, and applicable_models must include
-    lcdm/wcdm/w0wa_cdm (H0 prior is model-independent)."""
+def test_h0_anchor_model_domains_are_explicit() -> None:
+    """Direct low-redshift anchors are reusable across model families, while
+    the registered H0LiCOW scalar is specifically its flat-LCDM posterior."""
     from app.services.cosmology_likelihoods import get_cosmology_dataset
 
-    h0_anchors = [
+    model_independent_anchors = [
         "shoes_h0_riess22",
         "trgb_h0_freedman19",
-        "h0licow_h0",
         "megamaser_h0_pesce20",
     ]
-    for key in h0_anchors:
+    for key in model_independent_anchors:
         entry = get_cosmology_dataset(key)
         assert entry.observables == ("H0",), f"{key} observables wrong"
         assert "lcdm" in entry.applicable_models
         assert "wcdm" in entry.applicable_models
         assert "w0wa_cdm" in entry.applicable_models
+    assert get_cosmology_dataset("h0licow_h0").applicable_models == ("lcdm",)
 
 
 def test_h0_anchor_means_span_known_tension_range() -> None:
@@ -677,59 +904,36 @@ def test_h0_anchor_means_span_known_tension_range() -> None:
 # ── PART AI Phase 5: SPT-SZ cluster cosmology (Bocquet+ 2019) ────────
 
 
-def test_spt_cluster_bocquet19_registered_with_sigma8_sz_constraint() -> None:
-    """spec paper #19 — SPT-SZ Bocquet+ 2019 σ8(Ωm/0.3)^0.2 = 0.766 ± 0.025
-    cluster-count cosmology. Independent σ8 anchor (no weak lensing,
-    no CMB inverse). Compressed 2D Gaussian σ8 × Ωm with ρ=-0.6
-    typical SZ degeneracy slope."""
+def test_spt_cluster_bocquet19_is_metadata_only_without_invented_covariance() -> None:
     from app.services.cosmology_likelihoods import get_cosmology_dataset
 
     entry = get_cosmology_dataset("spt_cluster_bocquet19")
     assert entry.probe == "cluster"
-    assert entry.execution_mode == "compressed_gaussian"
+    assert entry.status == "metadata_only"
+    assert entry.execution_mode == "config_only"
     assert entry.likelihood_family == "cluster_count"
-    cl = entry.compressed_likelihood
-    assert cl is not None
-    # Note: parameter names are lowercase (matches RUNNER_PARAMETER_PRIORS convention).
-    # The published Bocquet+19 paper uses uppercase Ω_m; the platform internal schema uses omegam.
-    assert cl.parameters == ("sigma8", "omegam")
-    # sigma8 = 0.766 (Bocquet+19 baseline)
-    assert abs(cl.mean[0] - 0.766) < 1e-6
-    # Omegam = 0.300 (Bocquet+19 fiducial)
-    assert abs(cl.mean[1] - 0.300) < 1e-6
-    # Diagonal σ correctly recovered: σ_σ8 = 0.025, σ_Ωm = 0.05
-    import math
-    assert math.isclose(math.sqrt(cl.covariance[0][0]), 0.025, abs_tol=1e-6)
-    assert math.isclose(math.sqrt(cl.covariance[1][1]), 0.050, abs_tol=1e-6)
-    # rho = -0.6 SZ degeneracy slope direction
-    rho = cl.covariance[0][1] / (
-        math.sqrt(cl.covariance[0][0]) * math.sqrt(cl.covariance[1][1])
-    )
-    assert math.isclose(rho, -0.6, abs_tol=1e-6)
+    assert entry.compressed_likelihood is None
+    assert entry.covariance.provided is False
+    assert "joint posterior covariance is not registered" in entry.covariance.description
+    assert "sigma8_omegam_0p2" in entry.observables
 
-    arxivs = [c.arxiv for c in entry.citations if c.arxiv]
-    assert "1812.01679" in arxivs
+    citation = next(c for c in entry.citations if c.arxiv == "1812.01679")
+    assert citation.doi == "10.3847/1538-4357/ab1f10"
+    assert entry.source_url == "https://doi.org/10.3847/1538-4357/ab1f10"
 
 
-def test_spt_cluster_does_not_share_observables_with_weak_lensing() -> None:
-    """SPT cluster must be **independent** of weak lensing — observables must not include
-    xi_plus / xi_minus / S8 (those are cosmic shear fields). This is the key to its role
-    as an independent sigma8 tension anchor."""
+def test_spt_cluster_metadata_discloses_weak_lensing_mass_calibration() -> None:
     from app.services.cosmology_likelihoods import get_cosmology_dataset
 
     entry = get_cosmology_dataset("spt_cluster_bocquet19")
-    assert "xi_plus" not in entry.observables
-    assert "xi_minus" not in entry.observables
-    # sigma8 sharing is OK (kappa-shear also outputs sigma8); omegam likewise (lowercase per
-    # RUNNER_PARAMETER_PRIORS convention)
-    assert "sigma8" in entry.observables
-    assert "omegam" in entry.observables
+    notes = entry.notes.lower()
+    assert "weak gravitational-lensing" in notes
+    assert "magellan/hst" in notes
+    assert "32 clusters" in notes
+    assert "not a weak-lensing-free anchor" in notes
 
 
-def test_spt_cluster_chain_runner_combines_with_weak_lensing() -> None:
-    """SPT cluster + KiDS-1000 + DES Y3 + HSC Y1 joint chain must be runnable
-    (main sigma8 tension cross-check workflow). All 5 datasets are on the compressed_gaussian
-    path; the runner should accept them."""
+def test_spt_cluster_is_not_numerically_combined_with_weak_lensing() -> None:
     from app.services.cosmology_likelihoods import run_likelihood_chain
 
     result = run_likelihood_chain(
@@ -746,18 +950,15 @@ def test_spt_cluster_chain_runner_combines_with_weak_lensing() -> None:
     )
     assert result["success"] is True
     assert result["publication_ready"] is False
-    assert result["preliminary_ready"] is True
-    # sigma8 must be in the fit parameters
-    assert "sigma8" in result["parameters"]
-    assert "S8" in result["parameters"]
-    # All 5 datasets must participate in the fit
-    assert len(result["datasets_used"]) == 5
+    assert result["chain_tier"] == "blocked"
     used_keys = {entry["key"] for entry in result["datasets_used"]}
-    assert "spt_cluster_bocquet19" in used_keys
+    not_run_keys = {entry["key"] for entry in result["datasets_not_run"]}
+    assert "spt_cluster_bocquet19" not in used_keys
+    assert "spt_cluster_bocquet19" in not_run_keys
+    assert result["__do_not_claim__"] is True
 
 
-def test_spt_cluster_alone_chain_returns_2d_constraint() -> None:
-    """Running SPT cluster alone must return a sigma8/Omegam two-parameter posterior, not empty."""
+def test_spt_cluster_alone_returns_no_numeric_likelihood() -> None:
     from app.services.cosmology_likelihoods import run_likelihood_chain
 
     result = run_likelihood_chain(
@@ -767,11 +968,13 @@ def test_spt_cluster_alone_chain_returns_2d_constraint() -> None:
         n_samples=400,
     )
     assert result["success"] is True
-    assert "sigma8" in result["parameters"]
-    assert "omegam" in result["parameters"]
-    # sigma8 median should be approximately 0.766 (compressed Gaussian center)
-    sigma8_param = result["parameters"]["sigma8"]
-    assert abs(sigma8_param["median"] - 0.766) < 0.05
+    assert result["analysis_status"] == "NO_COMPRESSED_LIKELIHOOD"
+    assert result["chain_tier"] == "blocked"
+    assert result["datasets_used"] == []
+    assert [entry["key"] for entry in result["datasets_not_run"]] == [
+        "spt_cluster_bocquet19"
+    ]
+    assert result["__do_not_claim__"] is True
 
 
 # ── PART AI Phase 5: eBOSS DR16 RSD f·σ8 multi-z compilation ────────
@@ -862,7 +1065,7 @@ def test_single_cell_emcee_fallback_upgrades_collapsed_3probe() -> None:
     """The emcee fallback improves ESS but one flattened ensemble stays preliminary."""
     from app.services.cosmology_likelihoods import run_likelihood_chain
 
-    keys = ["desi_dr1_bao", "pantheon_plus", "planck2018_compressed"]
+    keys = ["desi_dr1_bao", "union3", "planck2018_compressed"]
 
     # Matrix / default path: fast importance sampling, ESS collapses on the
     # 3-probe product, so the cell is not publication-ready.
@@ -881,7 +1084,7 @@ def test_single_cell_emcee_fallback_upgrades_collapsed_3probe() -> None:
         n_samples=4000,
         allow_emcee_fallback=True,
     )
-    assert deep["sampler"] == "compressed_emcee"
+    assert deep["sampler"] == "sn_emcee"
     assert deep["publication_ready"] is False
     assert deep["preliminary_ready"] is True
     assert deep["chain_tier"] == "exploratory"

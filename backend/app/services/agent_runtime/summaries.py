@@ -707,7 +707,7 @@ def _cosmology_tool_grounded_summary(
                 "unless a full external Cobaya/CosmoSIS chain has actually run."
             )
         else:
-            reason = "no publication-ready compressed posterior was produced"
+            reason = "no publication-ready full-likelihood posterior was produced"
             warnings = chain.get("warnings")
             if isinstance(warnings, list) and warnings:
                 reason = str(warnings[0])
@@ -834,6 +834,10 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
     executed_not_ready_summaries: list[str] = []
     config_only_summaries: list[str] = []
     if isinstance(matrix, dict):
+        # Aggregate research matrices are diagnostic containers.  When the
+        # parent is tainted, a timeout/partial-summary path must not launder a
+        # child cell's numbers around the normal numeric-claim validator.
+        matrix_numbers_claimable = matrix.get("__do_not_claim__") is not True
         for cell in matrix.get("matrix") or []:
             if not isinstance(cell, dict):
                 continue
@@ -842,10 +846,18 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
             if cell.get("publication_ready") is True:
                 ready_cells.append(label)
                 result = cell.get("result") if isinstance(cell.get("result"), dict) else {}
-                params = result.get("parameters") if isinstance(result, dict) and isinstance(result.get("parameters"), dict) else {}
+                params = (
+                    result.get("parameters")
+                    if matrix_numbers_claimable
+                    and isinstance(result, dict)
+                    and isinstance(result.get("parameters"), dict)
+                    else {}
+                )
                 diagnostics = (
                     result.get("chain_diagnostics")
-                    if isinstance(result, dict) and isinstance(result.get("chain_diagnostics"), dict)
+                    if matrix_numbers_claimable
+                    and isinstance(result, dict)
+                    and isinstance(result.get("chain_diagnostics"), dict)
                     else {}
                 )
                 parts = [label]
@@ -881,7 +893,9 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
                 result = cell.get("result") if isinstance(cell.get("result"), dict) else {}
                 diagnostics = (
                     result.get("chain_diagnostics")
-                    if isinstance(result, dict) and isinstance(result.get("chain_diagnostics"), dict)
+                    if matrix_numbers_claimable
+                    and isinstance(result, dict)
+                    and isinstance(result.get("chain_diagnostics"), dict)
                     else {}
                 )
                 warnings = [str(w) for w in cell.get("warnings") or [] if w]
@@ -993,7 +1007,7 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
             (
                 "- The executable baseline below is compressed-likelihood preliminary only."
                 if ready_cells
-                else "- No publication-ready compressed-likelihood baseline completed this turn."
+                else "- No publication-ready direct likelihood result completed this turn."
             ),
             "",
         ])
@@ -1018,12 +1032,12 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
             lines.append(f"- {note}")
     if ready_cells:
         lines.append(
-            "- Runnable compressed-likelihood preliminary cells: "
+            "- Numerically executed compressed-likelihood preliminary cells: "
             + ", ".join(ready_cells[:6])
             + ("." if len(ready_cells) <= 6 else f", +{len(ready_cells) - 6} more.")
         )
     else:
-        lines.append("- No publication-ready compressed-likelihood cell completed this turn.")
+        lines.append("- No publication-ready direct likelihood result completed this turn.")
 
     lines.extend(["", "Executed analyses"])
     if plan:
@@ -1179,7 +1193,14 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
             row
             for row in gap_matrix
             if isinstance(row, dict)
-            and str(row.get("status")) in {"missing", "registered_config_only", "config_only", "partial"}
+            and str(row.get("status")) in {
+                "missing",
+                "registered_config_only",
+                "config_only",
+                "literature_context",
+                "context_only",
+                "partial",
+            }
         ]
         if missing_components:
             parts = []

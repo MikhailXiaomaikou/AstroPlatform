@@ -665,9 +665,16 @@ async def execute_tool(
         # Telemetry must never break the actual tool call.
         pass
 
-    from app.services.result_provenance import normalize_tool_result
+    from app.services.result_provenance import (
+        normalize_tool_result,
+        prepare_reproducible_tool_input,
+    )
+    execution_input, execution_seed, seed_source = prepare_reproducible_tool_input(
+        tool_name,
+        tool_input,
+    )
     result = await _execute_tool_inner(
-        tool_name, tool_input, api_key, provider_api_keys,
+        tool_name, execution_input, api_key, provider_api_keys,
         python_session_id, user_id, chat_session_id, progress_callback,
     )
 
@@ -677,7 +684,7 @@ async def execute_tool(
     # to prevent BYOK api_key or large payloads from being stored in the DB.
     try:
         from app.services.event_collector import event_collector
-        input_keys = sorted(tool_input.keys()) if isinstance(tool_input, dict) else []
+        input_keys = sorted(execution_input.keys())
         await event_collector.track(
             event_type="ai.tool_called",
             event_data={
@@ -692,9 +699,14 @@ async def execute_tool(
         # Telemetry must never break the actual tool call.
         pass
 
-    # R1: pass the caller's tool_input so the reproducibility envelope can
-    # hash the exact invocation parameters.
-    return normalize_tool_result(tool_name, result, tool_input=tool_input)
+    # R1/L20: hash the exact invocation parameters and stamp the same effective
+    # seed that was injected before execution.  Never derive a receipt-only seed
+    # after a stochastic kernel has already run.
+    normalize_kwargs: dict[str, Any] = {"tool_input": execution_input}
+    if execution_seed is not None:
+        normalize_kwargs["random_seed"] = execution_seed
+        normalize_kwargs["random_seed_source"] = seed_source
+    return normalize_tool_result(tool_name, result, **normalize_kwargs)
 
 
 async def _execute_tool_inner(

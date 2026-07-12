@@ -381,6 +381,48 @@ async def _run_agent_loop(
             summary = grounded.strip() or (
                 "The agent loop timed out before any tool produced a citable result."
             )
+            deadline_validation = _not_run_validation_summary("loop_deadline")
+            try:
+                from app.services.claim_validator import (
+                    enforce_scientific_conclusion_gate,
+                )
+
+                summary, conclusion_violations = enforce_scientific_conclusion_gate(
+                    summary, all_tool_results
+                )
+                if conclusion_violations:
+                    deadline_validation = {
+                        "schema_version": 1,
+                        "numeric_gate": "not_run",
+                        "citation_gate": "blocked",
+                        "regen_count": 0,
+                        "blocked": True,
+                        "reason": "scientific_conclusion_scope",
+                        "interventions": [{
+                            "gate": "scientific_conclusion_scope",
+                            "action": "blocked",
+                            "reason": "unmatched_conclusion_attestation",
+                        }],
+                    }
+            except Exception:
+                summary = (
+                    "The agent loop timed out and scientific-conclusion "
+                    "validation could not complete. No scientific conclusion "
+                    "is cleared for display; review the tool cards and rerun."
+                )
+                deadline_validation = {
+                    "schema_version": 1,
+                    "numeric_gate": "not_run",
+                    "citation_gate": "blocked",
+                    "regen_count": 0,
+                    "blocked": True,
+                    "reason": "scientific_conclusion_validation_error",
+                    "interventions": [{
+                        "gate": "scientific_conclusion_scope",
+                        "action": "blocked",
+                        "reason": "validation_error",
+                    }],
+                }
             return {
                 "reply": (
                     summary
@@ -392,7 +434,7 @@ async def _run_agent_loop(
                 "hit_iteration_cap": False,
                 # This early return skips the entire gate stack — say so
                 # instead of letting the reply look validated.
-                "validation_summary": _not_run_validation_summary("loop_deadline"),
+                "validation_summary": deadline_validation,
             }
 
         # G3.4: filter tools that have failed too many times this turn.
@@ -766,7 +808,7 @@ async def _run_agent_loop(
                 system_this_call
                 + "\n\n[RUNTIME: a ResearchPlan exists for this turn. The only "
                 + "available tool this iteration is run_research_matrix. Execute "
-                + "the runnable compressed-likelihood cells and mark config-only "
+                + "the numerically executable preliminary cells and mark config-only "
                 + "cells as not runnable. Do not invent missing likelihood results.]"
             )
         elif research_evidence_pending:
@@ -804,8 +846,9 @@ async def _run_agent_loop(
                 + "returned. The only available tools this iteration are "
                 + "run_cosmology_likelihood_chain and "
                 + "run_cosmology_robustness_matrix. Execute the phase-1 "
-                + "compressed Gaussian likelihood where registered summaries "
-                + "exist. If datasets_not_run is non-empty, say those datasets "
+                + "verified likelihood paths and role-approved priors/approximations. "
+                + "Published posterior/proposal summaries are context-only and must "
+                + "not enter chi-square. If datasets_not_run is non-empty, say those datasets "
                 + "still need external Cobaya/CosmoSIS chains; do not imply "
                 + "they are included in the numerical posterior.]"
             )
@@ -814,8 +857,8 @@ async def _run_agent_loop(
                 system_this_call
                 + "\n\n[RUNTIME: cosmology registry/config tools already "
                 + "returned for this turn. Stop calling tools unless a "
-                + "compressed-likelihood result is already present. Summarize "
-                + "registered datasets, runnable compressed results, and which "
+                + "numerical likelihood result is already present. Summarize "
+                + "registered datasets, executable results, context-only records, and which "
                 + "posterior/chain claims remain unsupported.]"
             )
 
@@ -1077,8 +1120,8 @@ async def _run_agent_loop(
             await _emit({
                 "type": "status",
                 "message": (
-                    "Running the phase-1 compressed Gaussian cosmology "
-                    "likelihood for registered executable summaries."
+                    "Running registered cosmology likelihood paths and "
+                    "role-approved priors/approximations."
                 ),
             })
         # 2026-05-28: cosmology direct-route early gate. Fires only on the
@@ -3082,6 +3125,47 @@ async def _run_agent_loop(
                 )
         except Exception as e:
             logger.debug("Fallback synthesis validation skipped: %s", e)
+
+    # Final qualitative-science post-condition.  This runs after every model,
+    # regeneration, identity correction, deterministic research summary, and
+    # empty-reply fallback path above.  Keeping one last boundary check prevents
+    # a later fallback from reintroducing an unsupported headline conclusion.
+    try:
+        from app.services.claim_validator import (
+            enforce_scientific_conclusion_gate,
+        )
+
+        _conclusion_draft = clean_reply
+        clean_reply, conclusion_violations = enforce_scientific_conclusion_gate(
+            clean_reply, all_tool_results
+        )
+        if conclusion_violations:
+            fabrication_stats["blocked"] = True
+            await _gate_event(
+                "scientific_conclusion_scope",
+                "blocked",
+                reason="unmatched_conclusion_attestation",
+                violations=conclusion_violations,
+                draft=_conclusion_draft,
+                final=clean_reply,
+            )
+    except Exception as exc:
+        _conclusion_draft = clean_reply
+        clean_reply = (
+            "Scientific-conclusion validation failed, so no qualitative "
+            "scientific conclusion is cleared for display. Review the current "
+            "tool evidence and rerun the validation step."
+        )
+        fabrication_stats["blocked"] = True
+        await _gate_event(
+            "scientific_conclusion_scope",
+            "blocked",
+            reason="validation_error",
+            details={"error_class": exc.__class__.__name__},
+            draft=_conclusion_draft,
+            final=clean_reply,
+        )
+        logger.exception("Scientific-conclusion final gate failed closed")
 
     # M7: telemetry so the UI can surface "hit iteration cap" to the user
     # (previously silent — a 13-step workflow just got truncated with no

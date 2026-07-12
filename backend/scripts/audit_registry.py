@@ -12,6 +12,8 @@ the platform relies on are populated:
 - ``units`` (per-observable units present for every observable)
 - ``execution_mode`` (compressed_gaussian / external_cobaya / ...)
 - ``covariance`` (a CovarianceSpec, even when metadata_only)
+- compressed Gaussian ``statistical_role`` (runtime-valid and explicit)
+- source-prior disclosure for posterior/proposal-only Gaussian records
 - bibcode reachability: every claim_validator citation pool source must
   resolve back to at least one DatasetCitation across the active registry
 
@@ -34,6 +36,19 @@ from typing import Any
 _BACKEND_ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(_BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(_BACKEND_ROOT))
+
+
+_VALID_COMPRESSED_STATISTICAL_ROLES = frozenset(
+    {
+        "published_posterior_summary",
+        "external_prior",
+        "likelihood_approximation",
+        "proposal_only",
+    }
+)
+_CONTEXT_ONLY_COMPRESSED_ROLES = frozenset(
+    {"published_posterior_summary", "proposal_only"}
+)
 
 
 def _citation_has_identifier(citation: Any) -> bool:
@@ -72,6 +87,19 @@ def _audit_entry(entry: Any) -> list[str]:
     # compressed_likelihood self-consistency
     spec = entry.compressed_likelihood
     if spec is not None:
+        statistical_role = str(getattr(spec, "statistical_role", "") or "")
+        if statistical_role not in _VALID_COMPRESSED_STATISTICAL_ROLES:
+            issues.append(
+                "compressed_likelihood has invalid statistical_role: "
+                f"{statistical_role!r}"
+            )
+        if (
+            statistical_role in _CONTEXT_ONLY_COMPRESSED_ROLES
+            and not str(getattr(spec, "source_prior", "") or "").strip()
+        ):
+            issues.append(
+                "context-only compressed_likelihood must disclose source_prior"
+            )
         params = list(spec.parameters or ())
         n = len(params)
         if n == 0:

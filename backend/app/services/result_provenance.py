@@ -114,11 +114,32 @@ _VALID_STATUS = {
     "PAPER_TOOL_MINING_BATCH_PARTIAL",
     "PAPER_TOOL_MINING_LOOP_ROUND_READY",
 }
-# Build-time tool version; populated by the Dockerfile via
-# `ARG TOOL_VERSION` / `ENV TOOL_VERSION=...`.  Falls back to "dev" when
-# running uvicorn locally.  Accessed lazily so tests can monkeypatch.
+# Immutable tool version used by scientific receipts.  A Docker build can set
+# TOOL_VERSION explicitly, while Render injects RENDER_GIT_COMMIT for each
+# deployed service.  GIT_COMMIT is the portable fallback for other hosts.
+_UNRESOLVED_TOOL_VERSIONS = {"", "dev", "unknown", "unset", "none"}
+
+
+def _runtime_is_production() -> bool:
+    return (
+        os.getenv("ENV", "").strip().lower() == "production"
+        or bool(os.getenv("RENDER_SERVICE_ID", "").strip())
+        or bool(os.getenv("RENDER_SERVICE_NAME", "").strip())
+    )
+
+
+def _tool_version_with_source() -> tuple[str, str]:
+    for env_name in ("TOOL_VERSION", "RENDER_GIT_COMMIT", "GIT_COMMIT"):
+        value = os.getenv(env_name, "").strip()
+        if value.lower() not in _UNRESOLVED_TOOL_VERSIONS:
+            return value, env_name.lower()
+    if _runtime_is_production():
+        return "unknown", "unresolved_production"
+    return "dev", "local_default"
+
+
 def _tool_version() -> str:
-    return os.getenv("TOOL_VERSION", "dev")
+    return _tool_version_with_source()[0]
 def _now_utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 def compute_query_hash(tool_name: str, tool_input: Any) -> str:
@@ -129,32 +150,68 @@ def compute_query_hash(tool_name: str, tool_input: Any) -> str:
     except (TypeError, ValueError):
         payload = repr((tool_name, tool_input))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
-# L20 (audit 2026-04-20): all stochastic tools must have a seed to enable
-# bit-exact reproduction. This set defines which tools are stochastic; if
-# random_seed=None is passed, a deterministic seed is automatically derived
-# from the query_hash and recorded in the envelope as
-# random_seed_source="auto_from_input". Running the same input twice always
-# produces the same seed -> same chain/bootstrap result; the user does not
-# need to track seeds manually.
-_STOCHASTIC_TOOLS: frozenset[str] = frozenset({
-    "bayesian_fit", "fit_rv_orbit", "lomb_scargle_period", "fit_sersic_morphology",
-    "analyze_spectrum_pro", "sensitivity_analysis",
-    # M2: fit_line_lfr will route to Bayesian (linmix, M3) or bootstrap
-    # (subsample significance, M4) when error columns are available.  Both
-    # are stochastic; the OLS path is deterministic but goes through the
-    # same envelope, so we seed it too for provenance consistency.
-    "fit_line_lfr",
-    "astro_statistics_toolbox",
-    "run_cosmology_likelihood_chain",
-    "run_cosmology_robustness_matrix",
-    "run_cmb_rotation_likelihood",
-    "run_nested_sampler",
-})
+# L20 (audit 2026-04-20): every genuinely stochastic tool must receive its
+# seed before execution.  Some tools use the historical field name ``seed``
+# and others use ``random_seed``; keeping the mapping here prevents the receipt
+# layer from inventing a post-hoc seed that the science kernel never saw.
+_STOCHASTIC_TOOL_SEED_FIELDS: dict[str, str] = {
+    "run_pipeline": "random_seed",
+    "fit_rv_orbit": "random_seed",
+    "fit_isochrone": "random_seed",
+    # fit_line_lfr may route to linmix/bootstrap; the deterministic OLS path
+    # still accepts the seed for a stable provenance contract.
+    "fit_line_lfr": "seed",
+    "astro_statistics_toolbox": "seed",
+    "fit_cosmology_mcmc": "random_seed",
+    "run_cobaya_cosmology": "random_seed",
+    "run_cosmology_likelihood_chain": "random_seed",
+    "run_cosmology_robustness_matrix": "random_seed",
+    "run_cmb_rotation_likelihood": "random_seed",
+    "run_nested_sampler": "random_seed",
+    "audit_published_constraint": "random_seed",
+    "run_research_matrix": "random_seed",
+}
+_STOCHASTIC_TOOLS: frozenset[str] = frozenset(_STOCHASTIC_TOOL_SEED_FIELDS)
+
+
+def prepare_reproducible_tool_input(
+    tool_name: str,
+    tool_input: dict[str, Any],
+) -> tuple[dict[str, Any], int | None, str | None]:
+    """Return the exact input to execute plus its effective seed metadata.
+
+    The seed is derived from the caller's seed-free input, then injected into a
+    copy before the tool runs.  Explicit caller seeds always win.  The original
+    input is never mutated.
+    """
+    prepared = dict(tool_input or {})
+    seed_field = _STOCHASTIC_TOOL_SEED_FIELDS.get(tool_name)
+    if seed_field is None:
+        return prepared, None, None
+
+    supplied = prepared.get(seed_field)
+    if supplied is not None:
+        try:
+            seed = int(supplied)
+        except (TypeError, ValueError):
+            # Preserve the caller's value so the tool's normal validation path
+            # can return a structured failure.  Provenance must not turn a bad
+            # seed into an uncaught dispatcher exception.
+            return prepared, None, None
+        prepared[seed_field] = seed
+        return prepared, seed, "user_provided"
+
+    seed = int(compute_query_hash(tool_name, prepared)[:8], 16)
+    prepared[seed_field] = seed
+    return prepared, seed, "auto_from_input"
+
+
 def reproducibility_envelope(
     tool_name: str,
     tool_input: Any,
     *,
     random_seed: int | None = None,
+    random_seed_source: str | None = None,
     archive_version: str | None = None,
     run_id: str | None = None,
 ) -> dict[str, Any]:
@@ -162,24 +219,32 @@ def reproducibility_envelope(
     Every tool result carries this so later analyses (golden-path tests,
     user-triggered replays, audit-log inspection) can verify that the same
     input against the same archive version would produce the same output.
-    L20: for stochastic tools (bayesian_fit, bootstrap, GP, emcee, etc.) with
-    no random_seed, a deterministic seed is derived from the query_hash and
-    recorded in the envelope as random_seed_source="auto_from_input". Running
-    the same input twice produces bit-exact results.
+    L20: the dispatcher derives and injects missing stochastic seeds *before*
+    execution, then supplies the effective seed here.  This function never
+    invents a seed after the science kernel has already run.
     """
+    tool_version, tool_version_source = _tool_version_with_source()
     envelope: dict[str, Any] = {
         "run_id": run_id or str(uuid.uuid4()),
-        "tool_version": _tool_version(),
+        "tool_version": tool_version,
+        "tool_version_source": tool_version_source,
         "query_hash": compute_query_hash(tool_name, tool_input),
         "timestamp_utc": _now_utc_iso(),
     }
     if random_seed is not None:
         envelope["random_seed"] = int(random_seed)
-        envelope["random_seed_source"] = "user_provided"
-    elif tool_name in _STOCHASTIC_TOOLS:
-        # Derive a 32-bit seed from the first 8 hex chars of query_hash
-        envelope["random_seed"] = int(envelope["query_hash"][:8], 16)
-        envelope["random_seed_source"] = "auto_from_input"
+        envelope["random_seed_source"] = random_seed_source or "user_provided"
+    else:
+        # Compatibility for direct normalizer callers that already placed an
+        # explicit seed in the invocation input.  Missing seeds are deliberately
+        # not derived here because this layer runs after execution.
+        seed_field = _STOCHASTIC_TOOL_SEED_FIELDS.get(tool_name)
+        if isinstance(tool_input, dict) and seed_field and tool_input.get(seed_field) is not None:
+            try:
+                envelope["random_seed"] = int(tool_input[seed_field])
+                envelope["random_seed_source"] = "user_provided"
+            except (TypeError, ValueError):
+                pass
     if archive_version:
         envelope["archive_version"] = str(archive_version)
     return envelope
@@ -639,12 +704,141 @@ def _taint_synthetic_transient_classifier(
     return tainted
 
 
+def _append_reproducibility_warning(result: dict[str, Any], warning: str) -> None:
+    warnings = result.get("warnings") or []
+    if isinstance(warnings, str):
+        warnings = [warnings]
+    else:
+        warnings = list(warnings)
+    if warning not in warnings:
+        warnings.append(warning)
+    result["warnings"] = warnings
+
+
+def _reported_random_seed(result: dict[str, Any]) -> int | None:
+    for key in ("random_seed", "seed"):
+        value = result.get(key)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _reconcile_reproducibility_seed(result: dict[str, Any]) -> dict[str, Any]:
+    """Keep a tool-reported seed and its receipt identical, failing closed on drift."""
+    envelope_raw = result.get("reproducibility")
+    if not isinstance(envelope_raw, dict):
+        return result
+    reported_seed = _reported_random_seed(result)
+    recorded_seed = envelope_raw.get("random_seed")
+    if reported_seed is None or recorded_seed is None:
+        return result
+    try:
+        recorded_seed_int = int(recorded_seed)
+    except (TypeError, ValueError):
+        recorded_seed_int = -1
+    if reported_seed == recorded_seed_int:
+        return result
+
+    tainted = dict(result)
+    envelope = dict(envelope_raw)
+    envelope["requested_random_seed"] = recorded_seed
+    envelope["random_seed"] = reported_seed
+    envelope["random_seed_source"] = "tool_reported_mismatch"
+    tainted["reproducibility"] = envelope
+    warning = (
+        "The science tool reported a different random seed than the dispatcher "
+        "requested; this result is not reproducible and cannot support claims."
+    )
+    _append_reproducibility_warning(tainted, warning)
+    tainted["__do_not_claim__"] = True
+    tainted["publication_ready"] = False
+    if tainted.get("chain_tier") == "publication":
+        tainted["chain_tier"] = "blocked"
+    if "scientific_conclusion_ready" in tainted:
+        tainted["scientific_conclusion_ready"] = False
+    diagnostics = tainted.get("chain_diagnostics")
+    if isinstance(diagnostics, dict):
+        diagnostics = dict(diagnostics)
+        diagnostics["publication_ready"] = False
+        diagnostics["publication_blocker"] = "random_seed_mismatch"
+        tainted["chain_diagnostics"] = diagnostics
+    publication_gate = tainted.get("publication_gate")
+    if isinstance(publication_gate, dict):
+        publication_gate = dict(publication_gate)
+        reasons = list(publication_gate.get("reasons") or [])
+        if "random_seed_mismatch" not in reasons:
+            reasons.append("random_seed_mismatch")
+        publication_gate["eligible"] = False
+        publication_gate["reasons"] = reasons
+        tainted["publication_gate"] = publication_gate
+    tainted["__message_to_model__"] = warning
+    return tainted
+
+
+def _taint_unversioned_publication_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Block publication claims when a production result lacks an immutable build id."""
+    if not _runtime_is_production():
+        return result
+    envelope = result.get("reproducibility")
+    if not isinstance(envelope, dict):
+        return result
+    version = str(envelope.get("tool_version") or "").strip().lower()
+    runtime_version, _runtime_version_source = _tool_version_with_source()
+    if (
+        version not in _UNRESOLVED_TOOL_VERSIONS
+        and runtime_version.strip().lower() not in _UNRESOLVED_TOOL_VERSIONS
+    ):
+        return result
+    publication_claim = (
+        result.get("publication_ready") is True
+        or str(result.get("chain_tier") or "").lower() == "publication"
+        or result.get("scientific_conclusion_ready") is True
+    )
+    if not publication_claim:
+        return result
+
+    tainted = dict(result)
+    warning = (
+        "Production scientific output has no immutable tool/code version; "
+        "publication readiness is blocked until the deployed commit is recorded."
+    )
+    _append_reproducibility_warning(tainted, warning)
+    tainted["__do_not_claim__"] = True
+    tainted["publication_ready"] = False
+    if str(tainted.get("chain_tier") or "").lower() == "publication":
+        tainted["chain_tier"] = "blocked"
+    if "scientific_conclusion_ready" in tainted:
+        tainted["scientific_conclusion_ready"] = False
+    diagnostics = tainted.get("chain_diagnostics")
+    if isinstance(diagnostics, dict):
+        diagnostics = dict(diagnostics)
+        diagnostics["publication_ready"] = False
+        diagnostics["publication_blocker"] = "unversioned_tool_build"
+        tainted["chain_diagnostics"] = diagnostics
+    publication_gate = tainted.get("publication_gate")
+    if isinstance(publication_gate, dict):
+        publication_gate = dict(publication_gate)
+        reasons = list(publication_gate.get("reasons") or [])
+        if "unversioned_tool_build" not in reasons:
+            reasons.append("unversioned_tool_build")
+        publication_gate["eligible"] = False
+        publication_gate["reasons"] = reasons
+        tainted["publication_gate"] = publication_gate
+    tainted["__message_to_model__"] = warning
+    return tainted
+
+
 def normalize_tool_result(
     tool_name: str,
     result: Any,
     *,
     tool_input: Any = None,
     random_seed: int | None = None,
+    random_seed_source: str | None = None,
     archive_version: str | None = None,
 ) -> dict[str, Any]:
     """Ensure every tool result is a dict with provenance metadata + envelope.
@@ -656,16 +850,38 @@ def normalize_tool_result(
     """
     if not isinstance(result, dict):
         result = {"value": result}
-    # Attach envelope if not already present.  Tools that construct their
-    # own envelope (e.g., pipeline-executed runs with upstream run_ids) win.
-    if "reproducibility" not in result:
-        result = dict(result)
-        result["reproducibility"] = reproducibility_envelope(
-            tool_name,
-            tool_input if tool_input is not None else result.get("_tool_input"),
-            random_seed=random_seed,
-            archive_version=archive_version,
-        )
+    # The dispatcher stamps the authoritative receipt for *this* execution.
+    # A tool-returned envelope is untrusted payload: allowing it to overwrite
+    # run_id/query_hash/tool_version/source made stale or caller-forged receipts
+    # look current.  Preserve it only as explicitly labelled upstream context;
+    # never merge it into the authoritative envelope.
+    envelope = reproducibility_envelope(
+        tool_name,
+        tool_input if tool_input is not None else result.get("_tool_input"),
+        random_seed=random_seed,
+        random_seed_source=random_seed_source,
+        archive_version=archive_version,
+    )
+    existing_envelope = result.get("reproducibility")
+    if isinstance(existing_envelope, dict):
+        envelope["upstream_receipt"] = {
+            key: existing_envelope[key]
+            for key in (
+                "run_id",
+                "tool_version",
+                "tool_version_source",
+                "query_hash",
+                "source",
+                "timestamp",
+                "timestamp_utc",
+                "archive_version",
+            )
+            if key in existing_envelope
+        }
+    result = dict(result)
+    result["reproducibility"] = envelope
+    result = _reconcile_reproducibility_seed(result)
+    result = _taint_unversioned_publication_result(result)
     result = _taint_unverified_run_python_randomness(tool_name, result, tool_input)
     result = _taint_synthetic_transient_classifier(tool_name, result)
     # R4: best-effort unit + frame annotation for well-known astronomical

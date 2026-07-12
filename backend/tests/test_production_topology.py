@@ -70,10 +70,16 @@ def test_ci_builds_the_images_used_by_production_and_compose():
     workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
         encoding="utf-8"
     )
+    backend_dockerfile = (REPO_ROOT / "backend" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
 
     assert "container-build:" in workflow
-    assert "docker build --pull -t standard-astro-backend:ci backend" in workflow
+    assert "--build-arg TOOL_VERSION=\"$GITHUB_SHA\"" in workflow
+    assert "-t standard-astro-backend:ci backend" in workflow
     assert "-t standard-astro-frontend:ci frontend" in workflow
+    assert 'ARG TOOL_VERSION=""' in backend_dockerfile
+    assert "ENV TOOL_VERSION=${TOOL_VERSION}" in backend_dockerfile
 
 
 def test_daily_jobs_install_only_the_hash_locked_scientific_environment():
@@ -144,6 +150,15 @@ def test_render_workers_wait_for_exact_schema_head():
         "envVarKey": "RENDER_EXTERNAL_URL",
     }
     assert frontend_env["NODE_VERSION"]["value"] == "20.19.0"
+
+    # Render injects RENDER_GIT_COMMIT on every deploy. Do not mirror it through
+    # a Blueprint self-reference: fromService values refresh on Blueprint sync,
+    # not on every commit deploy, and would override the runtime SHA with a stale
+    # TOOL_VERSION (the receipt resolver already reads RENDER_GIT_COMMIT).
+    assert "TOOL_VERSION" not in backend_env
+    for name in ("standard-astro-celery-worker", "standard-astro-celery-beat"):
+        service_env = {item["key"]: item for item in services[name]["envVars"]}
+        assert "TOOL_VERSION" not in service_env
 
     cache_headers = {
         item["path"]: item["value"]

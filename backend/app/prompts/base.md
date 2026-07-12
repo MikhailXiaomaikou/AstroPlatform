@@ -319,18 +319,21 @@ job id; poll `get_cosmology_run_status`.
 
 For ACT/Planck/BAO/weak-lensing likelihood-registry workflows, first list
 datasets, then build guarded configs, then use `run_cosmology_likelihood_chain`
-for the phase-1 compressed Gaussian runner when available.  A compressed
-runner result is only a preliminary summary likelihood, not a full external
-ACT/Planck/BAO/SN/DES/KiDS/HSC likelihood.  Quote numbers only for
-`datasets_used`; explicitly say which `datasets_not_run` still require
-external Cobaya/CosmoSIS likelihoods.
+for verified in-process likelihood paths and explicitly role-approved external
+priors/likelihood approximations. A registered published posterior summary is
+literature context, not a likelihood, even when it has a mean/covariance block.
+Quote numbers only for `datasets_used`; explicitly say which
+`datasets_not_run` were not numerically included. The Planck compressed path
+executes the independent CHW2019 distance prior only; its posterior sigma8/S8
+rows are proposal/context and do not constrain growth.
 When citing registry datasets, copy the registry citation label and year
 exactly as returned by the tool. Do not shorten, update, or normalize
 collaboration citations from memory (for example, never turn a registry
 entry's `eBOSS Collaboration ... (2020)` into `Collaboration 2021`).
 
-Only quote H0/Om0/w0/wa/sigma8/posterior numbers when the MCMC tool result
-or compressed likelihood runner has `publication_ready=true`.  If
+Only quote H0/Om0/w0/wa/sigma8/posterior numbers as publication-grade when a
+direct, signed full-likelihood result has `publication_ready=true`. Compressed
+likelihood/prior approximations remain preliminary even when numerically useful. If
 `publication_ready=false`, R-hat/ESS are missing, or the tool returns
 PARTIAL/UNAVAILABLE, state that the posterior was not determined to
 publication quality.  Do not substitute Planck, Pantheon, DESI,
@@ -841,4 +844,3 @@ You MUST:
 2. Use the sensitivity_analysis tool to test how conclusions change across plausible parameter ranges
 3. Explicitly state when qualitative conclusions (e.g., "which mechanism dominates") could flip with different parameter choices
 4. Never present a single scaling estimate as definitive when parameter uncertainties span >1 order of magnitude
-

@@ -62,6 +62,31 @@ describe("CosmologyLikelihoodPanel", () => {
     expect(screen.getByText(/external likelihood\/data files/)).toBeInTheDocument();
   });
 
+  it("labels registered posterior summaries as literature context", () => {
+    render(
+      <CosmologyLikelihoodPanel
+        result={{
+          dataset_count: 1,
+          datasets: [
+            {
+              key: "kids1000_wl",
+              display_name: "KiDS-1000",
+              execution_mode: "compressed_gaussian",
+              compressed_likelihood: {
+                parameters: ["S8"],
+                statistical_role: "published_posterior_summary",
+                source_prior: "KiDS source-analysis prior",
+              },
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText(/literature posterior context: S8/)).toBeInTheDocument();
+    expect(screen.queryByText(/executable compressed params/)).not.toBeInTheDocument();
+  });
+
   it("shows robustness matrix rows", () => {
     render(
       <CosmologyLikelihoodPanel
@@ -82,20 +107,22 @@ describe("CosmologyLikelihoodPanel", () => {
     expect(screen.getByText(/desi_dr1_bao \+ pantheon_plus \+ planck2018_compressed/)).toBeInTheDocument();
   });
 
-  it("shows executable compressed robustness cells", () => {
+  it("shows partial robustness cells without calling context datasets executed", () => {
     render(
       <CosmologyLikelihoodPanel
         result={{
           model: "lcdm",
-          analysis_status: "COMPRESSED_ROBUSTNESS_READY",
+          analysis_status: "ROBUSTNESS_MATRIX_DIAGNOSTIC",
           matrix_size: 1,
           matrix: [
             {
               label: "BAO + CMB + weak lensing",
               dataset_keys: ["desi_dr1_bao", "planck2018_compressed", "kids1000_wl"],
-              publication_ready: true,
+              publication_ready: false,
+              execution_level: "partial_dataset_run",
               result: {
-                datasets_used: [{ key: "planck2018_compressed" }, { key: "kids1000_wl" }],
+                datasets_used: [{ key: "planck2018_compressed" }],
+                datasets_not_run: [{ key: "kids1000_wl" }],
               },
             },
           ],
@@ -103,8 +130,9 @@ describe("CosmologyLikelihoodPanel", () => {
       />,
     );
 
-    expect(screen.getByText("compressed results")).toBeInTheDocument();
-    expect(screen.getByText(/compressed posterior ready/)).toBeInTheDocument();
-    expect(screen.getByText(/used 2 compressed dataset/)).toBeInTheDocument();
+    expect(screen.getByText("diagnostic matrix")).toBeInTheDocument();
+    expect(screen.getByText(/partial posterior; some datasets not included/)).toBeInTheDocument();
+    expect(screen.getByText(/used 1 dataset/)).toBeInTheDocument();
+    expect(screen.getByText(/not numerically included: kids1000_wl/)).toBeInTheDocument();
   });
 });

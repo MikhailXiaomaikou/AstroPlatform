@@ -115,8 +115,8 @@ def audit_published_constraint(
     base_warnings = [
         "Tension is a physical signal, not a fabrication verdict: a real H0/sigma8/S8 "
         "tension means the measurements disagree, NOT that the paper is wrong.",
-        "Reproduction uses the compressed Gaussian summary likelihood, not the full "
-        "external likelihood — treat it as a preliminary consistency check.",
+        "Reproduction uses only the executable paths explicitly listed in "
+        "datasets_run. Published posterior-summary/proposal rows remain context-only.",
     ]
     model_msg = (
         "Report each tension by its n-sigma as a physical comparison and attribute it to "
@@ -125,23 +125,20 @@ def audit_published_constraint(
         "the published value is unsupported."
     )
 
-    # 1. Partition requested datasets by actual execution mode.  Registry
-    # ``status`` describes product maturity, not whether the in-process runner
-    # can execute it (DESI is intentionally status=external_likelihood while its
-    # verified compressed path is runnable).
-    runnable: list[str] = []
+    # 1. Separate unknown keys, then let the real runner determine which known
+    # datasets actually executed. Registry execution_mode alone is insufficient:
+    # posterior summaries may be stored as compressed records but are context-only.
+    candidates: list[str] = []
     unavailable: list[dict[str, str]] = []
     for key in requested:
         entry = _REGISTRY.get(key)
         if entry is None:
             unavailable.append({"key": key, "reason": "not in cosmology dataset registry"})
-        elif entry.execution_mode == "config_only":
-            unavailable.append({"key": key, "reason": "execution_mode=config_only"})
         else:
-            runnable.append(key)
+            candidates.append(key)
 
-    # 2. Nothing runnable -> BLOCKED (no reproduction, no fabrication).
-    if not runnable:
+    # 2. Nothing known -> BLOCKED (no reproduction, no fabrication).
+    if not candidates:
         return {
             "success": True,
             "__tool_status__": "BLOCKED",
@@ -167,16 +164,64 @@ def audit_published_constraint(
             ),
         }
 
-    # 3. Reproduce deterministically (no emcee fallback -> closed-form, reproducible).
+    # 3. Reproduce deterministically (no emcee fallback), then derive execution
+    # truth from datasets_used/datasets_not_run rather than echoing the request.
     reproduced = run_likelihood_chain(
         model=str(model or ""),
-        dataset_keys=runnable,
+        dataset_keys=candidates,
         random_seed=random_seed,
         allow_emcee_fallback=False,
     )
     repro_params = reproduced.get("parameters") if isinstance(reproduced, dict) else None
     repro_params = repro_params if isinstance(repro_params, dict) else {}
     repro_pub_ready = bool(reproduced.get("publication_ready")) if isinstance(reproduced, dict) else False
+    datasets_run = [
+        str(item.get("key"))
+        for item in (reproduced.get("datasets_used") or [])
+        if isinstance(item, dict) and item.get("key")
+    ]
+    unavailable_keys = {item["key"] for item in unavailable}
+    for item in reproduced.get("datasets_not_run") or []:
+        if not isinstance(item, dict) or not item.get("key"):
+            continue
+        key = str(item["key"])
+        if key in unavailable_keys:
+            continue
+        spec = item.get("compressed_likelihood")
+        statistical_role = spec.get("statistical_role") if isinstance(spec, dict) else None
+        reason = (
+            f"statistical_role={statistical_role} is context-only"
+            if statistical_role in {"published_posterior_summary", "proposal_only"}
+            else f"execution_mode={item.get('execution_mode')} was not executed"
+        )
+        unavailable.append({"key": key, "reason": reason})
+        unavailable_keys.add(key)
+
+    if not datasets_run or not repro_params:
+        return {
+            "success": True,
+            "__tool_status__": "BLOCKED",
+            "analysis_status": "BLOCKED",
+            "data_origin": "unavailable",
+            "publication_ready": False,
+            "__do_not_claim__": True,
+            "audit_report": {
+                "model": str(model or ""),
+                "datasets_run": datasets_run,
+                "datasets_unavailable": unavailable,
+                "comparisons": [],
+                "paper_ref": paper_ref,
+            },
+            "reproduced_constraint": reproduced,
+            "warnings": base_warnings + [
+                "No requested dataset produced a claimable numerical constraint; "
+                "cannot reproduce. This is a coverage gap, not a judgement on the paper."
+            ],
+            "__message_to_model__": (
+                "Reproduction is BLOCKED: the requested records did not execute a "
+                "numerical likelihood. Do not quote any tension. " + model_msg
+            ),
+        }
 
     # canonical -> (actual_key, summary) from the reproduction, only where median exists.
     repro_canon: dict[str, tuple[str, dict]] = {}
@@ -186,9 +231,10 @@ def audit_published_constraint(
 
     overlap_pairs: list[str] = []
     unknown_claimed_datasets = sorted(key for key in claimed_ds if key not in _REGISTRY)
+    independence_proven = bool(claimed_ds) and not unknown_claimed_datasets
     for claimed_key in sorted(claimed_ds):
         claimed_entry = _REGISTRY.get(claimed_key)
-        for runnable_key in runnable:
+        for runnable_key in datasets_run:
             runnable_entry = _REGISTRY.get(runnable_key)
             if claimed_entry is None or runnable_entry is None:
                 continue
@@ -205,11 +251,17 @@ def audit_published_constraint(
             )
             if same_group or declared_overlap:
                 overlap_pairs.append(f"{claimed_key}<->{runnable_key}")
+            elif not (
+                claimed_entry.independence_group
+                and runnable_entry.independence_group
+                and claimed_entry.independence_group != runnable_entry.independence_group
+            ):
+                independence_proven = False
     overlap = sorted(set(overlap_pairs))
     independence = (
         "overlapping_data" if overlap
         else "independence_unverified" if unknown_claimed_datasets
-        else "assumed_independent" if claimed_ds
+        else "registry_verified_independent" if independence_proven
         else "independence_unverified"
     )
 
@@ -241,7 +293,8 @@ def audit_published_constraint(
         actual_key, summary = repro_canon[canon]
         repro_median = float(summary.get("median"))
         repro_std = float(summary.get("std") or 0.0)
-        if independence == "overlapping_data":
+        if independence in {"overlapping_data", "independence_unverified"}:
+            overlap_case = independence == "overlapping_data"
             comparisons.append({
                 "param": raw_name,
                 "canonical": canon,
@@ -249,12 +302,19 @@ def audit_published_constraint(
                 "claimed": [claimed_value, claimed_sig],
                 "reproduced": [repro_median, repro_std],
                 "tension_sigma": None,
-                "verdict": "OVERLAPPING_DATA_NOT_COMPARABLE",
+                "verdict": (
+                    "OVERLAPPING_DATA_NOT_COMPARABLE"
+                    if overlap_case
+                    else "INDEPENDENCE_UNVERIFIED_NOT_COMPARABLE"
+                ),
                 "independence": independence,
                 "exploratory": True,
                 "note": (
                     "The constraints share data/calibration. Independent-error "
                     "quadrature is invalid without their cross-covariance."
+                    if overlap_case
+                    else "Dataset independence is not registry-verified; n-sigma "
+                    "is withheld instead of assuming independent errors."
                 ),
             })
             continue
@@ -281,6 +341,7 @@ def audit_published_constraint(
             "NOT_REPRODUCED",
             "INVALID_INPUT",
             "OVERLAPPING_DATA_NOT_COMPARABLE",
+            "INDEPENDENCE_UNVERIFIED_NOT_COMPARABLE",
         }
         for c in comparisons
     )
@@ -299,8 +360,8 @@ def audit_published_constraint(
         )
     elif independence == "independence_unverified":
         warnings.append(
-            "claimed_datasets not provided; n-sigma assumes the published and reproduced "
-            "constraints are independent. If they share data, the tension is overstated."
+            "Dataset independence is not registry-verified; n-sigma is withheld "
+            "rather than assuming independent errors."
         )
     if not repro_pub_ready:
         warnings.append(
@@ -324,9 +385,10 @@ def audit_published_constraint(
         "data_origin": "cached_real",
         # Audit output is a comparison, never itself a citeable posterior.
         "publication_ready": False,
+        "__do_not_claim__": True,
         "audit_report": {
             "model": str(model or ""),
-            "datasets_run": runnable,
+            "datasets_run": datasets_run,
             "datasets_unavailable": unavailable,
             "reproduction_publication_ready": repro_pub_ready,
             "independence": independence,

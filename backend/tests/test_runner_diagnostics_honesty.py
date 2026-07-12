@@ -15,7 +15,8 @@ Four fabricated/decorative numbers in the runner results, all removed:
 3. run_alcock_paczynski_test fit the legacy hand-typed DESI constants (outside
    the sha256-pin audit) and stamped publication_ready unconditionally. Now it
    fits the verified vendored arrays (byte-identical values), carries the
-   artifact sha256 in provenance, and refuses loudly on an unverified file.
+   artifact sha256 in provenance, refuses loudly on an unverified file, and
+   remains diagnostic-only until the unified model-adequacy gate is satisfied.
 4. fit_statistics.delta_chi2 was a literal 0.0 placeholder in every result
    (both runners + cmb_rotation) — removed; model comparison lives in
    compute_model_comparison.
@@ -44,10 +45,15 @@ def test_rhat_is_honestly_none_on_sampling_runner():
     assert isinstance(d["ess_bulk"], int)
 
 
-def test_rhat_is_honestly_none_on_analytic_runner():
+def test_rhat_is_honestly_none_on_planck_distance_prior_runner():
     r = _chain(dataset_keys=["planck2018_compressed"])
     d = r["chain_diagnostics"]
-    assert d["overall_status"].startswith("analytic_gaussian")
+    assert d["overall_status"] in {
+        "importance_resampled",
+        "importance_resampled_low_ess",
+        "analytic_gaussian_truncated",
+        "analytic_gaussian_truncated_s8_reweighted",
+    }
     assert d["rhat"] is None
     assert d.get("ess_source") in {"importance_weights", "exact_gaussian_draws"}
 
@@ -102,7 +108,9 @@ def test_ap_test_fits_verified_arrays_with_provenance():
     prov = ap["provenance"]["alcock_paczynski"]
     assert prov["artifact_sha256"] == cl.load_verified_bao_data("desi_dr1_bao")["sha256"]
     assert prov["cov_fidelity"] == "full"
-    assert ap["publication_ready"] is True
+    assert ap["publication_ready"] is False
+    assert ap["preliminary_ready"] is True
+    assert ap["__do_not_claim__"] is True
 
 
 def test_ap_test_refuses_on_unverified_data(monkeypatch):

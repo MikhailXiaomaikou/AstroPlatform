@@ -469,28 +469,51 @@ def _external_chain_success_payload() -> dict:
         "H0": {"rhat": 1.005, "ess_bulk": 900.0},
         "omegam": {"rhat": 1.004, "ess_bulk": 850.0},
     }
+    summaries = {
+        "H0": {"mean": 67.4, "std": 0.5},
+        "omegam": {"mean": 0.315, "std": 0.007},
+    }
+    diagnostics = {
+        "overall_status": "ok",
+        "rhat": max(record["rhat"] for record in per_parameter.values()),
+        "ess_bulk": min(
+            record["ess_bulk"] for record in per_parameter.values()
+        ),
+        "n_chains": 4,
+        "n_independent_chains": 4,
+        "per_parameter": per_parameter,
+    }
+    from app.services.cosmology_likelihoods.verification import (
+        PUBLICATION_REQUIRED_ADEQUACY_CHECKS,
+        build_model_adequacy_attestation,
+        build_model_adequacy_subject,
+    )
+    subject = build_model_adequacy_subject(
+        model="lcdm",
+        dataset_keys=[entry.key for entry in entries],
+        random_seed=42,
+        summaries=summaries,
+        diagnostics=diagnostics,
+        data_verification=data_verification,
+    )
+    model_adequacy = build_model_adequacy_attestation(
+        subject=subject,
+        evidence_by_check={
+            name: {"artifact_id": f"evidence:{name}"}
+            for name in PUBLICATION_REQUIRED_ADEQUACY_CHECKS
+        },
+    )
     payload = cobaya_runner._runner_success(  # noqa: SLF001 — contract under test
         model_key="lcdm",
         entries=entries,
         seed=42,
         sampler="mcmc",
-        summaries={
-            "H0": {"mean": 67.4, "std": 0.5},
-            "omegam": {"mean": 0.315, "std": 0.007},
-        },
-        diagnostics={
-            "overall_status": "ok",
-            "rhat": max(record["rhat"] for record in per_parameter.values()),
-            "ess_bulk": min(
-                record["ess_bulk"] for record in per_parameter.values()
-            ),
-            "n_chains": 4,
-            "n_independent_chains": 4,
-            "per_parameter": per_parameter,
-        },
+        summaries=summaries,
+        diagnostics=diagnostics,
         chain_meta={"n_chains": 4, "n_draws_total": 4_000},
         stdout_tail="",
         data_verification=data_verification,
+        model_adequacy=model_adequacy,
     )
     assert payload["publication_ready"] is True
     assert payload["analysis_status"] == "EXTERNAL_COBAYA_READY"

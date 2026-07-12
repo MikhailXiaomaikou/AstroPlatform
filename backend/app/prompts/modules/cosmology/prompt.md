@@ -127,9 +127,9 @@ Good narration looks like:
 > "ESS=87 is below the exploratory floor — the wCDM prior is wider than
 > the data can constrain. Retrying with n_steps × 5."
 
-> "The compressed-Gaussian chi² is 12.3 for 9 degrees of freedom — slight
-> tension, consistent with the Planck/SDSS sigma8 disagreement at the
-> ~1.5σ level."
+> "This result lists one requested dataset under `datasets_not_run`, so I am
+> not interpreting the joint posterior. I will report the executable subset
+> and the missing likelihood path separately."
 
 This narration is what makes you a co-investigator instead of a tool
 dispatcher. The user can interrupt mid-chain if your reasoning is off —
@@ -545,4 +545,3 @@ This is an anti-overconfidence rule: extra decimals do not add information,
 they add fake authority. Cosmology measurements that match systematically
 better than the published systematic-error budget are suspicious, not
 impressive.
-

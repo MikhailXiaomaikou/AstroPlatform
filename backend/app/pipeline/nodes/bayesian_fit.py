@@ -27,7 +27,7 @@ def bayesian_fit(input_data: dict, params: dict) -> dict:
         ).encode()
         user_seed = int.from_bytes(hashlib.sha256(sig_bytes).digest()[:4], "big")
     rng = np.random.default_rng(int(user_seed))
-    np.random.seed(int(user_seed) & 0xFFFF_FFFF)  # legacy calls inside emcee
+    emcee_rng = np.random.RandomState(int(user_seed) & 0xFFFF_FFFF)
 
     # Get data
     x = np.array(input_data.get("x", input_data.get("wavelength", [])))
@@ -125,9 +125,24 @@ def bayesian_fit(input_data: dict, params: dict) -> dict:
     if method in ("nested", "dynesty", "ultranest"):
         from app.services.bayesian_inference import nested_sampling
         ns_method = "ultranest" if method == "ultranest" else "dynesty"
+        if ns_method == "ultranest":
+            return {
+                **input_data,
+                "error": (
+                    "BayesianFit deterministic replay is unsupported for UltraNest 4.5 "
+                    "because it exposes no isolated sampler RNG. Use method='dynesty'."
+                ),
+                "error_class": "deterministic_replay_unsupported",
+                "node_type": "BayesianFit",
+                "method": "ultranest",
+                "random_seed": int(user_seed),
+                "publication_ready": False,
+                "__do_not_claim__": True,
+            }
         result = nested_sampling(log_likelihood, prior_transform, ndim,
                                 nlive=params.get("n_live", 500),
-                                method=ns_method)
+                                method=ns_method,
+                                random_seed=int(user_seed))
     elif method == "mcmc":
         try:
             import emcee
@@ -186,6 +201,7 @@ def bayesian_fit(input_data: dict, params: dict) -> dict:
                     f"check likelihood sign, or widen the data/model."
                 )
             sampler = emcee.EnsembleSampler(n_walkers, ndim, log_prob)
+            sampler.random_state = emcee_rng.get_state()
             sampler.run_mcmc(p0, n_steps, progress=False)
 
             raw_chain = np.asarray(sampler.get_chain(discard=n_burn), dtype=float)

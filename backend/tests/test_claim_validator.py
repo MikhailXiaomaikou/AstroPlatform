@@ -328,6 +328,496 @@ def test_exploratory_mcmc_not_counted_as_claimable_success():
     assert not _payload_is_claimable_success("fit_cosmology_mcmc", result)
 
 
+def test_diagnostic_nested_sampler_cannot_support_claims_or_success():
+    from app.services.claim_validator import (
+        _is_tainted_synthetic_payload,
+        _payload_is_claimable_success,
+    )
+
+    result = {
+        "success": True,
+        "__tool_status__": "PARTIAL",
+        "analysis_status": "NESTED_SAMPLER_DIAGNOSTIC",
+        "publication_ready": False,
+        "__do_not_claim__": True,
+        "evidence": {"logz": -3.14159, "logzerr": 0.1},
+    }
+
+    assert _is_tainted_synthetic_payload(result) is True
+    assert not _payload_is_claimable_success("run_nested_sampler", result)
+
+
+def test_diagnostic_research_matrix_cannot_support_claims_or_success():
+    from app.services.claim_validator import (
+        _is_tainted_synthetic_payload,
+        _payload_is_claimable_success,
+    )
+
+    result = {
+        "success": True,
+        "analysis_status": "RESEARCH_MATRIX_DIAGNOSTIC",
+        "publication_ready": False,
+        "__do_not_claim__": True,
+        "matrix": [
+            {
+                "publication_ready": False,
+                "result": {"parameters": {"omegam": {"median": 0.29424}}},
+            }
+        ],
+    }
+
+    assert _is_tainted_synthetic_payload(result) is True
+    assert not _payload_is_claimable_success("run_research_matrix", result)
+
+
+def test_registry_proposal_means_cannot_launder_as_executed_constraints():
+    from app.services.claim_validator import validate_claims
+    from app.services.cosmology_likelihoods import (
+        list_cosmology_datasets,
+        run_likelihood_chain,
+    )
+
+    chain = run_likelihood_chain(
+        model="lcdm",
+        dataset_keys=["planck2018_compressed", "shoes_h0_riess22"],
+        n_samples=1000,
+        random_seed=42,
+    )
+    assert chain["parameters"]["H0"]["median"] != 67.36
+    assert "sigma8" not in chain["parameters"]
+
+    for reply in (
+        "Our constraint is H0 = 67.36 km/s/Mpc.",
+        "Our constraint is sigma8 = 0.8111.",
+        "Our constraint is S8 = 0.832.",
+    ):
+        validation = validate_claims(
+            reply,
+            [{"tool": "run_cosmology_likelihood_chain", "result": chain}],
+            require_typed_scientific_match=True,
+        )
+        assert validation.ok is False, reply
+
+    registry = list_cosmology_datasets(
+        dataset_keys=["planck2018_compressed"],
+    )
+    for reply in (
+        "Our constraint is H0 = 67.36 km/s/Mpc.",
+        "Our constraint is sigma8 = 0.8111.",
+        "Our constraint is S8 = 0.832.",
+    ):
+        validation = validate_claims(
+            reply,
+            [{"tool": "list_cosmology_datasets", "result": registry}],
+            require_typed_scientific_match=True,
+        )
+        assert validation.ok is False, reply
+
+
+def test_cosmology_central_claim_cannot_match_interval_or_error_statistic():
+    from app.services.claim_validator import validate_claims
+
+    tool_results = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {
+            "parameters": {
+                "H0": {
+                    "median": 68.8,
+                    "mean": 68.81,
+                    "best_fit": {"value": 68.82, "std": 67.36},
+                    "std": 0.52,
+                    "hdi_low_94": 67.36,
+                    "hdi_high_94": 69.79,
+                    "hdi_94": [67.36, 69.79],
+                }
+            }
+        },
+    }]
+
+    # ``H0 =`` is a central-estimate statement. An exact HDI edge must not
+    # certify it, in ordinary chat mode or strict manuscript mode.
+    for strict in (False, True):
+        rejected = validate_claims(
+            "Our constraint is H0 = 67.36 km/s/Mpc.",
+            tool_results,
+            require_typed_scientific_match=strict,
+        )
+        assert rejected.ok is False
+
+        accepted = validate_claims(
+            "Our constraint is H0 = 68.8 km/s/Mpc.",
+            tool_results,
+            require_typed_scientific_match=strict,
+        )
+        assert accepted.ok is True
+
+        nested_best_fit = validate_claims(
+            "Our constraint is H0 = 68.82 km/s/Mpc.",
+            tool_results,
+            require_typed_scientific_match=strict,
+        )
+        assert nested_best_fit.ok is True
+
+
+def test_cosmology_interval_claim_matches_only_the_typed_edge():
+    from app.services.claim_validator import validate_claims
+
+    tool_results = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {
+            "parameters": {
+                "H0": {
+                    "median": 68.8,
+                    "hdi_94": [67.36, 69.79],
+                }
+            }
+        },
+    }]
+
+    assert validate_claims(
+        "At the lower HDI edge, H0 = 67.36 km/s/Mpc.", tool_results
+    ).ok is True
+    assert validate_claims(
+        "At the upper HDI edge, H0 = 69.79 km/s/Mpc.", tool_results
+    ).ok is True
+    assert validate_claims(
+        "At the lower HDI edge, H0 = 69.79 km/s/Mpc.", tool_results
+    ).ok is False
+    assert validate_claims(
+        "Our central constraint is H0 = 67.36 km/s/Mpc.", tool_results
+    ).ok is False
+
+
+def test_cosmology_value_with_error_keeps_parameter_and_statistic_types():
+    from app.services.claim_validator import extract_claims, validate_claims
+
+    tool_results = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {
+            "parameters": {
+                "H0": {
+                    "median": 68.8,
+                    "std": 0.52,
+                    "hdi_high_94": 69.79,
+                }
+            },
+            # A coincidentally equal number elsewhere must not certify H0's
+            # uncertainty through the flat universe.
+            "unrelated_diagnostic": 0.31,
+        },
+    }]
+
+    claims = extract_claims("H0 = 68.8 ± 0.52 km/s/Mpc.")
+    assert any(claim.label == "cosmology_h0" for claim in claims)
+    assert any(
+        claim.label == "cosmology_h0_uncertainty" for claim in claims
+    )
+    assert validate_claims(
+        "H0 = 68.8 ± 0.52 km/s/Mpc.", tool_results
+    ).ok is True
+    assert validate_claims(
+        "H0 = 69.79 ± 0.52 km/s/Mpc.", tool_results
+    ).ok is False
+    assert validate_claims(
+        "H0 = 68.8 ± 0.31 km/s/Mpc.", tool_results
+    ).ok is False
+
+
+def test_dimensionless_cosmology_uncertainty_is_typed_and_validated():
+    from app.services.claim_validator import extract_claims, validate_claims
+
+    tool_results = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {"parameters": {"S8": {"median": 0.81, "std": 0.02}}},
+    }]
+
+    claims = extract_claims("S8 = 0.81 ± 0.02.")
+    assert any(claim.label == "cosmology_s8" for claim in claims)
+    assert any(
+        claim.label == "cosmology_s8_uncertainty" for claim in claims
+    )
+    assert validate_claims("S8 = 0.81 ± 0.02.", tool_results).ok is True
+    assert validate_claims("S8 = 0.81 ± 9.99.", tool_results).ok is False
+
+
+def test_unicode_cosmology_units_do_not_hide_uncertainty():
+    from app.services.claim_validator import extract_claims, validate_claims
+
+    tool_results = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {"parameters": {"H0": {"median": 68.8, "std": 0.52}}},
+    }]
+
+    claims = extract_claims("H0 = 68.8 ± 0.52 km s⁻¹ Mpc⁻¹.")
+    assert any(claim.label == "cosmology_h0" for claim in claims)
+    assert any(
+        claim.label == "cosmology_h0_uncertainty" for claim in claims
+    )
+    assert validate_claims(
+        "H0 = 68.8 ± 0.52 km s⁻¹ Mpc⁻¹.", tool_results
+    ).ok is True
+    assert validate_claims(
+        "H0 = 68.8 ± 9.99 km s⁻¹ Mpc⁻¹.", tool_results
+    ).ok is False
+
+    latex = r"$H_0 = 68.8 \pm 0.52\ \mathrm{km\,s^{-1}\,Mpc^{-1}}$."
+    latex_claims = extract_claims(latex)
+    assert any(
+        claim.label == "cosmology_h0_uncertainty" for claim in latex_claims
+    )
+    assert validate_claims(latex, tool_results).ok is True
+    assert validate_claims(
+        latex.replace(r"\pm 0.52", r"\pm 9.99"), tool_results
+    ).ok is False
+
+
+@pytest.mark.parametrize(
+    "spacing",
+    [r"\,", r"\;", r"\:", r"\!", r"\ ", "~", r"\quad"],
+)
+def test_tex_spacing_cannot_hide_cosmology_uncertainty(spacing):
+    from app.services.claim_validator import extract_claims, validate_claims
+
+    tool_results = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {"parameters": {"H0": {"median": 68.8, "std": 0.52}}},
+    }]
+    reply = (
+        rf"$H_0 = 68.8{spacing}\pm{spacing}9.99{spacing}"
+        r"\mathrm{km\,s^{-1}\,Mpc^{-1}}$."
+    )
+
+    claims = extract_claims(reply)
+    assert any(
+        claim.label == "cosmology_h0_uncertainty" for claim in claims
+    )
+    assert validate_claims(reply, tool_results).ok is False
+
+
+def test_tex_uncertainty_from_previous_text_remains_untrusted():
+    from app.services.claim_validator import extract_claims, validate_claims
+
+    tool_results = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {"parameters": {"H0": {"median": 68.8, "std": 0.52}}},
+    }]
+    reply = (
+        r"The previous result was $H_0 = 68.8\,\pm\,0.52\,"
+        r"\mathrm{km\,s^{-1}\,Mpc^{-1}}$."
+    )
+
+    claims = extract_claims(reply)
+    assert any(
+        claim.label.startswith("untrusted_context_value_with_error.")
+        for claim in claims
+    )
+    assert validate_claims(reply, tool_results).ok is False
+
+
+def test_sigma_interval_marker_is_not_detection_significance():
+    from app.services.claim_validator import extract_claims, validate_claims
+
+    tool_results = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {"parameters": {"H0": {"median": 68.8, "std": 0.52}}},
+    }]
+    replies = (
+        "At 1σ, H0 = 68.8 ± 0.52 km/s/Mpc.",
+        "H0 = 68.8 ± 0.52 km/s/Mpc (1σ).",
+    )
+    for reply in replies:
+        claims = extract_claims(reply)
+        assert not any(
+            claim.label == "significance_sigma" for claim in claims
+        )
+        assert validate_claims(reply, tool_results).ok is True
+
+    detection = "The detection significance is 1σ."
+    assert any(
+        claim.label == "significance_sigma"
+        for claim in extract_claims(detection)
+    )
+
+
+def test_sigma_semantics_are_bound_to_nearest_discourse_clause():
+    from app.services.claim_validator import extract_claims, validate_claims
+
+    h0_result = {
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {"parameters": {"H0": {"median": 68.8, "std": 0.52}}},
+    }
+    mixed_anomaly = (
+        "H0 = 68.8 ± 0.52 km/s/Mpc, and the anomaly is 5σ."
+    )
+    assert any(
+        claim.label == "significance_sigma" and claim.value == 5
+        for claim in extract_claims(mixed_anomaly)
+    )
+    assert validate_claims(mixed_anomaly, [h0_result]).ok is False
+
+    discrepancy = "The posterior interval is broad, but the discrepancy is 5σ."
+    assert any(
+        claim.label == "significance_sigma" and claim.value == 5
+        for claim in extract_claims(discrepancy)
+    )
+    assert validate_claims(discrepancy, []).ok is False
+
+    split_semantics = (
+        "The detection significance is 5σ, while "
+        "H0 = 68.8 ± 0.52 km/s/Mpc (1σ)."
+    )
+    sigma_claims = [
+        claim.value
+        for claim in extract_claims(split_semantics)
+        if claim.label == "significance_sigma"
+    ]
+    assert sigma_claims == [5.0]
+    assert validate_claims(
+        split_semantics,
+        [
+            h0_result,
+            {"tool": "compare_models", "result": {"equivalent_sigma": 5.0}},
+        ],
+        require_typed_scientific_match=True,
+    ).ok is True
+
+
+def test_one_sigma_value_with_error_keeps_central_value_semantics():
+    from app.services.claim_validator import validate_claims
+
+    tool_results = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {"parameters": {"H0": {"median": 68.8, "std": 0.52}}},
+    }]
+
+    assert validate_claims(
+        "The one-sigma constraint is H0 = 68.8 ± 0.52 km/s/Mpc.",
+        tool_results,
+    ).ok is True
+
+
+def test_cosmology_interval_cues_are_clause_and_parameter_bound():
+    from app.services.claim_validator import validate_claims
+
+    tool_results = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {
+            "parameters": {
+                "H0": {"median": 68.8, "hdi_94": [67.36, 69.79]},
+                "omegam": {"median": 0.31, "hdi_94": [0.29, 0.33]},
+            }
+        },
+    }]
+
+    assert validate_claims(
+        "We discuss the upper edge of the omegam posterior, while our "
+        "central result is H0 = 69.79 km/s/Mpc.",
+        tool_results,
+    ).ok is False
+    assert validate_claims(
+        "The upper edge of the omegam posterior and H0 = 69.79 km/s/Mpc.",
+        tool_results,
+    ).ok is False
+    assert validate_claims(
+        "At the lower HDI edge (tail mass 0.025), H0 = 67.36 km/s/Mpc.",
+        tool_results,
+    ).ok is True
+
+
+def test_nested_tainted_parameter_statistics_never_enter_typed_buckets():
+    from app.services.claim_validator import validate_claims
+
+    tool_results = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {
+            "parameters": {
+                "H0": {
+                    "median": 68.8,
+                    "best_fit": {
+                        "__do_not_claim__": True,
+                        "value": 71.25,
+                    },
+                    "hdi_94": {
+                        "statistical_role": "proposal_only",
+                        "lower": 66.0,
+                        "upper": 70.0,
+                    },
+                }
+            }
+        },
+    }]
+
+    assert validate_claims("H0 = 68.8 km/s/Mpc.", tool_results).ok is True
+    assert validate_claims("H0 = 71.25 km/s/Mpc.", tool_results).ok is False
+    assert validate_claims(
+        "At the lower HDI edge, H0 = 66.0 km/s/Mpc.", tool_results
+    ).ok is False
+
+
+def test_context_statistical_roles_are_skipped_independent_of_envelope_key():
+    from app.services.claim_validator import validate_claims
+
+    context_only = [{
+        "tool": "future_registry_tool",
+        "result": {
+            # Deliberately avoid the known ``compressed_likelihood`` key: the
+            # role/scope must be authoritative even if a future serializer
+            # moves the same record elsewhere.
+            "opaque_registry_copy": {
+                "statistical_role": "proposal_only",
+                "parameters": ["H0", "sigma8", "S8"],
+                "mean": [67.36, 0.8111, 0.832],
+            },
+            "opaque_tension_copy": {
+                "statistical_scope": "literature_context",
+                "parameter": "H0",
+                "value": 67.36,
+            },
+        },
+    }]
+    for reply in (
+        "Our constraint is H0 = 67.36 km/s/Mpc.",
+        "Our constraint is sigma8 = 0.8111.",
+        "Our constraint is S8 = 0.832.",
+    ):
+        validation = validate_claims(reply, context_only)
+        assert validation.ok is False, reply
+
+    executable_prior = [{
+        "tool": "future_registry_tool",
+        "result": {
+            "executed_record": {
+                "statistical_role": "external_prior",
+                "parameters": ["H0"],
+                "mean": [73.04],
+            }
+        },
+    }]
+    assert validate_claims(
+        "The external prior is H0 = 73.04 km/s/Mpc.",
+        executable_prior,
+    ).ok is True
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "The extended fit improves chi-squared by -4.58.",
+        "The delta chi-squared is -4.58.",
+        "Delta chi2 = -4.58.",
+        "The comparison gives Δχ² = -4.58.",
+    ],
+)
+def test_model_comparison_chi_squared_prose_is_extracted(reply):
+    from app.services.claim_validator import extract_claims
+
+    claims = extract_claims(reply)
+    assert any(
+        claim.label == "chi_squared" and claim.value == pytest.approx(-4.58)
+        for claim in claims
+    )
+
+
 def test_exploratory_result_not_treated_as_empty_turn():
     """EXPLORATORY status must not flip is_empty_turn to True. The posterior
     is meaningful enough to discuss in chat; only PARTIAL+__do_not_claim__
