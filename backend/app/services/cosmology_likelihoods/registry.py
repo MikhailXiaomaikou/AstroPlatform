@@ -1057,8 +1057,9 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         ),
         notes=(
             "The SN anchor of the 2018-2022 literature era (quoted by Planck 2018 / "
-            "DES-Y1 / eBOSS companion analyses). Default fast path is a compressed "
-            "SN-only flat-ΛCDM Ωm Gaussian (Ωm=0.298±0.022, Scolnic+18). The FULL "
+            "DES-Y1 / eBOSS companion analyses). Its compressed SN-only flat-ΛCDM "
+            "Ωm=0.298±0.022 record (Scolnic+18) is a published posterior summary for "
+            "context/proposal use only and is never multiplied as a likelihood. The FULL "
             "1048-SN apparent-magnitude vector + stat+sys covariance is vendored "
             "(sha256-pinned text files, scripts/fetch_pantheon18.py from "
             "CobayaSampler/sn_data) and runs in-process as an offset-marginalized "
@@ -1078,7 +1079,11 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             covariance=((0.022 ** 2,),),
             units={"omegam": "dimensionless"},
             source_locator="Scolnic et al. 2018 (arXiv:1710.00845) Table 8, SN-only flat-ΛCDM with systematics: Ωm = 0.298 ± 0.022.",
-            approximation="1D SN-only flat-ΛCDM Ωm Gaussian; NOT the full 1048-SN magnitude + covariance likelihood (env-gated).",
+            approximation=(
+                "1D SN-only flat-ΛCDM Ωm published posterior summary for "
+                "context/proposal use only; NOT an executable Gaussian likelihood and "
+                "NOT the full 1048-SN magnitude + covariance likelihood (env-gated)."
+            ),
             source_prior=(
                 "Published flat-LambdaCDM SN-only posterior after source-analysis "
                 "systematics and nuisance marginalisation; not deconvolved."
@@ -1765,10 +1770,11 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             DatasetCitation(label="Carron, Mirmelstein & Lewis likelihood method", year=2022, arxiv="2206.07773"),
         ),
         notes=(
-            "COMPRESSED NUMBERS ARE NOT ACT-ONLY: the executed (H0, sigma8, S8) "
-            "Gaussian is hand-typed from the ACT DR6 lensing paper's ACT+Planck "
-            "joint summary, so it is not statistically valid as a standalone ACT "
-            "constraint and must NOT be co-added with planck_2018_lensing / "
+            "COMPRESSED NUMBERS ARE NOT ACT-ONLY: the registered (H0, sigma8, S8) "
+            "record is a context-only posterior summary hand-typed from the ACT DR6 "
+            "lensing paper's ACT+Planck joint result. It is never executed as a "
+            "Gaussian likelihood, is not a standalone ACT constraint, and must NOT "
+            "be co-added with planck_2018_lensing / "
             "planck_pr4_lensing (double-counts Planck lensing; enforced via "
             "do_not_combine_with). The real standalone-ACT bandpower likelihood "
             "is STAGED (2026-07-07): act_dr6_lenslike pip-installed, adapter "
@@ -1776,14 +1782,14 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             "(data_products below) and reproducing the package's reference "
             "chi2 = 14.06 — but live cobaya execution still needs the "
             "cobaya_runner runtime-hash gate + YAML wiring, so execution_mode "
-            "stays compressed_gaussian. Until that flips, treat this entry as "
-            "a preliminary ACT+Planck consistency check only."
+            "stays compressed_gaussian. Until that flips, treat the registered "
+            "numbers as literature context only."
         ),
         cobaya_likelihood="external:act_dr6_lenslike.ACTDR6LensLike",
         cosmosis_module="external:act_dr6_lenslike",
         execution_mode="compressed_gaussian",
-        # The executed compressed numbers are the ACT+Planck JOINT lensing
-        # summary — co-adding with a Planck lensing likelihood (or with
+        # The registered context-only numbers are the ACT+Planck JOINT lensing
+        # posterior summary — co-adding them with a Planck lensing likelihood (or with
         # planck2018_compressed, whose S8 row quotes the lensing-included
         # Planck VI column) counts Planck lensing twice.
         do_not_combine_with=(
@@ -1912,7 +1918,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 "Diagonal compressed summary hand-typed from the ACT+Planck JOINT "
                 "lensing results (abstract level) — NOT a standalone ACT-only "
                 "constraint and NOT statistically independent of Planck lensing. "
-                "Use for preliminary consistency checks only."
+                "Published posterior context only; never execute as a likelihood."
             ),
             source_prior=(
                 "Published ACT+Planck-lensing posterior after the source analysis "

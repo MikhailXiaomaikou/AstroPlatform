@@ -66,6 +66,7 @@ jobs:
             tests/test_cosmology_likelihood_registry.py \
             tests/test_cosmology_likelihood_routing.py \
             tests/test_data_integrity.py \
+            tests/test_dataset_combination_guards.py::test_act_plus_planck_lensing_chain_is_not_publication_ready \
             tests/test_emcee_reproducibility.py \
             tests/test_final_security_authority.py \
             tests/test_fit_line_lfr_method_declaration.py \
@@ -73,6 +74,8 @@ jobs:
             tests/test_model_comparison_validity.py \
             tests/test_nested_sampling.py \
             tests/test_off_anchor_abstain.py \
+            tests/test_pantheon18_full_vector.py::test_flag_off_keeps_published_summary_context_only \
+            tests/test_pantheon18_full_vector.py::test_flag_off_provenance_attests_no_likelihood_ran \
             tests/test_pipeline_stochastic_reproducibility.py \
             tests/test_planck_distance_prior.py \
             tests/test_planck_pliklite.py \

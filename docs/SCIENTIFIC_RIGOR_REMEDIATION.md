@@ -120,9 +120,9 @@ test claim.
 
 ## Verification performed
 
-- Scheduled core scientific suite (2026-07-12): **798 passed, 0 skipped, 0
-  failed** across 40 explicit test files; the JUnit anti-silent-skip guard
-  passed.
+- Scheduled core scientific suite (2026-07-12): **801 passed, 0 skipped, 0
+  failed** across 40 full test files plus three targeted default-policy nodes
+  from two additional guard files; the JUnit anti-silent-skip guard passed.
 - Full backend regression suite (2026-07-10): **2871 passed, 3 skipped, 59
   deselected, 0 failed**; total measured coverage was **63.49%**.
 - Joint scientific-integrity, security-authority, storage, migration, archive,

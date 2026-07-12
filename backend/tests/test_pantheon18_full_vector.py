@@ -3,8 +3,8 @@
 Scolnic et al. 2018 (arXiv:1710.00845) — the SN anchor of the 2018-2022
 literature era. Env-gated behind PANTHEON18_FULL_CHI2_ENABLED (the DES-SN5YR
 precedent: a 1048x1048 per-sample cost has no place on the default chat
-deadline); the default path is the compressed SN-only Ωm Gaussian
-(0.298±0.022) on the registry entry.
+deadline); the compressed SN-only Ωm=0.298±0.022 registry record is a
+published posterior summary for context only and is not executed by default.
 
 Convention locked here (cobaya sn.pantheon, use_abs_mag=False, pecz=0,
 intrinsicdisp=0): C_total = C_sys + diag(dmb²); the constant magnitude offset
@@ -83,20 +83,24 @@ def test_chi2_is_h0_invariant():
     assert abs(a - b) < 1e-6
 
 
-def test_flag_off_runs_compressed_path_honestly():
-    """Without PANTHEON18_FULL_CHI2_ENABLED the chain uses the compressed Ωm
-    Gaussian and says so — never the full vector, never a silent drop."""
+def test_flag_off_keeps_published_summary_context_only():
+    """Without the full-vector gate, the published Ωm posterior stays context.
+
+    It must be reported as not run, never multiplied as a Gaussian likelihood
+    and never silently relabelled as the full vector.
+    """
     if cl.PANTHEON18_FULL_CHI2_ENABLED:
         pytest.skip("flag enabled in this environment")
     r = cl.run_likelihood_chain(
         model="lcdm", dataset_keys=["pantheon18"], n_samples=1500, random_seed=42,
     )
-    assert {d["key"] for d in r["datasets_used"]} == {"pantheon18"}
-    om = r["parameters"]["omegam"]
-    assert abs(om["median"] - 0.298) < 0.03
-    sources = r["provenance"]["cosmology_likelihood"]["compressed_sources"]
-    p18 = [s for s in sources if s.get("dataset_key") == "pantheon18"]
-    assert p18 and "Ωm = 0.298" in p18[0]["source_locator"]
+    assert r["analysis_status"] == "NO_COMPRESSED_LIKELIHOOD"
+    assert r["datasets_used"] == []
+    assert {d["key"] for d in r["datasets_not_run"]} == {"pantheon18"}
+    assert "parameters" not in r
+    registered = r["datasets"][0]["compressed_likelihood"]
+    assert registered["statistical_role"] == "published_posterior_summary"
+    assert "Ωm = 0.298" in registered["source_locator"]
 
 
 def test_flag_on_chain_runs_full_vector_via_emcee():
@@ -178,16 +182,17 @@ def test_flag_on_routing_via_monkeypatched_keys(monkeypatch):
     assert p18 and "1048-SN apparent magnitudes" in p18[0]["source_locator"]
 
 
-def test_flag_off_provenance_attests_compressed_not_full(monkeypatch):
-    """2026-06-13 review MAJOR: with the flag OFF the provenance record must
-    attest the compressed Ωm Gaussian that actually ran — never the full
-    1048-SN covariance chi2."""
+def test_flag_off_provenance_attests_no_likelihood_ran(monkeypatch):
+    """With the flag off, provenance must attest that no likelihood ran."""
     monkeypatch.setattr(cl, "PANTHEON18_EXECUTABLE_KEYS", set())
     r = cl.run_likelihood_chain(
         model="lcdm", dataset_keys=["pantheon18"], n_samples=1200, random_seed=42,
     )
-    sources = r["provenance"]["cosmology_likelihood"]["compressed_sources"]
-    p18 = [s for s in sources if s.get("dataset_key") == "pantheon18"]
-    assert p18, sources
-    assert "Ωm = 0.298" in p18[0]["source_locator"]
-    assert "1048-SN apparent magnitudes" not in p18[0]["source_locator"]
+    likelihood_provenance = r["provenance"]["cosmology_likelihood"]
+    assert "compressed_sources" not in likelihood_provenance
+    assert likelihood_provenance["datasets_used"] == []
+    assert likelihood_provenance["datasets_not_run"] == ["pantheon18"]
+    registered = r["datasets"][0]["compressed_likelihood"]
+    assert registered["statistical_role"] == "published_posterior_summary"
+    assert "Ωm = 0.298" in registered["source_locator"]
+    assert "1048-SN apparent magnitudes" not in registered["source_locator"]

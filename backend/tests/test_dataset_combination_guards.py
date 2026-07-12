@@ -103,8 +103,16 @@ def test_act_plus_planck_lensing_chain_is_not_publication_ready():
         n_samples=512,
     )
     assert result["publication_ready"] is False
-    joined = " ".join(result["warnings"])
-    assert "must not be co-added" in joined
+    assert result["analysis_status"] == "NO_COMPRESSED_LIKELIHOOD"
+    assert result["chain_tier"] == "blocked"
+    assert result["__do_not_claim__"] is True
+    assert result["datasets_used"] == []
+    assert {entry["key"] for entry in result["datasets_not_run"]} == {
+        "act_dr6_lensing",
+        "planck_2018_lensing",
+    }
+    assert "parameters" not in result
+    assert "context-only" in " ".join(result["warnings"])
 
 
 # ── (c) eBOSS DR16 LRG FSBAO (BOSS z=0.38/0.51 + eBOSS z=0.698) vs DESI ─────
