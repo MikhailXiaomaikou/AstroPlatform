@@ -51,6 +51,7 @@ jobs:
             tests/test_alcock_paczynski.py \
             tests/test_anchor_reproduction.py \
             tests/test_audit_published_constraint.py \
+            tests/test_blind_runner_eval.py \
             tests/test_canonical_full_likelihood_evidence.py \
             tests/test_chain_diagnostics.py \
             tests/test_chat_gate_fail_closed.py \
@@ -70,6 +71,7 @@ jobs:
             tests/test_emcee_reproducibility.py \
             tests/test_final_security_authority.py \
             tests/test_fit_line_lfr_method_declaration.py \
+            tests/test_independent_w0wa_postprocess.py \
             tests/test_m6_methodology_validator.py \
             tests/test_model_comparison_validity.py \
             tests/test_nested_sampling.py \
@@ -85,12 +87,14 @@ jobs:
             tests/test_red_team_corpus.py \
             tests/test_registry_executable_pins.py \
             tests/test_research_alpha_evaluator.py \
+            tests/test_research_alpha_manifest.py \
             tests/test_research_program.py \
             tests/test_result_provenance.py \
             tests/test_runner_diagnostics_honesty.py \
             tests/test_scientific_validation_guard.py \
             tests/test_scientific_publication_gate.py \
             tests/test_server_evidence_key_rotation.py \
+            tests/test_w0wa_exact_pipeline.py \
             -v --tb=short --no-cov --junitxml=/tmp/core-scientific.xml || status=$?
           python scripts/scientific_validation_guard.py assert-junit \
             /tmp/core-scientific.xml --minimum-tests 150

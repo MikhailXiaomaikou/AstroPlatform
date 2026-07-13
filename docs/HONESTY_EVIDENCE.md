@@ -39,20 +39,23 @@ numbers and commands are retained in
 The honesty-relevant part: **the platform refuses to claim this result
 autonomously.** The in-process 45-second chat path uses a compressed CMB that
 does *not* reproduce DESI (it leaves w0 ≈ -0.62), so w0/wa goals stay
-off-anchor (exploratory / human-review) in the anchor oracle. The trustworthy
-offline run remains preliminary until strict convergence and the fixed-model
-MAP comparison are both complete.
+off-anchor (exploratory / human-review) in the anchor oracle. The archived
+offline run remains preliminary and is not eligible for the new exact-profile
+evidence path. The current milestone is deliberately narrower: reproduce the
+four published parameter intervals, not estimate a model-preference
+significance.
 
-The repository now includes a fail-closed canonical evidence workflow for
-that missing work. It requires four distinct chain files, rank-normalized
-R-hat `<1.01` and bulk ESS `>=400` for every sampled and nuisance parameter,
-byte-level hashes for all six likelihood groups, and matched successful free-
-`w0wa`/fixed-LambdaCDM MAP fits before emitting intervals or raw paired-point
-objective/likelihood differences. Because those committed fits optimize the
-posterior (`ignore_prior: false`), the workflow explicitly withholds a Wilks
-p-value or sigma. Running the archived chain through that workflow returns
-`FAIL` and emits neither quantity; adding stricter code has not retroactively
-upgraded the old scientific result.
+The repository now includes a fail-closed exact-profile workflow for that
+interval-reproduction task. It requires the paper's PR3
+Commander/SimAll/plik stack, ACT DR6 + Planck PR4 lensing, DESI DR1 BAO and
+Pantheon+; four fresh chain files; rank-normalized R-hat `<1.01`; bulk ESS
+`>=1000`; parameter-specific MCSE checks; a chain-length balance gate; complete
+byte-level input/runtime provenance; and six separately executed model-
+adequacy checks. It never emits a Wilks p-value, Gaussian-equivalent sigma,
+Bayes-factor preference or discovery claim. The formal chains and adequacy
+matrix have not yet completed, so the current scientific state remains
+`WITHHELD`, with both A-ready and strict-A counts at zero. Adding stricter code
+has not retroactively upgraded the old scientific result.
 
 ## 2. Anti-fabrication defenses triggered by real LLM behavior
 

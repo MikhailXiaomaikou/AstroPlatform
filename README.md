@@ -111,7 +111,11 @@ These rules are non-negotiable: configuration is not evidence, literature is not
 <details>
 <summary><strong>当前 Alpha 验收目标 / Current alpha contract</strong></summary>
 
-近期目标是在论文衍生的观测宇宙学盲测中达到 **B 或更好的部分通过**：
+当前严格里程碑是 DESI 2024 VI `DESI+CMB+PantheonPlus` 四个参数区间的
+已知目标、预注册复现。它不是模型偏好或“发现动态暗能量”的检验。离线流程
+必须按 `preflight → generate → run → analyze → grade` 执行，并且只有论文
+匹配的 PR3 `plik` + ACT/PR4 lensing + DESI DR1 BAO + Pantheon+ profile 有资格
+进入验收：
 
 - 识别科学流程和可能适用的已注册数据集；
 - 有受控压缩版或初步基线时真实运行；
@@ -119,9 +123,16 @@ These rules are non-negotiable: configuration is not evidence, literature is not
 - 避免无依据的后验、拟合、显著性、异常或引用结论；
 - 清楚说明达到论文级一致性还需要什么。
 
-这不是“95% 论文复现率”的声明。严格 A 级一致性是离线隐藏答案评估，需要正确的数据产品、方法、模型族、诊断、证据图和数值尺度。
+这不是“95% 论文复现率”的声明。最高自动状态只能是
+`A_READY_PENDING_EXTERNAL_REVIEW`；`strict_A_count` 在独立外部复核完成前始终
+为零。当前状态仍为 `WITHHELD`：正式链和六项模型充分性证据尚未全部实跑，
+而且本次实现提示已公开目标值，不能声称 analyst-blinded。完整门禁与偏差披露
+见 [DESI `w0wa` A-readiness protocol](./docs/DESI_W0WA_A_READINESS_PROTOCOL.md)。
 
-The near-term target is **B-or-better partial-pass behavior** on paper-derived observational-cosmology blind tests. It is not a claim of 95% paper reproduction.
+The current strict milestone is a known-target, preregistered reproduction of
+the four DESI+CMB+PantheonPlus parameter intervals. It remains `WITHHELD` until
+the formal chains and all six adequacy requirements have actually run; software
+tests or generated configs are not scientific completion.
 
 </details>
 

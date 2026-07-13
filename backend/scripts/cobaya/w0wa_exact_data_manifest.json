@@ -1,0 +1,238 @@
+{
+  "schema_version": 1,
+  "kind": "w0wa_exact_data_byte_commitment",
+  "profile_id": "desi_2024_vi_table3_desi_cmb_pantheonplus_v1",
+  "frozen_before_formal_run": true,
+  "overall_inventory_fingerprint": "sha256:d88788f6945b795478bd9b79767441dbda6d90db97112257f9532909b3d30518",
+  "adequacy_inventory_fingerprint": "sha256:c039846636769d8d04779180371806de5fd31c7e041fc2bc6e5991aa39cb55c9",
+  "groups": {
+    "planck_2018_lowl.TT_clik": {
+      "file_count": 7,
+      "total_size_bytes": 6509031,
+      "fingerprint": "sha256:3c085956c13d1c5e8cf7f73d21929dd3bcbb53c2c33dd8b48338d1b602de810e"
+    },
+    "planck_2018_lowl.EE_clik": {
+      "file_count": 7,
+      "total_size_bytes": 694285,
+      "fingerprint": "sha256:830037a017589ebdfe2c04d48a945049939dd68aec8de36cd23a2603b44d6b9f"
+    },
+    "planck_2018_highl_plik.TTTEEE": {
+      "file_count": 1106,
+      "total_size_bytes": 70882176,
+      "fingerprint": "sha256:0e725006145e06d40775dbd7d16d5009dac171ae22d0ab441a7375ba11006d39"
+    },
+    "act_dr6_lenslike.ACTDR6LensLike": {
+      "file_count": 31,
+      "total_size_bytes": 2927689271,
+      "fingerprint": "sha256:f15724474cf23a926c904c82d73485a08d8e0f145840ab456e9199cc6ef8693e"
+    },
+    "bao.desi_2024_bao_all": {
+      "file_count": 3,
+      "total_size_bytes": 2550,
+      "fingerprint": "sha256:9adc44fb4eeddf990ca81ec1388787cc5ce8fd0973d93aa7250c97c1a240c047",
+      "files": [
+        {"path": "data/bao_data/version.dat", "size_bytes": 4, "sha256": "sha256:6091e7140b2cca30d90f1a442f5670f3cd05826fea5e4fd6fff9f2621d47f9f7"},
+        {"path": "data/bao_data/desi_2024_gaussian_bao_ALL_GCcomb_mean.txt", "size_bytes": 376, "sha256": "sha256:dd2873a0b88459a491af3c0c0307ba059f62df9211d5b976760f310565a1be68"},
+        {"path": "data/bao_data/desi_2024_gaussian_bao_ALL_GCcomb_cov.txt", "size_bytes": 2170, "sha256": "sha256:bbafa9074b51cf1a45e0d10e4f37db8c0e80a5d1d1788857abb7fc49fb21abcc"}
+      ]
+    },
+    "sn.pantheonplus": {
+      "file_count": 4,
+      "total_size_bytes": 33864404,
+      "fingerprint": "sha256:f8538497e7d4223ed2174d4f5fcedc47018ddcc30c8eb7c9552e3681ac4d9fe1",
+      "files": [
+        {"path": "data/sn_data/version.dat", "size_bytes": 4, "sha256": "sha256:49f076561db87b4b351d24d27b655541fa65cae73420bb2586e58a0e3a44e47e"},
+        {"path": "data/sn_data/PantheonPlus/config.dataset", "size_bytes": 157, "sha256": "sha256:80e7104bec01b27ab1d1ad0adcc66effc3df28138c5e5da992d775b5171b93cb"},
+        {"path": "data/sn_data/PantheonPlus/Pantheon+SH0ES.dat", "size_bytes": 579283, "sha256": "sha256:1cb0fc379ef066afdc2ffd1857681cc478024570d8a3eba284fb645775198cf8"},
+        {"path": "data/sn_data/PantheonPlus/Pantheon+SH0ES_STAT+SYS.cov", "size_bytes": 33284960, "sha256": "sha256:abf806d966485e64afdb359c87bffc0ecc00d05eff0a31ced66f247385df0fdc"}
+      ]
+    }
+  },
+  "adequacy_groups": {
+    "planck_NPIPE_highl_CamSpec.TTTEEE": {
+      "file_count": 15,
+      "total_size_bytes": 510767254,
+      "fingerprint": "sha256:d174212b9b0d88b1dc816b74ac117f00516e418c0fc456df4870968080c9a877",
+      "files": [
+        {
+          "path": "data/planck_NPIPE_CamSpec/version.dat",
+          "size_bytes": 3,
+          "sha256": "sha256:2d27fbdf4e8ca207afbfa388ca9172fbcc6c70e534af2476b3b704f87debadcf"
+        },
+        {
+          "path": "data/planck_NPIPE_CamSpec/CamSpec_NPIPE/100x100_10.5_dust.dat",
+          "size_bytes": 62979,
+          "sha256": "sha256:2c1f3a37e2e310b1881ccf07ec541c53f6876750b6a299570c3f0e847520d6b1"
+        },
+        {
+          "path": "data/planck_NPIPE_CamSpec/CamSpec_NPIPE/143x143_10.5_dust.dat",
+          "size_bytes": 62979,
+          "sha256": "sha256:045a3bcaa0b4debf3a0e9f0053028310906dd56eb5d6e6b7da124d23af004f0a"
+        },
+        {
+          "path": "data/planck_NPIPE_CamSpec/CamSpec_NPIPE/143x217_10.5_dust.dat",
+          "size_bytes": 62979,
+          "sha256": "sha256:9ebff4056bb45970d9bb024d89da94860584bb7978c4fd816ce30079c64a19ce"
+        },
+        {
+          "path": "data/planck_NPIPE_CamSpec/CamSpec_NPIPE/217x217_10.5_dust.dat",
+          "size_bytes": 62979,
+          "sha256": "sha256:35b990801f88af38d68b0c1a3dfd7e1fe651bb95f92dc639c44ea9d6b8cf4d43"
+        },
+        {
+          "path": "data/planck_NPIPE_CamSpec/CamSpec_NPIPE/CamSpecHM.paramnames",
+          "size_bytes": 2174,
+          "sha256": "sha256:2cdc9435e3d62c2ebc175553c09d55b9900df2daa7f84dd692131ae54e5f75c8"
+        },
+        {
+          "path": "data/planck_NPIPE_CamSpec/CamSpec_NPIPE/CamSpec_NPIPE_12_6_cl.dataset",
+          "size_bytes": 773,
+          "sha256": "sha256:9adc3d2cba43c314724094384feb64f935d936cfbc5f1acb3871c0952404781a"
+        },
+        {
+          "path": "data/planck_NPIPE_CamSpec/CamSpec_NPIPE/README.md",
+          "size_bytes": 698,
+          "sha256": "sha256:ff9b1ea3b177eaf83c21fdab2ff5ebf09060ef7cc31708413acaecde23b45dff"
+        },
+        {
+          "path": "data/planck_NPIPE_CamSpec/CamSpec_NPIPE/cib217.txt",
+          "size_bytes": 221000,
+          "sha256": "sha256:eeca4d3b07ca41de7763d429a39e5798329c2949a54d997aa36796527ff7d4e0"
+        },
+        {
+          "path": "data/planck_NPIPE_CamSpec/CamSpec_NPIPE/cl_ksz_148_trac.dat",
+          "size_bytes": 148866,
+          "sha256": "sha256:f154d6d001dfdbc6ba68d90a91c0166d536f408020758015eb060cb2e13851bc"
+        },
+        {
+          "path": "data/planck_NPIPE_CamSpec/CamSpec_NPIPE/like_NPIPE_12.6_unified_cov.bin",
+          "size_bytes": 509495184,
+          "sha256": "sha256:f788df648a3ac46237533125dc92559c3a576f81035ffdeb55020946ac0cdd82"
+        },
+        {
+          "path": "data/planck_NPIPE_CamSpec/CamSpec_NPIPE/like_NPIPE_12.6_unified_data_ranges.txt",
+          "size_bytes": 198,
+          "sha256": "sha256:11e194aa01a9a62d4bf76029e0a15c7785fab3e4f49e96be121e2245bc95b0e9"
+        },
+        {
+          "path": "data/planck_NPIPE_CamSpec/CamSpec_NPIPE/like_NPIPE_12.6_unified_spectra.txt",
+          "size_bytes": 257603,
+          "sha256": "sha256:640a8f58fadbc730e70cf43e93000f5be21c65138a5bb294ec986b94801a059e"
+        },
+        {
+          "path": "data/planck_NPIPE_CamSpec/CamSpec_NPIPE/sz_x_cib_template.dat",
+          "size_bytes": 178860,
+          "sha256": "sha256:3d7f8408c5931354d9b937e5de6d30890a049537f67486009143f32da7a7af00"
+        },
+        {
+          "path": "data/planck_NPIPE_CamSpec/CamSpec_NPIPE/tsz_143_eps0.50.dat",
+          "size_bytes": 209979,
+          "sha256": "sha256:c4cc9cff1f0b3ca45f1fc859b3be045fe36a548e89da887e8ad039b5f0f52cbd"
+        }
+      ]
+    }
+  },
+  "data_quality_checks": {
+    "bao.desi_2024_bao_all": {
+      "mean_data_rows": 12,
+      "covariance_shape": [12, 12]
+    },
+    "sn.pantheonplus": {
+      "data_rows": 1701,
+      "data_columns": 47,
+      "unique_CID": 1543,
+      "redshift_column": "zHD",
+      "redshift_cut": ">0.01",
+      "rows_after_redshift_cut": 1590,
+      "covariance_shape": [1701, 1701]
+    }
+  },
+  "source_archives": [
+    {
+      "filename": "COM_Likelihood_Data-baseline_R3.00.tar.gz",
+      "url": "https://irsa.ipac.caltech.edu/data/Planck/release_3/software/COM_Likelihood_Data-baseline_R3.00.tar.gz",
+      "size_bytes": 60323470,
+      "sha256": "sha256:0b73171e3acc671c28184466a45485a2d1c1d93676b832abdfe688c7b04024e6"
+    },
+    {
+      "filename": "ACT_dr6_likelihood_v1.2.tgz",
+      "url": "https://lambda.gsfc.nasa.gov/data/suborbital/ACT/ACT_dr6/likelihood/data/ACT_dr6_likelihood_v1.2.tgz",
+      "size_bytes": 361306879,
+      "sha256": "sha256:bbcde3bcacd7c9a97138c4873c8a1217635a18504d15c4f86b1fba39d3601085"
+    },
+    {
+      "filename": "archives/CamSpec_NPIPE.v1.verified.zip",
+      "source_asset_name": "CamSpec_NPIPE.zip",
+      "release_asset_id": 84169207,
+      "url": "https://github.com/CobayaSampler/planck_native_data/releases/download/v1/CamSpec_NPIPE.zip",
+      "size_bytes": 85421478,
+      "sha256": "sha256:1978dd0c148a87678b4cf07340401814a3bc81b5cb87dbdccb76565a3a883e15"
+    }
+  ],
+  "source_vcs": [
+    {
+      "repository": "https://github.com/CobayaSampler/bao_data",
+      "tag": "v2.6",
+      "commit": "b7b8a36e9bccb063081f811f323cada21ab5fbdd",
+      "files": [
+        {
+          "logical_path": "data/bao_data/desi_2024_gaussian_bao_ALL_GCcomb_mean.txt",
+          "git_blob_sha1": "6aff4520e478fc305985c1e69f058ccbee4d1936",
+          "size_bytes": 376,
+          "sha256": "sha256:dd2873a0b88459a491af3c0c0307ba059f62df9211d5b976760f310565a1be68"
+        },
+        {
+          "logical_path": "data/bao_data/desi_2024_gaussian_bao_ALL_GCcomb_cov.txt",
+          "git_blob_sha1": "7e3a6666f3d8ec2cda35be35b6ce49486d65c4b6",
+          "size_bytes": 2170,
+          "sha256": "sha256:bbafa9074b51cf1a45e0d10e4f37db8c0e80a5d1d1788857abb7fc49fb21abcc"
+        }
+      ]
+    },
+    {
+      "repository": "https://github.com/CobayaSampler/sn_data",
+      "tag": "v1.8",
+      "commit": "61d96434cafc2770928322c38e5a750e686368ae",
+      "files": [
+        {
+          "logical_path": "data/sn_data/PantheonPlus/config.dataset",
+          "git_blob_sha1": "40fa08ad421564ff1c199524dd027a0184197a63",
+          "size_bytes": 157,
+          "sha256": "sha256:80e7104bec01b27ab1d1ad0adcc66effc3df28138c5e5da992d775b5171b93cb"
+        },
+        {
+          "logical_path": "data/sn_data/PantheonPlus/Pantheon+SH0ES.dat",
+          "git_blob_sha1": "cce857db0c15e9ce7a0e0ce77452b6ff62af969a",
+          "size_bytes": 579283,
+          "sha256": "sha256:1cb0fc379ef066afdc2ffd1857681cc478024570d8a3eba284fb645775198cf8"
+        },
+        {
+          "logical_path": "data/sn_data/PantheonPlus/Pantheon+SH0ES_STAT+SYS.cov",
+          "git_blob_sha1": "d1a1498154e7ba826df14bdbef35ebcb7f5efba1",
+          "size_bytes": 33284960,
+          "sha256": "sha256:abf806d966485e64afdb359c87bffc0ecc00d05eff0a31ced66f247385df0fdc"
+        }
+      ]
+    },
+    {
+      "repository": "https://github.com/PantheonPlusSH0ES/DataRelease",
+      "tag": "main-at-frozen-commit",
+      "commit": "c447f0fea703fcd0fff57de5000947b5ca81286b",
+      "source_root": ".local/w0wa-strict-a-readiness/pantheonplus-data-release",
+      "files": [
+        {
+          "repository_path": "Pantheon+_Data/4_DISTANCES_AND_COVAR/Pantheon+SH0ES_STATONLY.cov",
+          "git_blob_sha1": "bd0fef3f25150a3aee5100b3f35c895cbdf63235",
+          "size_bytes": 31827416,
+          "sha256": "sha256:9f177129a332735d3637affd20054080d5260815f3ca0809120c05b2c902297f"
+        },
+        {
+          "repository_path": "Pantheon+_Data/4_DISTANCES_AND_COVAR/README",
+          "git_blob_sha1": "8d2d0b9af0633573b4d1c190e44adcd135bbec85",
+          "size_bytes": 4056,
+          "sha256": "sha256:e2b0d262757f01c1794a938c78d32600a21e289b2a0320e5c660c4c6fc9aa87e"
+        }
+      ]
+    }
+  ]
+}

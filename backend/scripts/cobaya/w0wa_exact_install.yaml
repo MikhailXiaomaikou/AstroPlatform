@@ -1,0 +1,13 @@
+# Data/code installer for the exact DESI 2024 VI Table 3 profile.
+# Run only in the dedicated offline environment and packages/ directory.
+theory:
+  camb:
+likelihood:
+  planck_2018_lowl.TT_clik:
+  planck_2018_lowl.EE_clik:
+  planck_2018_highl_plik.TTTEEE:
+  act_dr6_lenslike.ACTDR6LensLike:
+  bao.desi_2024_bao_all:
+  sn.pantheonplus:
+  # Pre-registered systematics run; not part of the baseline target likelihood.
+  planck_NPIPE_highl_CamSpec.TTTEEE:

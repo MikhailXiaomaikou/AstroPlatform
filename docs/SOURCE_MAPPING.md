@@ -100,6 +100,23 @@ explicitly preliminary. Overlapping samples
 declare reciprocal `do_not_combine_with` pairs (DESI vs SDSS/eBOSS BAO,
 the SN compilations among themselves); violating combinations block.
 
+### DESI `w0wa` exact offline profile
+
+The preregistered DESI 2024 VI interval-reproduction workflow is separate from
+the registry's historical clik-free/CamSpec proxy path. Its only A-readiness-
+eligible profile uses the official DESI DR1 Gaussian BAO and Pantheon+ full
+statistical/systematic covariance likelihoods, Planck PR3 Commander + simall +
+plik TTTEEE, and ACT DR6 + Planck PR4 lensing `actplanck_baseline`. It pins
+CAMB PPF, the neutrino model, priors, likelihood anchors, dependency closure,
+data/code/config hashes, fresh MPI-chain identities, and independent analysis.
+
+This is an offline evidence pipeline, not a new public HTTP capability. A
+generated config, successful reference point, smoke chain, historical proxy
+chain, or CI fixture is never counted as scientific completion. The workflow
+remains `WITHHELD` until its formal chains and six model-adequacy requirements
+have actually run. See `docs/DESI_W0WA_A_READINESS_PROTOCOL.md` for the frozen
+scope and state definitions.
+
 ## Solar System / Exoplanet Module Data Sources
 
 Extracted to the sibling standard-astro-verticals repository on 2026-06-03

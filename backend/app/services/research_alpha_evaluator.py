@@ -5,8 +5,9 @@ execution path.  It is an offline grading helper: hidden paper answers are
 allowed here, but they must never be sent back into the assistant prompt.
 
 The evaluator distinguishes the current B-level target (correct route or
-honest scope gap) from A-level agreement (correct data/method/model plus
-tool-grounded result direction and numerical scale).
+honest scope gap), ``A_READY`` agreement (an exact-run manifest that matches the
+hidden target), and strict A (the same evidence after a separately attested
+external review).
 """
 
 from __future__ import annotations
@@ -28,6 +29,8 @@ SEVERE_PROCESS_FLAGS = {
 }
 
 STRICT_A_REQUIRED_MATCH_CRITERIA = {
+    "run_identity_match",
+    "target_match",
     "data_match",
     "method_match",
     "model_match",
@@ -73,40 +76,67 @@ def evaluate_alpha_class(
     flags = _collect_flags(platform_record, text)
     hidden_status = _hidden_record_status(hidden)
     evidence_manifest = _alpha_evidence_manifest(platform_record)
+    expected_run_id = _expected_run_id(platform_record)
 
     criteria = {
-        "data_match": _terms_match(
-            _manifest_terms_text(evidence_manifest, "datasets"),
+        "run_identity_match": _run_identity_match(
+            evidence_manifest, expected_run_id=expected_run_id
+        ),
+        "target_match": _target_compatible(evidence_manifest, hidden),
+        "blinding_protocol_compatible": _blinding_protocol_compatible(
+            evidence_manifest, hidden
+        ),
+        "data_match": _structured_terms_match(
+            _manifest_terms(evidence_manifest, "datasets"),
             _expectation_terms(hidden, ("expected_datasets", "required_datasets", "datasets")),
         ),
-        "method_match": _terms_match(
-            _manifest_terms_text(evidence_manifest, "methods"),
+        "method_match": _structured_terms_match(
+            _manifest_terms(evidence_manifest, "methods"),
             _expectation_terms(hidden, ("expected_methods", "required_methods", "methods")),
         ),
-        "model_match": _terms_match(
-            _manifest_terms_text(evidence_manifest, "models"),
+        "model_match": _structured_terms_match(
+            _manifest_terms(evidence_manifest, "models"),
             _expectation_terms(hidden, ("expected_models", "required_models", "model_family")),
         ),
-        "execution_ready": _execution_ready(evidence_manifest),
-        "diagnostics_ready": _diagnostics_ready(evidence_manifest),
+        "execution_ready": _execution_ready(
+            evidence_manifest, expected_run_id=expected_run_id
+        ),
+        "diagnostics_ready": _diagnostics_ready(
+            evidence_manifest, expected_run_id=expected_run_id
+        ),
         "direction_compatible": _direction_compatible(evidence_manifest, hidden),
         "numeric_compatible": _numeric_compatible(evidence_manifest, hidden),
-        "evidence_complete": _evidence_complete(evidence_manifest),
+        "evidence_complete": _evidence_complete(
+            evidence_manifest, expected_run_id=expected_run_id
+        ),
     }
-    why_not_a = _why_not_a(hidden_status, criteria, flags)
+    why_not_a_ready = _why_not_a(hidden_status, criteria, flags)
+    externally_reviewed = _external_review_complete(
+        evidence_manifest, expected_run_id=expected_run_id
+    )
 
     if flags & SEVERE_PROCESS_FLAGS:
         grade = "E"
         comparison = "severe_failure_or_unsafe_output"
-    elif not why_not_a:
+    elif not why_not_a_ready and externally_reviewed:
         grade = "A"
-        comparison = "paper_level_agreement_supported_by_current_turn_evidence"
+        comparison = "paper_level_agreement_with_external_review"
+    elif not why_not_a_ready:
+        grade = "A_READY"
+        comparison = "paper_level_agreement_pending_external_review"
     else:
         grade, comparison = _fallback_grade(platform_record, text, criteria)
 
+    why_not_a = list(why_not_a_ready)
+    if grade == "A_READY":
+        why_not_a.append("external_review=pending")
+
     return {
         "grade": grade,
-        "a_level_ready": grade == "A",
+        "a_level_ready": grade in {"A", "A_READY"},
+        "a_ready": grade in {"A", "A_READY"},
+        "strict_a": grade == "A",
+        "externally_reviewed": externally_reviewed,
         "comparison_to_hidden_answer": comparison,
         "hidden_record_status": hidden_status,
         "criteria": criteria,
@@ -116,18 +146,22 @@ def evaluate_alpha_class(
         "paper_title": hidden.get("title"),
         "anomaly_type": hidden.get("anomaly_type"),
         "evidence_manifest_status": (
-            "trusted" if _trusted_alpha_manifest(evidence_manifest) else "missing_or_untrusted"
+            "trusted"
+            if _trusted_alpha_manifest(
+                evidence_manifest, expected_run_id=expected_run_id
+            )
+            else "missing_or_untrusted"
         ),
     }
 
 
 def summarize_alpha_evaluations(evaluations: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
-    """Aggregate strict A-class evaluation records.
+    """Aggregate A-ready and externally reviewed strict-A records.
 
     The summary is intended for local blind-test reports.  It keeps the
-    accounting blunt: A-level readiness is counted separately from B-or-better
-    partial pass, and the most common ``why_not_A`` reasons are surfaced as the
-    implementation queue.
+    accounting blunt: A-ready and externally reviewed A are counted separately
+    from B-or-better partial pass, and the most common ``why_not_A`` reasons are
+    surfaced as the implementation queue.
     """
 
     items = [dict(item) for item in evaluations]
@@ -146,12 +180,21 @@ def summarize_alpha_evaluations(evaluations: Iterable[Mapping[str, Any]]) -> dic
             flag_counts[flag] = flag_counts.get(flag, 0) + 1
 
     total = len(items)
-    strict_a = grade_counts.get("A", 0)
-    b_or_better = sum(grade_counts.get(grade, 0) for grade in ("A", "B"))
+    strict_a = sum(
+        1
+        for item in items
+        if item.get("grade") == "A" and item.get("externally_reviewed") is True
+    )
+    a_ready = strict_a + grade_counts.get("A_READY", 0)
+    b_or_better = sum(
+        grade_counts.get(grade, 0) for grade in ("A", "A_READY", "B")
+    )
     return {
         "total": total,
         "strict_A_count": strict_a,
         "strict_A_rate": strict_a / total if total else 0.0,
+        "A_ready_count": a_ready,
+        "A_ready_rate": a_ready / total if total else 0.0,
         "B_or_better_count": b_or_better,
         "B_or_better_rate": b_or_better / total if total else 0.0,
         "grade_counts": grade_counts,
@@ -193,19 +236,32 @@ def _alpha_evidence_manifest(platform_record: Mapping[str, Any]) -> Mapping[str,
     return {}
 
 
-def _trusted_alpha_manifest(manifest: Mapping[str, Any]) -> bool:
-    from app.services.server_evidence import verify_scientific_attestation
+def _trusted_alpha_manifest(
+    manifest: Mapping[str, Any],
+    *,
+    expected_run_id: str | None = None,
+) -> bool:
+    from app.services.research_alpha_manifest import (
+        validate_research_alpha_manifest,
+    )
 
     return bool(
-        manifest.get("source") in {"server_attested", "human_attested"}
-        and verify_scientific_attestation(
-            dict(manifest),
-            expected_type="research_alpha",
-        )
+        validate_research_alpha_manifest(
+            manifest,
+            expected_run_id=expected_run_id,
+        )["valid"]
     )
 
 
-def _manifest_terms_text(manifest: Mapping[str, Any], key: str) -> str:
+def _expected_run_id(platform_record: Mapping[str, Any]) -> str | None:
+    for key in ("run_id", "execution_run_id", "scientific_run_id"):
+        value = platform_record.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _manifest_terms(manifest: Mapping[str, Any], key: str) -> list[str]:
     value = manifest.get(key)
     values = value if isinstance(value, Iterable) and not isinstance(value, (str, bytes, Mapping)) else [value]
     terms: list[str] = []
@@ -214,7 +270,56 @@ def _manifest_terms_text(manifest: Mapping[str, Any], key: str) -> str:
             terms.extend(str(v) for v in item.values() if v is not None)
         elif item is not None:
             terms.append(str(item))
-    return " ".join(terms)
+    return [_normalize_term(term) for term in terms if _normalize_term(term)]
+
+
+def _run_identity_match(
+    manifest: Mapping[str, Any], *, expected_run_id: str | None
+) -> str:
+    if expected_run_id is None:
+        return "missing"
+    identity = manifest.get("run_identity")
+    observed = identity.get("run_id") if isinstance(identity, Mapping) else None
+    if observed is None:
+        return "missing"
+    return "match" if observed == expected_run_id else "contradicted"
+
+
+def _target_compatible(
+    manifest: Mapping[str, Any], hidden: Mapping[str, Any]
+) -> str:
+    expected = hidden.get("target_hash") or hidden.get("paper_target_hash")
+    if not expected:
+        return "not_specified"
+    target = manifest.get("target")
+    observed = target.get("hash") if isinstance(target, Mapping) else None
+    if observed is None:
+        return "missing"
+    return "match" if observed == expected else "contradicted"
+
+
+def _blinding_protocol_compatible(
+    manifest: Mapping[str, Any], hidden: Mapping[str, Any]
+) -> bool:
+    protocol = manifest.get("protocol_status")
+    if not isinstance(protocol, Mapping):
+        return False
+    analyst_blinding = protocol.get("analyst_blinding")
+    if analyst_blinding not in {"achieved", "not_achieved"}:
+        return False
+    if protocol.get("target_preregistration") != "frozen" or protocol.get(
+        "computation_answer_key_separation"
+    ) != "enforced":
+        return False
+    required = hidden.get("analyst_blinding_required")
+    if required is None:
+        thresholds = hidden.get("acceptance_thresholds")
+        required = (
+            thresholds.get("analyst_blinding_required")
+            if isinstance(thresholds, Mapping)
+            else False
+        )
+    return required is not True or analyst_blinding == "achieved"
 
 
 def _collect_flags(platform_record: Mapping[str, Any], text: str) -> set[str]:
@@ -287,11 +392,11 @@ def _expectation_terms(hidden: Mapping[str, Any], keys: Iterable[str]) -> list[s
     return [_normalize_term(term) for term in terms if _normalize_term(term)]
 
 
-def _terms_match(text: str, terms: list[str]) -> str:
+def _structured_terms_match(observed: list[str], terms: list[str]) -> str:
     if not terms:
         return "not_specified"
-    lower = _normalize_text(text)
-    matched = [term for term in terms if term in lower]
+    observed_set = set(observed)
+    matched = [term for term in terms if term in observed_set]
     if len(matched) == len(terms):
         return "match"
     if matched:
@@ -299,7 +404,11 @@ def _terms_match(text: str, terms: list[str]) -> str:
     return "missing"
 
 
-def _execution_ready(manifest: Mapping[str, Any]) -> bool:
+def _execution_ready(
+    manifest: Mapping[str, Any], *, expected_run_id: str | None = None
+) -> bool:
+    from app.services.w0wa_exact_contract import EXACT_PROFILE_ID
+
     publication_gate = manifest.get("publication_gate")
     adequacy = (
         publication_gate.get("model_adequacy")
@@ -307,7 +416,10 @@ def _execution_ready(manifest: Mapping[str, Any]) -> bool:
         else None
     )
     return bool(
-        _trusted_alpha_manifest(manifest)
+        _trusted_alpha_manifest(manifest, expected_run_id=expected_run_id)
+        and manifest.get("profile_id") == EXACT_PROFILE_ID
+        and manifest.get("readiness_status")
+        in {"A_READY_PENDING_EXTERNAL_REVIEW", "A"}
         and isinstance(publication_gate, Mapping)
         and publication_gate.get("eligible") is True
         and isinstance(adequacy, Mapping)
@@ -317,8 +429,10 @@ def _execution_ready(manifest: Mapping[str, Any]) -> bool:
     )
 
 
-def _diagnostics_ready(manifest: Mapping[str, Any]) -> bool:
-    if not _trusted_alpha_manifest(manifest):
+def _diagnostics_ready(
+    manifest: Mapping[str, Any], *, expected_run_id: str | None = None
+) -> bool:
+    if not _trusted_alpha_manifest(manifest, expected_run_id=expected_run_id):
         return False
     diagnostics = manifest.get("diagnostics")
     return bool(
@@ -332,8 +446,10 @@ def _diagnostics_ready(manifest: Mapping[str, Any]) -> bool:
     )
 
 
-def _evidence_complete(manifest: Mapping[str, Any]) -> bool:
-    if not _trusted_alpha_manifest(manifest):
+def _evidence_complete(
+    manifest: Mapping[str, Any], *, expected_run_id: str | None = None
+) -> bool:
+    if not _trusted_alpha_manifest(manifest, expected_run_id=expected_run_id):
         return False
     evidence_ids = manifest.get("evidence_ids")
     support_paths = manifest.get("claim_support_paths")
@@ -364,10 +480,20 @@ def _direction_compatible(manifest: Mapping[str, Any], hidden: Mapping[str, Any]
     expected_terms = _expectation_terms(hidden, ("expected_direction_terms", "acceptable_result_terms"))
     if not expected_terms:
         return "not_specified"
-    return _terms_match(_manifest_terms_text(manifest, "result_direction_terms"), expected_terms)
+    return _structured_terms_match(
+        _manifest_terms(manifest, "result_direction_terms"), expected_terms
+    )
 
 
 def _numeric_compatible(manifest: Mapping[str, Any], hidden: Mapping[str, Any]) -> str:
+    """Compare named centers and complete 68% interval statistics.
+
+    A hidden expectation that declares an interval is matched component by
+    component.  Omitting a bound/uncertainty, swapping a statistic, or pairing
+    a bound with a different uncertainty can therefore never be promoted by a
+    correct center alone.
+    """
+
     expected_numbers = hidden.get("expected_numbers")
     if not expected_numbers:
         return "not_specified"
@@ -375,10 +501,13 @@ def _numeric_compatible(manifest: Mapping[str, Any], hidden: Mapping[str, Any]) 
         return "missing"
 
     observed_numbers = manifest.get("numbers")
-    observed_by_name: dict[str, float] = {}
+    observed_by_name: dict[str, Mapping[str, Any]] = {}
     if isinstance(observed_numbers, Mapping):
         iterable = [
-            {"name": name, **(dict(value) if isinstance(value, Mapping) else {"value": value})}
+            {
+                "name": name,
+                **(dict(value) if isinstance(value, Mapping) else {"value": value}),
+            }
             for name, value in observed_numbers.items()
         ]
     elif isinstance(observed_numbers, list):
@@ -389,36 +518,233 @@ def _numeric_compatible(manifest: Mapping[str, Any], hidden: Mapping[str, Any]) 
         if not isinstance(item, Mapping):
             continue
         name = str(item.get("name") or item.get("parameter") or "").strip().lower()
-        value = _float_or_none(_first_present(item, ("value", "median", "mean")))
-        if name and value is not None:
-            observed_by_name[name] = value
+        if name:
+            observed_by_name[name] = item
 
-    results: list[bool] = []
+    component_results: list[bool | None] = []
+    parameter_seen = False
     for spec in expected_numbers:
         if not isinstance(spec, Mapping):
+            component_results.append(False)
             continue
         name = str(spec.get("name") or spec.get("parameter") or "").strip()
-        value = _float_or_none(_first_present(spec, ("value", "median", "expected")))
-        if not name or value is None:
+        expected = _expected_number_components(spec)
+        if not name or expected is None:
+            component_results.append(False)
             continue
-        observed = observed_by_name.get(name.lower())
-        if observed is None:
-            results.append(False)
+        observed_raw = observed_by_name.get(name.lower())
+        if observed_raw is None:
+            component_results.extend(False for _ in expected)
             continue
-        tolerance_abs = _float_or_none(spec.get("tolerance_abs"))
-        tolerance_rel = _float_or_none(spec.get("tolerance_rel"))
-        sigma = _float_or_none(spec.get("sigma") or spec.get("uncertainty"))
-        if tolerance_abs is None:
-            tolerance_abs = 2.0 * sigma if sigma is not None else abs(value) * (tolerance_rel or 0.1)
-        results.append(abs(observed - value) <= max(tolerance_abs, 1e-12))
+        parameter_seen = True
+        observed = _observed_number_components(observed_raw)
+        if not _observed_interval_aligned(observed):
+            component_results.extend(False for _ in expected)
+            continue
+        for component, expected_value in expected.items():
+            observed_value = observed.get(component)
+            if observed_value is None:
+                component_results.append(None)
+                continue
+            tolerance = _numeric_component_tolerance(
+                component=component,
+                expected=expected,
+                spec=spec,
+                observed_value=observed_value,
+            )
+            component_results.append(
+                abs(observed_value - expected_value) <= max(tolerance, 1e-12)
+            )
+        if {"lower_68", "upper_68"}.issubset(expected):
+            expected_width = expected["upper_68"] - expected["lower_68"]
+            observed_lower = observed.get("lower_68")
+            observed_upper = observed.get("upper_68")
+            if observed_lower is None or observed_upper is None:
+                component_results.append(None)
+            else:
+                width_tolerance_rel = _float_or_none(
+                    spec.get("interval_width_tolerance_rel")
+                )
+                if width_tolerance_rel is None:
+                    width_tolerance_rel = 0.15
+                component_results.append(
+                    abs((observed_upper - observed_lower) - expected_width)
+                    <= max(abs(expected_width) * width_tolerance_rel, 1e-12)
+                    + 1e-12
+                )
 
-    if not results:
+    if not component_results:
         return "not_specified"
-    if all(results):
+    if all(result is True for result in component_results):
         return "match"
-    if any(results):
+    if any(result is True for result in component_results) or (
+        parameter_seen and any(result is None for result in component_results)
+    ):
         return "partial"
     return "contradicted"
+
+
+def _expected_number_components(spec: Mapping[str, Any]) -> dict[str, float] | None:
+    center = _float_or_none(
+        _first_present(spec, ("center", "value", "median", "expected"))
+    )
+    if center is None:
+        return None
+    lower = _float_or_none(_first_present(spec, ("lower_68", "lower", "q16")))
+    upper = _float_or_none(_first_present(spec, ("upper_68", "upper", "q84")))
+    minus = _float_or_none(
+        _first_present(spec, ("uncertainty_minus", "error_minus", "minus"))
+    )
+    plus = _float_or_none(
+        _first_present(spec, ("uncertainty_plus", "error_plus", "plus"))
+    )
+    sigma = _float_or_none(_first_present(spec, ("sigma", "uncertainty")))
+    if sigma is not None:
+        minus = sigma if minus is None else minus
+        plus = sigma if plus is None else plus
+    interval_declared = any(
+        value is not None for value in (lower, upper, minus, plus, sigma)
+    )
+    if not interval_declared:
+        return {"center": center}
+    if minus is None and lower is not None:
+        minus = center - lower
+    if plus is None and upper is not None:
+        plus = upper - center
+    if lower is None and minus is not None:
+        lower = center - minus
+    if upper is None and plus is not None:
+        upper = center + plus
+    if None in {lower, upper, minus, plus}:
+        return {"center": center, "lower_68": math.nan}
+    expected = {
+        "center": center,
+        "lower_68": float(lower),
+        "upper_68": float(upper),
+        "uncertainty_minus": float(minus),
+        "uncertainty_plus": float(plus),
+    }
+    return expected if _observed_interval_aligned(expected) else {
+        "center": center,
+        "lower_68": math.nan,
+    }
+
+
+def _observed_number_components(item: Mapping[str, Any]) -> dict[str, float | None]:
+    return {
+        "center": _float_or_none(
+            _first_present(item, ("center", "value", "median", "mean"))
+        ),
+        "lower_68": _float_or_none(
+            _first_present(item, ("lower_68", "lower", "q16"))
+        ),
+        "upper_68": _float_or_none(
+            _first_present(item, ("upper_68", "upper", "q84"))
+        ),
+        "uncertainty_minus": _float_or_none(
+            _first_present(item, ("uncertainty_minus", "error_minus", "minus"))
+        ),
+        "uncertainty_plus": _float_or_none(
+            _first_present(item, ("uncertainty_plus", "error_plus", "plus"))
+        ),
+    }
+
+
+def _observed_interval_aligned(values: Mapping[str, float | None]) -> bool:
+    center = values.get("center")
+    lower = values.get("lower_68")
+    upper = values.get("upper_68")
+    minus = values.get("uncertainty_minus")
+    plus = values.get("uncertainty_plus")
+    interval_values = (lower, upper, minus, plus)
+    if all(value is None for value in interval_values):
+        return center is not None
+    if center is None or any(value is None for value in interval_values):
+        return False
+    assert lower is not None and upper is not None and minus is not None and plus is not None
+    if not all(math.isfinite(value) for value in (center, lower, upper, minus, plus)):
+        return False
+    if not lower < center < upper or minus <= 0 or plus <= 0:
+        return False
+    scale = max(abs(center), abs(lower), abs(upper), minus, plus, 1.0)
+    tolerance = max(1e-12, scale * 1e-10)
+    return math.isclose(
+        center - lower, minus, rel_tol=1e-10, abs_tol=tolerance
+    ) and math.isclose(
+        upper - center, plus, rel_tol=1e-10, abs_tol=tolerance
+    )
+
+
+def _numeric_component_tolerance(
+    *,
+    component: str,
+    expected: Mapping[str, float],
+    spec: Mapping[str, Any],
+    observed_value: float,
+) -> float:
+    component_abs = _float_or_none(spec.get(f"{component}_tolerance_abs"))
+    if component_abs is not None:
+        return abs(component_abs)
+    generic_abs = _float_or_none(spec.get("tolerance_abs"))
+    if component == "center" and generic_abs is not None:
+        return abs(generic_abs)
+    minus = expected.get("uncertainty_minus")
+    plus = expected.get("uncertainty_plus")
+    if component == "center":
+        center = expected["center"]
+        directional_sigma = plus if observed_value >= center else minus
+        reference_sigma = directional_sigma or 0.0
+    else:
+        reference_sigma = max(
+            value for value in (minus, plus, 0.0) if value is not None
+        )
+    if component == "center" and reference_sigma > 0:
+        tolerance_sigma = _float_or_none(spec.get("center_tolerance_sigma"))
+        return reference_sigma * (0.30 if tolerance_sigma is None else tolerance_sigma)
+    if component in {"lower_68", "upper_68"}:
+        # Endpoints are derived from two independently preregistered gates:
+        # center may move by 0.30 paper sigma and the corresponding side width
+        # may change by 15%.  Requiring an endpoint itself to stay within only
+        # 0.15 sigma contradicts those accepted components (a valid aligned
+        # endpoint can move by their sum, 0.45 sigma for a symmetric interval).
+        side_sigma = minus if component == "lower_68" else plus
+        if side_sigma is not None and side_sigma > 0:
+            center_tolerance_sigma = _float_or_none(
+                spec.get("center_tolerance_sigma")
+            )
+            if center_tolerance_sigma is None:
+                center_tolerance_sigma = 0.30
+            side_tolerance_rel = _float_or_none(
+                spec.get(f"{component}_tolerance_rel")
+            )
+            if side_tolerance_rel is None:
+                side_tolerance_rel = _float_or_none(
+                    spec.get("interval_tolerance_rel")
+                )
+            if side_tolerance_rel is None:
+                side_tolerance_rel = 0.15
+            return side_sigma * (
+                abs(center_tolerance_sigma) + abs(side_tolerance_rel)
+            )
+    relative = _float_or_none(spec.get(f"{component}_tolerance_rel"))
+    if relative is None:
+        relative = _float_or_none(spec.get("interval_tolerance_rel"))
+    if relative is None:
+        relative = 0.15
+    expected_value = expected.get(component, 0.0)
+    return abs(expected_value) * relative
+
+
+def _external_review_complete(
+    manifest: Mapping[str, Any], *, expected_run_id: str | None = None
+) -> bool:
+    if not _trusted_alpha_manifest(manifest, expected_run_id=expected_run_id):
+        return False
+    from app.services.research_alpha_manifest import (
+        research_alpha_external_review_complete,
+    )
+
+    return research_alpha_external_review_complete(manifest)
 
 
 def _why_not_a(hidden_status: str, criteria: Mapping[str, Any], flags: set[str]) -> list[str]:
@@ -516,6 +842,11 @@ def _implementation_queue_from_reasons(
 ) -> list[dict[str, Any]]:
     queue: list[dict[str, Any]] = []
     reason_map = {
+        "run_identity_match": "bind the platform run_id to the exact signed manifest",
+        "target_match": "bind the hidden paper target hash to the exact run manifest",
+        "blinding_protocol_compatible": (
+            "do not issue A-ready when analyst blinding is a required gate but was not achieved"
+        ),
         "data_match": "complete hidden-answer dataset fields and improve dataset routing",
         "method_match": "complete hidden-answer method fields and implement missing likelihood/estimator routes",
         "model_match": "complete hidden-answer model-family fields and add model-family routing",

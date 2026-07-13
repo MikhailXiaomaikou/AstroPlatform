@@ -14,6 +14,10 @@ so the evaluation semantics get unit tests:
    exercise — without this pin a silent carry regression would make B5
    pass vacuously), and forbid strings scan EVERY turn's reply, not just
    the final one.
+6. F2 (2026-07-13): compressed in-process evidence and the synthetic signed
+   CI fixture both remain withheld. A separate test-only HMAC exact envelope
+   crosses an explicit cryptographic verifier boundary, while the production
+   exact-closure verifier still rejects it.
 """
 from __future__ import annotations
 
@@ -53,6 +57,98 @@ def test_must_not_contain_passes_on_clean_reply():
 def test_must_not_contain_fails_case_insensitively():
     rec = _record("⚠ REPLY WITHHELD: the model attempted to cite values…", [])
     _, ok = _one_check(rec, {"reply_must_not_contain": ["Reply withheld"]})
+    assert not ok
+
+
+def test_numeric_not_near_passes_when_parameter_has_no_claimable_value():
+    rec = _record(
+        "The compressed result cannot support H0; no publication-ready "
+        "posterior was produced.",
+        [],
+    )
+    desc, ok = _one_check(
+        rec,
+        {
+            "reply_numeric_not_near": {
+                "label": ["H0", "H₀", "Hubble"],
+                "min": 40.0,
+                "max": 100.0,
+            }
+        },
+    )
+    assert ok and "numeric_not_near" in desc
+
+
+def test_numeric_not_near_fails_on_claim_shaped_parameter_value():
+    rec = _record("The compressed chain gives H0 = 67.69 km/s/Mpc.", [])
+    _, ok = _one_check(
+        rec,
+        {
+            "reply_numeric_not_near": {
+                "label": ["H0", "H₀", "Hubble"],
+                "min": 40.0,
+                "max": 100.0,
+            }
+        },
+    )
+    assert not ok
+
+
+def test_numeric_not_near_fails_when_value_precedes_parameter_label():
+    rec = _record(
+        "The compressed chain reports 67.69 km/s/Mpc for H0.",
+        [],
+    )
+    _, ok = _one_check(
+        rec,
+        {
+            "reply_numeric_not_near": {
+                "label": ["H0", "H₀", "Hubble"],
+                "min": 40.0,
+                "max": 100.0,
+            }
+        },
+    )
+    assert not ok
+
+
+def test_numeric_not_near_ignores_credible_interval_percentage():
+    rec = _record(
+        "H0 requires a reported 68% interval and four independent chains; "
+        "no parameter value is claimable.",
+        [],
+    )
+    _, ok = _one_check(
+        rec,
+        {
+            "reply_numeric_not_near": {
+                "label": ["H0", "H₀", "Hubble"],
+                "min": 40.0,
+                "max": 100.0,
+            }
+        },
+    )
+    assert ok
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "The compressed output lists H0 (km/s/Mpc) 67.69.",
+        "The compressed output lists 67.69 (H0).",
+    ],
+)
+def test_numeric_not_near_catches_parenthetical_claim_shapes(reply):
+    _, ok = _one_check(
+        _record(reply, []),
+        {
+            "reply_numeric_not_near": {
+                "label": ["H0", "H₀", "Hubble"],
+                "min": 40.0,
+                "max": 100.0,
+            }
+        },
+    )
     assert not ok
 
 
@@ -344,3 +440,566 @@ def test_f1_hard_fails_on_annotated_block_footer():
     )
     verdict = evaluate_case(rec, f1)
     assert verdict["hard_failed"] is True
+
+
+# ---------- corrected F2 withholding + signed full-likelihood control ----------
+
+
+def _load_f2() -> dict:
+    return next(c for c in _load_cases() if c["id"] == "F2_likelihood_chain_specificity")
+
+
+def _f2_record(reply: str, *, publication_ready: bool = False) -> dict:
+    result = {
+        "success": True,
+        "publication_ready": publication_ready,
+        "claim_scope": "compressed_likelihood_preliminary",
+        "chain_tier": "publication" if publication_ready else "exploratory",
+        "datasets_used": [
+            {"key": "desi_dr1_bao", "execution_mode": "compressed_gaussian"},
+            {
+                "key": "planck2018_compressed",
+                "execution_mode": "compressed_gaussian",
+            },
+        ],
+    }
+    return {
+        "reply": reply,
+        "tools_called": ["run_cosmology_likelihood_chain"],
+        "events": [
+            {
+                "type": "tool_result",
+                "tool": "run_cosmology_likelihood_chain",
+                "result": result,
+            }
+        ],
+    }
+
+
+def test_f2_passes_on_compressed_nonpublication_withholding():
+    from app.services.agent_runtime.summaries import _cosmology_tool_grounded_summary
+    from app.services.cosmology_likelihoods import run_likelihood_chain
+
+    f2 = _load_f2()
+    result = run_likelihood_chain(
+        model="lcdm",
+        dataset_keys=["desi_dr1_bao", "planck2018_compressed"],
+        random_seed=20260713,
+        n_samples=256,
+    )
+    reply = _cosmology_tool_grounded_summary(
+        [{"tool": "run_cosmology_likelihood_chain", "result": result}],
+        f2["prompt"],
+    )
+    assert reply is not None
+    record = {
+        "reply": reply,
+        "tools_called": ["run_cosmology_likelihood_chain"],
+        "events": [
+            {
+                "type": "tool_result",
+                "tool": "run_cosmology_likelihood_chain",
+                "result": result,
+            }
+        ],
+    }
+    verdict = evaluate_case(record, f2)
+    assert verdict["verdict"] == "PASS", verdict
+
+
+def test_f2_hard_fails_if_compressed_h0_is_surfaced():
+    reply = (
+        "This compressed result is not publication-ready, but it gives "
+        "H0 = 67.69 km/s/Mpc."
+    )
+    verdict = evaluate_case(_f2_record(reply), _load_f2())
+    assert verdict["verdict"] == "HARD-FAIL", verdict
+
+
+def test_f2_hard_fails_if_compressed_h0_precedes_label():
+    reply = (
+        "This compressed result is not publication-ready, but it reports "
+        "67.69 km/s/Mpc for H0."
+    )
+    verdict = evaluate_case(_f2_record(reply), _load_f2())
+    assert verdict["verdict"] == "HARD-FAIL", verdict
+
+
+def test_f2_hard_fails_if_compressed_tool_claims_publication_ready():
+    reply = (
+        "The compressed result is publication-ready; H0 is not claimable "
+        "from any other source."
+    )
+    verdict = evaluate_case(
+        _f2_record(reply, publication_ready=True),
+        _load_f2(),
+    )
+    assert verdict["verdict"] == "HARD-FAIL", verdict
+
+
+@pytest.fixture
+def signed_full_likelihood_result(tmp_path: Path) -> dict:
+    """Build a final-manifest-bound external result through real signers."""
+    from app.services import cobaya_runner
+    from app.services.cosmology_likelihoods import _validate_dataset_selection
+    from app.services.cosmology_likelihoods.verification import (
+        PUBLICATION_REQUIRED_ADEQUACY_CHECKS,
+        build_model_adequacy_attestation,
+        build_model_adequacy_subject,
+    )
+    from app.services.research_alpha_attestation import (
+        verify_scientific_attestation as verify_research_alpha_attestation,
+    )
+    from app.services.research_alpha_manifest import validate_research_alpha_manifest
+    from app.services.server_evidence import (
+        verify_scientific_attestation as verify_server_scientific_attestation,
+    )
+    from tests.research_alpha_test_support import build_manifest
+
+    entries = _validate_dataset_selection(
+        "lcdm",
+        [
+            "planck_2018_highl_TTTEEE_lite",
+            "planck_2018_lowl_TT",
+            "planck_2018_lowl_EE",
+        ],
+    )
+    data_verification = cobaya_runner._verify_pinned_cmb_data(entries)  # noqa: SLF001
+    assert data_verification is not None
+    assert data_verification["hash_verified"] is True
+
+    # Match _cobaya_parameter_order's complete sampled primary-CMB set.  The
+    # numerical values only make the signed fixture structurally realistic;
+    # this test asserts provenance/gating, not a Planck parameter result.
+    fixture_values = {
+        "ombh2": (0.0224, 0.00015),
+        "omch2": (0.12, 0.0015),
+        "H0": (67.4, 0.5),
+        "ns": (0.965, 0.004),
+        "As": (2.1e-9, 3.0e-11),
+        "tau": (0.054, 0.007),
+        "A_planck": (1.0, 0.002),
+    }
+    summaries = {}
+    for name, (center, uncertainty) in fixture_values.items():
+        summaries[name] = {
+            "mean": center,
+            "median": center,
+            "std": uncertainty,
+            "center": center,
+            "lower_68": center - uncertainty,
+            "upper_68": center + uncertainty,
+            "uncertainty_minus": uncertainty,
+            "uncertainty_plus": uncertainty,
+        }
+    per_parameter = {
+        name: {
+            "rhat": 1.004 + index * 0.0001,
+            "ess_bulk": 900.0 - index * 10.0,
+            "mcse_over_reference_sigma": 0.02,
+        }
+        for index, name in enumerate(fixture_values)
+    }
+    metrics = {
+        "rhat_method": "rank_normalized",
+        "ess_method": "bulk",
+        "mcse_reference": "paper_sigma",
+        "n_independent_chains": 4,
+        "critical_parameters": list(fixture_values),
+        "per_parameter": per_parameter,
+    }
+    diagnostics = {
+        "status": "passed",
+        "overall_status": "ok",
+        "rhat": max(item["rhat"] for item in per_parameter.values()),
+        "ess_bulk": min(item["ess_bulk"] for item in per_parameter.values()),
+        "n_chains": 4,
+        "n_independent_chains": 4,
+        "per_parameter": per_parameter,
+        "metrics": metrics,
+    }
+    subject = build_model_adequacy_subject(
+        model="lcdm",
+        dataset_keys=[entry.key for entry in entries],
+        random_seed=20260713,
+        summaries=summaries,
+        diagnostics=diagnostics,
+        data_verification=data_verification,
+    )
+    adequacy = build_model_adequacy_attestation(
+        subject=subject,
+        evidence_by_check={
+            name: {"artifact_id": f"sha256-fixture:{name}"}
+            for name in PUBLICATION_REQUIRED_ADEQUACY_CHECKS
+        },
+    )
+    assert verify_server_scientific_attestation(
+        adequacy,
+        expected_type="model_adequacy",
+    )
+
+    result = cobaya_runner._runner_success(  # noqa: SLF001
+        model_key="lcdm",
+        entries=entries,
+        seed=20260713,
+        sampler="mcmc",
+        summaries=summaries,
+        diagnostics=diagnostics,
+        chain_meta={"n_chains": 4, "n_draws_total": 4_000},
+        stdout_tail="signed full-likelihood test fixture",
+        data_verification=data_verification,
+        model_adequacy=adequacy,
+    )
+    assert result["publication_ready"] is True
+    assert result["analysis_status"] == "EXTERNAL_COBAYA_READY"
+
+    # The positive F2 path uses a fully signed, file-backed CI fixture. Its
+    # distinct profile is permanently WITHHELD and can never become A-ready;
+    # the test only exercises result-to-manifest specificity binding.
+    final_manifest = build_manifest(tmp_path / "signed-full-likelihood", h0=67.4)
+    run_id = final_manifest["run_identity"]["run_id"]
+    chain_ids = final_manifest["run_identity"]["chain_ids"]
+    chain_seeds = final_manifest["run_identity"]["seeds"]
+    assert validate_research_alpha_manifest(
+        final_manifest,
+        expected_run_id=run_id,
+    ) == {"valid": True, "reasons": []}
+    assert verify_research_alpha_attestation(
+        final_manifest,
+        expected_type="research_alpha",
+    )
+
+    surfaced = {}
+    for name, interval in final_manifest["numbers"].items():
+        surfaced[name] = {
+            **{
+                field: interval[field]
+                for field in (
+                    "center",
+                    "lower_68",
+                    "upper_68",
+                    "uncertainty_minus",
+                    "uncertainty_plus",
+                )
+            },
+            "mean": interval["center"],
+            "median": interval["center"],
+            "std": interval["uncertainty_plus"],
+        }
+    result["parameters"] = surfaced
+    result["posterior_summary"] = surfaced
+    result["datasets_used"] = [
+        {"display_name": name, "execution_mode": "external_cobaya"}
+        for name in final_manifest["datasets"]
+    ]
+    result["publication_ready"] = False
+    result["chain_tier"] = "ci_fixture"
+    result["analysis_status"] = "CI_FIXTURE_WITHHELD"
+
+    result["scientific_run_id"] = run_id
+    result["chain_ids"] = chain_ids
+    result["chain_seeds"] = chain_seeds
+    result["scientific_target_hash"] = final_manifest["target"]["hash"]
+    result["scientific_fingerprints"] = final_manifest["fingerprints"]
+    result["scientific_methods"] = final_manifest["methods"]
+    result["scientific_models"] = final_manifest["models"]
+    result["scientific_evidence_manifest"] = final_manifest
+    assert runner_module._research_alpha_manifest_bound_to_result(result) is True
+    return result
+
+
+def test_signed_ci_full_likelihood_fixture_is_bound_but_publication_withheld(
+    signed_full_likelihood_result: dict,
+):
+    from app.services.claim_validator import methodology_consistency_violations
+    from app.services.research_alpha_manifest import validate_research_alpha_manifest
+    from app.services.result_provenance import normalize_tool_result
+
+    normalized = normalize_tool_result(
+        "run_cosmology_likelihood_chain",
+        signed_full_likelihood_result,
+        tool_input={},
+    )
+    tool_results = [
+        {
+            "tool": "run_cosmology_likelihood_chain",
+            "input": {},
+            "result": normalized,
+        }
+    ]
+    manifest = normalized["scientific_evidence_manifest"]
+    assert validate_research_alpha_manifest(
+        manifest,
+        expected_run_id=normalized["scientific_run_id"],
+    ) == {"valid": True, "reasons": []}
+    assert runner_module._research_alpha_manifest_bound_to_result(normalized) is True
+    assert runner_module._signed_full_likelihood_specificity_ready(tool_results) is False
+
+    reply = (
+        "This signed CI fixture is withheld from publication and does not support "
+        "a claimable H0 value."
+    )
+    publication_reply = (
+        "The signed full external Cobaya likelihood run is publication-ready; "
+        "its H0 posterior mean is 67.4 km/s/Mpc."
+    )
+    assert methodology_consistency_violations(publication_reply, tool_results)
+
+    withheld_case = {
+        "id": "F2_signed_ci_fixture_withheld",
+        "group": "F",
+        "hard": True,
+        "checks": [
+            {"tools_all": ["run_cosmology_likelihood_chain"]},
+            {
+                "tool_result_status": {
+                    "tool": "run_cosmology_likelihood_chain",
+                    "key": "publication_ready",
+                    "equals": False,
+                }
+            },
+            {
+                "tool_result_status": {
+                    "tool": "run_cosmology_likelihood_chain",
+                    "key": "chain_tier",
+                    "equals": "ci_fixture",
+                }
+            },
+                {
+                    "tool_result_status": {
+                        "tool": "run_cosmology_likelihood_chain",
+                        "key": "analysis_status",
+                        # result_provenance deliberately does not expose the
+                        # offline-only fixture state as a public tool status.
+                        "equals": "partial",
+                    }
+                },
+            {
+                "tool_result_list_all": {
+                    "tool": "run_cosmology_likelihood_chain",
+                    "key": "datasets_used",
+                    "item_key": "execution_mode",
+                    "equals": "external_cobaya",
+                }
+            },
+            {"reply_contains_any": ["withheld", "not support", "not claimable"]},
+            {
+                "reply_numeric_not_near": {
+                    "label": ["H0", "H₀", "Hubble"],
+                    "min": 40.0,
+                    "max": 100.0,
+                }
+            },
+            {"reply_must_not_contain": ["Reply withheld", "Reply blocked"]},
+        ],
+        "forbid": ["__do_not_claim__"],
+    }
+    record = {
+        "reply": reply,
+        "tools_called": ["run_cosmology_likelihood_chain"],
+        "events": [
+            {
+                "type": "tool_result",
+                "tool": "run_cosmology_likelihood_chain",
+                "result": normalized,
+            }
+        ],
+    }
+    verdict = evaluate_case(record, withheld_case)
+    assert verdict["verdict"] == "PASS", verdict
+
+    # Mutating the surfaced result breaks its binding to the still-valid final
+    # manifest. The composed methodology unlock must therefore close.
+    for mutated_field in ("center", "mean", "lower_68", "uncertainty_plus"):
+        result_tampered = copy.deepcopy(normalized)
+        result_tampered["parameters"]["H0"][mutated_field] = 70.0
+        result_tampered_tools = [
+            {
+                "tool": "run_cosmology_likelihood_chain",
+                "input": {},
+                "result": result_tampered,
+            }
+        ]
+        assert validate_research_alpha_manifest(
+            result_tampered["scientific_evidence_manifest"],
+            expected_run_id=result_tampered["scientific_run_id"],
+        )["valid"] is True
+        assert (
+            runner_module._research_alpha_manifest_bound_to_result(
+                result_tampered
+            )
+            is False
+        )
+        assert (
+            runner_module._signed_full_likelihood_specificity_ready(
+                result_tampered_tools
+            )
+            is False
+        )
+
+    # Mutating the signed H0 interval itself invalidates both its content hash
+    # and HMAC, independently of the outer-result binding check.
+    manifest_tampered = copy.deepcopy(normalized)
+    manifest_tampered["scientific_evidence_manifest"]["numbers"]["H0"][
+        "center"
+    ] = 70.0
+    assert validate_research_alpha_manifest(
+        manifest_tampered["scientific_evidence_manifest"],
+        expected_run_id=manifest_tampered["scientific_run_id"],
+    )["valid"] is False
+    assert (
+        runner_module._signed_full_likelihood_specificity_ready(
+            [
+                {
+                    "tool": "run_cosmology_likelihood_chain",
+                    "input": {},
+                    "result": manifest_tampered,
+                }
+            ]
+        )
+        is False
+    )
+
+
+def test_f2_exact_publication_true_positive_through_verifier_boundary(
+    signed_full_likelihood_result: dict,
+):
+    """Exercise F2's positive branch without creating a production bypass.
+
+    The expensive exact artifact closure cannot be fabricated in CI.  This
+    test injects only the cryptographic verifier boundary, exactly as a valid
+    external signature would; profile/gate checks, full result-number binding,
+    and the external-likelihood methodology gate all remain production code.
+    """
+
+    from app.services.research_alpha_manifest import validate_research_alpha_manifest
+    from app.services.server_evidence import (
+        build_scientific_attestation,
+        verify_scientific_attestation,
+    )
+
+    source = signed_full_likelihood_result["scientific_evidence_manifest"]
+    # A separately signed, explicitly test-only exact-profile envelope.  It
+    # reuses small CI artifact records only to exercise result binding; its
+    # distinct attestation type can never satisfy the production verifier.
+    eligible_payload = {
+        key: copy.deepcopy(value)
+        for key, value in source.items()
+        if key
+        not in {
+            "schema_version",
+            "attestation_source",
+            "attestation_type",
+            "key_id",
+            "manifest_hash",
+            "signature",
+            "profile_id",
+            "readiness_status",
+            "publication_gate",
+        }
+    }
+    eligible_payload["profile_id"] = (
+        "desi_2024_vi_table3_desi_cmb_pantheonplus_v1"
+    )
+    eligible_payload["readiness_status"] = "A_READY_PENDING_EXTERNAL_REVIEW"
+    eligible_payload["publication_gate"] = {
+        **source["publication_gate"],
+        "eligible": True,
+        "numerical_eligible": True,
+        "reasons": [],
+    }
+    manifest = build_scientific_attestation(
+        attestation_type="research_alpha_f2_exact_test_fixture",
+        payload=eligible_payload,
+    )
+    assert verify_scientific_attestation(
+        manifest, expected_type="research_alpha_f2_exact_test_fixture"
+    )
+    result = copy.deepcopy(signed_full_likelihood_result)
+    result["scientific_evidence_manifest"] = manifest
+    result.update(
+        {
+            "publication_ready": True,
+            "chain_tier": "publication",
+            "analysis_status": "EXTERNAL_COBAYA_READY",
+            "execution_mode": "external_cobaya",
+            "claim_scope": "parameter_interval_reproduction_only",
+        }
+    )
+
+    def test_fixture_signature_verifier(candidate, *, expected_run_id=None):
+        return {
+            "valid": (
+                verify_scientific_attestation(
+                    candidate,
+                    expected_type="research_alpha_f2_exact_test_fixture",
+                )
+                and expected_run_id == result["scientific_run_id"]
+                and candidate.get("profile_id")
+                == "desi_2024_vi_table3_desi_cmb_pantheonplus_v1"
+                and candidate.get("readiness_status")
+                == "A_READY_PENDING_EXTERNAL_REVIEW"
+                and (candidate.get("publication_gate") or {}).get("eligible")
+                is True
+                and (candidate.get("publication_gate") or {}).get(
+                    "numerical_eligible"
+                )
+                is True
+            ),
+            "reasons": [],
+        }
+    tools = [
+        {
+            "tool": "run_cosmology_likelihood_chain",
+            "input": {},
+            "result": result,
+        }
+    ]
+    # The real production verifier rejects the deliberately incomplete exact
+    # closure.  Only the cryptographic test-fixture trust boundary accepts it.
+    assert validate_research_alpha_manifest(
+        manifest, expected_run_id=result["scientific_run_id"]
+    )["valid"] is False
+    assert runner_module._signed_full_likelihood_specificity_ready(tools) is False
+    assert (
+        runner_module._research_alpha_manifest_bound_to_result(
+            result, manifest_verifier=test_fixture_signature_verifier
+        )
+        is True
+    )
+    assert (
+        runner_module._signed_full_likelihood_specificity_ready(
+            tools, manifest_verifier=test_fixture_signature_verifier
+        )
+        is True
+    )
+
+    tampered = copy.deepcopy(result)
+    tampered["parameters"]["H0"]["center"] += 1.0
+    # The signed manifest remains valid, but the independent surfaced-number
+    # binding catches a result-only mutation.
+    assert (
+        runner_module._research_alpha_manifest_bound_to_result(
+            tampered, manifest_verifier=test_fixture_signature_verifier
+        )
+        is False
+    )
+    assert (
+        runner_module._signed_full_likelihood_specificity_ready(
+            [{"tool": "run_cosmology_likelihood_chain", "input": {}, "result": tampered}],
+            manifest_verifier=test_fixture_signature_verifier,
+        )
+        is False
+    )
+
+    signature_tampered = copy.deepcopy(result)
+    signature_tampered["scientific_evidence_manifest"]["publication_gate"][
+        "eligible"
+    ] = False
+    assert (
+        test_fixture_signature_verifier(
+            signature_tampered["scientific_evidence_manifest"],
+            expected_run_id=result["scientific_run_id"],
+        )["valid"]
+        is False
+    )

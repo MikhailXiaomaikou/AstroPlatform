@@ -1,6 +1,7 @@
 # Clik-FREE Planck 2018 likelihood set for the full-CMB dark-energy reproduction.
-# Avoids the plik/clik C library (hard to build on macOS): uses the native-Python
-# CamSpec2021 high-l TT/TE/EE + native low-l TT/EE + native lensing.
+# Historical exploratory proxy using native-Python CamSpec2021 high-l TT/TE/EE
+# + native low-l TT/EE + native lensing. Modern Cobaya uses pure-Python clipy
+# for plik; this proxy must not produce exact-profile or A-readiness evidence.
 # Install once locally:  cobaya-install scripts/cobaya/planck_clikfree_install.yaml -p packages
 theory:
   camb:

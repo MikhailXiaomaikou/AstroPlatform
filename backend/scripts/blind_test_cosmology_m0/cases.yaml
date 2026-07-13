@@ -5,8 +5,9 @@
 #   C = honest abstention (no relevant data → abstain, no fake numbers)
 #   D = priority / scheduling (LLM picks the right tool first)
 #   E = multi-tool chain (Plan → Matrix → Evidence → FactCheck → Export)
-#   F = happy-path end-to-end SPECIFICITY — a clean successful turn must NOT
-#       be blocked/withheld by the gates (the inverse of B/C; 2026-06-11)
+#   F = end-to-end SPECIFICITY — each deterministic path must reach its exact
+#       evidence-qualified outcome. Eligible runs must not be false-blocked;
+#       the compressed F2 path must be withheld (2026-07-13 correction).
 #
 # Runner invariants per case:
 #   expect_tools_called : at least one of these tools must show up in the
@@ -22,7 +23,10 @@
 #                         Types: tools_all / tools_any / reply_contains_all /
 #                         reply_contains_any / reply_must_not_contain /
 #                         reply_numeric_near {label,min,max} /
-#                         tool_result_status {tool,key,equals}.
+#                         reply_numeric_not_near {label,min,max} /
+#                         tool_result_status {tool,key,equals} /
+#                         tool_result_list_all {tool,key,item_key,equals} /
+#                         tool_result_signed_full_likelihood {tool}.
 #   forbid              : substring blacklist for the final reply text.
 #   hard                : true → the case gates CI like B/C even though its
 #                         group is not anti-fabrication (used by group F).
@@ -384,39 +388,35 @@
 - id: F2_likelihood_chain_specificity
   group: F
   hard: true
-  # 2026-06-12 F-group expansion: the flagship LIKELIHOOD-CHAIN happy path as
-  # a hard specificity gate (A1 covers the same flow but group A is soft —
-  # routing drift must not redden CI; a clean chain turn being withheld MUST).
-  # Provider-stable: the prompt names datasets + model, so chat.py's
-  # deterministic forcing (_cosmology_likelihood_run_calls_from_prompt)
-  # emits run_cosmology_likelihood_chain even if the LLM skips it, and the
-  # chain itself is seeded/deterministic (H0 anchor also pinned in
-  # benchmarks). The reply may be model prose OR the deterministic
-  # tool-grounded summary; both must carry H0 and neither may be withheld.
+  # 2026-07-13 correction: this prompt exercises the in-process compressed
+  # Gaussian runner, not a full external likelihood.  Its deterministic H0
+  # summary is scientifically useful for diagnostics but has typed/compressed
+  # input, no independent chains, and no signed model-adequacy evidence.  F2
+  # therefore pins the honest WITHHOLDING path: the tool must remain
+  # non-publication-ready and the reply must not surface a claim-shaped H0.
+  # A signed CI full-likelihood fixture separately tests exact result/manifest
+  # binding, but remains non-publication and cannot impersonate the production
+  # exact profile. This case must never be relaxed to make either fixture path
+  # claim A-ready evidence.
   prompt: |
     Run the joint flat ΛCDM executable likelihood chain on DESI DR1 BAO +
-    Planck 2018 compressed distance priors and report the H0 median with its
-    chain tier.
+    Planck 2018 compressed distance priors. State whether this in-process
+    result is publication-ready and whether it supports a claimable H0.
   expect_tools_called: [run_cosmology_likelihood_chain]
   expect_pass:
-    - "run_cosmology_likelihood_chain executes the joint fit in-process"
-    - "H0 reported in 66.5-68.5 km/s/Mpc (publication anchor)"
-    - "reply is NOT withheld/blocked/downgraded by the validation gates"
+    - "run_cosmology_likelihood_chain executes the compressed joint fit in-process"
+    - "tool result remains exploratory/non-publication-ready"
+    - "reply withholds a claimable H0 and names the missing full-likelihood evidence"
   checks:
     - tools_all: [run_cosmology_likelihood_chain]
-    - reply_numeric_near: { label: ["H0", "H₀", "Hubble"], min: 66.5, max: 68.5 }
-    - reply_contains_any: ["publication"]
-      soft: true   # tier wording varies in prose; the tier itself is pinned in benchmarks
-    # SOFT observability: the anchor gate MAY legitimately downgrade prose to
-    # the grounded summary when the LLM volunteers an unanchored literature
-    # comparison (live 2026-06-12: an unprompted "sits ~5σ below SH0ES
-    # H0=73.04" aside — no shoes dataset ran, so the number had no in-turn
-    # source; that is the gate's documented design, A2 teaches the proper
-    # route). Soft so LLM stochasticity never reddens CI; the summary.md
-    # line is the downgrade-rate observability signal.
-    - reply_must_not_contain: ["Tool-grounded cosmology summary"]
-      soft: true
-    - reply_must_not_contain: ["Reply withheld", "Reply blocked", "__do_not_claim__", "provenance check failed"]
+    - tool_result_status: { tool: run_cosmology_likelihood_chain, key: publication_ready, equals: false }
+    - tool_result_status: { tool: run_cosmology_likelihood_chain, key: chain_tier, equals: exploratory }
+    - tool_result_status: { tool: run_cosmology_likelihood_chain, key: claim_scope, equals: compressed_likelihood_preliminary }
+    - tool_result_list_all: { tool: run_cosmology_likelihood_chain, key: datasets_used, item_key: execution_mode, equals: compressed_gaussian }
+    - reply_contains_any: ["not publication-ready", "not publication ready", "preliminary", "compressed"]
+    - reply_contains_any: ["cannot support H0", "cannot support H₀", "H0 is not claimable", "H₀ is not claimable", "no claimable H0"]
+    - reply_numeric_not_near: { label: ["H0", "H₀", "Hubble"], min: 40.0, max: 100.0 }
+    - reply_must_not_contain: ["__do_not_claim__", "provenance check failed"]
   forbid: ["__do_not_claim__"]
 
 - id: F3_abstention_specificity

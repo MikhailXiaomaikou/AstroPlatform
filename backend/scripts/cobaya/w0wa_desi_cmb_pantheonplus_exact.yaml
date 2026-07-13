@@ -1,0 +1,109 @@
+# Exact DESI 2024 VI Table 3 profile: DESI DR1 BAO + baseline CMB + PantheonPlus.
+# CMB means PR3 Commander TT, PR3 SimAll EE, PR3 plik TTTEEE, and the ACT DR6 +
+# Planck PR4 lensing actplanck_baseline likelihood. PantheonPlus uses Cobaya's
+# full statistical+systematic covariance and its built-in zHD > 0.01 cut
+# (Cobaya maps the source zHD column to its internal ``zcmb`` array).
+#
+# This file contains no Table 3 answer values. Offline grade reads the separately
+# committed hidden-answer record only after the formal run has been analyzed.
+theory:
+  camb:
+    # Do not let packages_path/code/CAMB shadow the locked venv wheel.
+    path: global
+    ignore_obsolete: true
+    extra_args:
+      lmax: 4000
+      lens_margin: 1250
+      lens_potential_accuracy: 4
+      AccuracyBoost: 1
+      lSampleBoost: 1
+      lAccuracyBoost: 1
+      halofit_version: mead2016
+      num_massive_neutrinos: 1
+      nnu: 3.044
+      standard_neutrino_neff: 3.044
+      # The DESI analysis fixes the standard-neutrino sector but does not name
+      # a BBN interpolation table. Freeze Cobaya's Planck-v3.6.2 implementation
+      # choice so a future CAMB default cannot silently move YHe.
+      YHe: null
+      bbn_predictor: PArthENoPE_880.2_standard.dat
+      dark_energy_model: ppf
+      theta_H0_range: [40, 100]
+likelihood:
+  planck_2018_lowl.TT_clik:
+  planck_2018_lowl.EE_clik:
+  planck_2018_highl_plik.TTTEEE:
+  act_dr6_lenslike.ACTDR6LensLike:
+    variant: actplanck_baseline
+    lens_only: false
+  bao.desi_2024_bao_all:
+  sn.pantheonplus:
+params:
+  ombh2:
+    prior: {min: 0.005, max: 0.1}
+    ref: {dist: norm, loc: 0.02237, scale: 0.0002}
+    proposal: 0.0001
+    latex: \Omega_\mathrm{b} h^2
+  omch2:
+    prior: {min: 0.001, max: 0.99}
+    ref: {dist: norm, loc: 0.12, scale: 0.002}
+    proposal: 0.001
+    latex: \Omega_\mathrm{c} h^2
+  theta_MC_100:
+    prior: {min: 0.5, max: 10}
+    ref: {dist: norm, loc: 1.04109, scale: 0.0004}
+    proposal: 0.0002
+    latex: 100\theta_\mathrm{MC}
+    drop: true
+    renames: theta
+  cosmomc_theta:
+    value: "lambda theta_MC_100: 1.e-2*theta_MC_100"
+    derived: false
+  H0:
+    latex: H_0
+    min: 40
+    max: 100
+  tau:
+    prior: {min: 0.01, max: 0.8}
+    ref: {dist: norm, loc: 0.055, scale: 0.006}
+    proposal: 0.003
+    latex: \tau_\mathrm{reio}
+  ns:
+    prior: {min: 0.8, max: 1.2}
+    ref: {dist: norm, loc: 0.965, scale: 0.004}
+    proposal: 0.002
+    latex: n_\mathrm{s}
+  logA:
+    prior: {min: 1.61, max: 3.91}
+    ref: {dist: norm, loc: 3.05, scale: 0.01}
+    proposal: 0.005
+    drop: true
+    latex: \log(10^{10} A_\mathrm{s})
+  As:
+    value: "lambda logA: 1e-10*np.exp(logA)"
+    latex: A_\mathrm{s}
+  w:
+    prior: {min: -3.0, max: 1.0}
+    ref: {dist: norm, loc: -0.9, scale: 0.1}
+    proposal: 0.05
+    latex: w_0
+  wa:
+    prior: {min: -3.0, max: 2.0}
+    ref: {dist: norm, loc: -0.3, scale: 0.3}
+    proposal: 0.2
+    latex: w_a
+  mnu: 0.06
+  omegam:
+    latex: \Omega_\mathrm{m}
+  sigma8:
+    latex: \sigma_8
+prior:
+  early_matter_domination: "lambda w, wa: 0.0 if w + wa < 0.0 else -np.inf"
+sampler:
+  mcmc:
+    seed: [11863279, 29100487, 40721353, 59380621]
+    drag: true
+    oversample_power: 0.4
+    Rminus1_stop: 0.01
+    Rminus1_cl_stop: 0.10
+    max_tries: 10000
