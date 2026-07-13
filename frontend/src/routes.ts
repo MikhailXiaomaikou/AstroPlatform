@@ -25,6 +25,18 @@ export interface NavRoute {
   tourSelector?: string;
 }
 
+/**
+ * The linked Bot talks to services that exist only on the operator's Mac.
+ * Keep its navigation out of public deployments unless the deployer opts in;
+ * the `/bot` route itself remains available and explains that requirement.
+ */
+export const BOT_CONSOLE_ENABLED =
+  import.meta.env.DEV
+  || import.meta.env.MODE === "test"
+  || ["1", "true", "yes"].includes(
+    String(import.meta.env.VITE_BOT_CONSOLE_ENABLED || "").trim().toLowerCase(),
+  );
+
 export const NAV_ROUTES: readonly NavRoute[] = [
   // Primary destinations — surfaced in main masthead nav and the onboarding tour.
   {
@@ -37,6 +49,15 @@ export const NAV_ROUTES: readonly NavRoute[] = [
     keywords: "ask question chat assistant",
     tourSelector: 'a[href="/chat"]',
   },
+  ...(BOT_CONSOLE_ENABLED ? [{
+    id: "nav-bot",
+    path: "/bot",
+    labelKey: "cmd.research_bot",
+    descKey: "bot.subtitle",
+    categoryKey: "cmd.cat_nav",
+    category: "primary" as const,
+    keywords: "bot linked research weekly report automation pipeline",
+  }] : []),
   {
     id: "nav-papers",
     path: "/papers",

@@ -82,6 +82,42 @@ describe("API client configuration", () => {
   });
 });
 
+describe("Linked research Bot API helpers", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("uses only the stable automation endpoints", async () => {
+    const {
+      default: api,
+      chatWithAutomationBot,
+      getAutomationResearchReport,
+      getAutomationResearchStatus,
+      triggerAutomationResearch,
+    } = await import("../api/client");
+    const postSpy = vi.spyOn(api, "post")
+      .mockResolvedValueOnce({ data: { reply: "answer", model: "gpt-5.6-sol" } })
+      .mockResolvedValueOnce({ data: { submitted: true, status: "pending" } });
+    const getSpy = vi.spyOn(api, "get")
+      .mockResolvedValueOnce({ data: { week_id: "2026-W28", status: "pending" } })
+      .mockResolvedValueOnce({ data: { week_id: "2026-W28", markdown: "report" } });
+    const messages = [{ role: "user" as const, content: "hello" }];
+
+    await chatWithAutomationBot(messages);
+    await getAutomationResearchStatus();
+    await getAutomationResearchReport();
+    await triggerAutomationResearch();
+
+    expect(postSpy).toHaveBeenNthCalledWith(1, "/api/automation/bot/chat", { messages });
+    expect(getSpy).toHaveBeenNthCalledWith(1, "/api/automation/research/status");
+    expect(getSpy).toHaveBeenNthCalledWith(2, "/api/automation/research/report");
+    expect(postSpy).toHaveBeenNthCalledWith(2, "/api/automation/research/trigger");
+
+    postSpy.mockRestore();
+    getSpy.mockRestore();
+  });
+});
+
 describe("Auth helper functions", () => {
   beforeEach(() => {
     localStorageMock.clear();

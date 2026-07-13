@@ -2283,4 +2283,80 @@ export async function deleteComment(
   });
 }
 
+// ── Local automation / linked research bot ──
+
+export interface AutomationBotMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface AutomationBotChatResponse {
+  reply: string;
+  model: string;
+}
+
+export interface AutomationResearchStatus {
+  week_id: string;
+  status: string;
+  status_label: string;
+  bot_online: boolean;
+  model: string;
+  schedule_primary: string | null;
+  schedule_recovery: string | null;
+  llm_calls_used: number;
+  llm_calls_limit: number;
+  executed_success: number;
+  needs_review: number;
+  report_available: boolean;
+  report_name: string | null;
+  notification_status: string | null;
+  can_trigger: boolean;
+}
+
+export interface AutomationResearchReport {
+  week_id: string;
+  report_name: string;
+  markdown: string;
+  truncated: boolean;
+  updated_at: string;
+}
+
+export interface AutomationResearchTriggerResponse {
+  week_id: string;
+  submitted: boolean;
+  status: string;
+  message: string;
+}
+
+export async function chatWithAutomationBot(
+  messages: AutomationBotMessage[],
+): Promise<AutomationBotChatResponse> {
+  const { data } = await api.post<AutomationBotChatResponse>(
+    "/api/automation/bot/chat",
+    { messages },
+  );
+  return data;
+}
+
+export async function getAutomationResearchStatus(): Promise<AutomationResearchStatus> {
+  const { data } = await api.get<AutomationResearchStatus>(
+    "/api/automation/research/status",
+  );
+  return data;
+}
+
+export async function getAutomationResearchReport(): Promise<AutomationResearchReport> {
+  const { data } = await api.get<AutomationResearchReport>(
+    "/api/automation/research/report",
+  );
+  return data;
+}
+
+export async function triggerAutomationResearch(): Promise<AutomationResearchTriggerResponse> {
+  const { data } = await api.post<AutomationResearchTriggerResponse>(
+    "/api/automation/research/trigger",
+  );
+  return data;
+}
+
 export default api;

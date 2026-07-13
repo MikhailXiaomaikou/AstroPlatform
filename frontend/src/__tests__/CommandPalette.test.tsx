@@ -110,6 +110,14 @@ describe("CommandPalette", () => {
     }
   });
 
+  it("lists the local linked Bot route in the test environment", async () => {
+    const { NAV_ROUTES } = await import("../routes");
+    expect(NAV_ROUTES.find((route) => route.path === "/bot")).toMatchObject({
+      id: "nav-bot",
+      labelKey: "cmd.research_bot",
+    });
+  });
+
   // ── Close on Escape ──
 
   it("closes on Escape key", () => {
