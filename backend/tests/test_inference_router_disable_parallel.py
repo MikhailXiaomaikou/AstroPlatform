@@ -198,3 +198,46 @@ async def test_openai_chat_payload_omits_tool_controls_without_tools(monkeypatch
     assert "tools" not in payload
     assert "tool_choice" not in payload
     assert "parallel_tool_calls" not in payload
+
+
+@pytest.mark.asyncio
+async def test_explicit_provider_map_prevents_generic_key_cross_provider_leak(
+    monkeypatch,
+):
+    from app.ai.inference_router import DeepSeekBackend
+
+    captured: dict = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [{"finish_reason": "stop", "message": {"content": "ok"}}],
+                "usage": {},
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, **kwargs):
+            captured.update(kwargs)
+            return FakeResponse()
+
+    monkeypatch.setattr("app.ai.inference_router.httpx.AsyncClient", FakeClient)
+
+    await DeepSeekBackend().complete(
+        [{"role": "user", "content": "Summarize"}],
+        api_key="sk-ant-must-not-cross-provider",
+        provider_api_keys={"deepseek": "sk-deepseek-correct"},
+    )
+
+    assert captured["headers"]["Authorization"] == "Bearer sk-deepseek-correct"

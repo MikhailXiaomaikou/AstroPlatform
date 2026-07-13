@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 from collections import defaultdict
 from datetime import datetime, timezone
 
@@ -10,6 +11,7 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
 from app.auth import decode_token
+from app.cors import get_cors_origins
 from app.models.database import async_session
 from app.models.schemas import PipelineRun, TeamMember
 
@@ -21,6 +23,43 @@ router = APIRouter()
 _WS_CLOSE_UNAUTHORIZED = 4401
 # T2 (PART T): 4403 = authorized but not a member / owner.
 _WS_CLOSE_FORBIDDEN = 4403
+
+
+def _is_production() -> bool:
+    """Return whether hosted-production transport rules must apply."""
+    return os.getenv("ENV", "dev").strip().lower() in {"prod", "production"}
+
+
+def _ws_origin_allowed(websocket: WebSocket) -> bool:
+    """Validate browser WebSocket origins against the HTTP CORS allowlist.
+
+    Non-browser clients normally omit ``Origin`` and still authenticate with a
+    JWT, so a missing header remains supported. Browsers always send the
+    header; empty, opaque (``null``), and unlisted origins fail closed.
+    """
+    origin = websocket.headers.get("origin")
+    if origin is None:
+        return True
+    origin = origin.strip()
+    return bool(origin) and origin != "null" and origin in get_cors_origins()
+
+
+def _ws_response_subprotocol(websocket: WebSocket) -> str | None:
+    """Echo only a requested auth marker, never the JWT itself.
+
+    Browser WebSocket clients abort when they offer subprotocols and the server
+    selects none. The marker is safe to echo and proves that the upgrade
+    completed without reflecting the credential into the response headers.
+    """
+    requested = [
+        part.strip()
+        for part in websocket.headers.get("sec-websocket-protocol", "").split(",")
+        if part.strip()
+    ]
+    for part in requested:
+        if part.lower() in {"bearer", "jwt"}:
+            return part
+    return None
 
 
 async def _authorize_pipeline_run(user_id: str, run_id: str) -> bool:
@@ -72,16 +111,29 @@ async def _authorize_team_member(user_id: str, team_id: str) -> bool:
 
 
 async def _authenticate_ws(websocket: WebSocket):
-    """Verify the JWT carried on the WS upgrade (query string or Sec-WebSocket-Protocol).
+    """Verify the browser origin and JWT carried on the WebSocket upgrade.
 
     Returns the authenticated user_id, or closes the socket and returns None.
     Browsers cannot set custom Authorization headers on WebSocket upgrades, so
-    callers pass the token as `?token=<jwt>` or via `Sec-WebSocket-Protocol`.
+    production callers temporarily use ``Sec-WebSocket-Protocol: bearer,
+    <jwt>``. Query-string JWTs remain accepted only in development for legacy
+    local clients because request URLs are commonly retained in access logs.
     """
-    token = websocket.query_params.get("token")
+    if not _ws_origin_allowed(websocket):
+        await websocket.close(code=_WS_CLOSE_FORBIDDEN, reason="origin not allowed")
+        return None
+
+    token = str(websocket.query_params.get("token") or "").strip()
+    if token and _is_production():
+        await websocket.close(
+            code=_WS_CLOSE_UNAUTHORIZED,
+            reason="query-string token transport is disabled",
+        )
+        return None
     if not token:
         proto = websocket.headers.get("sec-websocket-protocol", "")
-        # Accept "bearer, <jwt>" / "jwt.<jwt>" patterns for flexibility.
+        # Temporary browser bridge: accept "bearer, <jwt>". Preserve the
+        # legacy raw-token protocol form until clients move to one-time tickets.
         for part in (p.strip() for p in proto.split(",")):
             if part and part.lower() not in ("bearer", "jwt"):
                 token = part
@@ -162,7 +214,7 @@ async def pipeline_ws(websocket: WebSocket, run_id: str):
         await websocket.close(code=_WS_CLOSE_FORBIDDEN, reason="run not found or not yours")
         logger.info("WS pipeline_ws rejected: user %s → run %s (not owner)", user_id, run_id)
         return
-    await websocket.accept()
+    await websocket.accept(subprotocol=_ws_response_subprotocol(websocket))
     _connections[run_id].append(websocket)
     logger.info("WebSocket connected for run %s (user %s)", run_id, user_id)
 
@@ -255,7 +307,7 @@ async def collab_websocket(websocket: WebSocket, team_id: str):
             auth_user_id, team_id,
         )
         return
-    await websocket.accept()
+    await websocket.accept(subprotocol=_ws_response_subprotocol(websocket))
 
     # Trust the JWT for user identity — never the payload.  The optional
     # `identify` message may still carry a display name, but user_id is

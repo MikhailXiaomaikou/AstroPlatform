@@ -29,7 +29,7 @@ from app.ai.model_profiles import (
 from app.ai.orchestrator import orchestrator
 from app.auth import get_current_user, get_optional_user
 from app.api.auth import require_admin_any
-from app.rate_limit import daily_quota, limiter
+from app.rate_limit import daily_quota, get_client_ip, limiter
 from app.models.database import get_db
 from app.models.schemas import User
 from app.services.prompt_loader import build_allowed_tools, build_system_prompt
@@ -350,31 +350,30 @@ def _env_flag_enabled(name: str, *, default: bool = True) -> bool:
     raw = os.getenv(name)
     if raw is None:
         return default
-    return raw.strip().lower() not in {"0", "false", "no", "off"}
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _server_deepseek_api_key() -> str:
     """Server-funded DeepSeek key for public/anonymous chat.
 
-    Anthropic/OpenAI remain BYOK.  DeepSeek is intentionally the only hosted
-    shared provider because it is the low-cost public fallback we can rate-limit
-    centrally without exposing the secret to the browser.
+    Anthropic/OpenAI remain BYOK. DeepSeek is the only supported hosted shared
+    provider, but it is disabled unless the operator explicitly opts in.
     """
 
     env_flag = os.getenv("SHARED_DEEPSEEK_API_KEY_ENABLED")
     try:
         from app.config import settings
 
-        settings_enabled = bool(getattr(settings, "shared_deepseek_api_key_enabled", True))
+        settings_enabled = bool(getattr(settings, "shared_deepseek_api_key_enabled", False))
         settings_key = (
             str(getattr(settings, "platform_deepseek_api_key", "") or "").strip()
             or str(getattr(settings, "deepseek_api_key", "") or "").strip()
         )
     except Exception:
-        settings_enabled = True
+        settings_enabled = False
         settings_key = ""
     if env_flag is not None:
-        if not _env_flag_enabled("SHARED_DEEPSEEK_API_KEY_ENABLED", default=True):
+        if not _env_flag_enabled("SHARED_DEEPSEEK_API_KEY_ENABLED", default=False):
             return ""
     elif not settings_enabled:
         return ""
@@ -406,7 +405,16 @@ def _provider_api_keys(context: dict | None, user: User | None) -> dict[str, str
             # Legacy fallback: the generic api_key field was historically used
             # for the primary hosted backend. Treat untyped keys as OpenAI-style.
             keys.setdefault("openai", context_key)
-    if "deepseek" not in keys:
+    # A user-selected BYOK/local route must never fall back to the platform
+    # DeepSeek key after their backend fails. Otherwise an invalid BYOK can
+    # obtain quota-exempt, platform-funded inference through the router's
+    # fallback chain. Retain user-owned cross-provider keys: those fallbacks
+    # are still paid by the user.
+    selected_uses_own_backend = (
+        context_provider in {"anthropic", "openai", "deepseek"}
+        and bool(keys.get(context_provider))
+    ) or (context_provider == "local" and _local_backend_configured())
+    if "deepseek" not in keys and not selected_uses_own_backend:
         server_key = _server_deepseek_api_key()
         if server_key:
             keys["deepseek"] = server_key
@@ -418,8 +426,10 @@ def _enforce_starter_daily_quota(
     user: User | None,
     context: dict | None,
     provider_api_keys: dict[str, str],
+    *,
+    request: Request | None = None,
 ) -> None:
-    """Reject over-quota platform-funded chat calls for starter accounts.
+    """Reject over-quota platform-funded chat before inference or SSE starts.
 
     Decision 2B (2026-07): self-service signups land on the "starter" tier
     (app/rate_limit.py TIER_LIMITS) so a fresh registration cannot burn the
@@ -430,46 +440,88 @@ def _enforce_starter_daily_quota(
     - The user's own DeepSeek key shadows the platform key entirely in
       _provider_api_keys -> exempt, not counted.
     - An explicitly selected provider backed by the user's own key runs on
-      their money -> exempt. (If that primary call errors, the inference
-      router may still fall back to the platform key; charging those rare
-      failure fallbacks pre-call is not worth the complexity.)
+      their money -> exempt. _provider_api_keys deliberately withholds the
+      platform key in this case, so a failed or invalid BYOK cannot turn into
+      an uncharged platform-funded fallback.
     - Everything else counts (fail closed). In particular, a provider
       preference WITHOUT a matching user key is counted, because the
       router's fallback chain would route it straight back to the platform
       DeepSeek key.
 
-    Pre-existing tiers (solo/lab/institution) are intentionally not
-    enforced here: this gate implements only the starter cap, so existing
-    accounts keep their current behavior.
+    Anonymous shared-key calls use the same 50/day cap, keyed by the client IP
+    derived through ``get_client_ip``'s trusted-proxy policy. Pre-existing
+    tiers (solo/lab/institution) are intentionally not enforced here.
+
+    Hosted shared-key traffic requires the Redis-backed counter. A Redis
+    outage fails closed with 503 instead of silently resetting the daily
+    allowance in each web process. Local development can use the in-memory
+    fallback so contributors do not need Redis just to exercise chat.
     """
-    if user is None:
-        # Anonymous traffic is throttled by the per-IP slowapi limits;
-        # decision 2B targets registered accounts.
-        return
-    if (user.subscription_tier or "solo") != "starter":
-        return
     server_key = _server_deepseek_api_key()
     if not server_key:
         return  # no platform-funded key configured -> nothing to protect
-    if provider_api_keys.get("deepseek") != server_key:
+    effective_deepseek_key = provider_api_keys.get("deepseek")
+    if effective_deepseek_key and effective_deepseek_key != server_key:
         return  # the user's own DeepSeek key is in effect
     own_key_providers = {
         provider
         for provider, key in provider_api_keys.items()
-        if key and not (provider == "deepseek" and key == server_key)
+        if provider in {"anthropic", "openai", "deepseek"}
+        and key
+        and not (provider == "deepseek" and key == server_key)
     }
     preferred = str((context or {}).get("api_provider") or "").strip().lower()
     if preferred and preferred in own_key_providers:
         return
     if preferred == "local" and _local_backend_configured():
         return  # dev-only local backend spends no platform money
-    verdict = daily_quota.check_and_increment(str(user.id), "starter", "api_calls")
+
+    if user is None:
+        if request is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Anonymous chat cannot verify its daily quota identity",
+            )
+        client_ip = get_client_ip(request)
+        if not client_ip:
+            raise HTTPException(
+                status_code=503,
+                detail="Anonymous chat cannot verify its daily quota identity",
+            )
+        quota_subject = f"anonymous-ip:{client_ip}"
+        quota_tier = "anonymous"
+    else:
+        if (user.subscription_tier or "solo") != "starter":
+            return
+        quota_subject = str(user.id)
+        quota_tier = "starter"
+
+    runtime_env = os.getenv("ENV", "dev").strip().lower()
+    require_durable = runtime_env in {"prod", "production"} or _env_flag_enabled(
+        "RENDER", default=False
+    )
+    verdict = daily_quota.check_and_increment(
+        quota_subject,
+        quota_tier,
+        "api_calls",
+        require_durable=require_durable,
+    )
+    if verdict.get("backend_unavailable"):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Platform-funded chat is temporarily unavailable because its "
+                "daily quota service cannot be verified. Try again later or "
+                "use your own API key."
+            ),
+        )
     if not verdict.get("allowed", True):
         limit = verdict.get("limit", 50)
+        subject = "Anonymous access includes" if user is None else "New accounts get"
         raise HTTPException(
             status_code=429,
             detail=(
-                f"Daily limit reached: new accounts get {limit} platform-funded "
+                f"Daily limit reached: {subject} {limit} platform-funded "
                 f"chat messages per day, and you have used all {limit}. The "
                 "counter resets at midnight UTC. To keep working now, add your "
                 "own API key (Anthropic, OpenAI, or DeepSeek) under Settings "
@@ -708,10 +760,15 @@ async def chat_message_stream(
     owner_id = str(user.id) if user is not None else None
     anonymous_job_scope = f"anonymous:{uuid.uuid4().hex}" if user is None else None
 
-    # Decision 2B: reject over-quota platform-funded starter calls before
-    # the stream opens, so the client gets a clean HTTP 429 instead of an
-    # in-stream error frame.
-    _enforce_starter_daily_quota(user, req.context, _provider_api_keys(req.context, user))
+    # Reject over-quota platform-funded starter/anonymous calls before the
+    # stream opens, so the client gets a clean HTTP 429 (or quota-backend 503)
+    # instead of an in-stream error frame.
+    _enforce_starter_daily_quota(
+        user,
+        req.context,
+        _provider_api_keys(req.context, user),
+        request=request,
+    )
 
     async def generate():
         # ══════════════════════════════════════════════════════════════
@@ -2313,7 +2370,12 @@ async def chat_message(
     Falls back to single-turn with <actions> tags if tool_use is unavailable.
     """
     provider_api_keys = _provider_api_keys(req.context, user)
-    _enforce_starter_daily_quota(user, req.context, provider_api_keys)
+    _enforce_starter_daily_quota(
+        user,
+        req.context,
+        provider_api_keys,
+        request=request,
+    )
     preferred_backend = _preferred_backend(req.context)
     preferred_model_profile = _preferred_model_profile(req.context)
     workflow_budget = _workflow_budget_config(_infer_workflow_budget_mode(req))

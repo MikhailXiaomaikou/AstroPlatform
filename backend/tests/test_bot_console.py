@@ -56,6 +56,7 @@ def local_console_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BOT_CONSOLE_ENABLED", "1")
     monkeypatch.setenv("OPENAI_CLI_ENABLED", "1")
     monkeypatch.setenv("BOT_CONSOLE_MODEL_ID", TEST_MODEL_ID)
+    monkeypatch.delenv("BOT_CONSOLE_MODEL_PROFILE", raising=False)
     monkeypatch.setenv("RESEARCH_LAUNCHD_LABEL", TEST_RESEARCH_LABEL)
     monkeypatch.setenv("BOT_LAUNCHD_LABEL", TEST_BOT_LABEL)
     # Self-hosters may run this console on non-macOS; that path is covered by
@@ -234,6 +235,21 @@ async def test_sol_service_never_falls_through_to_generic_local_model(
 
 
 @pytest.mark.asyncio
+async def test_sol_service_rejects_non_cli_profile_before_backend_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BOT_CONSOLE_MODEL_PROFILE", "local:default")
+    monkeypatch.setenv("LOCAL_MODEL_ENABLED", "1")
+
+    async def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("generic local backend must not be called")
+
+    monkeypatch.setattr(console.LocalBackend, "complete", fail_if_called)
+    with pytest.raises(console.SolUnavailable):
+        await console.chat_with_sol([{"role": "user", "content": "question"}])
+
+
+@pytest.mark.asyncio
 async def test_sol_failure_response_is_redacted(
     app_client,
     test_user,
@@ -387,6 +403,44 @@ async def test_report_rejects_paths_outside_reports_and_symlinks(
     state_path = root / ".pipeline_state" / "weeks" / f"{week_id}.json"
     state_path.write_text(
         json.dumps({"status": "completed", "report": str(unsafe)}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("COSMO_SECOND_ORDER_ROOT", str(root))
+
+    response = await app_client.get(
+        "/api/automation/research/report",
+        headers=_auth_headers(token),
+    )
+
+    assert response.status_code == 404
+    assert "PRIVATE REPORT" not in response.text
+    assert str(tmp_path) not in response.text
+
+
+@pytest.mark.asyncio
+async def test_report_rejects_symlinked_reports_directory(
+    app_client,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _, token = test_user
+    root = tmp_path / "cosmo"
+    weeks = root / ".pipeline_state" / "weeks"
+    weeks.mkdir(parents=True)
+    outside_reports = tmp_path / "private-reports"
+    outside_reports.mkdir()
+    report_name = "2026-07-10.md"
+    (outside_reports / report_name).write_text("PRIVATE REPORT", encoding="utf-8")
+    (root / "reports").symlink_to(outside_reports, target_is_directory=True)
+    week_id = console.current_week_id()
+    (weeks / f"{week_id}.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "report": str(root / "reports" / report_name),
+            }
+        ),
         encoding="utf-8",
     )
     monkeypatch.setenv("COSMO_SECOND_ORDER_ROOT", str(root))

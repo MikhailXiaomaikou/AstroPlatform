@@ -21,7 +21,10 @@ curl -o ~/Desktop/astro_admin.html https://astro-backend-h4x1.onrender.com/admin
 open ~/Desktop/astro_admin.html
 ```
 
-双击打开时浏览器 origin 是 `null`, backend CORS 已经允许 (一切仍可工作).
+双击打开时浏览器 origin 是 `null`。开发环境默认允许；生产环境为避免
+opaque-origin 滥用不再自动允许。只有明确接受该风险且必须使用旧流程时，
+才在生产 `CORS_ORIGINS` 末尾显式加入 `,null`。推荐始终使用上面的
+`/admin` 同源页面。
 
 ## 看到什么
 

@@ -120,7 +120,14 @@ def test_production_cli_flag_does_not_bypass_platform_quota(
     monkeypatch.setattr(chat, "_server_deepseek_api_key", lambda: "server-key")
     calls: list[tuple[str, str, str]] = []
 
-    def record_charge(user_id: str, tier: str, metric: str) -> dict:
+    def record_charge(
+        user_id: str,
+        tier: str,
+        metric: str,
+        *,
+        require_durable: bool = False,
+    ) -> dict:
+        assert require_durable is True
         calls.append((user_id, tier, metric))
         return {"allowed": True}
 

@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 from pathlib import Path
+import re
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -20,6 +21,8 @@ _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 _CELERY_PING_TIMEOUT_SECONDS = 2.0
 _READINESS_DEADLINE_SECONDS = 4.0
 _STORAGE_PROBE_TIMEOUT_SECONDS = 8.0
+_UNKNOWN_RELEASES = {"", "unknown", "none", "null"}
+_FULL_GIT_SHA = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
 
 
 def _expected_alembic_heads() -> set[str]:
@@ -73,7 +76,12 @@ async def _probe_schema_head() -> tuple[bool, str]:
 def _runtime_version() -> dict[str, str]:
     """Return only non-secret deployment identifiers."""
     return {
-        "commit": os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or "unknown",
+        "commit": (
+            os.getenv("RENDER_GIT_COMMIT")
+            or os.getenv("GIT_COMMIT")
+            or os.getenv("TOOL_VERSION")
+            or "unknown"
+        ),
         "branch": os.getenv("RENDER_GIT_BRANCH") or os.getenv("GIT_BRANCH") or "unknown",
         "service": os.getenv("RENDER_SERVICE_NAME") or "unknown",
     }
@@ -109,8 +117,8 @@ async def _probe_broker() -> bool:
         return False
 
 
-async def _probe_celery_workers() -> int:
-    """Return the number of workers that answer Celery's control ping."""
+async def _probe_celery_workers(expected_commit: str) -> tuple[int, bool]:
+    """Return pong count and whether every live worker is this release."""
     try:
         from celery_worker import celery_app
 
@@ -121,15 +129,82 @@ async def _probe_celery_workers() -> int:
             asyncio.to_thread(_ping),
             timeout=_CELERY_PING_TIMEOUT_SECONDS + 1.0,
         )
-        return sum(
-            1
+        identities = [
+            str(identity)
             for reply in replies
             if isinstance(reply, dict)
-            and any(payload == {"ok": "pong"} for payload in reply.values())
+            for identity, payload in reply.items()
+            if payload == {"ok": "pong"}
+        ]
+        expected_prefix = f"worker-{expected_commit.lower()}@"
+        identity_ok = bool(identities) and all(
+            identity.lower().startswith(expected_prefix) for identity in identities
         )
+        return len(identities), identity_ok
     except Exception as exc:
         logger.warning("health/deep: Celery worker probe failed: %s", exc)
-        return 0
+        return 0, False
+
+
+async def _probe_celery_beat(expected_commit: str) -> tuple[bool, str]:
+    """Verify every active Beat instance lease is on the backend release."""
+    try:
+        import redis.asyncio as aioredis
+        from app.config import settings
+        from celery_worker import (
+            _BEAT_RELEASE_LEASE_PREFIX,
+            _BEAT_RELEASE_LEGACY_KEY,
+        )
+
+        client = aioredis.from_url(
+            settings.redis_url,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+            **settings.redis_tls_kwargs(),
+        )
+        try:
+            legacy_lease = await client.get(_BEAT_RELEASE_LEGACY_KEY)
+            if legacy_lease is None:
+                lease_keys = [
+                    key
+                    async for key in client.scan_iter(
+                        match=f"{_BEAT_RELEASE_LEASE_PREFIX}*",
+                        count=100,
+                    )
+                ]
+                raw_commits = await client.mget(lease_keys) if lease_keys else []
+                if len(raw_commits) != len(lease_keys):
+                    raise RuntimeError("Redis returned an incomplete Beat lease read")
+            else:
+                raw_commits = []
+        finally:
+            await client.aclose()
+        # During the v1 -> v2 rollout an old Beat process keeps refreshing the
+        # scalar key. Refuse acceptance until it stops and that TTL expires.
+        if legacy_lease is not None:
+            return False, "legacy_lease_active"
+        # A lease may legitimately expire between SCAN and MGET. Ignore that
+        # vanished instance, but require at least one still-active lease.
+        active_commits = [raw for raw in raw_commits if raw is not None]
+        if not active_commits:
+            return False, "missing"
+        observed_commits = [
+            (
+                raw.decode("ascii", errors="strict")
+                if isinstance(raw, bytes)
+                else str(raw)
+            )
+            .strip()
+            .lower()
+            for raw in active_commits
+        ]
+        expected = expected_commit.strip().lower()
+        if any(observed != expected for observed in observed_commits):
+            return False, "revision_mismatch"
+        return True, "ok"
+    except Exception as exc:
+        logger.warning("health/deep: Celery Beat probe failed: %s", exc)
+        return False, "unavailable"
 
 
 def _round_trip_storage() -> dict:
@@ -367,7 +442,12 @@ async def health_deep():
     # G1 (PART AD): deploy version transparency. Render injects these git env
     # vars automatically; they read "unknown" locally. Lets a dashboard or a
     # deploy check reconcile which commit is actually serving traffic.
-    result["version"] = _runtime_version()
+    runtime_version = _runtime_version()
+    result["version"] = runtime_version
+    raw_release_commit = str(runtime_version["commit"] or "unknown").strip().lower()
+    release_known = _FULL_GIT_SHA.fullmatch(raw_release_commit) is not None
+    release_commit = raw_release_commit if release_known else "unknown"
+    production = os.getenv("ENV", "dev").lower() == "production"
 
     db_ok = await _probe_database()
     result["components"]["db"] = "ok" if db_ok else "fail"
@@ -401,17 +481,40 @@ async def health_deep():
         if not broker_ok:
             result["ok"] = False
             result["components"]["celery_worker"] = "unreachable"
+            result["components"]["celery_beat"] = "unreachable"
         else:
-            worker_count = await _probe_celery_workers()
-            result["components"]["celery_worker"] = (
-                "ok" if worker_count > 0 else "none"
+            worker_count, worker_identity_ok = await _probe_celery_workers(
+                release_commit
             )
             result["worker_count"] = worker_count
             if worker_count < 1:
+                result["components"]["celery_worker"] = "none"
+                result["ok"] = False
+            elif not release_known:
+                worker_status = "unmanaged_dev"
+                if production:
+                    worker_status = (
+                        "release_unknown"
+                        if raw_release_commit in _UNKNOWN_RELEASES
+                        else "release_invalid"
+                    )
+                result["components"]["celery_worker"] = worker_status
+                if production:
+                    result["ok"] = False
+            elif not worker_identity_ok:
+                result["components"]["celery_worker"] = "revision_mismatch"
+                result["ok"] = False
+            else:
+                result["components"]["celery_worker"] = "ok"
+
+            beat_ok, beat_status = await _probe_celery_beat(release_commit)
+            result["components"]["celery_beat"] = beat_status
+            if not beat_ok:
                 result["ok"] = False
     else:
         result["components"]["broker"] = "not_required"
         result["components"]["celery_worker"] = "not_required"
+        result["components"]["celery_beat"] = "not_required"
 
     # At least one AI provider key configured.  Scanning env so we
     # don't inadvertently read a user's localStorage-sent key.

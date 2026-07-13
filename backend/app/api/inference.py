@@ -31,17 +31,18 @@ def _shared_deepseek_available() -> bool:
     try:
         from app.config import settings
 
-        settings_enabled = bool(getattr(settings, "shared_deepseek_api_key_enabled", True))
+        settings_enabled = bool(getattr(settings, "shared_deepseek_api_key_enabled", False))
         settings_key = (
             str(getattr(settings, "platform_deepseek_api_key", "") or "").strip()
             or str(getattr(settings, "deepseek_api_key", "") or "").strip()
         )
     except Exception:
-        settings_enabled = True
+        settings_enabled = False
         settings_key = ""
-    if flag is not None and flag.strip().lower() in {"0", "false", "no", "off"}:
-        return False
-    if flag is None and not settings_enabled:
+    if flag is not None:
+        if not _env_truthy("SHARED_DEEPSEEK_API_KEY_ENABLED"):
+            return False
+    elif not settings_enabled:
         return False
     return bool(
         os.getenv("PLATFORM_DEEPSEEK_API_KEY", "").strip()

@@ -64,6 +64,12 @@ def test_ci_exercises_real_postgresql_legacy_uuid_bridge():
     assert "astro_uuid_drill_ci" in workflow
     assert "run_legacy_uuid_migration_drill.sh" in workflow
     assert "Exercise legacy VARCHAR UUID migration and dirty-data rollback" in workflow
+    assert 'RESTORE_EXPECTED_COMMIT="$GITHUB_SHA"' in workflow
+    assert "RESTORE_FERNET_KEY_ID=ci-test-key" in workflow
+    assert (
+        'RESTORE_EVIDENCE_SIGNING_KEY_ID="$EVIDENCE_SIGNING_KEY_ID"'
+        in workflow
+    )
 
 
 def test_ci_builds_the_images_used_by_production_and_compose():
@@ -131,14 +137,31 @@ def test_render_workers_wait_for_exact_schema_head():
     worker = services["standard-astro-celery-worker"]
     assert worker["maxShutdownDelaySeconds"] == 300
     assert "--concurrency=1" in worker["dockerCommand"]
+    assert "--hostname=worker-${RENDER_GIT_COMMIT}@%h" in worker["dockerCommand"]
     for name in ("standard-astro-celery-worker", "standard-astro-celery-beat"):
         command = services[name]["dockerCommand"]
         assert "scripts/wait_for_schema_head.py" in command
         assert "&& exec celery" in command
+    beat_env = {
+        item["key"]: item for item in services["standard-astro-celery-beat"]["envVars"]
+    }
+    assert beat_env["ENABLE_TRANSIENT_ALERT_INGEST"]["value"] == "false"
 
     frontend = services["standard-astro-frontend"]
     backend_env = {item["key"]: item for item in backend["envVars"]}
     frontend_env = {item["key"]: item for item in frontend["envVars"]}
+    for key in (
+        "JWT_SECRET",
+        "FERNET_KEY",
+        "EVIDENCE_SIGNING_KEY",
+        "EVIDENCE_SIGNING_KEY_ID",
+    ):
+        assert backend_env[key] == {"key": key, "sync": False}
+        assert "generateValue" not in backend_env[key]
+    assert backend_env["RATE_LIMIT_ENABLED"]["value"] == "true"
+    assert backend_env["SHARED_DEEPSEEK_API_KEY_ENABLED"]["value"] == "false"
+    assert backend_env["TRUSTED_PROXY_MODE"]["value"] == "none"
+    assert backend_env["ASTRO_RESEARCH_FOCUS"]["value"] == "cosmology"
     assert backend_env["CORS_ORIGINS"]["fromService"] == {
         "name": "standard-astro-frontend",
         "type": "web",
@@ -201,6 +224,7 @@ def test_compose_frontend_is_built_for_local_backend_not_render():
 
 def test_celery_delivery_semantics_are_fail_safe():
     import celery_worker
+    from celery.utils.imports import symbol_by_name
 
     celery_app = celery_worker.celery_app
 
@@ -218,6 +242,225 @@ def test_celery_delivery_semantics_are_fail_safe():
         > celery_app.conf.broker_transport_options["visibility_timeout"]
     )
     assert "reconcile-stale-research-jobs" in celery_app.conf.beat_schedule
+    assert "release-heartbeat" not in celery_app.conf.beat_schedule
+    assert "system.release_heartbeat" not in celery_app.tasks
+    assert celery_app.conf.beat_scheduler == (
+        "celery_worker:ReleaseLeaseScheduler"
+    )
+    assert symbol_by_name(celery_app.conf.beat_scheduler) is (
+        celery_worker.ReleaseLeaseScheduler
+    )
+    assert (
+        celery_app.conf.beat_max_loop_interval
+        == celery_worker._BEAT_RELEASE_HEARTBEAT_SECONDS
+    )
+    assert "ingest-ztf-alerts" not in celery_app.conf.beat_schedule
+
+
+def test_transient_alert_ingest_requires_explicit_opt_in(monkeypatch):
+    import celery_worker
+
+    monkeypatch.delenv("ENABLE_TRANSIENT_ALERT_INGEST", raising=False)
+    assert "ingest-ztf-alerts" not in celery_worker._build_beat_schedule()
+
+    monkeypatch.setenv("ENABLE_TRANSIENT_ALERT_INGEST", "true")
+    schedule = celery_worker._build_beat_schedule()
+    assert schedule["ingest-ztf-alerts"] == {
+        "task": "alerts.ingest",
+        "schedule": 900.0,
+    }
+
+
+def test_beat_release_lease_is_instance_scoped_and_uses_verified_tls(
+    monkeypatch,
+):
+    import redis
+
+    import celery_worker
+    from app.config import settings
+
+    commit = "a" * 40
+    owner = "1" * 32
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "abc123")
+    assert celery_worker._runtime_commit() == "unknown"
+    with pytest.raises(RuntimeError, match="full Git SHA"):
+        celery_worker._write_beat_release_lease(owner)
+    with pytest.raises(ValueError, match="owner"):
+        celery_worker._write_beat_release_lease("unsafe/owner")
+
+    monkeypatch.setenv("RENDER_GIT_COMMIT", commit)
+
+    writes: list[tuple[str, str, int]] = []
+
+    class FakeRedis:
+        def set(self, key, value, *, ex):
+            writes.append((key, value, ex))
+            return True
+
+        def close(self):
+            return None
+
+    def from_url(url, **kwargs):
+        assert url == "rediss://redis.example/0"
+        assert kwargs["ssl_cert_reqs"] == "required"
+        return FakeRedis()
+
+    monkeypatch.setattr(settings, "redis_url", "rediss://redis.example/0")
+    monkeypatch.setattr(settings, "redis_tls_insecure", False)
+    monkeypatch.setattr(redis.Redis, "from_url", staticmethod(from_url))
+
+    assert celery_worker._write_beat_release_lease(owner) == commit
+    assert writes == [
+        (
+            f"{celery_worker._BEAT_RELEASE_LEASE_PREFIX}{owner}",
+            commit,
+            celery_worker._BEAT_RELEASE_HEARTBEAT_TTL_SECONDS,
+        )
+    ]
+
+
+def test_release_lease_scheduler_renews_only_after_successful_throttled_ticks(
+    monkeypatch,
+):
+    import celery_worker
+
+    scheduler = object.__new__(celery_worker.ReleaseLeaseScheduler)
+    scheduler._release_lease_owner = "2" * 32
+    scheduler._last_release_lease_attempt = None
+    clock = iter((0.0, 10.0, 31.0))
+    writes: list[str] = []
+
+    monkeypatch.setattr(
+        celery_worker.PersistentScheduler,
+        "tick",
+        lambda _self, *_args, **_kwargs: 90.0,
+    )
+    monkeypatch.setattr(celery_worker.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(
+        celery_worker,
+        "_write_beat_release_lease",
+        lambda owner: writes.append(owner),
+    )
+
+    assert scheduler.tick() == celery_worker._BEAT_RELEASE_HEARTBEAT_SECONDS
+    assert scheduler.tick() == celery_worker._BEAT_RELEASE_HEARTBEAT_SECONDS
+    assert scheduler.tick() == celery_worker._BEAT_RELEASE_HEARTBEAT_SECONDS
+    assert writes == ["2" * 32, "2" * 32]
+
+
+def test_release_lease_scheduler_does_not_renew_when_tick_raises(
+    monkeypatch,
+):
+    import celery_worker
+
+    scheduler = object.__new__(celery_worker.ReleaseLeaseScheduler)
+    scheduler._release_lease_owner = "3" * 32
+    scheduler._last_release_lease_attempt = None
+    writes: list[str] = []
+
+    def failed_tick(_self, *_args, **_kwargs):
+        raise RuntimeError("scheduler main loop failed")
+
+    monkeypatch.setattr(celery_worker.PersistentScheduler, "tick", failed_tick)
+    monkeypatch.setattr(
+        celery_worker,
+        "_write_beat_release_lease",
+        lambda owner: writes.append(owner),
+    )
+
+    with pytest.raises(RuntimeError, match="main loop failed"):
+        scheduler.tick()
+    assert writes == []
+
+
+def test_release_lease_scheduler_does_not_renew_while_tick_is_stalled(
+    monkeypatch,
+):
+    import threading
+
+    import celery_worker
+
+    scheduler = object.__new__(celery_worker.ReleaseLeaseScheduler)
+    scheduler._release_lease_owner = "5" * 32
+    scheduler._last_release_lease_attempt = None
+    tick_started = threading.Event()
+    release_tick = threading.Event()
+    writes: list[str] = []
+
+    def stalled_tick(_self, *_args, **_kwargs):
+        tick_started.set()
+        assert release_tick.wait(timeout=1.0)
+        return 30.0
+
+    monkeypatch.setattr(celery_worker.PersistentScheduler, "tick", stalled_tick)
+    monkeypatch.setattr(
+        celery_worker,
+        "_write_beat_release_lease",
+        lambda owner: writes.append(owner),
+    )
+
+    tick_thread = threading.Thread(target=scheduler.tick)
+    tick_thread.start()
+    assert tick_started.wait(timeout=1.0)
+    assert writes == []
+
+    release_tick.set()
+    tick_thread.join(timeout=1.0)
+    assert not tick_thread.is_alive()
+    assert writes == ["5" * 32]
+
+
+def test_release_lease_scheduler_retries_failed_write_on_later_tick(monkeypatch):
+    import celery_worker
+
+    scheduler = object.__new__(celery_worker.ReleaseLeaseScheduler)
+    scheduler._release_lease_owner = "4" * 32
+    scheduler._last_release_lease_attempt = None
+    attempts: list[str] = []
+    clock = iter((0.0, 31.0))
+
+    def write(owner):
+        attempts.append(owner)
+        if len(attempts) == 1:
+            raise RuntimeError("temporary Redis outage")
+
+    monkeypatch.setattr(
+        celery_worker.PersistentScheduler,
+        "tick",
+        lambda _self, *_args, **_kwargs: 30.0,
+    )
+    monkeypatch.setattr(celery_worker.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(celery_worker, "_write_beat_release_lease", write)
+    logged: list[str] = []
+    monkeypatch.setattr(
+        celery_worker.logger,
+        "exception",
+        lambda message: logged.append(message),
+    )
+
+    scheduler.tick()
+    scheduler.tick()
+
+    assert attempts == ["4" * 32, "4" * 32]
+    assert logged == ["Celery Beat release lease renewal failed"]
+
+
+def test_release_lease_scheduler_assigns_safe_unique_owner(monkeypatch):
+    import celery_worker
+
+    monkeypatch.setattr(
+        celery_worker.PersistentScheduler,
+        "__init__",
+        lambda _self, *_args, **_kwargs: None,
+    )
+
+    first = celery_worker.ReleaseLeaseScheduler()
+    second = celery_worker.ReleaseLeaseScheduler()
+
+    assert celery_worker._BEAT_OWNER.fullmatch(first._release_lease_owner)
+    assert celery_worker._BEAT_OWNER.fullmatch(second._release_lease_owner)
+    assert first._release_lease_owner != second._release_lease_owner
 
 
 def test_rediss_verifies_certificates_unless_insecure_opt_in(monkeypatch):

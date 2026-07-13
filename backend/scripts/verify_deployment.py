@@ -1,15 +1,20 @@
 """Post-deployment verification script.
 
-Checks liveness, full deployment readiness, API documentation, and optional
-admin statistics.
+Checks liveness, bounded traffic readiness, full deployment readiness, release
+identity, API documentation, and optional admin statistics.
 
 Usage:
     python scripts/verify_deployment.py https://your-backend-url.com
+    EXPECTED_COMMIT=<full-sha> python scripts/verify_deployment.py <url>
     python scripts/verify_deployment.py  # defaults to localhost:8000
 """
 
+import ipaddress
 import os
+import re
 import sys
+from typing import Any
+from urllib.parse import urlparse
 
 try:
     import httpx
@@ -18,10 +23,55 @@ except ImportError:
     sys.exit(1)
 
 
-def verify(base_url: str) -> bool:
+_UNKNOWN_COMMITS = {"", "unknown", "none", "null"}
+_FULL_GIT_SHA = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
+
+
+def _is_loopback_url(base_url: str) -> bool:
+    """Return whether ``base_url`` resolves syntactically to a loopback host."""
+    hostname = (urlparse(base_url).hostname or "").strip().lower()
+    if hostname == "localhost" or hostname.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _response_payload(response: httpx.Response) -> dict[str, Any]:
+    """Return the operator-safe payload from either a 2xx or FastAPI error."""
+    data = response.json()
+    if not isinstance(data, dict):
+        return {}
+    detail = data.get("detail")
+    return detail if isinstance(detail, dict) else data
+
+
+def _commit(payload: dict[str, Any] | None) -> str:
+    if not payload:
+        return "unknown"
+    version = payload.get("version")
+    if not isinstance(version, dict):
+        return "unknown"
+    return str(version.get("commit") or "unknown").strip()
+
+
+def verify(base_url: str, *, expected_commit: str | None = None) -> bool:
+    base_url = base_url.rstrip("/")
+    if expected_commit is None:
+        expected_commit = os.getenv("EXPECTED_COMMIT", "")
+    expected_commit = str(expected_commit or "").strip()
+    if not _is_loopback_url(base_url):
+        if _FULL_GIT_SHA.fullmatch(expected_commit) is None:
+            print(
+                "\n\u274c Remote deployment verification requires EXPECTED_COMMIT "
+                "to be the full 40-character Git SHA.\n"
+            )
+            return False
+        expected_commit = expected_commit.lower()
+
     checks = [
         ("Liveness", f"{base_url}/health", 200),
-        ("Deployment readiness", f"{base_url}/health/deep", 200),
         ("OpenAPI schema", f"{base_url}/openapi.json", 200),
         ("Swagger docs", f"{base_url}/docs", 200),
         ("ReDoc", f"{base_url}/redoc", 200),
@@ -30,52 +80,84 @@ def verify(base_url: str) -> bool:
     passed = 0
     failed = 0
 
+    def record(name: str, ok: bool, detail: str) -> None:
+        nonlocal passed, failed
+        icon = "✅" if ok else "❌"
+        print(f"  {icon} {name}: {detail}")
+        if ok:
+            passed += 1
+        else:
+            failed += 1
+
     print(f"\nVerifying deployment at: {base_url}\n")
 
+    health_payload: dict[str, Any] | None = None
     for name, url, expected_status in checks:
         try:
             resp = httpx.get(url, timeout=30, follow_redirects=True)
             ok = resp.status_code == expected_status
-            icon = "\u2705" if ok else "\u274c"
-            print(f"  {icon} {name}: {resp.status_code} (expected {expected_status})")
-            if ok:
-                passed += 1
-            else:
-                failed += 1
+            record(name, ok, f"{resp.status_code} (expected {expected_status})")
+            if name == "Liveness":
+                try:
+                    health_payload = _response_payload(resp)
+                except Exception:
+                    health_payload = None
         except httpx.ConnectError:
-            print(f"  \u274c {name}: Connection refused")
-            failed += 1
+            record(name, False, "connection refused")
         except httpx.TimeoutException:
-            print(f"  \u274c {name}: Timeout (30s)")
-            failed += 1
+            record(name, False, "timeout (30s)")
         except Exception as e:
-            print(f"  \u274c {name}: {e}")
-            failed += 1
+            record(name, False, str(e))
 
-    # Check health response content
-    try:
-        resp = httpx.get(f"{base_url}/health", timeout=10)
-        data = resp.json()
-        print(f"\n  Version: {data.get('version', 'unknown')}")
-        print(f"  Status: {data.get('status', 'unknown')}")
-    except Exception:
-        pass
+    if health_payload:
+        print(f"\n  Version: {health_payload.get('version', 'unknown')}")
+        print(f"  Status: {health_payload.get('status', 'unknown')}")
 
-    # Readiness content is as important as the HTTP status. Render returns 503
-    # for failures, but this catches proxies or future handlers that rewrite it.
-    try:
-        resp = httpx.get(f"{base_url}/health/deep", timeout=15)
-        data = resp.json()
-        detail = data.get("detail", data)
-        print(f"  Ready commit: {(detail.get('version') or {}).get('commit', 'unknown')}")
-        print(f"  Components: {detail.get('components', {})}")
-        if resp.status_code == 200 and detail.get("ok") is True:
-            passed += 1
-        else:
-            failed += 1
-    except Exception as exc:
-        print(f"  ❌ Readiness body: {exc}")
-        failed += 1
+    # Fetch each readiness surface exactly once. A 200 status alone is
+    # insufficient: proxies and future handlers must not turn a fail-closed body
+    # into a false deployment success.
+    readiness_payloads: dict[str, dict[str, Any] | None] = {
+        "ready": None,
+        "deep": None,
+    }
+    readiness_checks = (
+        ("ready", "Traffic readiness", "/health/ready", "ready"),
+        ("deep", "Full readiness", "/health/deep", True),
+    )
+    for key, name, path, expected_body in readiness_checks:
+        try:
+            response = httpx.get(
+                f"{base_url}{path}", timeout=15, follow_redirects=True
+            )
+            payload = _response_payload(response)
+            readiness_payloads[key] = payload
+            body_ok = (
+                payload.get("status") == expected_body
+                if key == "ready"
+                else payload.get("ok") is expected_body
+            )
+            ok = response.status_code == 200 and body_ok
+            record(name, ok, f"{response.status_code}; components={payload.get('components', {})}")
+        except httpx.ConnectError:
+            record(name, False, "connection refused")
+        except httpx.TimeoutException:
+            record(name, False, "timeout (15s)")
+        except Exception as exc:
+            record(name, False, f"invalid response: {exc}")
+
+    ready_commit = _commit(readiness_payloads["ready"])
+    deep_commit = _commit(readiness_payloads["deep"])
+    commits_known = (
+        ready_commit.lower() not in _UNKNOWN_COMMITS
+        and deep_commit.lower() not in _UNKNOWN_COMMITS
+    )
+    same_release = commits_known and ready_commit.lower() == deep_commit.lower()
+    expected_release = not expected_commit or ready_commit.lower() == expected_commit
+    identity_ok = same_release and expected_release
+    identity_detail = f"ready={ready_commit}, deep={deep_commit}"
+    if expected_commit:
+        identity_detail += f", expected={expected_commit}"
+    record("Release identity", identity_ok, identity_detail)
 
     # Admin stats are protected; check them only when the operator explicitly
     # supplies the secret in the environment.
@@ -88,8 +170,7 @@ def verify(base_url: str) -> bool:
                 timeout=10,
             )
             if resp.status_code != 200:
-                print(f"  ❌ Admin health stats: {resp.status_code}")
-                failed += 1
+                record("Admin health stats", False, str(resp.status_code))
             else:
                 data = resp.json()
                 uptime = data.get("uptime_seconds", 0)
@@ -98,10 +179,9 @@ def verify(base_url: str) -> bool:
                 print(f"  Uptime: {hours}h {minutes}m")
                 print(f"  Total requests: {data.get('requests_total', 0)}")
                 print(f"  Error rate: {data.get('error_rate', 0):.2%}")
-                passed += 1
+                record("Admin health stats", True, "200")
         except Exception as exc:
-            print(f"  ❌ Admin health stats: {exc}")
-            failed += 1
+            record("Admin health stats", False, str(exc))
 
     print(f"\n  Result: {passed}/{passed + failed} checks passed\n")
     return failed == 0

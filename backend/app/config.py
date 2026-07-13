@@ -115,14 +115,18 @@ class Settings(BaseSettings):
     #                 ignore every forwarded header. Use when clients reach
     #                 uvicorn directly (bare local dev, docker-compose
     #                 without a proxy in front).
+    #   "render"      trust the first X-Forwarded-For entry emitted by
+    #                 Render's edge. Enable only after validating that the
+    #                 deployed service cannot be reached around that edge.
     #   "1".."9"      that many trusted reverse proxies in front; the real
     #                 client is the Nth-from-the-right X-Forwarded-For entry
     #                 (each trusted proxy appends the peer it accepted).
-    #                 Render terminates traffic with exactly one proxy, so
-    #                 production defaults to "1".
     #   "cloudflare"  Cloudflare in front; trust CF-Connecting-IP.
     # Any other value fails closed to "none".
-    trusted_proxy_mode: str = "1" if _ENV == "production" else "none"
+    # Production also defaults to "none": proxy trust is an explicit operator
+    # opt-in because a mistaken topology assumption makes client-IP quotas
+    # spoofable.
+    trusted_proxy_mode: str = "none"
 
     # Max FITS upload size in bytes (default 100 MB)
     max_upload_size: int = 100 * 1024 * 1024
@@ -145,16 +149,21 @@ class Settings(BaseSettings):
     google_client_id: str = ""
     google_client_secret: str = ""
 
-    # Server-funded DeepSeek fallback for public/anonymous chat.  The key is
-    # read only server-side; never expose it to the browser or commit it.
+    # Optional server-funded DeepSeek fallback for public/anonymous chat. The
+    # key is read only server-side; never expose it to the browser or commit
+    # it. Sharing is fail-closed and requires an explicit operator opt-in.
     platform_deepseek_api_key: str = ""
     deepseek_api_key: str = ""
-    shared_deepseek_api_key_enabled: bool = True
+    shared_deepseek_api_key_enabled: bool = False
 
     # Docker image digest for reproducibility
     docker_image_digest: str = ""
 
-    model_config = {"env_file": ".env"}
+    # Runtime-only local keys (CLI commands and the Bot Console bridge) are
+    # intentionally read with os.getenv at call time. Ignore those additional
+    # keys when a self-hoster keeps them beside declared Settings fields in a
+    # local .env file.
+    model_config = {"env_file": ".env", "extra": "ignore"}
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

@@ -1,13 +1,24 @@
 import logging
 import os
+import re
 import ssl
+import time
+import uuid
 
 from celery import Celery
+from celery.beat import PersistentScheduler
 from celery.signals import worker_ready
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+_BEAT_RELEASE_LEASE_PREFIX = "astro:celery:beat:release:v2:"
+_BEAT_RELEASE_LEGACY_KEY = "astro:celery:beat:release"
+_BEAT_RELEASE_HEARTBEAT_SECONDS = 30.0
+_BEAT_RELEASE_HEARTBEAT_TTL_SECONDS = 120
+_GIT_COMMIT = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
+_BEAT_OWNER = re.compile(r"[0-9a-f]{32}")
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -19,6 +30,25 @@ def _positive_int_env(name: str, default: int) -> int:
     if value <= 0:
         raise ValueError(f"{name} must be positive, got {value}")
     return value
+
+
+def _boolean_env(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _runtime_commit() -> str:
+    """Return a bounded release identifier safe to put in task arguments."""
+    raw = (
+        os.getenv("RENDER_GIT_COMMIT")
+        or os.getenv("GIT_COMMIT")
+        or os.getenv("TOOL_VERSION")
+        or "unknown"
+    )
+    commit = str(raw).strip().lower()
+    return commit if _GIT_COMMIT.fullmatch(commit) else "unknown"
 
 
 _TASK_SOFT_TIME_LIMIT = _positive_int_env(
@@ -89,6 +119,11 @@ celery_app.conf.update(
     broker_transport_options={"visibility_timeout": _VISIBILITY_TIMEOUT},
     result_backend_transport_options={"visibility_timeout": _VISIBILITY_TIMEOUT},
     visibility_timeout=_VISIBILITY_TIMEOUT,
+    # The custom scheduler renews a per-instance release lease only after a
+    # successful scheduler tick. Bound the sleep so a healthy idle Beat ticks
+    # often enough to renew the lease.
+    beat_scheduler="celery_worker:ReleaseLeaseScheduler",
+    beat_max_loop_interval=_BEAT_RELEASE_HEARTBEAT_SECONDS,
     **_broker_opts,
 )
 
@@ -102,21 +137,96 @@ celery_app.conf.include = [
     "app.tasks.ai_tools_tasks",
 ]
 
-# Celery Beat schedule: run the scheduler check every 60 seconds
-celery_app.conf.beat_schedule = {
-    "check-scheduled-pipelines": {
-        "task": "scheduler.check_due_schedules",
-        "schedule": 60.0,  # every 60 seconds
-    },
-    "ingest-ztf-alerts": {
-        "task": "alerts.ingest",
-        "schedule": 900.0,  # every 15 minutes
-    },
-    "reconcile-stale-research-jobs": {
-        "task": "ai_tools.reconcile_stale_jobs",
-        "schedule": 300.0,  # every 5 minutes
-    },
-}
+
+def _build_beat_schedule() -> dict[str, dict[str, object]]:
+    """Build the production schedule with non-cosmology ingestion opt-in."""
+
+    schedule: dict[str, dict[str, object]] = {
+        "check-scheduled-pipelines": {
+            "task": "scheduler.check_due_schedules",
+            "schedule": 60.0,  # every 60 seconds
+        },
+        "reconcile-stale-research-jobs": {
+            "task": "ai_tools.reconcile_stale_jobs",
+            "schedule": 300.0,  # every 5 minutes
+        },
+    }
+    if _boolean_env("ENABLE_TRANSIENT_ALERT_INGEST"):
+        schedule["ingest-ztf-alerts"] = {
+            "task": "alerts.ingest",
+            "schedule": 900.0,  # every 15 minutes
+        }
+    return schedule
+
+
+# Celery Beat schedule: cosmology-safe tasks are enabled by default. The
+# retained ZTF/Lasair vertical is dormant unless an operator explicitly opts
+# in on a separate deployment.
+celery_app.conf.beat_schedule = _build_beat_schedule()
+
+
+def _write_beat_release_lease(owner: str) -> str:
+    """Renew this Beat instance's release lease directly in Redis."""
+    import redis
+
+    normalized_owner = str(owner or "").strip().lower()
+    if _BEAT_OWNER.fullmatch(normalized_owner) is None:
+        raise ValueError("Beat release lease owner must be 32 lowercase hex chars")
+    commit = _runtime_commit()
+    if commit == "unknown" and os.getenv("ENV", "dev").lower() == "production":
+        raise RuntimeError("Beat release lease requires a full Git SHA")
+
+    client = redis.Redis.from_url(
+        settings.redis_url,
+        socket_connect_timeout=2,
+        socket_timeout=2,
+        **settings.redis_tls_kwargs(),
+    )
+    try:
+        stored = client.set(
+            f"{_BEAT_RELEASE_LEASE_PREFIX}{normalized_owner}",
+            commit,
+            ex=_BEAT_RELEASE_HEARTBEAT_TTL_SECONDS,
+        )
+        if not stored:
+            raise RuntimeError("Redis did not acknowledge Beat release lease")
+    finally:
+        client.close()
+    return commit
+
+
+class ReleaseLeaseScheduler(PersistentScheduler):
+    """Persistent Beat scheduler with tick-coupled per-instance release leases."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        self._release_lease_owner = uuid.uuid4().hex
+        self._last_release_lease_attempt: float | None = None
+        super().__init__(*args, **kwargs)
+
+    def _maybe_renew_release_lease(self) -> None:
+        now = time.monotonic()
+        last_attempt = self._last_release_lease_attempt
+        if (
+            last_attempt is not None
+            and now - last_attempt < _BEAT_RELEASE_HEARTBEAT_SECONDS
+        ):
+            return
+        # Throttle both successful writes and failures. A persistent Redis
+        # outage expires the lease fail-closed without log-spamming every tick.
+        self._last_release_lease_attempt = now
+        try:
+            _write_beat_release_lease(self._release_lease_owner)
+        except Exception:
+            logger.exception("Celery Beat release lease renewal failed")
+
+    def tick(self, *args, **kwargs):
+        # Never renew before/surrounding the scheduler operation: if the main
+        # scheduling loop blocks or raises, its lease must age out.
+        next_interval = super().tick(*args, **kwargs)
+        self._maybe_renew_release_lease()
+        if next_interval is None:
+            return _BEAT_RELEASE_HEARTBEAT_SECONDS
+        return min(next_interval, _BEAT_RELEASE_HEARTBEAT_SECONDS)
 
 
 @celery_app.task(name="scheduler.check_due_schedules")

@@ -6,15 +6,29 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 
-# ── 1. CORS null origin allowed (desktop HTML double-clicked opens browser sending Origin: null) ──
+# ── 1. CORS null-origin policy ──
 
-def test_cors_origins_includes_null():
+def test_cors_origins_includes_null_in_development(monkeypatch):
     from app.cors import get_cors_origins
+
+    monkeypatch.setenv("ENV", "dev")
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)
     origins = get_cors_origins()
     assert "null" in origins, (
         "桌面 admin HTML 双击打开时浏览器发 Origin: null, "
-        "CORS 必须显式允许"
+        "本地开发默认允许"
     )
+
+
+def test_cors_origins_requires_explicit_null_opt_in_in_production(monkeypatch):
+    from app.cors import get_cors_origins
+
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("CORS_ORIGINS", "https://astro.example")
+    assert get_cors_origins() == ["https://astro.example"]
+
+    monkeypatch.setenv("CORS_ORIGINS", "https://astro.example,null")
+    assert get_cors_origins() == ["https://astro.example", "null"]
 
 
 # ── 2. require_admin_any dual paths ──────────────────────────────────────

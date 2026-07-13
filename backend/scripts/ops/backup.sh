@@ -8,8 +8,8 @@ umask 077
 
 BACKUP_ROOT="${BACKUP_ROOT:-./backups}"
 STORAGE_DIR="${STORAGE_DIR:-}"
-FERNET_KEY_ID="${FERNET_KEY_ID:-unrecorded}"
-EVIDENCE_SIGNING_KEY_ID="${EVIDENCE_SIGNING_KEY_ID:-unrecorded}"
+FERNET_KEY_ID="${FERNET_KEY_ID:-}"
+EVIDENCE_SIGNING_KEY_ID="${EVIDENCE_SIGNING_KEY_ID:-}"
 BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-0}"
 
 for command_name in pg_dump psql python3 tar; do
@@ -30,8 +30,52 @@ esac
 database_url="${DATABASE_URL/postgresql+asyncpg:/postgresql:}"
 database_url="${database_url/postgres+asyncpg:/postgresql:}"
 
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+backend_root="$(cd -- "$script_dir/../.." && pwd)"
+commit="${RENDER_GIT_COMMIT:-${GIT_COMMIT:-${TOOL_VERSION:-}}}"
+if [[ -z "$commit" ]] && command -v git >/dev/null 2>&1; then
+  commit="$(git -C "$backend_root" rev-parse --verify HEAD 2>/dev/null || true)"
+fi
+commit="$(printf '%s' "$commit" | tr '[:upper:]' '[:lower:]')"
+if [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "backup requires a full 40-hex git commit from RENDER_GIT_COMMIT, GIT_COMMIT, TOOL_VERSION, or git rev-parse" >&2
+  exit 2
+fi
+
+validate_key_id() {
+  local name="$1"
+  local value="$2"
+  local normalized
+  normalized="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+  if [[ ! "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._:@/+~-]{0,127}$ || "$normalized" == "unrecorded" ]]; then
+    echo "$name must be a recorded key identifier using safe identifier characters" >&2
+    exit 2
+  fi
+}
+validate_key_id "FERNET_KEY_ID" "$FERNET_KEY_ID"
+validate_key_id "EVIDENCE_SIGNING_KEY_ID" "$EVIDENCE_SIGNING_KEY_ID"
+
+alembic_bin="${ALEMBIC_BIN:-}"
+if [[ -z "$alembic_bin" && -x "$backend_root/venv/bin/alembic" ]]; then
+  alembic_bin="$backend_root/venv/bin/alembic"
+elif [[ -z "$alembic_bin" ]]; then
+  alembic_bin="$(command -v alembic || true)"
+fi
+if [[ -z "$alembic_bin" || ! -x "$alembic_bin" ]]; then
+  echo "alembic command unavailable; set ALEMBIC_BIN" >&2
+  exit 2
+fi
+
+shipped_heads_output="$(cd "$backend_root" && "$alembic_bin" heads)"
+shipped_revision="$(printf '%s\n' "$shipped_heads_output" | python3 -c '
+import sys
+heads = sorted(line.split()[0] for line in sys.stdin if line.strip())
+if not heads:
+    raise SystemExit("no shipped Alembic heads")
+print(",".join(heads))
+')"
+
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-commit="${RENDER_GIT_COMMIT:-${GIT_COMMIT:-unknown}}"
 backup_id="standard-astro-${timestamp}-${commit:0:12}"
 
 mkdir -p "$BACKUP_ROOT"
@@ -46,6 +90,21 @@ cleanup() {
 trap cleanup EXIT
 mkdir -p "$work"
 
+read_database_revision() {
+  psql "$database_url" -X -A -t -v ON_ERROR_STOP=1 \
+    -c "SELECT string_agg(version_num, ',' ORDER BY version_num) FROM alembic_version;"
+}
+
+alembic_revision="$(read_database_revision)"
+if [[ -z "$alembic_revision" ]]; then
+  echo "could not record an Alembic revision before pg_dump; refusing an unverifiable backup" >&2
+  exit 2
+fi
+if [[ "$alembic_revision" != "$shipped_revision" ]]; then
+  echo "database Alembic revision does not match this code revision: database=$alembic_revision shipped=$shipped_revision" >&2
+  exit 2
+fi
+
 echo "creating PostgreSQL logical backup" >&2
 pg_dump \
   --dbname "$database_url" \
@@ -54,11 +113,15 @@ pg_dump \
   --no-acl \
   --file "$work/database.dump"
 
-alembic_revision="$({
-  psql "$database_url" -X -A -t \
-    -c "SELECT string_agg(version_num, ',' ORDER BY version_num) FROM alembic_version;"
-} 2>/dev/null || true)"
-alembic_revision="${alembic_revision:-unversioned}"
+alembic_revision_after_dump="$(read_database_revision)"
+if [[ -z "$alembic_revision_after_dump" ]]; then
+  echo "could not record an Alembic revision after pg_dump; refusing an unverifiable backup" >&2
+  exit 2
+fi
+if [[ "$alembic_revision_after_dump" != "$alembic_revision" ]]; then
+  echo "database Alembic revision changed during pg_dump: before=$alembic_revision after=$alembic_revision_after_dump" >&2
+  exit 2
+fi
 
 storage_file=""
 if [[ -n "$STORAGE_DIR" ]]; then
@@ -100,10 +163,25 @@ import datetime
 import hashlib
 import json
 import pathlib
+import re
 import sys
 
 work = pathlib.Path(sys.argv[1])
 backup_id, commit, revision, storage_file, fernet_key_id, evidence_key_id = sys.argv[2:]
+
+if not re.fullmatch(r"[0-9a-f]{40}", commit):
+    raise SystemExit("git_commit must be a full 40-hex commit")
+if not re.fullmatch(r"[A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+)*", revision):
+    raise SystemExit("invalid alembic_revision")
+for name, value in (
+    ("fernet_key_id", fernet_key_id),
+    ("evidence_signing_key_id", evidence_key_id),
+):
+    if (
+        not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:@/+~-]{0,127}", value)
+        or value.lower() == "unrecorded"
+    ):
+        raise SystemExit(f"invalid {name}")
 
 def digest(name: str) -> str:
     hasher = hashlib.sha256()

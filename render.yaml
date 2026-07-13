@@ -17,7 +17,9 @@
 
 databases:
   - name: standard-astro-db
-    plan: basic-256mb           # 1 GB storage / 256 MB RAM / 0.1 CPU
+    # Confirm the current provider capacity and cost before any Blueprint sync;
+    # this target intentionally does not make a price or storage-size claim.
+    plan: basic-256mb
     postgresMajorVersion: "16"  # Must match CI and the UUID migration drill.
     databaseName: astro
     user: astro
@@ -58,19 +60,36 @@ services:
           type: keyvalue
           property: connectionString
       - key: JWT_SECRET
-        generateValue: true
+        # Recovery requires the exact original value. Store it in the external
+        # secret manager and seed it before the first Blueprint sync.
+        sync: false
       - key: FERNET_KEY
-        generateValue: true
+        # Losing this key makes stored BYOK credentials unreadable.
+        sync: false
       - key: EVIDENCE_SIGNING_KEY
-        generateValue: true
+        # Keep this independent from JWT_SECRET and retain old verification
+        # keys according to docs/OPERATIONS_RUNBOOK.md.
+        sync: false
       - key: EVIDENCE_SIGNING_KEY_ID
-        value: evidence-prod-v1
+        # Stable identifier paired with the externally managed signing key.
+        sync: false
       # JSON object of retired key-id -> secret.  Populate before rotating the
       # current key; legacy JWT evidence can retain its old JWT secret here.
       - key: EVIDENCE_VERIFICATION_KEYS
         sync: false
       - key: PIPELINE_MODE
         value: celery
+      - key: RATE_LIMIT_ENABLED
+        value: "true"
+      # Shared public inference is deliberately disabled in the reference
+      # production topology. Enabling it is a separate budget/security decision
+      # that also requires a verified client-IP trust mode and global cost cap.
+      - key: SHARED_DEEPSEEK_API_KEY_ENABLED
+        value: "false"
+      - key: TRUSTED_PROXY_MODE
+        # Do not trust forwarded IP headers until the target Render service has
+        # passed the forged-XFF diagnostic documented in DEPLOYMENT.md.
+        value: none
       # Shared research-object storage. Set bucket + credentials (and endpoint
       # for R2/MinIO) before syncing an existing Blueprint; startup fails closed
       # when required S3 credentials are absent.
@@ -92,6 +111,8 @@ services:
         value: /app/data
       - key: SANDBOX_BACKEND
         value: disabled
+      - key: ASTRO_RESEARCH_FOCUS
+        value: cosmology
       - key: CORS_ORIGINS
         fromService:
           name: standard-astro-frontend
@@ -134,7 +155,7 @@ services:
     maxShutdownDelaySeconds: 300
     # The backend owns migrations.  A worker deploy is independent on Render,
     # so it must wait for this image's exact Alembic head before consuming work.
-    dockerCommand: sh -c 'python scripts/wait_for_schema_head.py && exec celery -A celery_worker worker --loglevel=info --concurrency=1 --hostname=worker@%h'
+    dockerCommand: sh -c 'python scripts/wait_for_schema_head.py && exec celery -A celery_worker worker --loglevel=info --concurrency=1 --hostname=worker-${RENDER_GIT_COMMIT}@%h'
     envVars:
       - key: ENV
         value: production
@@ -286,6 +307,8 @@ services:
         value: "900"
       - key: ASTRO_RESEARCH_FOCUS
         value: cosmology
+      - key: ENABLE_TRANSIENT_ALERT_INGEST
+        value: "false"
 
   # ── Frontend ──
   - type: web

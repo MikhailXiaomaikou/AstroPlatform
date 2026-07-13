@@ -72,7 +72,10 @@ def sol_model() -> str:
 
 
 def _sol_profile() -> str:
-    return os.getenv("BOT_CONSOLE_MODEL_PROFILE", "").strip() or "local:openai-cli"
+    profile = os.getenv("BOT_CONSOLE_MODEL_PROFILE", "").strip() or "local:openai-cli"
+    if profile != "local:openai-cli":
+        raise SolUnavailable("the Bot Console only supports the local OpenAI CLI")
+    return profile
 
 
 def _research_launchd_label() -> str:
@@ -254,6 +257,8 @@ def _report_candidate(root: Path, raw: object) -> Path | None:
         return None
     reports_root = root / "reports"
     try:
+        if reports_root.is_symlink():
+            return None
         safe_root = reports_root.resolve(strict=True)
     except OSError:
         return None

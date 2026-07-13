@@ -195,6 +195,9 @@ jobs:
           createdb -h 127.0.0.1 -U astro astro_restore
           DATABASE_URL=postgresql://astro:astro@127.0.0.1:5432/astro_restore \
             RESTORE_CONFIRM="restore:$backup_id" \
+            RESTORE_EXPECTED_COMMIT="$GITHUB_SHA" \
+            RESTORE_FERNET_KEY_ID=ci-test-key \
+            RESTORE_EVIDENCE_SIGNING_KEY_ID="$EVIDENCE_SIGNING_KEY_ID" \
             RESTORE_STORAGE_DIR=/tmp/astro-restored-storage \
             backend/scripts/ops/restore.sh "$bundle"
           test -f /tmp/astro-restored-storage/sentinel.txt

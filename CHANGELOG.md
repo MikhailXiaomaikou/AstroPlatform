@@ -8,6 +8,35 @@ need entries unless they change user-visible behavior or research validity.
 
 ## Unreleased
 
+### P0 production and local-automation hardening (2026-07-13)
+
+- Added a loopback-only Bot Console for the local weekly cosmology-research and
+  notification automation, fixed to the tool-free OpenAI subscription CLI and
+  rejected in hosted production.
+- Added a 50-per-UTC-day shared-model allowance for anonymous IP buckets and
+  starter accounts. Production counters require Redis and fail closed; BYOK or
+  local-model requests cannot silently fall back to a platform-funded key. The
+  reference production topology keeps public chat BYOK-only and disables this
+  optional paid path unless an operator explicitly opts in.
+- Production WebSockets now reject query-string JWTs and untrusted browser
+  origins. Production CORS no longer opts every opaque `null` origin in by
+  default.
+- Celery Beat no longer schedules the out-of-scope transient-alert ingester
+  unless it is explicitly enabled; the default production schedule remains
+  cosmology-only.
+- Remote deployment acceptance now requires a full expected commit, matching
+  `/health/ready` and `/health/deep` backend identities, same-commit Celery
+  workers, and same-commit per-instance Beat leases renewed by scheduler ticks.
+  Portable backups require
+  identifiable key material and a full commit; restores bind the canonical
+  database artifact to that manifest, require a truly fresh database and
+  absent storage target, reject migrations that overlap `pg_dump`, and validate
+  schema before atomic no-replace storage placement.
+- Production JWT, Fernet, and evidence-signing keys are now operator-supplied
+  recovery secrets instead of Blueprint-generated values. Added the cutover,
+  security, privacy, and contribution governance documents; the production
+  cutover itself remains an explicit operator action.
+
 ### Campaign backfill (2026-05-28 → 2026-06-13)
 
 The observational-cosmology completion campaign. Product- and science-facing

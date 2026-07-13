@@ -17,18 +17,17 @@ def get_cors_origins() -> list[str]:
     if raw.strip():
         origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
 
-    # N'-1: when desktop admin HTML is opened directly the browser sends
-    # `Origin: null`. Always allow "null" — admin endpoints are still gated
-    # by the X-Admin-Secret header, CORS is not the auth layer.
-    if "null" not in origins:
-        origins.append("null")
-
-    # In production, only use explicitly configured origins (plus null for desktop tools)
-    if env == "production":
+    # Production trusts only explicit origins. A downloaded file:// admin page
+    # sends Origin: null; an operator who still needs that legacy workflow must
+    # opt in with CORS_ORIGINS=...,null. Automatically allowing every opaque
+    # origin would also expose anonymous/shared-key endpoints to sandboxed
+    # documents, where CORS is part of the browser abuse boundary.
+    if env.strip().lower() in {"prod", "production"}:
         return origins
 
     # Dev/test: include common dev and staging origins
     defaults = [
+        "null",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "https://astro-frontend-tyfr.onrender.com",

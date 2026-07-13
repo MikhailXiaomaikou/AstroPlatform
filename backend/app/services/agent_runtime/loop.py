@@ -1664,7 +1664,6 @@ async def _run_agent_loop(
                 summary_messages,
                 system=system,
                 tools=[],  # text-only — no tool calls allowed
-                api_key=provider_api_keys.get("anthropic", ""),
                 provider_api_keys=provider_api_keys,
                 preferred_backend=preferred_backend,
                 model_profile=model_profile,
