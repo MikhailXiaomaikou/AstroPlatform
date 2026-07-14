@@ -76,6 +76,151 @@ def _environment_pass(lock_path: Path = DEPENDENCY_LOCK, wheels_path: Path | Non
     }
 
 
+def _trusted_runner_identity_provider(root: Path):
+    """Build a host-neutral regular-file runner identity for launcher tests."""
+
+    root.mkdir(parents=True, exist_ok=True)
+    site_root = root / "site-packages"
+    site_root.mkdir()
+    python_path = root / "python"
+    mpirun_path = root / "mpirun"
+    module_path = site_root / "cobaya" / "run.py"
+    module_path.parent.mkdir()
+    python_path.write_bytes(b"fixture trusted Python launcher\n")
+    mpirun_path.write_bytes(b"fixture trusted MPI launcher\n")
+    module_path.write_bytes(b"# fixture cobaya.run module\n")
+    python_path.chmod(0o555)
+    mpirun_path.chmod(0o555)
+
+    import_policy_payload = {
+        "schema_version": 1,
+        "isolated_interpreter": True,
+        "python_flag": "-I",
+        "ignore_environment": True,
+        "no_user_site": True,
+        "safe_path": True,
+        "pythonpath_empty": True,
+        "user_site_disabled_by_child": True,
+        "venv_root": str(root.resolve()),
+        "site_package_roots": [str(site_root.resolve())],
+        "startup_hooks": [],
+    }
+    import_policy = {
+        **import_policy_payload,
+        "passed": True,
+        "reasons": [],
+        "fingerprint": pipeline._hash_object(import_policy_payload),
+    }
+
+    def identity() -> dict:
+        executable = pipeline._regular_executable_record(
+            python_path.resolve(), invoked_path=python_path.resolve()
+        )
+        executable["source_resolved_path"] = str(python_path.resolve())
+        executable["source_sha256"] = pipeline._hash_file(python_path)
+        return {
+            "schema_version": 1,
+            "invocation": "current_interpreter_module",
+            "in_virtual_environment": True,
+            "virtual_environment_prefix": str(root.resolve()),
+            "import_policy": copy.deepcopy(import_policy),
+            "executable": executable,
+            "mpirun": pipeline._regular_executable_record(
+                mpirun_path.resolve(), invoked_path=mpirun_path.resolve()
+            ),
+            "module": {
+                "name": "cobaya.run",
+                "path": str(module_path.resolve()),
+                "size_bytes": module_path.stat().st_size,
+                "sha256": pipeline._hash_file(module_path),
+            },
+            "distribution": {
+                "name": "cobaya",
+                "version": pipeline.REQUIRED_PACKAGE_VERSIONS["cobaya"],
+                "root": str(site_root.resolve()),
+                "fingerprint": "sha256:" + "9" * 64,
+            },
+        }
+
+    return identity
+
+
+def _install_trusted_child_identity_fixture(root: Path, monkeypatch):
+    root.mkdir(parents=True, exist_ok=True)
+    source_python = root / "source-python"
+    launcher = root / "trusted-python"
+    mpirun = root / "trusted-mpirun"
+    for path, content in (
+        (source_python, b"fixture source Python\n"),
+        (launcher, b"fixture materialized Python\n"),
+        (mpirun, b"fixture trusted mpirun\n"),
+    ):
+        path.write_bytes(content)
+        path.chmod(0o555)
+    distribution_root = root / "site-packages"
+    module_path = distribution_root / "cobaya" / "run.py"
+    module_path.parent.mkdir(parents=True)
+    module_path.write_bytes(b"# fixture cobaya.run\n")
+
+    class FakeDistribution:
+        metadata = {"Name": "cobaya"}
+
+        def __init__(self):
+            self.version = pipeline.REQUIRED_PACKAGE_VERSIONS["cobaya"]
+
+        def locate_file(self, relative):
+            return distribution_root / relative
+
+    state = SimpleNamespace(
+        source_python=source_python,
+        launcher=launcher,
+        mpirun=mpirun,
+        distribution=FakeDistribution(),
+        distribution_root=distribution_root,
+        module_path=module_path,
+    )
+    monkeypatch.setattr(pipeline.sys, "executable", str(source_python))
+    monkeypatch.setattr(pipeline.sys, "prefix", str(root / "venv"))
+    monkeypatch.setattr(pipeline.sys, "base_prefix", str(root / "base"))
+    monkeypatch.setattr(
+        pipeline, "_materialize_trusted_python_launcher", lambda _: launcher
+    )
+    monkeypatch.setattr(
+        pipeline.shutil,
+        "which",
+        lambda name: str(mpirun) if name == "mpirun" else None,
+    )
+    commitments = dict(pipeline.TRUSTED_NATIVE_RUNTIME_SHA256)
+    commitments["mpirun"] = pipeline._hash_file(mpirun)
+    monkeypatch.setattr(pipeline, "TRUSTED_NATIVE_RUNTIME_SHA256", commitments)
+    monkeypatch.setattr(
+        pipeline.importlib.metadata,
+        "distribution",
+        lambda _: state.distribution,
+    )
+    monkeypatch.setattr(
+        pipeline.importlib.util,
+        "find_spec",
+        lambda _: SimpleNamespace(origin=str(state.module_path)),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_distribution_inventory",
+        lambda _: {"fingerprint": "sha256:" + "8" * 64},
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_exact_python_import_policy",
+        lambda: {
+            "isolated_interpreter": True,
+            "pythonpath_empty": True,
+            "passed": True,
+            "reasons": [],
+        },
+    )
+    return state
+
+
 def test_exact_profile_matches_paper_stack_and_contains_no_answer_key():
     from cobaya.input import update_info
 
@@ -992,7 +1137,29 @@ def test_wheel_manifest_freezes_complete_lock_and_missing_archives_fail_closed(
 ):
     lock_pins, lock_reasons = pipeline._parse_exact_version_lock(DEPENDENCY_LOCK)
     assert lock_reasons == []
-    manifest, manifest_reasons = pipeline._trusted_wheel_manifest(lock_pins)
+
+    with monkeypatch.context() as incompatible_host:
+        incompatible_host.setattr(pipeline.sys, "version", "0.0 fixture host")
+        incompatible_host.setattr(
+            pipeline, "sys_tags", lambda: iter(["py0-none-incompatible"])
+        )
+        _, incompatible_reasons = pipeline._trusted_wheel_manifest(lock_pins)
+    assert incompatible_reasons == [
+        "exact_wheel_manifest_python_version_mismatch",
+        "exact_wheel_manifest_platform_tags_mismatch",
+    ]
+
+    frozen_payload = json.loads(WHEEL_MANIFEST.read_text(encoding="utf-8"))
+    with monkeypatch.context() as frozen_host:
+        frozen_host.setattr(
+            pipeline.sys, "version", frozen_payload["python_version"]
+        )
+        frozen_host.setattr(
+            pipeline,
+            "sys_tags",
+            lambda: iter(frozen_payload["platform_tags"]),
+        )
+        manifest, manifest_reasons = pipeline._trusted_wheel_manifest(lock_pins)
     assert manifest_reasons == []
     assert manifest is not None
     assert len(manifest["wheels"]) == len(lock_pins) == 52
@@ -1367,6 +1534,64 @@ def test_converged_runner_rejects_force_and_arbitrary_cobaya_entrypoint(
         pipeline.run_cobaya_with_attestation(**base)
 
 
+def test_trusted_python_launcher_rejects_unfrozen_runtime(tmp_path, monkeypatch):
+    source = tmp_path / "python"
+    source.write_bytes(b"unfrozen Python launcher bytes\n")
+    source.chmod(0o555)
+    commitments = dict(pipeline.TRUSTED_NATIVE_RUNTIME_SHA256)
+    commitments["python"] = "sha256:" + "0" * 64
+    monkeypatch.setattr(pipeline, "TRUSTED_NATIVE_RUNTIME_SHA256", commitments)
+
+    with pytest.raises(RuntimeError, match="bytes do not match the frozen runtime"):
+        pipeline._materialize_trusted_python_launcher(source)
+
+
+def test_trusted_child_identity_accepts_frozen_native_and_distribution_fixture(
+    tmp_path, monkeypatch
+):
+    state = _install_trusted_child_identity_fixture(tmp_path, monkeypatch)
+    identity = pipeline._trusted_cobaya_child_identity()
+
+    assert identity["in_virtual_environment"] is True
+    assert identity["executable"]["resolved_path"] == str(state.launcher.resolve())
+    assert identity["executable"]["source_resolved_path"] == str(
+        state.source_python.resolve()
+    )
+    assert identity["mpirun"]["sha256"] == pipeline._hash_file(state.mpirun)
+    assert identity["module"]["path"] == str(state.module_path.resolve())
+    assert identity["distribution"]["version"] == (
+        pipeline.REQUIRED_PACKAGE_VERSIONS["cobaya"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("drift", "message"),
+    [
+        ("mpirun_hash", "mpirun bytes do not match the frozen runtime"),
+        ("module_origin", "cobaya.run resolves outside"),
+        ("distribution_version", "distribution version is not the preregistered"),
+    ],
+)
+def test_trusted_child_identity_rejects_native_or_distribution_drift(
+    tmp_path, monkeypatch, drift, message
+):
+    state = _install_trusted_child_identity_fixture(tmp_path, monkeypatch)
+    if drift == "mpirun_hash":
+        commitments = dict(pipeline.TRUSTED_NATIVE_RUNTIME_SHA256)
+        commitments["mpirun"] = "sha256:" + "0" * 64
+        monkeypatch.setattr(
+            pipeline, "TRUSTED_NATIVE_RUNTIME_SHA256", commitments
+        )
+    elif drift == "module_origin":
+        state.module_path = tmp_path / "outside-cobaya-run.py"
+        state.module_path.write_bytes(b"# unowned module\n")
+    else:
+        state.distribution.version = "0.0.0"
+
+    with pytest.raises(RuntimeError, match=message):
+        pipeline._trusted_cobaya_child_identity()
+
+
 def test_converged_runner_uses_isolated_interpreter_and_attests_import_policy(
     tmp_path, monkeypatch
 ):
@@ -1376,20 +1601,12 @@ def test_converged_runner_uses_isolated_interpreter_and_attests_import_policy(
     inventory = _synthetic_inventory()
     inventory["packages_path"] = str((tmp_path / "packages").resolve())
     monkeypatch.setattr(pipeline, "build_data_inventory", lambda _: inventory)
-    trusted_identity = pipeline._trusted_cobaya_child_identity()
+    identity_provider = _trusted_runner_identity_provider(tmp_path / "trusted-runner")
+    trusted_identity = identity_provider()
     assert trusted_identity["in_virtual_environment"] is True
     assert isinstance(trusted_identity.get("import_policy"), dict)
-    trusted_identity = copy.deepcopy(trusted_identity)
-    trusted_identity["import_policy"].update(
-        {
-            "isolated_interpreter": True,
-            "pythonpath_empty": True,
-            "passed": True,
-            "reasons": [],
-        }
-    )
     monkeypatch.setattr(
-        pipeline, "_trusted_cobaya_child_identity", lambda: trusted_identity
+        pipeline, "_trusted_cobaya_child_identity", identity_provider
     )
     runtime_environment = {
         "python": "fixture",
@@ -1499,17 +1716,10 @@ def test_formal_launcher_completion_receipt_binds_real_run_and_resolved_binaries
     inventory = _synthetic_inventory()
     inventory["packages_path"] = str((tmp_path / "packages").resolve())
     monkeypatch.setattr(pipeline, "build_data_inventory", lambda _: inventory)
-    trusted_identity = copy.deepcopy(pipeline._trusted_cobaya_child_identity())
-    trusted_identity["import_policy"].update(
-        {
-            "isolated_interpreter": True,
-            "pythonpath_empty": True,
-            "passed": True,
-            "reasons": [],
-        }
-    )
+    identity_provider = _trusted_runner_identity_provider(tmp_path / "trusted-runner")
+    trusted_identity = identity_provider()
     monkeypatch.setattr(
-        pipeline, "_trusted_cobaya_child_identity", lambda: trusted_identity
+        pipeline, "_trusted_cobaya_child_identity", identity_provider
     )
     runtime_environment = {
         "python": "fixture",

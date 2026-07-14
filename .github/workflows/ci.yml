@@ -26,6 +26,41 @@ jobs:
         run: |
           cd backend
           pip install --require-hashes -r requirements.lock
+      - name: Fetch pinned Pantheon+ adequacy inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          hydrate_sparse_checkout() {
+            local root="$1" repository="$2" commit="$3" sparse_path="$4"
+            mkdir -p "$root"
+            git -C "$root" init --quiet
+            git -C "$root" remote add origin "$repository"
+            git -C "$root" sparse-checkout init --no-cone
+            git -C "$root" sparse-checkout set --no-cone "$sparse_path"
+            git -C "$root" fetch --quiet --depth=1 --filter=blob:none origin "$commit"
+            git -C "$root" checkout --quiet --detach FETCH_HEAD
+            test "$(git -C "$root" rev-parse HEAD)" = "$commit"
+          }
+          sn_root='.local/w0wa-strict-a-readiness/sn-data-v1.8'
+          sn_path='PantheonPlus/Pantheon+SH0ES.dat'
+          hydrate_sparse_checkout \
+            "$sn_root" 'https://github.com/CobayaSampler/sn_data.git' \
+            '61d96434cafc2770928322c38e5a750e686368ae' "$sn_path"
+          table='backend/packages/data/sn_data/PantheonPlus/Pantheon+SH0ES.dat'
+          mkdir -p "$(dirname "$table")"
+          cp "$sn_root/$sn_path" "$table"
+          release_root='.local/w0wa-strict-a-readiness/pantheonplus-data-release'
+          covariance_path='Pantheon+_Data/4_DISTANCES_AND_COVAR/Pantheon+SH0ES_STATONLY.cov'
+          hydrate_sparse_checkout \
+            "$release_root" 'https://github.com/PantheonPlusSH0ES/DataRelease.git' \
+            'c447f0fea703fcd0fff57de5000947b5ca81286b' "$covariance_path"
+          covariance="$release_root/$covariance_path"
+          printf '%s  %s\n' \
+            '1cb0fc379ef066afdc2ffd1857681cc478024570d8a3eba284fb645775198cf8' \
+            "$table" | sha256sum --check --strict
+          printf '%s  %s\n' \
+            '9f177129a332735d3637affd20054080d5260815f3ca0809120c05b2c902297f' \
+            "$covariance" | sha256sum --check --strict
       - name: Run tests with coverage (cosmology + shared infra)
         # cosmology-only repo: solar_system / exoplanet / dormant modules and
         # their tests were extracted to the standard-astro-verticals repo, so
