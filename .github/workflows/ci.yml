@@ -10,9 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     # Backstop against a hung test: pytest-timeout enforces the per-test
     # @pytest.mark.timeout marks, but unmarked tests can still deadlock, and
-    # without this the job would burn the 360-minute GitHub default. Normal
-    # runs take ~35 minutes.
-    timeout-minutes: 50
+    # without this the job would burn the 360-minute GitHub default. Full
+    # hosted runs can exceed 50 minutes as the scientific suite grows.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
