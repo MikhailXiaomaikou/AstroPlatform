@@ -934,16 +934,20 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 "(Brout et al. 2022; Riess et al. 2022 calibration branch)."
             ),
             approximation=(
-                "Diagonal SN+SH0ES compressed preliminary summary for phase-1 "
-                "research matrices; not the full Pantheon+ covariance likelihood."
+                "Diagonal published SN+SH0ES posterior summary for literature "
+                "context/proposal design only; not the full Pantheon+ likelihood."
+            ),
+            source_prior=(
+                "Published Pantheon+SH0ES posterior summary after the source "
+                "analysis calibration and cosmological priors; not deconvolved."
             ),
         ),
         research_roles=("sn_distance_ladder", "late_universe_distance", "dark_energy_matrix"),
-        execution_level="compressed_preliminary",
+        execution_level="context_only",
         independence_group="pantheon_plus_sn",
-        claimable_parameters=("H0", "omegam", "M_B"),
+        claimable_parameters=(),
         recommended_combinations=("desi_dr1_bao", "planck2018_compressed"),
-        # The compressed Pantheon+ spec IS the SH0ES-calibrated branch (its H0 mean
+        # The context-only Pantheon+ posterior block IS the SH0ES-calibrated branch (its H0 mean
         # 73.04 ± 1.04 is the Riess+2022 SH0ES value), so co-adding the standalone
         # SH0ES H0 prior double-counts the identical measurement and halves the H0
         # variance. Keep them as robustness alternatives, never a joint fit.
@@ -979,8 +983,9 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         ),
         notes=(
             "Photometrically classified DES SN sample; robustness partner for "
-            "Pantheon+/Union3. Default fast path is a compressed SN-only flat-ΛCDM Ωm "
-            "Gaussian (Ωm=0.352±0.017). The FULL 1829-SN distance-modulus vector + "
+            "Pantheon+/Union3. The registered SN-only flat-ΛCDM Ωm posterior "
+            "summary (Ωm=0.352±0.017) is context-only and is not executed as a "
+            "likelihood. The FULL 1829-SN distance-modulus vector + "
             "stat+sys covariance is vendored (sha256-pinned data.npz, built by "
             "scripts/fetch_des_sn5yr.py from the github tag-1.3 Vincenzi+2024 Legacy "
             "release) and runs in-process as a full-covariance χ² when "
@@ -999,7 +1004,11 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             covariance=((0.017 ** 2,),),
             units={"omegam": "dimensionless"},
             source_locator="DES Collaboration (Abbott et al.) 2024 (arXiv:2401.02929) Table 2, Flat-ΛCDM SN-only / no external priors: Ωm = 0.352 ± 0.017.",
-            approximation="1D SN-only flat-ΛCDM Ωm Gaussian; NOT the full 1829-SN distance-modulus + covariance likelihood (external).",
+            approximation="Published 1D SN-only flat-ΛCDM Ωm posterior summary; context-only, NOT the full 1829-SN distance-modulus likelihood.",
+            source_prior=(
+                "Published flat-LambdaCDM SN-only posterior after source-analysis "
+                "nuisance marginalisation; not deconvolved."
+            ),
         ),
         data_products=(
             DataProductSpec(
@@ -1048,8 +1057,9 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         ),
         notes=(
             "The SN anchor of the 2018-2022 literature era (quoted by Planck 2018 / "
-            "DES-Y1 / eBOSS companion analyses). Default fast path is a compressed "
-            "SN-only flat-ΛCDM Ωm Gaussian (Ωm=0.298±0.022, Scolnic+18). The FULL "
+            "DES-Y1 / eBOSS companion analyses). Its compressed SN-only flat-ΛCDM "
+            "Ωm=0.298±0.022 record (Scolnic+18) is a published posterior summary for "
+            "context/proposal use only and is never multiplied as a likelihood. The FULL "
             "1048-SN apparent-magnitude vector + stat+sys covariance is vendored "
             "(sha256-pinned text files, scripts/fetch_pantheon18.py from "
             "CobayaSampler/sn_data) and runs in-process as an offset-marginalized "
@@ -1069,7 +1079,15 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             covariance=((0.022 ** 2,),),
             units={"omegam": "dimensionless"},
             source_locator="Scolnic et al. 2018 (arXiv:1710.00845) Table 8, SN-only flat-ΛCDM with systematics: Ωm = 0.298 ± 0.022.",
-            approximation="1D SN-only flat-ΛCDM Ωm Gaussian; NOT the full 1048-SN magnitude + covariance likelihood (env-gated).",
+            approximation=(
+                "1D SN-only flat-ΛCDM Ωm published posterior summary for "
+                "context/proposal use only; NOT an executable Gaussian likelihood and "
+                "NOT the full 1048-SN magnitude + covariance likelihood (env-gated)."
+            ),
+            source_prior=(
+                "Published flat-LambdaCDM SN-only posterior after source-analysis "
+                "systematics and nuisance marginalisation; not deconvolved."
+            ),
         ),
         data_products=(
             DataProductSpec(
@@ -1147,6 +1165,10 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             units={"omegam": "dimensionless"},
             source_locator="Rubin et al. 2023 (arXiv:2311.12098) Table 9, Flat-ΛCDM SN-only: Ωm = 0.356 (+0.028/-0.026); symmetrized σ = 0.027.",
             approximation="1D SN-only flat-ΛCDM Ωm Gaussian — published anchor for the in-process full 22-bin likelihood (which reproduces Ωm=0.356 at its chi2 minimum).",
+            source_prior=(
+                "Published flat-LambdaCDM SN-only posterior after UNITY nuisance "
+                "marginalisation; retained only as a literature anchor."
+            ),
         ),
         data_products=(
             DataProductSpec(
@@ -1222,22 +1244,15 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             "EXECUTION (2026-07-07 upgrade): on the sampling path (any executable "
             "probe co-selected; every flat model, LCDM included) the executed CMB "
             "term is the CORRELATED Chen-Huang-Wang 2019 (arXiv:1808.05724, Table I) "
-            "4-dim (R, l_A, ombh2, ns) distance-prior Gaussian — the observables "
-            "this entry claims — plus the Planck-2018 S8 growth-amplitude row "
-            "applied on the derived S8 == sigma8 * (Omega_m/0.3)^0.5 (the distance "
-            "priors carry no clustering amplitude; without the S8 row sigma8 would "
-            "be unconstrained). The (H0, Omega_m, sigma8) diagonal parameter "
-            "summary below (Planck VI Table 2 TT,TE,EE+lowE+lensing column) remains "
-            "in use for the analytic no-probe path (CMB-alone selections, where the "
-            "nonlinear prior cannot run). Its S8 row is NOT multiplied into that "
-            "analytic posterior: S8 is derived from the already-constrained "
-            "Omega_m/sigma8 samples, so treating the published derived summary as "
-            "independent would double-count the same Planck posterior. The S8 row "
-            "remains metadata for the sampling path, pairwise-tension table, and "
-            "importance-proposal anchoring. A chain-derived non-diagonal covariance for "
-            "the analytic path remains a follow-up -- see "
-            "scripts/fetch_planck2018_compressed.py. Treat all of it as compressed-"
-            "preliminary, not full-likelihood, constraints. Do NOT co-add with the "
+            "4-dim (R, l_A, ombh2, ns) distance-prior Gaussian — the only rows "
+            "multiplied into chi-square. The (H0, Omega_m, sigma8, S8) block below "
+            "is a Planck VI Table 2 base-LCDM posterior summary: it is proposal and "
+            "literature context only, including for CMB-alone selections, and is "
+            "never multiplied as a likelihood. Consequently the in-process distance-"
+            "prior result does not constrain or report sigma8/S8; use the native "
+            "Planck likelihood stack for growth-amplitude inference. Treat the "
+            "distance-prior route as compressed-preliminary, not a full-likelihood "
+            "constraint. Do NOT co-add with the "
             "native Planck 2018 stack entries (enforced via do_not_combine_with)."
         ),
         cobaya_likelihood="external:planck_2018_distance_prior",
@@ -1302,23 +1317,24 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             source_locator=(
                 "Executed distance priors: Chen, Huang & Wang 2019 (arXiv:1808.05724) "
                 "Table I, Planck 2018 TT,TE,EE+lowE base-LCDM. Parameter summary rows "
-                "(analytic path / tensions / proposal): Planck Collaboration VI 2020 "
-                "Table 2 baseline. S8 is a derived summary and is excluded as an "
-                "independent row on the analytic path."
+                "(proposal/context only): Planck Collaboration VI 2020 Table 2 "
+                "baseline. None of the H0/Omega_m/sigma8/S8 posterior rows is "
+                "executed as a likelihood."
             ),
             approximation=(
                 "Sampling path (flat models, any executable probe co-selected): the "
                 "executed CMB chi2 is the correlated CHW2019 4-dim (R, l_A, ombh2, "
-                "ns) distance-prior Gaussian plus the S8 row applied on derived "
-                "S8 == sigma8 * (Omega_m/0.3)^0.5 — NOT this diagonal parameter "
-                "summary. The analytic no-probe path executes only the H0, Omega_m, "
-                "and sigma8 marginal rows; it derives S8 for reporting but excludes "
-                "the registered S8 summary as an independent likelihood factor. The "
-                "full four-row summary otherwise feeds the tension table and proposal "
-                "anchoring. Neither route is the full Planck likelihood, and no route "
-                "samples an independent S8. Real "
-                "non-diagonal chain covariance for the analytic path remains a "
-                "follow-up (scripts/fetch_planck2018_compressed.py)."
+                "ns) distance-prior Gaussian. This diagonal parameter block feeds "
+                "proposal anchoring and literature/tension context only; none of its "
+                "four posterior-summary rows enters chi2. The distance prior carries "
+                "no clustering-amplitude information, so sigma8/S8 are absent from "
+                "this in-process result. Neither route is the full Planck likelihood."
+            ),
+            statistical_role="proposal_only",
+            source_prior=(
+                "The H0/Omega_m/sigma8/S8 rows are Planck base-LCDM posterior "
+                "summaries. They inherit the source analysis priors and may not "
+                "be multiplied as an independent likelihood."
             ),
         ),
     ),
@@ -1754,10 +1770,11 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             DatasetCitation(label="Carron, Mirmelstein & Lewis likelihood method", year=2022, arxiv="2206.07773"),
         ),
         notes=(
-            "COMPRESSED NUMBERS ARE NOT ACT-ONLY: the executed (H0, sigma8, S8) "
-            "Gaussian is hand-typed from the ACT DR6 lensing paper's ACT+Planck "
-            "joint summary, so it is not statistically valid as a standalone ACT "
-            "constraint and must NOT be co-added with planck_2018_lensing / "
+            "COMPRESSED NUMBERS ARE NOT ACT-ONLY: the registered (H0, sigma8, S8) "
+            "record is a context-only posterior summary hand-typed from the ACT DR6 "
+            "lensing paper's ACT+Planck joint result. It is never executed as a "
+            "Gaussian likelihood, is not a standalone ACT constraint, and must NOT "
+            "be co-added with planck_2018_lensing / "
             "planck_pr4_lensing (double-counts Planck lensing; enforced via "
             "do_not_combine_with). The real standalone-ACT bandpower likelihood "
             "is STAGED (2026-07-07): act_dr6_lenslike pip-installed, adapter "
@@ -1765,14 +1782,14 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             "(data_products below) and reproducing the package's reference "
             "chi2 = 14.06 — but live cobaya execution still needs the "
             "cobaya_runner runtime-hash gate + YAML wiring, so execution_mode "
-            "stays compressed_gaussian. Until that flips, treat this entry as "
-            "a preliminary ACT+Planck consistency check only."
+            "stays compressed_gaussian. Until that flips, treat the registered "
+            "numbers as literature context only."
         ),
         cobaya_likelihood="external:act_dr6_lenslike.ACTDR6LensLike",
         cosmosis_module="external:act_dr6_lenslike",
         execution_mode="compressed_gaussian",
-        # The executed compressed numbers are the ACT+Planck JOINT lensing
-        # summary — co-adding with a Planck lensing likelihood (or with
+        # The registered context-only numbers are the ACT+Planck JOINT lensing
+        # posterior summary — co-adding them with a Planck lensing likelihood (or with
         # planck2018_compressed, whose S8 row quotes the lensing-included
         # Planck VI column) counts Planck lensing twice.
         do_not_combine_with=(
@@ -1901,7 +1918,11 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 "Diagonal compressed summary hand-typed from the ACT+Planck JOINT "
                 "lensing results (abstract level) — NOT a standalone ACT-only "
                 "constraint and NOT statistically independent of Planck lensing. "
-                "Use for preliminary consistency checks only."
+                "Published posterior context only; never execute as a likelihood."
+            ),
+            source_prior=(
+                "Published ACT+Planck-lensing posterior after the source analysis "
+                "cosmology and nuisance priors; not deconvolved."
             ),
         ),
     ),
@@ -1989,6 +2010,10 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             units={"S8": "dimensionless"},
             source_locator="Asgari et al. KiDS-1000 cosmic shear abstract/fiducial S8 summary.",
             approximation="Symmetrized 68% S8-only compressed summary; nuisance parameters marginalized in source analysis.",
+            source_prior=(
+                "Published KiDS-1000 posterior after intrinsic-alignment, shear, "
+                "photo-z, and cosmological priors; not deconvolved."
+            ),
         ),
     ),
     "des_y3_3x2pt": CosmologyDatasetEntry(
@@ -2027,6 +2052,10 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             units={"S8": "dimensionless"},
             source_locator="DES Collaboration Year 3 3x2pt ΛCDM S8 summary.",
             approximation="S8-only compressed summary; full DES Y3 nuisance/covariance is external.",
+            source_prior=(
+                "Published DES Y3 posterior after source-analysis nuisance and "
+                "cosmological priors; not deconvolved."
+            ),
         ),
     ),
     "hsc_y1_cosmic_shear": CosmologyDatasetEntry(
@@ -2068,6 +2097,10 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             units={"S8": "dimensionless", "omegam": "dimensionless"},
             source_locator="Hamana et al. HSC Y1 cosmic shear abstract ΛCDM summary.",
             approximation="Symmetrized S8/Omega_m compressed summary; covariance off-diagonal unavailable here.",
+            source_prior=(
+                "Published HSC Y1 posterior after intrinsic-alignment, shear, "
+                "photo-z, and cosmological priors; not deconvolved."
+            ),
         ),
     ),
     "cosmic_chronometers": CosmologyDatasetEntry(
@@ -2272,6 +2305,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             units={"H0": "km s^-1 Mpc^-1"},
             source_locator="Riess et al. 2022 SH0ES H0 prior.",
             approximation="Scalar Gaussian H0 prior; not an Ωm/S8 constraint.",
+            statistical_role="external_prior",
         ),
     ),
     # ── PART AI follow-up: spec papers #12-#15 (4 H0-ladder alternates besides
@@ -2335,6 +2369,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             units={"H0": "km s^-1 Mpc^-1"},
             source_locator="Freedman et al. 2019 TRGB H0 prior.",
             approximation="Scalar Gaussian H0 prior; mid-rung distance ladder anchor.",
+            statistical_role="external_prior",
         ),
         do_not_combine_with=("shoes_h0_riess22",),
     ),
@@ -2397,6 +2432,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             units={"H0": "km s^-1 Mpc^-1"},
             source_locator="Freedman et al. 2024 (arXiv:2408.06153) combined HST+JWST TRGB H0 = 70.39 +/- 1.22(stat) +/- 1.33(sys) +/- 0.70(sigma_SN).",
             approximation="Scalar Gaussian H0 prior (stat/sys/sigma_SN added in quadrature); JWST-era distance-ladder anchor.",
+            statistical_role="external_prior",
         ),
     ),
     "h0licow_h0": CosmologyDatasetEntry(
@@ -2407,7 +2443,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         status="ready",
         observables=("H0",),
         units={"H0": "km s^-1 Mpc^-1"},
-        applicable_models=H0_MODELS,
+        applicable_models=("lcdm",),
         likelihood_family="gaussian_prior",
         covariance=CovarianceSpec(
             kind="1D gaussian variance (asymmetric)",
@@ -2431,7 +2467,8 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         notes=(
             "Strong-lens time-delay H0 — geometry-only, independent of "
             "Cepheid / TRGB / SN Ia ladders. Sigma 1.75 is the symmetric "
-            "approximation of the published +1.7/-1.8 asymmetric error; "
+            "approximation of the published +1.7/-1.8 asymmetric flat-LambdaCDM "
+            "posterior and is therefore registered for lcdm only; "
             "for full likelihood prefer TDCOSMO+ updated chains."
         ),
         cobaya_likelihood="gaussian:H0=73.3,sigma=1.75",
@@ -2444,9 +2481,10 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             units={"H0": "km s^-1 Mpc^-1"},
             source_locator="Wong et al. 2020 H0LiCOW XIII H0 prior.",
             approximation=(
-                "Scalar Gaussian H0 prior; symmetrized 1.75 sigma from "
-                "published +1.7/-1.8 asymmetric error."
+                "Flat-LambdaCDM scalar Gaussian H0 approximation; symmetrized "
+                "1.75 sigma from the published +1.7/-1.8 asymmetric error."
             ),
+            statistical_role="external_prior",
         ),
     ),
     "megamaser_h0_pesce20": CosmologyDatasetEntry(
@@ -2491,6 +2529,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             units={"H0": "km s^-1 Mpc^-1"},
             source_locator="Pesce et al. 2020 megamaser H0 prior.",
             approximation="Scalar Gaussian H0 prior; geometric anchor only.",
+            statistical_role="external_prior",
         ),
     ),
     "bbn_ombh2_schoeneberg24": CosmologyDatasetEntry(
@@ -2523,14 +2562,16 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             ),
         ),
         notes=(
-            "Standard BBN omega_b prior for sound-horizon-independent / CMB-free "
-            "BAO+BBN inference (the prior DESI adopts). Without it a 'CMB-free' run "
-            "is silently contaminated by the Planck-compressed omega_b. Schöneberg "
-            "2024 also reports 0.02196 +/- 0.00063 under ab-initio Deuterium rates."
+            "Standard BBN omega_b prior for an external sound-horizon forward "
+            "model. The current in-process BAO runner samples r_d freely and has "
+            "no BBN omega_b -> r_d mapping, so this entry is configuration/context "
+            "only and must not be advertised as a CMB-free BAO+BBN H0 inference. "
+            "Schöneberg 2024 also reports 0.02196 +/- 0.00063 under ab-initio "
+            "Deuterium rates."
         ),
         cobaya_likelihood="gaussian:ombh2=0.02218,sigma=0.00055",
         cosmosis_module="prior ombh2 = gaussian 0.02218 0.00055",
-        execution_mode="compressed_gaussian",
+        execution_mode="config_only",
         compressed_likelihood=CompressedLikelihoodSpec(
             parameters=("ombh2",),
             mean=(0.02218,),
@@ -2538,6 +2579,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             units={"ombh2": "dimensionless"},
             source_locator="Schöneberg 2024 (arXiv:2401.15054) conservative LCDM BBN omega_b h^2; PDG light-element abundances.",
             approximation="Scalar Gaussian omega_b h^2 prior; PRyMordial nuclear-rate marginalization.",
+            statistical_role="external_prior",
         ),
     ),
     "spt3g_cmb": CosmologyDatasetEntry(
@@ -2587,72 +2629,52 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
     "spt_cluster_bocquet19": CosmologyDatasetEntry(
         key="spt_cluster_bocquet19",
         display_name="SPT 2500 deg² SZ cluster cosmology (Bocquet+ 2019)",
-        version="SPT-SZ 2500d cluster catalog + multiwavelength mass calibration",
+        version="SPT-SZ 2500d cluster catalog + weak-lensing/X-ray mass calibration",
         probe="cluster",
-        status="ready",
-        observables=("sigma8", "omegam"),
-        units={"sigma8": "dimensionless", "omegam": "dimensionless"},
+        status="metadata_only",
+        observables=("sigma8", "omegam", "sigma8_omegam_0p2"),
+        units={
+            "sigma8": "dimensionless",
+            "omegam": "dimensionless",
+            "sigma8_omegam_0p2": "dimensionless",
+        },
         applicable_models=ALL_MODELS,
         likelihood_family="cluster_count",
         covariance=CovarianceSpec(
-            kind="2D Gaussian (sigma8 × omegam)",
-            provided=True,
+            kind="published marginalized constraints; joint covariance not registered",
+            provided=False,
             description=(
-                "Compressed 2D Gaussian summary of the σ8-Ωm constraint from "
-                "the SPT-SZ 2500 deg² cluster catalog (377 confirmed clusters "
-                "with M500c > 3e14 M_sun, multi-probe mass calibration). "
-                "Bocquet+2019 reports σ8(Ωm/0.3)^0.2 = 0.766 ± 0.025 when "
-                "marginalized over LCDM."
+                "Bocquet et al. report marginalized constraints from the SPT-SZ "
+                "cluster-count analysis, including Omega_m=0.276+/-0.047, "
+                "sigma8=0.781+/-0.037, and "
+                "sigma8(Omega_m/0.3)^0.2=0.766+/-0.025. A joint posterior "
+                "covariance is not registered, so these numbers must not be "
+                "expanded into an executable two-dimensional Gaussian."
             ),
-            url="https://doi.org/10.3847/1538-4357/aaf230",
-            format="2x2 Gaussian covariance from published Table 4",
+            url="https://doi.org/10.3847/1538-4357/ab1f10",
+            format="paper marginalized posterior summaries",
         ),
-        source_url="https://doi.org/10.3847/1538-4357/aaf230",
+        source_url="https://doi.org/10.3847/1538-4357/ab1f10",
         citations=(
             DatasetCitation(
                 label="Bocquet et al. SPT-SZ 2500d cluster cosmology",
                 year=2019,
                 arxiv="1812.01679",
-                doi="10.3847/1538-4357/aaf230",
+                doi="10.3847/1538-4357/ab1f10",
             ),
         ),
         notes=(
-            "Independent σ8 anchor — does NOT use weak lensing OR CMB "
-            "inverse routes. Pairs naturally with KiDS-1000 / DES Y3 / "
-            "HSC Y1 to cross-check the σ8 tension story. Uses the "
-            "compressed Gaussian (σ8(Ωm/0.3)^0.2 = 0.766 ± 0.025) "
-            "rather than full cluster-count likelihood; full external "
-            "cluster likelihood (CosmoSIS module 'cluster_counting') is "
-            "phase-2 work. This compressed form is what Planck 2018 "
-            "Table 4 + DES Y3 §6 report as the SPT-SZ headline. "
-            "NOTE: parameter names use lowercase `omegam` to match the "
-            "RUNNER_PARAMETER_PRIORS convention; published Bocquet+2019 "
-            "uses Ω_m which maps 1:1."
+            "Metadata-only until the public posterior chain or full cluster-count "
+            "likelihood is ingested and hash-bound. The analysis supplements the "
+            "343-cluster SZ sample with weak gravitational-lensing measurements "
+            "of 32 clusters from Magellan/HST and X-ray measurements of 89 clusters "
+            "from Chandra, and jointly fits mass-observable scaling relations and "
+            "cosmology. It is therefore not a weak-lensing-free anchor. The published "
+            "one-dimensional combination sigma8(Omega_m/0.3)^0.2 must not be treated "
+            "as sigma8 at a fixed Omega_m or used to invent a two-dimensional "
+            "covariance."
         ),
-        cobaya_likelihood="external:cluster.spt_sz_bocquet19",
-        cosmosis_module="likelihood/clusters/spt_sz/cluster_counting.py",
-        execution_mode="compressed_gaussian",
-        compressed_likelihood=CompressedLikelihoodSpec(
-            parameters=("sigma8", "omegam"),
-            # Bocquet+2019 Table 4 baseline: σ8 = 0.766 at Ωm = 0.3,
-            # constraint slope σ8 ∝ Ωm^-0.2 inside ±0.025. We expand to
-            # 2D Gaussian centered at (σ8=0.766, Ωm=0.300) with diagonal
-            # σ_σ8 = 0.025, σ_Ωm = 0.05 and the σ8-Ωm correlation
-            # coefficient ρ ≈ -0.6 (typical SZ degeneracy slope). This
-            # matches Planck 2018 Table 4 SPT-SZ entry within 0.5σ.
-            mean=(0.766, 0.300),
-            covariance=(
-                (0.025 ** 2, -0.6 * 0.025 * 0.05),
-                (-0.6 * 0.025 * 0.05, 0.05 ** 2),
-            ),
-            units={"sigma8": "dimensionless", "omegam": "dimensionless"},
-            source_locator="Bocquet et al. 2019 SPT-SZ 2500d Table 4 LCDM result.",
-            approximation=(
-                "2D Gaussian σ8-Ωm with ρ=-0.6 derived from σ8(Ωm/0.3)^0.2="
-                "0.766±0.025 published constraint. Full cluster-count "
-                "likelihood with mass-calibration nuisance is phase-2."
-            ),
-        ),
+        execution_mode="config_only",
     ),
 }
 

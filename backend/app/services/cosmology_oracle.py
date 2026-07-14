@@ -1,9 +1,9 @@
 """T1-U9: a single, sourced table of published cosmology anchors.
 
-The platform's "right answers" — published parameter constraints it can reproduce
-in-process — were scattered across benchmark bands and module constants.  This
-centralizes them as one frozen, citable table so the reproduce-anchor harness
-(T1-U10) and the oracle-coverage measurement (T1-U11) share a single basis.
+Published reference values and genuinely reproducible targets were scattered
+across benchmark bands and module constants.  This centralizes them as one
+frozen, citable table while keeping literature-only posterior summaries
+separate from targets the in-process runner may actually reproduce.
 
 Each anchor records the published central value, an absolute tolerance, the
 datasets + model that reproduce it, and the arXiv identifier of the source.  We
@@ -23,20 +23,20 @@ class OracleAnchor:
     tol: float               # absolute tolerance for "reproduced"
     datasets: tuple[str, ...]
     model: str
-    # "independent" = the fit recovers the published number from RAW data +
-    # physics (a genuine reproduction).  "consistency" = a compressed Gaussian
-    # summary recovers its own input mean (a self-consistency check, not
-    # independent validation).  Only honest if set per anchor by inspection.
+    # "independent" = the fit recovers the published number from raw/released
+    # data + physics (a genuine reproduction). "fit_quality" = a data-backed
+    # goodness-of-fit reproduction. "consistency" is retained as the stable
+    # compatibility label for a literature-context posterior reference; it is
+    # never executed as a likelihood or counted as a reproduction.
     independence: str
     source_arxiv: str        # arXiv id of the source paper
     source_label: str
 
 
-# Anchors seeded ONLY from constraints the platform already reproduces in-process
-# (each has a backing benchmark or provenance test).  SN/CMB values are kept in
-# sync with the live registry compressed means by test_oracle_values_match_live_
-# registry_constants, so a registry typo breaks the oracle test instead of
-# silently shifting the "right answer".
+# Genuine anchors have a backing data/fit benchmark. SN/CMB posterior summaries
+# remain in the table only as literature context and drift guards; they are kept
+# in sync with registry constants but are not sent through the runner as if they
+# were likelihood factors.
 PUBLISHED_ANCHORS: tuple[OracleAnchor, ...] = (
     OracleAnchor(
         "desi_dr1_bao_omegam", "omegam", 0.295, 0.02, ("desi_dr1_bao",), "lcdm",
@@ -159,8 +159,8 @@ def chain_is_off_anchor(model: str, dataset_keys) -> bool:
 
 def route_goal(goal_key: str) -> dict:
     """Decide whether a goal may be answered autonomously.  Only GENUINELY
-    reproduced goals route to 'answer'; a compressed self-consistency anchor is
-    not validation, so it routes to human_review like any off-anchor goal.  This
+    reproduced goals route to 'answer'; a literature-context posterior anchor
+    is not validation, so it routes to human_review like any off-anchor goal. This
     enforces 'no off-anchor autonomous conclusions' and does NOT authorize
     off-anchor autonomy (a policy decision, not a code change here)."""
     if is_genuine(goal_key):
@@ -175,8 +175,9 @@ def route_goal(goal_key: str) -> dict:
             else "off_anchor_not_in_oracle_coverage"
         ),
         "suggested_next_step": (
-            "This goal has only a compressed self-consistency anchor (the summary "
-            "recovers its own input mean), not a genuine reproduction. Add and "
+            "This goal has only a published posterior summary retained as "
+            "literature context, not an executable likelihood or genuine "
+            "reproduction. Add and "
             "verify an independent or fit-quality anchor, or route to a human reviewer."
             if consistency_only
             else "This goal has no reproduced published anchor. Add and verify an "
@@ -212,13 +213,20 @@ def off_anchor_abstention(goal_key: str) -> dict:
 
 
 def oracle_coverage() -> dict:
-    """Measure what fraction of the goal universe is backed by a reproduced
-    published anchor.  Measurement ONLY — it authorizes nothing; it is the number
-    that must be reviewed before any off-anchor autonomy is enabled (T1-U12 routes
-    uncovered goals to human review)."""
+    """Measure reference coverage separately from genuine reproduction.
+
+    ``n_covered`` / ``coverage_fraction`` are retained compatibility names for
+    goals with any curated published reference, including literature-only
+    posterior summaries.  They must not be interpreted as reproduction metrics.
+    ``n_reproduced`` / ``reproduced_fraction`` are the fail-closed scientific
+    coverage values and include only independent or fit-quality reproductions.
+    """
     covered = tuple(a.goal_key for a in PUBLISHED_ANCHORS)
     independent = tuple(a.goal_key for a in PUBLISHED_ANCHORS if a.independence == "independent")
     fit_quality = tuple(a.goal_key for a in PUBLISHED_ANCHORS if a.independence == "fit_quality")
+    literature_context = tuple(
+        a.goal_key for a in PUBLISHED_ANCHORS if a.independence == "consistency"
+    )
     genuine = independent + fit_quality
     uncovered = OFF_ANCHOR_GOALS
     n_goals = len(covered) + len(uncovered)
@@ -234,6 +242,14 @@ def oracle_coverage() -> dict:
         "n_fit_quality": len(fit_quality),
         "n_genuine": len(genuine),
         "genuine_fraction": round(len(genuine) / n_goals, 4),
+        "n_reproduced": len(genuine),
+        "reproduced_fraction": round(len(genuine) / n_goals, 4),
+        "n_literature_context": len(literature_context),
+        "literature_context_goals": list(literature_context),
+        "coverage_semantics": (
+            "coverage_fraction is curated-reference coverage; use "
+            "reproduced_fraction for scientific reproduction coverage"
+        ),
         # Denominator-stable: fraction of ANCHORS that are genuine — does not move
         # when the off-anchor list is edited (genuine_fraction's denominator does).
         "genuine_of_anchored": round(len(genuine) / len(covered), 4) if covered else 0.0,
@@ -251,6 +267,28 @@ def reproduce_anchor(anchor: OracleAnchor) -> dict:
     land on the right number), distinct from provenance (did the number come from
     a verified tool).  run_likelihood_chain is imported lazily to keep this module
     a dependency-free data table."""
+    if anchor.independence == "consistency":
+        return {
+            "goal_key": anchor.goal_key,
+            "parameter": anchor.parameter,
+            "published_value": anchor.value,
+            "tol": anchor.tol,
+            "reproduced_value": None,
+            "within_tol": None,
+            "reproduction_attempted": False,
+            "reproduction_status": "literature_context_not_executed",
+            "anchor_scope": "literature_context",
+            "publication_ready": False,
+            "preliminary_ready": False,
+            "chain_tier": "not_run",
+            "publication_gate": None,
+            "preliminary_reasons": [
+                "published_posterior_summary_is_not_a_likelihood"
+            ],
+            "datasets": list(anchor.datasets),
+            "source_arxiv": anchor.source_arxiv,
+        }
+
     from app.services.cosmology_likelihoods import run_likelihood_chain
 
     # 2000 importance samples is ample for the point-median tolerances here (the
@@ -276,6 +314,9 @@ def reproduce_anchor(anchor: OracleAnchor) -> dict:
         "tol": anchor.tol,
         "reproduced_value": float(med) if has_value else None,
         "within_tol": bool(within),
+        "reproduction_attempted": True,
+        "reproduction_status": "completed",
+        "anchor_scope": "genuine_reproduction",
         "publication_ready": bool(r.get("publication_ready")),
         "preliminary_ready": bool(r.get("preliminary_ready")),
         "chain_tier": r.get("chain_tier"),

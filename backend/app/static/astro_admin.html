@@ -273,13 +273,16 @@
 <div id="sandbox-result" class="sub" style="margin-top:4px;"></div>
 
 <footer>
-  Astro Platform Admin · 单 HTML 工具 · localStorage 仅保存在你这台设备
+  Astro Platform Admin · Admin secret 仅保存在当前页面内存，刷新后清除
 </footer>
 
 <script>
-// ───────────────────────────── 配置 + localStorage ─────────────────────────────
+// ───────────────────────────── 配置 + 内存 secret ─────────────────────────────
 const LS_URL = 'astro_admin_url';
-const LS_SECRET = 'astro_admin_secret';
+const LEGACY_LS_SECRET = 'astro_admin_secret';
+// Older releases persisted the administrator credential. Purge it eagerly;
+// browser Storage is readable by any same-origin script.
+localStorage.removeItem(LEGACY_LS_SECRET);
 // 默认 URL: HTML 从 http(s) 后端托管时直接用 window.location.origin,
 // bookmark 此 URL 就永远是最新 HTML + 正确 backend. file:// 双击打开
 // 时 fallback 到 Render production.
@@ -290,7 +293,7 @@ const _DEFAULT_URL = (
 );
 let CONFIG = {
   url: localStorage.getItem(LS_URL) || _DEFAULT_URL,
-  secret: localStorage.getItem(LS_SECRET) || '',
+  secret: '',
 };
 let PERIOD = '7d';
 
@@ -301,22 +304,21 @@ function saveConfigAndLoad() {
   CONFIG.secret = $('cfg-secret').value.trim();
   if (!CONFIG.secret) { alert('请填 admin secret'); return; }
   localStorage.setItem(LS_URL, CONFIG.url);
-  localStorage.setItem(LS_SECRET, CONFIG.secret);
   loadAll();
 }
 
 function clearConfig() {
   if (!confirm('清除本地存的 backend URL + admin secret?')) return;
   localStorage.removeItem(LS_URL);
-  localStorage.removeItem(LS_SECRET);
+  localStorage.removeItem(LEGACY_LS_SECRET);
   CONFIG = { url: _DEFAULT_URL, secret: '' };
   $('cfg-url').value = CONFIG.url;
   $('cfg-secret').value = '';
 }
 
-// 启动时填回 input
+// URL 可以持久化；secret 始终从空值开始，只存在 CONFIG 内存中。
 $('cfg-url').value = CONFIG.url;
-$('cfg-secret').value = CONFIG.secret;
+$('cfg-secret').value = '';
 
 // ───────────────────────────── period 切换 ─────────────────────────────
 document.querySelectorAll('.period-btn').forEach(btn => {
@@ -880,11 +882,6 @@ function fmt(n) {
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
-}
-
-// 自动加载: 启动时若 secret 已存就直接 load
-if (CONFIG.secret) {
-  loadAll();
 }
 
 </script>

@@ -38,6 +38,8 @@ from app.services.cosmology_likelihoods.core import (
     DataProductSpec,  # noqa: F401
     CompressedLikelihoodSpec,  # noqa: F401
     CosmologyDatasetEntry,  # noqa: F401
+    EXECUTABLE_COMPRESSED_STATISTICAL_ROLES,  # noqa: F401
+    compressed_rows_are_executable,  # noqa: F401
     MODEL_LABELS,  # noqa: F401
     ALL_MODELS,  # noqa: F401
     SN_MODELS,  # noqa: F401

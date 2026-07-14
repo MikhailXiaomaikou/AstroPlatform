@@ -59,15 +59,27 @@ jobs:
     if: ${{ vars.DAILY_BLIND_ENABLED == 'true' }}
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.lock
       - name: Install dependencies
         run: |
           cd backend
           python -m venv venv
-          ./venv/bin/pip install -r requirements.txt
+          ./venv/bin/pip install --require-hashes -r requirements.lock
+      - name: Initialize blind-test database
+        run: |
+          cd backend
+          # Blind cases exercise the durable research-record path.  Export one
+          # runner-temporary URL both to this shell and every following step so
+          # migrations and the runner cannot accidentally use different files.
+          export DATABASE_URL="sqlite+aiosqlite:///$RUNNER_TEMP/daily-blind.sqlite3"
+          echo "DATABASE_URL=$DATABASE_URL" >> "$GITHUB_ENV"
+          ./venv/bin/alembic upgrade head
+          ./venv/bin/alembic check
       - name: Run blind tests (cosmology)
         env:
           # Map PLATFORM_DEEPSEEK_API_KEY (platform-default secret name)
@@ -95,7 +107,7 @@ jobs:
           bash backend/scripts/daily_blind.sh "$@"
       - name: Upload blind-test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: blind-tests-${{ github.run_id }}
           path: |
@@ -114,15 +126,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.lock
       - name: Install dependencies
         run: |
           cd backend
-          pip install -r requirements.txt
-          pip install pytest-cov
+          pip install --require-hashes -r requirements.lock
       - name: Run integration tests
         run: |
           cd backend
@@ -156,20 +169,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: backend/requirements.txt
+          cache-dependency-path: backend/requirements.lock
       - name: Install dependencies
         run: |
           cd backend
-          pip install -r requirements.txt
-          # Exact pins on top of requirements.txt's permissive ranges: these
-          # are the versions the parity tests were validated against in the
-          # local venv (2026-07-03). Both ship manylinux wheels, no compile.
-          pip install cobaya==3.6.2 camb==1.6.6
+          # The universal lock already pins cobaya==3.6.2 and camb==1.6.6,
+          # the exact parity baseline, with hashes for every wheel/sdist.
+          pip install --require-hashes -r requirements.lock
       - name: Fetch cobaya bao_data checkout
         # backend/packages/ is gitignored (backend/.gitignore), so CI must
         # download the released BAO data files that the real cobaya
@@ -188,6 +199,7 @@ jobs:
           test -f packages/data/bao_data/sdss_DR16_LYAUTO_BAO_DMDHgrid.txt
           test -f packages/data/bao_data/sdss_DR16_LYxQSO_BAO_DMDHgrid.txt
           test -f packages/data/bao_data/sdss_DR12Consensus_bao.dat
+          sha256sum -c scripts/cobaya/bao_data.sha256
       - name: Run cobaya parity tests
         run: |
           cd backend

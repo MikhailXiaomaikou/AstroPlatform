@@ -8,6 +8,7 @@ import CommandPalette from "./components/CommandPalette";
 import OnboardingOverlay from "./components/OnboardingOverlay";
 import HelpDrawer from "./components/HelpDrawer";
 import LandingPage from "./pages/Landing/LandingPage";
+import { BOT_CONSOLE_ENABLED } from "./routes";
 import "./App.css";
 // Journal edition overrides — MUST come after App.css so it wins the cascade.
 import "./styles/journal.css";
@@ -60,6 +61,7 @@ const SharedSessionPage = lazy(() => import("./pages/SharedSession/SharedSession
 const ObservationsPage = lazy(() => import("./pages/Observations/ObservationsPage"));
 const AccountPage = lazy(() => import("./pages/Account/AccountPage"));
 const PapersPage = lazy(() => import("./pages/Papers/PapersPage"));
+const BotPage = lazy(() => import("./pages/Bot/BotPage"));
 
 function useTheme() {
   // Journal edition: default to light. We use a new key (astro_theme_v2) so
@@ -149,6 +151,9 @@ function NavBar() {
         >
           <NavLink to="/"          end onClick={() => setMenuOpen(false)}>{t("nav.home")}</NavLink>
           <NavLink to="/chat"          onClick={() => setMenuOpen(false)}>{t("nav.ai_assistant")}</NavLink>
+          {BOT_CONSOLE_ENABLED && (
+            <NavLink to="/bot" onClick={() => setMenuOpen(false)}>{t("nav.research_bot")}</NavLink>
+          )}
           {/* M3 (2026-05-18): /search /adql /pipeline /workspace removed
               as dead-page deletion.  Their cosmology-focus NavLink was
               already hidden via cosmoFocus check since Action 6. */}
@@ -378,6 +383,7 @@ function App() {
                 <Route path="/team" element={<TeamPage />} />
                 <Route path="/help" element={<HelpPage />} />
                 <Route path="/chat" element={<ChatPage />} />
+                <Route path="/bot" element={<BotPage />} />
                 <Route path="/account" element={<AccountPage />} />
                 <Route path="/papers" element={<PapersPage />} />
                 <Route path="/papers/public/:token" element={<PapersPage />} />

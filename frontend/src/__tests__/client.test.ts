@@ -82,6 +82,42 @@ describe("API client configuration", () => {
   });
 });
 
+describe("Linked research Bot API helpers", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("uses only the stable automation endpoints", async () => {
+    const {
+      default: api,
+      chatWithAutomationBot,
+      getAutomationResearchReport,
+      getAutomationResearchStatus,
+      triggerAutomationResearch,
+    } = await import("../api/client");
+    const postSpy = vi.spyOn(api, "post")
+      .mockResolvedValueOnce({ data: { reply: "answer", model: "gpt-5.6-sol" } })
+      .mockResolvedValueOnce({ data: { submitted: true, status: "pending" } });
+    const getSpy = vi.spyOn(api, "get")
+      .mockResolvedValueOnce({ data: { week_id: "2026-W28", status: "pending" } })
+      .mockResolvedValueOnce({ data: { week_id: "2026-W28", markdown: "report" } });
+    const messages = [{ role: "user" as const, content: "hello" }];
+
+    await chatWithAutomationBot(messages);
+    await getAutomationResearchStatus();
+    await getAutomationResearchReport();
+    await triggerAutomationResearch();
+
+    expect(postSpy).toHaveBeenNthCalledWith(1, "/api/automation/bot/chat", { messages });
+    expect(getSpy).toHaveBeenNthCalledWith(1, "/api/automation/research/status");
+    expect(getSpy).toHaveBeenNthCalledWith(2, "/api/automation/research/report");
+    expect(postSpy).toHaveBeenNthCalledWith(2, "/api/automation/research/trigger");
+
+    postSpy.mockRestore();
+    getSpy.mockRestore();
+  });
+});
+
 describe("Auth helper functions", () => {
   beforeEach(() => {
     localStorageMock.clear();
@@ -91,6 +127,20 @@ describe("Auth helper functions", () => {
       /* ignore */
     }
     vi.clearAllMocks();
+  });
+
+  it("purges legacy browser API keys instead of persisting new clear-text keys", async () => {
+    store["astro_api_keys"] = "legacy-local-secret";
+    store["astro_api_keys_persist"] = "1";
+    sessionStorage.setItem("astro_api_keys", "legacy-session-secret");
+    const { getStoredApiKeys, writeStoredApiKeys } = await import("../api/client");
+
+    writeStoredApiKeys({ anthropic: "sk-ant-new-secret" });
+
+    expect(getStoredApiKeys()).toEqual({});
+    expect(sessionStorage.getItem("astro_api_keys")).toBeNull();
+    expect(store["astro_api_keys"]).toBeUndefined();
+    expect(store["astro_api_keys_persist"]).toBeUndefined();
   });
 
   it("isAuthenticated returns false when no token", async () => {
@@ -360,6 +410,7 @@ describe("Auth helper functions", () => {
     const requestBody = JSON.parse(String(mockFetch.mock.calls[0][1]?.body || "{}"));
     expect(requestBody.context.api_provider).toBe("openai");
     expect(requestBody.context.model_profile).toBe("openai:gpt-5.5");
+    expect(requestBody.context.api_keys).toBeUndefined();
 
     vi.unstubAllGlobals();
   });

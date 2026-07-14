@@ -24,6 +24,7 @@ def test_iid_chains_are_convergence_ready_but_never_standalone_publication_ready
     assert result["chain_diagnostics"]["thresholds"]["ess_method"] == "bulk"
     assert "missing_likelihood_provenance" in result["publication_reasons"]
     assert result["scientific_claim_scope"] == "diagnostics_only"
+    assert result["__do_not_claim__"] is True
 
 
 def test_evaluate_chain_diagnostics_marks_single_chain_partial():
@@ -38,7 +39,22 @@ def test_evaluate_chain_diagnostics_marks_single_chain_partial():
     assert result["convergence_ready"] is False
     assert result["__tool_status__"] == "PARTIAL"
     assert result["parameters"]["H0"]["rhat"] is None
-    assert result["__do_not_claim__"]
+    assert result["__do_not_claim__"] is True
+
+
+def test_nonconverged_chain_numbers_cannot_be_laundered_into_claims():
+    from app.services.chain_diagnostics import evaluate_chain_diagnostics
+    from app.services.claim_validator import validate_claims
+
+    result = evaluate_chain_diagnostics(
+        chains={"H0": [70.0 + 0.01 * i for i in range(100)]},
+    )
+    validation = validate_claims(
+        "H0 = 70.495 and ESS = 0.",
+        [{"tool": "evaluate_chain_diagnostics", "result": result}],
+    )
+
+    assert validation.ok is False
 
 
 def test_ai_tool_wrapper_evaluates_chain_diagnostics():

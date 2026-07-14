@@ -16,6 +16,8 @@ from app.services.cmb_rotation_likelihoods import (
     run_cmb_rotation_likelihood,
 )
 from app.services.cosmology_likelihoods import (
+    _is_executable_des_sn_entry,
+    _is_executable_sn_entry,
     build_likelihood_config,
     compute_model_comparison,
     get_cosmology_dataset,
@@ -42,6 +44,34 @@ COSMOLOGY_PROBE_DATASETS: dict[str, list[str]] = {
     "hz": ["cosmic_chronometers"],
     "rsd": ["eboss_dr16_rsd"],
 }
+
+
+# These tools validate or render evidence; they do not create observations or
+# scientific estimates.  Keep them visible in audit trails, but never let a
+# successful validator/rendering result recursively become the evidence that a
+# later evidence graph or fact check relies on.
+_SCIENTIFIC_EVIDENCE_META_TOOLS: frozenset[str] = frozenset(
+    {
+        "build_evidence_graph",
+        "verify_research_facts",
+        "export_research_report",
+    }
+)
+
+_CONTEXT_ONLY_COMPRESSED_ROLES: frozenset[str] = frozenset(
+    {"published_posterior_summary", "proposal_only"}
+)
+_EXECUTABLE_COMPRESSED_ROLES: frozenset[str] = frozenset(
+    {"external_prior", "likelihood_approximation"}
+)
+
+
+def _tool_name_from_entry(item: dict[str, Any]) -> str:
+    return str(item.get("tool") or item.get("name") or "")
+
+
+def _is_scientific_evidence_meta_tool(item: dict[str, Any]) -> bool:
+    return _tool_name_from_entry(item) in _SCIENTIFIC_EVIDENCE_META_TOOLS
 
 
 def plan_research_program(
@@ -196,11 +226,12 @@ def run_research_matrix(
         return {
             "success": True,
             "__tool_status__": "PARTIAL",
-            "analysis_status": "RESEARCH_MATRIX_PARTIAL",
-            "publication_ready": bool(run.get("publication_ready")),
-            "claim_scope": "cmb_rotation_compressed_preliminary"
-            if run.get("publication_ready") is True
-            else "research_matrix_scope_gap",
+            "analysis_status": "RESEARCH_MATRIX_DIAGNOSTIC",
+            # A matrix aggregate is never itself a scientific result.  A
+            # publication-ready child must be quoted from its direct signed
+            # result, not through this mixed container.
+            "publication_ready": False,
+            "claim_scope": "research_matrix_scope_gap",
             "research_plan": plan,
             "partial_pass_readiness": plan.get("partial_pass_readiness"),
             "capability_gap_matrix": plan.get("capability_gap_matrix"),
@@ -212,7 +243,7 @@ def run_research_matrix(
             "failure_categories": []
             if run.get("publication_ready") is True
             else ["runner missing", "wrong routing"],
-            "__do_not_claim__": True if run.get("publication_ready") is not True else False,
+            "__do_not_claim__": True,
             "__message_to_model__": (
                 "Summarize only the CMB rotation result. Do not report BAO/SN/H0 posterior numbers "
                 "for this CMB polarization-rotation request. If publication_ready=false, state the "
@@ -335,7 +366,18 @@ def run_research_matrix(
                 })
                 continue
             non_executable = _non_executable_dataset_keys(cell_datasets)
-            if non_executable:
+            context_only = [
+                key
+                for key in non_executable
+                if _dataset_plan_status(get_cosmology_dataset(key).to_dict()).get(
+                    "execution_level"
+                )
+                == "context_only"
+            ]
+            hard_non_executable = [
+                key for key in non_executable if key not in context_only
+            ]
+            if hard_non_executable:
                 cells.append({
                     "label": label,
                     "model": model,
@@ -344,9 +386,26 @@ def run_research_matrix(
                     "runnable": False,
                     "execution_level": "config_only",
                     "config_hash": config.get("config_hash"),
-                    "non_executable_dataset_keys": non_executable,
+                    "non_executable_dataset_keys": hard_non_executable,
                     "warnings": [
                         "This research cell was not numerically run because it includes config-only or external-only datasets.",
+                    ],
+                })
+                continue
+            if context_only and len(context_only) == len(cell_datasets):
+                cells.append({
+                    "label": label,
+                    "model": model,
+                    "dataset_keys": cell_datasets,
+                    "publication_ready": False,
+                    "runnable": False,
+                    "execution_level": "context_only",
+                    "config_hash": config.get("config_hash"),
+                    "non_executable_dataset_keys": context_only,
+                    "warnings": [
+                        "This cell contains only published posterior/proposal "
+                        "records. They remain literature context and were not "
+                        "evaluated as likelihoods."
                     ],
                 })
                 continue
@@ -474,10 +533,18 @@ def run_research_matrix(
             model_comparisons.append(comparison)
     return {
         "success": True,
-        "__tool_status__": "COMPLETED" if ready else "PARTIAL",
-        "analysis_status": "RESEARCH_MATRIX_READY" if ready else "RESEARCH_MATRIX_PARTIAL",
-        "publication_ready": bool(ready),
-        "claim_scope": "research_matrix_compressed_preliminary",
+        "__tool_status__": "PARTIAL",
+        "analysis_status": "RESEARCH_MATRIX_DIAGNOSTIC",
+        # A matrix is a mixed diagnostic container, not one scientific result.
+        # Even if individual cells someday pass, quote them only from a direct
+        # result call; otherwise non-ready sibling cells can launder numbers.
+        "publication_ready": False,
+        "__do_not_claim__": True,
+        "do_not_claim_reasons": [
+            "Research-matrix aggregates may contain exploratory, partial, or "
+            "context-only cells; use a direct publication-ready result instead."
+        ],
+        "claim_scope": "research_matrix_diagnostic",
         "research_plan": plan,
         "partial_pass_readiness": plan.get("partial_pass_readiness"),
         "capability_gap_matrix": plan.get("capability_gap_matrix"),
@@ -487,7 +554,9 @@ def run_research_matrix(
         "matrix_size": len(cells),
         "ready_cells": len(ready),
         "warnings": [
-            "Research matrix uses executable compressed-likelihood cells where available; config-only cells are not numerical evidence.",
+            "Research matrix is diagnostic only. It runs released likelihood "
+            "paths and role-approved priors/approximations; context/config-only "
+            "cells are not numerical evidence.",
             *(
                 [
                     "Some model comparisons carry comparison_valid=false (a representation "
@@ -536,8 +605,9 @@ def run_research_matrix(
             "UI/process failure",
         ],
         "__message_to_model__": (
-            "Summarize only publication_ready cells as compressed-likelihood preliminary. "
-            "For other cells, describe the missing runner/config gap."
+            "Do not quote posterior or model-comparison numbers from this aggregate. "
+            "Use a direct result whose own publication_ready=true; otherwise describe "
+            "the cell's likelihood/context/config gap."
             + (
                 " Model comparisons: quote a model-preference verdict (preferred, "
                 "delta_aic, delta_bic) ONLY from entries with comparison_valid=true, "
@@ -575,6 +645,8 @@ def _cell_status_for_chart(cell: dict[str, Any]) -> str:
         return "not_ready"
     if level == "config_only":
         return "config_only"
+    if level == "context_only":
+        return "context_only"
     return "missing"
 
 
@@ -630,24 +702,25 @@ def _research_matrix_charts(cells: list[dict[str, Any]]) -> dict[str, Any]:
 
         result = cell.get("result") if isinstance(cell.get("result"), dict) else {}
         if isinstance(result, dict):
-            params = _posterior_source(result)
-            for param in preferred_params:
-                summary = params.get(param)
-                if not isinstance(summary, dict):
-                    continue
-                median = _as_float(summary.get("median"))
-                if median is None:
-                    continue
-                low, high = _summary_bounds(summary)
-                posterior_forest.append({
-                    "label": label,
-                    "parameter": "omegam" if param == "Omega_m" else param,
-                    "median": median,
-                    "low": low,
-                    "high": high,
-                    "publication_ready": bool(cell.get("publication_ready")),
-                    "execution_level": cell.get("execution_level") or "not_available",
-                })
+            if cell.get("publication_ready") is True:
+                params = _posterior_source(result)
+                for param in preferred_params:
+                    summary = params.get(param)
+                    if not isinstance(summary, dict):
+                        continue
+                    median = _as_float(summary.get("median"))
+                    if median is None:
+                        continue
+                    low, high = _summary_bounds(summary)
+                    posterior_forest.append({
+                        "label": label,
+                        "parameter": "omegam" if param == "Omega_m" else param,
+                        "median": median,
+                        "low": low,
+                        "high": high,
+                        "publication_ready": True,
+                        "execution_level": cell.get("execution_level") or "not_available",
+                    })
 
             chain = result.get("chain_diagnostics")
             if isinstance(chain, dict):
@@ -672,7 +745,8 @@ def _research_matrix_charts(cells: list[dict[str, Any]]) -> dict[str, Any]:
         "diagnostics": diagnostics[:24],
         "notes": [
             "Charts are deterministic renderings of current-turn Research Matrix cells.",
-            "They are visual diagnostics only; claimability still follows publication_ready and Fact Check.",
+            "Posterior forests include only publication-ready cells; non-ready "
+            "cells expose status/diagnostics but no parameter estimates.",
         ],
     }
 
@@ -693,15 +767,23 @@ def build_evidence_graph(
     for idx, item in enumerate(tool_results):
         tool = str(item.get("tool") or item.get("name") or f"tool_{idx}")
         result = item.get("result") if isinstance(item.get("result"), dict) else item
+        is_meta_tool = _is_scientific_evidence_meta_tool(item)
         tool_id = f"tool_run:{idx}:{tool}"
         nodes.append({
             "id": tool_id,
             "type": "tool_run",
             "tool": tool,
-            "publication_ready": bool(result.get("publication_ready")) if isinstance(result, dict) else False,
+            "publication_ready": (
+                bool(result.get("publication_ready"))
+                if isinstance(result, dict) and not is_meta_tool
+                else False
+            ),
+            "scientific_evidence": not is_meta_tool,
             "analysis_status": result.get("analysis_status") if isinstance(result, dict) else None,
             "input_hash": _stable_hash(item.get("input") or item.get("tool_input") or {}),
         })
+        if is_meta_tool:
+            continue
         if isinstance(result, dict):
             result_id = f"result:{idx}:{tool}"
             if result.get("publication_ready") is True:
@@ -717,7 +799,10 @@ def build_evidence_graph(
                 })
                 edges.append({"from": result_id, "to": tool_id, "kind": "produced_by"})
             for dataset in _datasets_from_result(result):
-                ds_id = f"dataset:{dataset.get('key') or dataset.get('display_name')}"
+                dataset_identity = dataset.get("key") or dataset.get("display_name")
+                if not dataset_identity:
+                    continue
+                ds_id = f"dataset:{dataset_identity}"
                 if not any(node["id"] == ds_id for node in nodes):
                     nodes.append({
                         "id": ds_id,
@@ -729,7 +814,12 @@ def build_evidence_graph(
                         "citations": dataset.get("citations", []),
                     })
                 edges.append({"from": tool_id, "to": ds_id, "kind": "uses_dataset"})
-            if result.get("publication_ready") is True:
+            supporting_dataset_ids = list(dict.fromkeys(
+                f"dataset:{dataset.get('key') or dataset.get('display_name')}"
+                for dataset in _supporting_datasets_from_result(result)
+                if dataset.get("key") or dataset.get("display_name")
+            ))
+            if result.get("publication_ready") is True and supporting_dataset_ids:
                 for param in _claimable_parameters_from_result(result):
                     claim_id = f"claim:{param}:{len(supported_claims)}"
                     claimable_params.add(param)
@@ -739,7 +829,12 @@ def build_evidence_graph(
                         "supporting_tool_run": tool_id,
                         "supporting_result": result_id,
                         "scope": result.get("claim_scope"),
-                        "evidence_path": [claim_id, result_id, tool_id],
+                        "evidence_path": [
+                            claim_id,
+                            result_id,
+                            tool_id,
+                            *supporting_dataset_ids,
+                        ],
                     })
                     nodes.append({"id": claim_id, "type": "claim", "parameter": param})
                     edges.append({"from": claim_id, "to": result_id, "kind": "supported_by"})
@@ -756,14 +851,19 @@ def build_evidence_graph(
         "unsupported_claims": unsupported_claims,
         "claimable_parameters": sorted(claimable_params),
     }
+    graph_has_support_path = bool(supported_claims)
+    publication_ready = graph_has_support_path and not unsupported_claims
     return {
         "success": True,
-        "__tool_status__": "COMPLETED" if not unsupported_claims else "PARTIAL",
+        "__tool_status__": "COMPLETED" if publication_ready else "PARTIAL",
         "analysis_status": "EVIDENCE_GRAPH_READY",
-        "publication_ready": not unsupported_claims,
+        "publication_ready": publication_ready,
+        "__do_not_claim__": not publication_ready,
         "evidence_graph": graph,
         "claimable_parameters": sorted(claimable_params),
         "unsupported_claim_count": len(unsupported_claims),
+        "supported_claim_count": len(supported_claims),
+        "has_support_path": graph_has_support_path,
         "__message_to_model__": (
             "Use supported_claims only. Unsupported claims must be removed or replaced with a scope-gap statement."
         ),
@@ -1236,11 +1336,11 @@ def _paper_draft_from_report_parts(
         "## 3. Methods",
         (
             "The analysis follows the generated ResearchPlan. Each requested "
-            "dataset combination is classified as runnable, config-only, or not "
-            "available. Runnable compressed Gaussian likelihood cells are executed "
-            "with recorded random seeds and diagnostics; config-only datasets are "
-            "listed as scope gaps and are not used to support posterior, tension, "
-            "or model-selection claims."
+            "dataset combination is classified as executable, literature-context, "
+            "config-only, or unavailable. Only released likelihood paths and "
+            "role-approved priors/approximations are executed with recorded seeds "
+            "and diagnostics; published posterior summaries remain context and are "
+            "not used to support posterior, tension, or model-selection claims."
         ),
         "",
         "### Experiment Matrix",
@@ -1869,9 +1969,40 @@ def _has_dedicated_model_gap(prompt: str) -> bool:
 
 def _dataset_plan_status(entry: dict[str, Any]) -> dict[str, Any]:
     mode = str(entry.get("execution_mode") or "config_only")
-    has_compressed = bool(entry.get("compressed_likelihood")) or entry.get("key") == "desi_dr1_bao"
-    level = "compressed_preliminary" if mode == "compressed_gaussian" or has_compressed else "config_only"
-    if mode in {"external_cobaya", "external_cosmosis"} and not has_compressed:
+    spec = entry.get("compressed_likelihood")
+    statistical_role = (
+        str(spec.get("statistical_role") or "published_posterior_summary")
+        if isinstance(spec, dict)
+        else None
+    )
+    context_only_record = statistical_role in _CONTEXT_ONLY_COMPRESSED_ROLES
+    separate_numerical_path = _context_record_has_separate_numerical_path(entry)
+    has_executable_compressed_factor = statistical_role in _EXECUTABLE_COMPRESSED_ROLES
+    has_compressed = bool(spec) or entry.get("key") == "desi_dr1_bao"
+    level = (
+        "compressed_preliminary"
+        if (
+            (mode == "compressed_gaussian" and not context_only_record)
+            or has_executable_compressed_factor
+            or separate_numerical_path
+            or entry.get("key") == "desi_dr1_bao"
+        )
+        else "context_only"
+        if context_only_record
+        else "config_only"
+    )
+    if (
+        mode in {"external_cobaya", "external_cosmosis"}
+        and not has_executable_compressed_factor
+        and not separate_numerical_path
+    ):
+        level = "context_only" if context_only_record else "config_only"
+    literature_context_parameters = (
+        [str(param) for param in spec.get("parameters") or []]
+        if isinstance(spec, dict) and context_only_record
+        else []
+    )
+    if not has_compressed and mode in {"external_cobaya", "external_cosmosis"}:
         level = "config_only"
     return {
         "key": entry.get("key"),
@@ -1879,16 +2010,65 @@ def _dataset_plan_status(entry: dict[str, Any]) -> dict[str, Any]:
         "probe": entry.get("probe"),
         "execution_mode": mode,
         "execution_level": level,
+        "compressed_statistical_role": statistical_role,
+        "compressed_record_scope": (
+            "literature_context" if context_only_record else "numerical_factor"
+            if statistical_role is not None else None
+        ),
         "claimable_parameters": _claimable_params_for_entry(entry),
+        "literature_context_parameters": literature_context_parameters,
         "version": entry.get("version"),
         "citations": entry.get("citations", []),
     }
 
 
+def _context_record_has_separate_numerical_path(entry: dict[str, Any]) -> bool:
+    """Whether a context-only registry record has another executable target.
+
+    Planck's H0/Omega_m/sigma8/S8 rows are proposal/literature context, while
+    the same registry key executes a separately encoded CHW2019 distance-prior
+    likelihood.  Some SN entries likewise retain a literature posterior anchor
+    alongside a released full-vector path.  The context record itself never
+    becomes the numerical factor.
+    """
+
+    key = str(entry.get("key") or "")
+    if key == "planck2018_compressed":
+        return True
+    try:
+        registered = get_cosmology_dataset(key)
+    except Exception:
+        return False
+    return bool(
+        _is_executable_sn_entry(registered)
+        or _is_executable_des_sn_entry(registered)
+    )
+
+
 def _claimable_params_for_entry(entry: dict[str, Any]) -> list[str]:
-    if isinstance(entry.get("claimable_parameters"), list):
-        return [str(param) for param in entry.get("claimable_parameters") or []]
     spec = entry.get("compressed_likelihood")
+    statistical_role = (
+        str(spec.get("statistical_role") or "published_posterior_summary")
+        if isinstance(spec, dict)
+        else None
+    )
+    if statistical_role in _CONTEXT_ONLY_COMPRESSED_ROLES:
+        if not _context_record_has_separate_numerical_path(entry):
+            return []
+        key = str(entry.get("key") or "")
+        if key == "planck2018_compressed":
+            # These are the axes of the separately encoded CHW2019 distance
+            # prior.  The proposal-only sigma8/S8 rows are deliberately absent.
+            return ["H0", "omegam", "ombh2", "ns"]
+        explicit = entry.get("claimable_parameters")
+        if isinstance(explicit, (list, tuple)) and explicit:
+            return [str(param) for param in explicit]
+        # Released, offset-marginalized SN vectors constrain Omega_m (and the
+        # requested DE-shape axes at execution time), not the literature row as
+        # an independently multiplied Gaussian.
+        return ["omegam"]
+    if isinstance(entry.get("claimable_parameters"), (list, tuple)):
+        return [str(param) for param in entry.get("claimable_parameters") or []]
     if isinstance(spec, dict):
         return list(spec.get("parameters") or [])
     # Executable-without-compressed-likelihood probes (dedicated data-vector χ²
@@ -1923,7 +2103,10 @@ def _non_executable_dataset_keys(dataset_keys: list[str]) -> list[str]:
         except Exception:
             blocked.append(key)
             continue
-        if _dataset_plan_status(entry).get("execution_level") == "config_only":
+        if _dataset_plan_status(entry).get("execution_level") in {
+            "config_only",
+            "context_only",
+        }:
             blocked.append(key)
     return blocked
 
@@ -1931,7 +2114,14 @@ def _non_executable_dataset_keys(dataset_keys: list[str]) -> list[str]:
 def _blocking_gaps(dataset_status: list[dict[str, Any]], models: list[str]) -> list[str]:
     gaps: list[str] = []
     for entry in dataset_status:
-        if entry.get("execution_level") == "config_only":
+        if entry.get("execution_level") == "context_only":
+            gaps.append(
+                f"{entry.get('display_name') or entry.get('key')} exposes only a "
+                "published posterior/proposal summary as literature context; "
+                "it requires a released likelihood/data-vector runner before "
+                "new posterior or joint-likelihood claims."
+            )
+        elif entry.get("execution_level") == "config_only":
             gaps.append(f"{entry.get('display_name') or entry.get('key')} requires external Cobaya/CosmoSIS or a future runner before posterior claims.")
     non_runnable = sorted({
         model for model in models
@@ -2004,10 +2194,17 @@ def _capability_gap_matrix(
     rows: list[dict[str, Any]] = []
     for entry in dataset_status:
         level = str(entry.get("execution_level") or "config_only")
+        row_status = (
+            "available"
+            if level == "compressed_preliminary"
+            else "literature_context"
+            if level == "context_only"
+            else "config_only"
+        )
         rows.append({
             "component": f"dataset:{entry.get('key')}",
             "category": "dataset",
-            "status": "available" if level == "compressed_preliminary" else "config_only",
+            "status": row_status,
             "details": (
                 f"{entry.get('display_name') or entry.get('key')} "
                 f"({entry.get('execution_mode') or 'unknown mode'})"
@@ -2015,6 +2212,8 @@ def _capability_gap_matrix(
             "claim_support": (
                 "can support compressed-preliminary claims"
                 if level == "compressed_preliminary"
+                else "published literature context only; cannot support a new posterior or joint likelihood"
+                if level == "context_only"
                 else "metadata/config only; cannot support posterior claims"
             ),
         })
@@ -2174,7 +2373,13 @@ def _partial_pass_readiness(
     domain_gap_rows = [
         row
         for row in capability_gap_matrix
-        if str(row.get("status")) in {"missing", "registered_config_only", "config_only", "partial"}
+        if str(row.get("status")) in {
+            "missing",
+            "registered_config_only",
+            "config_only",
+            "literature_context",
+            "partial",
+        }
     ]
     has_domain_gap_map = bool(domain_gap_rows and blocking_gaps)
     has_experiment_matrix = bool(matrix)
@@ -2227,7 +2432,11 @@ def _overall_executable_level(dataset_status: list[dict[str, Any]]) -> str:
     levels = {str(item.get("execution_level")) for item in dataset_status}
     if levels == {"compressed_preliminary"}:
         return "compressed_preliminary"
+    if levels == {"context_only"}:
+        return "context_only"
     if "compressed_preliminary" in levels:
+        return "mixed"
+    if "context_only" in levels and len(levels) > 1:
         return "mixed"
     return "config_only"
 
@@ -2246,6 +2455,28 @@ def _datasets_from_result(result: dict[str, Any]) -> list[dict[str, Any]]:
         for cell in matrix:
             if isinstance(cell, dict) and isinstance(cell.get("result"), dict):
                 datasets.extend(_datasets_from_result(cell["result"]))
+    return datasets
+
+
+def _supporting_datasets_from_result(
+    result: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Return only datasets that participated in a claimable computation."""
+
+    datasets: list[dict[str, Any]] = []
+    for key in ("datasets_used", "datasets"):
+        value = result.get(key)
+        if isinstance(value, list):
+            datasets.extend(item for item in value if isinstance(item, dict))
+    matrix = result.get("matrix")
+    if isinstance(matrix, list):
+        for cell in matrix:
+            if (
+                isinstance(cell, dict)
+                and cell.get("publication_ready") is True
+                and isinstance(cell.get("result"), dict)
+            ):
+                datasets.extend(_supporting_datasets_from_result(cell["result"]))
     return datasets
 
 
@@ -2517,6 +2748,8 @@ def _numeric_support_from_tool_results(tool_results: list[dict[str, Any]]) -> di
     for idx, item in enumerate(tool_results):
         if not isinstance(item, dict):
             continue
+        if _is_scientific_evidence_meta_tool(item):
+            continue
         result = item.get("result") if isinstance(item.get("result"), dict) else item
         if not isinstance(result, dict):
             continue
@@ -2729,6 +2962,8 @@ def _tool_payload_text(tool_results: list[dict[str, Any]]) -> str:
     for item in tool_results or []:
         if not isinstance(item, dict):
             continue
+        if _is_scientific_evidence_meta_tool(item):
+            continue
         result = item.get("result") if isinstance(item.get("result"), dict) else None
         if result is None:
             result = {k: v for k, v in item.items() if k != "input"}
@@ -2755,6 +2990,8 @@ def _dataset_index_from_tool_results(tool_results: list[dict[str, Any]]) -> dict
     for item in tool_results:
         if not isinstance(item, dict):
             continue
+        if _is_scientific_evidence_meta_tool(item):
+            continue
         result = item.get("result") if isinstance(item.get("result"), dict) else item
         if not isinstance(result, dict):
             continue
@@ -2769,6 +3006,8 @@ def _publication_ready_tool_ids(tool_results: list[dict[str, Any]]) -> set[str]:
     ids: set[str] = set()
     for idx, item in enumerate(tool_results):
         if not isinstance(item, dict):
+            continue
+        if _is_scientific_evidence_meta_tool(item):
             continue
         result = item.get("result") if isinstance(item.get("result"), dict) else item
         if isinstance(result, dict) and result.get("publication_ready") is True and result.get("__do_not_claim__") is not True:

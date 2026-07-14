@@ -2,6 +2,11 @@
 
 import os
 from pathlib import Path
+import uuid
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 os.environ["RATE_LIMIT_ENABLED"] = "false"
 # Tests intentionally exercise the legacy local executor.  Runtime defaults
@@ -18,16 +23,12 @@ os.environ.setdefault("SANDBOX_BACKEND", "inprocess")
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 (_REPO_ROOT / "data").mkdir(parents=True, exist_ok=True)
 
-import uuid
-
-import pytest
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
-from app.models.database import Base, get_db
-from app.auth import create_access_token, hash_password
-from app.models.schemas import User
-from app.utils.usernames import username_from_email
+# Application imports intentionally follow the test-only environment and data
+# directory setup above because both are consumed during module import.
+from app.models.database import Base, get_db  # noqa: E402
+from app.auth import create_access_token, hash_password  # noqa: E402
+from app.models.schemas import User  # noqa: E402
+from app.utils.usernames import username_from_email  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

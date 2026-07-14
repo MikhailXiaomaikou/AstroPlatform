@@ -49,7 +49,7 @@ def test_numeric_claim_corpus_case(case: dict) -> None:
 
     if actual_ok != expect_ok:
         uncited_repr = ", ".join(
-            f"{c.kind}={c.value!r}" for c in (result.uncited or [])
+            f"{c.label}={c.value!r}" for c in (result.uncited or [])
         )
         universe_repr = ", ".join(str(v) for v in (result.universe_sample or [])[:10])
         pytest.fail(

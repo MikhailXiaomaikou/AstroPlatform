@@ -1,11 +1,13 @@
 """Controlled nested-sampling runner.
 
-This module intentionally accepts only typed Gaussian likelihood summaries.
+This module intentionally accepts only typed Gaussian records.
 It does not execute user-provided Python, Cobaya YAML, or arbitrary
 likelihood code.  The paper-to-tool mining loop repeatedly surfaced nested
 sampling / evidence comparison as a missing research primitive, so this is
 the small safe kernel the platform can expose before full external
-likelihood adapters are ready.
+likelihood adapters are ready.  Registered posterior summaries remain
+context-only: numerical equality with a registry row does not turn a posterior
+into a likelihood or make its Bayesian evidence meaningful.
 """
 
 from __future__ import annotations
@@ -23,6 +25,9 @@ MAX_DIMENSIONS = 8
 MIN_NLIVE_FOR_PUBLICATION_READY = 50
 MIN_ESS_FOR_PUBLICATION_READY = 80.0
 MAX_LOGZERR_FOR_PUBLICATION_READY = 0.75
+_EXECUTABLE_STATISTICAL_ROLES = frozenset(
+    {"external_prior", "likelihood_approximation"}
+)
 
 
 @dataclass(frozen=True)
@@ -42,6 +47,7 @@ class GaussianLikelihoodSpec:
     source_url: str | None = None
     source_machine_verified: bool = False
     source_verification: str = "caller_supplied_unverified"
+    statistical_role: str | None = None
     declared_citation: str | None = None
     declared_source_url: str | None = None
 
@@ -79,6 +85,41 @@ def run_controlled_nested_sampler(
         _validate_likelihoods(parameter_specs, likelihood_specs)
     except ValueError as exc:
         return _failed(str(exc), "invalid_nested_sampler_input")
+
+    context_only = [
+        spec
+        for spec in likelihood_specs
+        if spec.statistical_role in {
+            "published_posterior_summary",
+            "proposal_only",
+        }
+    ]
+    if context_only:
+        labels = [spec.dataset_key or spec.label for spec in context_only]
+        return {
+            "success": True,
+            "__tool_status__": "BLOCKED",
+            "analysis_status": "CONTEXT_ONLY_INPUT",
+            "publication_ready": False,
+            "claim_scope": "registered_gaussian_context_only",
+            "likelihoods_used": [],
+            "likelihoods_not_run": [
+                _likelihood_to_dict(spec) for spec in context_only
+            ],
+            "warnings": [
+                "Published posterior summaries and proposal-only Gaussian rows "
+                "cannot be evaluated as likelihoods or Bayesian evidence."
+            ],
+            "__do_not_claim__": True,
+            "do_not_claim_reasons": [
+                "Context-only registry rows were rejected before dynesty execution."
+            ],
+            "__message_to_model__": (
+                "Nested sampling was not run for context-only dataset record(s): "
+                + ", ".join(labels)
+                + ". Do not quote posterior, logZ, or Bayes factors from this call."
+            ),
+        }
 
     config = dict(sampler_config or {})
     seed = int(random_seed if random_seed is not None else config.get("random_seed", 20260507))
@@ -178,25 +219,34 @@ def run_controlled_nested_sampler(
     source_machine_verified = all(
         spec.source_machine_verified for spec in likelihood_specs
     )
-    publication_ready = numerical_quality_ready and source_machine_verified
+    scientific_input_eligible = all(
+        spec.source_machine_verified
+        and spec.statistical_role in _EXECUTABLE_STATISTICAL_ROLES
+        for spec in likelihood_specs
+    )
+    # This kernel evaluates caller-shaped Gaussian approximations and does not
+    # bind a complete data likelihood, model-adequacy manifest, simulation
+    # recovery, or independent reproduction.  Good dynesty diagnostics and an
+    # exact registry match therefore establish a reproducible diagnostic only,
+    # never publication readiness or a citable Bayes factor.
+    publication_ready = False
     if ess < MIN_ESS_FOR_PUBLICATION_READY:
         warnings.append(f"posterior ESS={ess:.1f} is below threshold {MIN_ESS_FOR_PUBLICATION_READY}.")
     if logzerr > MAX_LOGZERR_FOR_PUBLICATION_READY:
         warnings.append(f"logZ error={logzerr:.3f} exceeds threshold {MAX_LOGZERR_FOR_PUBLICATION_READY}.")
-    if not source_machine_verified:
+    if not scientific_input_eligible:
         warnings.append(
-            "At least one Gaussian likelihood is caller-supplied and was not an "
-            "exact machine-verified match to a registered dataset; convergence "
-            "alone cannot make its posterior or evidence citeable."
+            "At least one Gaussian record is caller-supplied, context-only, or "
+            "not an exact machine-verified match to an executable registered "
+            "likelihood/prior; it cannot support posterior or evidence claims."
         )
-
-    status = (
-        "NESTED_SAMPLER_READY"
-        if publication_ready
-        else "NESTED_SAMPLER_DIAGNOSTIC"
-        if numerical_quality_ready
-        else "PARTIAL"
+    warnings.append(
+        "Controlled Gaussian nested sampling has no full-likelihood and "
+        "model-adequacy attestation; logZ and posterior summaries are diagnostic "
+        "only even when numerical stopping criteria pass."
     )
+
+    status = "NESTED_SAMPLER_DIAGNOSTIC" if numerical_quality_ready else "PARTIAL"
     return {
         "success": True,
         "__tool_status__": "COMPLETED" if publication_ready else "PARTIAL",
@@ -212,7 +262,7 @@ def run_controlled_nested_sampler(
             "information": round(float(results.information[-1]), 6),
         },
         "chain_diagnostics": {
-            "overall_status": "nested_sampling" if publication_ready else "not_publication_ready",
+            "overall_status": "not_publication_ready",
             "publication_ready": publication_ready,
             "nlive": int(nlive),
             "niter": int(results.niter),
@@ -221,6 +271,7 @@ def run_controlled_nested_sampler(
             "posterior_ess": round(ess, 3),
             "n_equal_weight_samples": int(equal_samples.shape[0]),
             "numerical_quality_ready": numerical_quality_ready,
+            "scientific_input_eligible": scientific_input_eligible,
             "stopping_criterion_met": stopping_criterion_met,
             "requested_dlogz": dlogz,
             "maxiter": maxiter,
@@ -237,10 +288,10 @@ def run_controlled_nested_sampler(
         "package_versions": {"dynesty": _package_version("dynesty")},
         "warnings": warnings,
         "__message_to_model__": (
-            "This is a controlled Gaussian nested-sampling result. Quote posterior "
-            "or evidence values only when publication_ready=true. Caller-supplied "
-            "Gaussian summaries that do not exactly match a registered dataset "
-            "remain diagnostic even when dynesty converges."
+            "This is a diagnostic controlled-Gaussian nested-sampling result. "
+            "Do not quote its posterior, logZ, or Bayes factors as research "
+            "conclusions; it has no full-likelihood/model-adequacy attestation, "
+            "and registered posterior summaries remain context-only."
         ),
         "provenance": {
             "nested_sampler": {
@@ -249,16 +300,17 @@ def run_controlled_nested_sampler(
                 "random_seed": seed,
                 "likelihood_count": len(likelihood_specs),
                 "source_machine_verified": source_machine_verified,
+                "scientific_input_eligible": scientific_input_eligible,
                 "stopping_criterion_met": stopping_criterion_met,
                 "publication_ready": publication_ready,
             }
         },
-        "__do_not_claim__": (
-            [] if publication_ready else [
-                "Do not quote posterior or evidence values as research results; "
-                "the Gaussian source or dynesty stopping criterion is not publication-ready."
-            ]
-        ),
+        "__do_not_claim__": True,
+        "do_not_claim_reasons": [
+            "Do not quote posterior or evidence values as research results; "
+            "this controlled Gaussian approximation has no publication-grade "
+            "likelihood and model-adequacy attestation."
+        ],
     }
 
 
@@ -358,6 +410,7 @@ def _verify_registered_likelihood(
                 spec,
                 source_verification="dataset_has_no_registered_gaussian",
             )
+        statistical_role = registered.statistical_role
         parameters_match = tuple(registered.parameters) == spec.parameters
         mean_match = np.array_equal(
             np.asarray(registered.mean, dtype=float),
@@ -370,18 +423,30 @@ def _verify_registered_likelihood(
         if not (parameters_match and mean_match and covariance_match):
             return replace(
                 spec,
+                statistical_role=statistical_role,
                 source_verification="registered_values_mismatch",
             )
         canonical_citation = "; ".join(
             citation.label for citation in entry.citations
         ) or None
         canonical_url = entry.source_url or entry.covariance.url
+        if statistical_role not in _EXECUTABLE_STATISTICAL_ROLES:
+            return replace(
+                spec,
+                citation=canonical_citation,
+                source_url=canonical_url,
+                statistical_role=statistical_role,
+                source_verification=(
+                    f"registered_{statistical_role}_is_context_only"
+                ),
+            )
         return replace(
             spec,
             citation=canonical_citation,
             source_url=canonical_url,
             source_machine_verified=True,
             source_verification="exact_registered_gaussian_match",
+            statistical_role=statistical_role,
         )
     except Exception:
         return replace(
@@ -493,6 +558,7 @@ def _likelihood_to_dict(spec: GaussianLikelihoodSpec) -> dict[str, Any]:
         "source_url": spec.source_url,
         "source_machine_verified": spec.source_machine_verified,
         "source_verification": spec.source_verification,
+        "statistical_role": spec.statistical_role,
     }
 
 

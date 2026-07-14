@@ -53,5 +53,5 @@ class TestHealthDetailedStorageProbe:
         )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["checks"]["storage"]["status"].startswith("error:")
+        assert body["checks"]["storage"]["status"] == "error"
         assert body["status"] == "degraded"

@@ -29,23 +29,21 @@ def get_rate_limit_key(request: Request) -> str:
                 return f"user:{user_id}"
         except Exception:
             pass
-    # Fallback to client IP, derived through the TRUSTED_PROXY_MODE trust
-    # chain (see get_client_ip). Behind Render's proxy, TRUSTED_PROXY_MODE=1
-    # (the ENV=production default) yields the real client instead of the
-    # proxy address, without honoring spoofable headers on direct hits.
+    # Fallback to client IP, derived through the explicit TRUSTED_PROXY_MODE
+    # trust chain (see get_client_ip). The default trusts only the socket peer.
     return f"ip:{get_client_ip(request) or 'unknown'}"
 
 
 def _parse_trusted_proxy_mode(raw: str) -> int | str:
-    """Normalize TRUSTED_PROXY_MODE to "none", "cloudflare", or a hop count.
+    """Normalize proxy mode to "none", "render", "cloudflare", or hops.
 
     Anything unrecognized fails closed to "none" (trust no headers).
     """
     value = (raw or "").strip().lower()
     if value in ("", "none", "0"):
         return "none"
-    if value == "cloudflare":
-        return "cloudflare"
+    if value in {"render", "cloudflare"}:
+        return value
     try:
         hops = int(value)
     except ValueError:
@@ -53,7 +51,7 @@ def _parse_trusted_proxy_mode(raw: str) -> int | str:
     if hops >= 1:
         return hops
     _quota_logger.warning(
-        "Invalid TRUSTED_PROXY_MODE %r; trusting only the socket peer", raw
+        "Invalid TRUSTED_PROXY_MODE; trusting only the socket peer"
     )
     return "none"
 
@@ -66,11 +64,12 @@ def get_client_ip(request: Request) -> str | None:
     (env TRUSTED_PROXY_MODE, documented in app/config.py):
 
     - "none": trust only the transport peer (request.client.host).
+    - "render": trust the first non-empty X-Forwarded-For entry. Render's
+      edge places the original client there; this mode must be an explicit
+      deployment choice after validating that the service is edge-only.
     - N >= 1 trusted reverse proxies: each trusted proxy appends the peer it
       accepted to X-Forwarded-For, so the last N entries are trusted and the
-      real client is the Nth from the right. Render is N=1 (its proxy appends
-      the connecting client as the final hop); the leftmost entries are
-      whatever the client chose to send and are never used.
+      real client is the Nth from the right.
     - "cloudflare": trust CF-Connecting-IP, which Cloudflare sets on every
       proxied request.
 
@@ -82,7 +81,15 @@ def get_client_ip(request: Request) -> str | None:
 
     mode = _parse_trusted_proxy_mode(settings.trusted_proxy_mode)
 
-    if mode == "cloudflare":
+    if mode == "render":
+        hops = [
+            part.strip()
+            for part in request.headers.get("X-Forwarded-For", "").split(",")
+            if part.strip()
+        ]
+        if hops:
+            return hops[0][:64]
+    elif mode == "cloudflare":
         value = request.headers.get("CF-Connecting-IP", "").strip()
         if value:
             return value[:64]
@@ -124,7 +131,13 @@ def _get_quota_redis():
 
 
 class DailyQuota:
-    """Per-user daily API quota tracking. Uses Redis when available, falls back to in-memory."""
+    """Daily API quota tracking for users or anonymous client buckets.
+
+    Redis is the durable, multi-process authority when it is available. Local
+    development may fall back to the in-process counters; hosted callers can
+    set ``require_durable`` so a Redis outage cannot silently disable a
+    platform-funded quota.
+    """
 
     TIER_LIMITS = {
         # "starter" is the default tier for new self-service signups
@@ -134,6 +147,7 @@ class DailyQuota:
         # app/api/chat.py:_enforce_starter_daily_quota, which exempts BYOK
         # calls. pipeline_runs / adql_queries spend no platform LLM money,
         # so they keep the solo allowances.
+        "anonymous": {"api_calls": 50},
         "starter": {"api_calls": 50, "pipeline_runs": 50, "adql_queries": 200},
         "solo": {"api_calls": 1000, "pipeline_runs": 50, "adql_queries": 200},
         "lab": {"api_calls": 5000, "pipeline_runs": 200, "adql_queries": 1000},
@@ -151,8 +165,21 @@ class DailyQuota:
     def _redis_key(self, user_id: str) -> str:
         return f"astro:quota:{user_id}:{self._today()}"
 
-    def check_and_increment(self, user_id: str, tier: str, resource: str) -> dict:
-        """Check quota and increment usage. Returns dict with allowed/remaining."""
+    def check_and_increment(
+        self,
+        user_id: str,
+        tier: str,
+        resource: str,
+        *,
+        require_durable: bool = False,
+    ) -> dict:
+        """Check quota and increment usage.
+
+        ``user_id`` is a quota subject, not necessarily a database user ID;
+        anonymous chat passes a namespaced client-IP bucket. When
+        ``require_durable`` is true, lack of a working Redis backend returns a
+        fail-closed verdict instead of using process-local memory.
+        """
         limits = self.TIER_LIMITS.get(tier, self.TIER_LIMITS["solo"])
         limit = limits.get(resource, 1000)
 
@@ -163,12 +190,36 @@ class DailyQuota:
                 key = self._redis_key(user_id)
                 current = int(r.hincrby(key, resource, 1))
                 r.expire(key, 86400)
-                r.close()
                 if current > limit:
                     return {"allowed": False, "current": current, "limit": limit, "resource": resource}
                 return {"allowed": True, "current": current, "limit": limit, "remaining": limit - current}
             except Exception as e:
+                if require_durable:
+                    _quota_logger.error(
+                        "Durable daily-quota backend unavailable; rejecting request"
+                    )
+                    return {
+                        "allowed": False,
+                        "backend_unavailable": True,
+                        "limit": limit,
+                        "resource": resource,
+                    }
                 _quota_logger.debug("Redis quota failed, using in-memory: %s", e)
+            finally:
+                try:
+                    r.close()
+                except Exception:
+                    pass
+        elif require_durable:
+            _quota_logger.error(
+                "Durable daily-quota backend is not configured; rejecting request"
+            )
+            return {
+                "allowed": False,
+                "backend_unavailable": True,
+                "limit": limit,
+                "resource": resource,
+            }
 
         # In-memory fallback
         today = self._today()

@@ -1537,9 +1537,9 @@ async def analyze_fits_spectrum(
             result["ai_summary"] = ai_result.get("summary", "")
             result["ai_narrative"] = ai_result.get("narrative", "")
             result["ai_next_steps"] = ai_result.get("next_steps", [])
-        except Exception as e:
-            logger.warning("AI interpretation failed: %s", e)
-            result["ai_error"] = str(e)
+        except Exception:
+            logger.warning("AI interpretation failed", exc_info=True)
+            result["ai_error"] = "AI interpretation is temporarily unavailable."
     else:
         result["ai_error"] = "No API key available for AI analysis. Set your Anthropic key in Settings."
 

@@ -11,6 +11,8 @@ app.services.ai_tools.
 """
 
 import asyncio
+import hashlib
+from copy import deepcopy
 from typing import Any
 
 from app.services.ai_tools import _session_cache_key, get_cached_results
@@ -83,6 +85,14 @@ TOOL_SCHEMAS = [
                     "description": "Pipeline DAG with nodes and edges arrays",
                 },
                 "input_data_id": {"type": "string", "description": "FITS file path to use as input"},
+                "random_seed": {
+                    "type": "integer",
+                    "description": (
+                        "Outer reproducibility seed. BayesianFit and TimeSeriesAnalysis "
+                        "nodes without their own seed receive stable per-node seeds "
+                        "derived from this value and the node id."
+                    ),
+                },
             },
             "required": ["dag", "input_data_id"],
         },
@@ -165,6 +175,52 @@ TOOL_SCHEMAS = [
         },
     },
 ]
+
+
+_STOCHASTIC_PIPELINE_NODE_TYPES = frozenset({"BayesianFit", "TimeSeriesAnalysis"})
+
+
+def _derive_pipeline_node_seed(outer_seed: int, node_id: str) -> int:
+    """Derive a stable uint32 seed for one node in a seeded pipeline run."""
+    payload = f"{int(outer_seed)}:{node_id}".encode("utf-8")
+    return int.from_bytes(hashlib.sha256(payload).digest()[:4], "big")
+
+
+def _inject_pipeline_random_seeds(
+    dag: dict,
+    outer_seed: int | None,
+) -> tuple[dict, dict[str, int]]:
+    """Copy a DAG and seed every stochastic node without mutating caller input."""
+    seeded_dag = deepcopy(dag)
+    node_seeds: dict[str, int] = {}
+    if outer_seed is None:
+        return seeded_dag, node_seeds
+
+    for node in seeded_dag.get("nodes", []):
+        if not isinstance(node, dict) or node.get("type") not in _STOCHASTIC_PIPELINE_NODE_TYPES:
+            continue
+        node_id = str(node.get("id") or "").strip()
+        if not node_id:
+            continue
+        data = node.get("data")
+        if not isinstance(data, dict):
+            data = {}
+            node["data"] = data
+        params = data.get("params")
+        if not isinstance(params, dict):
+            params = {}
+        else:
+            params = dict(params)
+        raw_node_seed = params.get("random_seed")
+        node_seed = (
+            int(raw_node_seed)
+            if raw_node_seed is not None
+            else _derive_pipeline_node_seed(outer_seed, node_id)
+        )
+        params["random_seed"] = node_seed
+        data["params"] = params
+        node_seeds[node_id] = node_seed
+    return seeded_dag, node_seeds
 
 
 def _exec_get_cached_results(inp: dict, python_session_id: str = "default") -> dict:
@@ -325,6 +381,8 @@ async def _exec_run_pipeline(
 
     dag = inp.get("dag", {})
     input_data_id = inp.get("input_data_id", "")
+    raw_outer_seed = inp.get("random_seed")
+    outer_seed = int(raw_outer_seed) if raw_outer_seed is not None else None
 
     if "nodes" not in dag or "edges" not in dag:
         return {"error": "DAG must have 'nodes' and 'edges'"}
@@ -338,6 +396,8 @@ async def _exec_run_pipeline(
         topological_sort(dag)
     except ValueError as e:
         return {"error": str(e)}
+
+    dag, node_random_seeds = _inject_pipeline_random_seeds(dag, outer_seed)
 
     import uuid
     run_id = str(uuid.uuid4())
@@ -372,7 +432,13 @@ async def _exec_run_pipeline(
                     s[k] = v
         summary[nid] = s
 
-    return {"run_id": run_id, "status": "completed", "results": summary}
+    return {
+        "run_id": run_id,
+        "status": "completed",
+        "results": summary,
+        "random_seed": outer_seed,
+        "node_random_seeds": node_random_seeds,
+    }
 
 
 async def _exec_generate_proposal(inp: dict) -> dict:

@@ -200,8 +200,8 @@ def test_guest_rate_limit_key_ignores_forwarded_ip_by_default(monkeypatch):
     assert get_rate_limit_key(request) == "ip:10.0.0.99"
 
 
-def test_guest_rate_limit_key_render_mode_uses_rightmost_forwarded_hop(monkeypatch):
-    """TRUSTED_PROXY_MODE=1 (Render/production default): the trusted proxy
+def test_guest_rate_limit_key_one_hop_mode_uses_rightmost_forwarded_hop(monkeypatch):
+    """TRUSTED_PROXY_MODE=1 (explicit append-only proxy topology): the proxy
     appended the real client as the last X-Forwarded-For hop."""
     from app.config import settings
 

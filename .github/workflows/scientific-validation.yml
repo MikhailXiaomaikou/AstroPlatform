@@ -1,0 +1,165 @@
+name: Weekly Scientific Validation
+
+# A slower, fail-closed science gate that complements the per-PR CI. It runs
+# every Monday morning in Beijing and can also be started manually. Critical
+# suites emit JUnit XML and are rejected if any test becomes a silent skip.
+on:
+  schedule:
+    - cron: "23 17 * * 0" # Monday 01:23 Asia/Shanghai (Sunday 17:23 UTC)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scientific-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHONHASHSEED: "0"
+  TOOL_VERSION: ${{ github.sha }}
+
+jobs:
+  core-scientific-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.lock
+      - name: Install locked backend dependencies
+        run: cd backend && pip install --require-hashes -r requirements.lock
+      - name: Verify scientific runtime (anti-silent-skip preflight)
+        run: cd backend && python scripts/scientific_validation_guard.py preflight
+      - name: Audit cosmology registry
+        run: cd backend && python scripts/audit_registry.py --json /tmp/registry-audit.json
+      - name: Run deterministic cosmology benchmarks
+        run: >-
+          cd backend &&
+          python scripts/benchmarks/run_cosmology_benchmarks.py
+          --json /tmp/cosmology-benchmarks.json
+      - name: Run core scientific regression suites
+        shell: bash
+        run: |
+          cd backend
+          status=0
+          python -m pytest \
+            -o addopts='' \
+            tests/test_alcock_paczynski.py \
+            tests/test_anchor_reproduction.py \
+            tests/test_audit_published_constraint.py \
+            tests/test_canonical_full_likelihood_evidence.py \
+            tests/test_chain_diagnostics.py \
+            tests/test_chat_gate_fail_closed.py \
+            tests/test_claim_validator.py \
+            tests/test_cobaya_runner.py \
+            tests/test_compressed_extended_model_gate.py \
+            tests/test_compressed_scientific_guards.py \
+            tests/test_cosmology_anchor_gate.py \
+            tests/test_cosmology_benchmark_honesty.py \
+            tests/test_cosmology_cov_fidelity.py \
+            tests/test_cosmology_data_vectors.py \
+            tests/test_cosmology_importance_sampler.py \
+            tests/test_cosmology_likelihood_registry.py \
+            tests/test_cosmology_likelihood_routing.py \
+            tests/test_data_integrity.py \
+            tests/test_dataset_combination_guards.py::test_act_plus_planck_lensing_chain_is_not_publication_ready \
+            tests/test_emcee_reproducibility.py \
+            tests/test_final_security_authority.py \
+            tests/test_fit_line_lfr_method_declaration.py \
+            tests/test_m6_methodology_validator.py \
+            tests/test_model_comparison_validity.py \
+            tests/test_nested_sampling.py \
+            tests/test_off_anchor_abstain.py \
+            tests/test_pantheon18_full_vector.py::test_flag_off_keeps_published_summary_context_only \
+            tests/test_pantheon18_full_vector.py::test_flag_off_provenance_attests_no_likelihood_ran \
+            tests/test_pipeline_stochastic_reproducibility.py \
+            tests/test_planck_distance_prior.py \
+            tests/test_planck_pliklite.py \
+            tests/test_production_topology.py \
+            tests/test_provenance_versioning.py \
+            tests/test_real_data_validation.py \
+            tests/test_red_team_corpus.py \
+            tests/test_registry_executable_pins.py \
+            tests/test_research_alpha_evaluator.py \
+            tests/test_research_program.py \
+            tests/test_result_provenance.py \
+            tests/test_runner_diagnostics_honesty.py \
+            tests/test_scientific_validation_guard.py \
+            tests/test_scientific_publication_gate.py \
+            tests/test_server_evidence_key_rotation.py \
+            -v --tb=short --no-cov --junitxml=/tmp/core-scientific.xml || status=$?
+          python scripts/scientific_validation_guard.py assert-junit \
+            /tmp/core-scientific.xml --minimum-tests 150
+          exit "$status"
+      - name: Upload scientific validation artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: core-scientific-validation-${{ github.sha }}
+          path: |
+            /tmp/registry-audit.json
+            /tmp/cosmology-benchmarks.json
+            /tmp/core-scientific.xml
+          if-no-files-found: ignore
+
+  released-likelihood-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.lock
+      - name: Install locked backend dependencies
+        run: cd backend && pip install --require-hashes -r requirements.lock
+      - name: Fetch released Cobaya BAO data
+        run: >-
+          cd backend &&
+          cobaya-install
+          bao.sdss_dr12_consensus_bao
+          bao.sdss_dr16_bao_elg
+          bao.sdss_dr16_baoplus_lyauto
+          bao.sdss_dr16_baoplus_lyxqso
+          -p packages
+      - name: Verify scientific runtime and pinned BAO bytes
+        run: |
+          cd backend
+          python scripts/scientific_validation_guard.py preflight \
+            --bao-manifest scripts/cobaya/bao_data.sha256
+          sha256sum -c scripts/cobaya/bao_data.sha256
+      - name: Run released-likelihood parity with zero allowed skips
+        shell: bash
+        env:
+          PANTHEON18_FULL_CHI2_ENABLED: "1"
+        run: |
+          cd backend
+          status=0
+          python -m pytest \
+            -o addopts='' \
+            tests/test_eboss_dr16_grid_bao.py \
+            tests/test_sdss_dr12_consensus.py \
+            tests/test_pantheon18_full_vector.py::test_vendored_files_match_pins \
+            tests/test_pantheon18_full_vector.py::test_covariance_is_sys_plus_diagonal_stat \
+            tests/test_pantheon18_full_vector.py::test_marginalization_parity_with_cobaya_projection \
+            tests/test_pantheon18_full_vector.py::test_chi2_minimum_at_published_omegam \
+            tests/test_pantheon18_full_vector.py::test_chi2_is_h0_invariant \
+            tests/test_pantheon18_full_vector.py::test_flag_on_chain_runs_full_vector_via_emcee \
+            tests/test_pantheon18_full_vector.py::test_offset_sn_dispatch_covers_pantheon18 \
+            tests/test_pantheon18_full_vector.py::test_flag_on_routing_via_monkeypatched_keys \
+            -v --tb=short --no-cov --junitxml=/tmp/released-likelihood-parity.xml || status=$?
+          python scripts/scientific_validation_guard.py assert-junit \
+            /tmp/released-likelihood-parity.xml --minimum-tests 25
+          exit "$status"
+      - name: Upload released-likelihood parity report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: released-likelihood-parity-${{ github.sha }}
+          path: /tmp/released-likelihood-parity.xml
+          if-no-files-found: ignore

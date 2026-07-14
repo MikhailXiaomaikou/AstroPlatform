@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compute the Planck 2018 compressed (H0, Ωm, σ8) mean + non-diagonal covariance.
+"""Compute a Planck 2018 posterior proposal/context covariance.
 
 Source: Planck 2018 base ΛCDM, plikHM TT,TE,EE+lowl+lowE (no lensing), from the
 IRSA mirror of the Planck Legacy Archive cosmoparams release R3.00. The +lensing
@@ -7,12 +7,14 @@ baseline is only published inside the ~9 GB full grid, so this script uses the
 standalone TT,TE,EE+lowl+lowE chains (≈0.1σ from the +lensing column; relabel the
 registry entry accordingly).
 
-Why (H0, Ωm, σ8) and NOT S8: S8 ≡ σ8·(Ωm/0.3)^0.5 is *exactly* determined by σ8
-and Ωm, so a joint Gaussian that also lists S8 is rank-deficient (singular) and
-double-counts the clustering amplitude. The compressed likelihood must constrain
-(H0, Ωm, σ8); S8 is a derived quantity, reported per-sample as σ8·(Ωm/0.3)^0.5.
+Why (H0, Ωm, σ8) and NOT S8: S8 ≡ σ8·(Ωm/0.3)^0.5 is exactly determined by σ8
+and Ωm, so a joint Gaussian that also lists S8 is rank-deficient. More
+importantly, these are posterior-chain summaries that inherit the source model
+and priors: this artifact is for proposal design/literature context only and
+must never be multiplied as a likelihood. The executable compressed CMB target
+is the separately encoded CHW2019 distance prior.
 
-Output (committed, small): backend/data/planck2018_compressed/distance_prior.json
+Output (committed, small): backend/data/planck2018_compressed/posterior_proposal.json
     {
       "parameters": ["H0", "omegam", "sigma8"],
       "mean": [...],
@@ -47,7 +49,7 @@ SOURCE_URL = (
 PARAMS = ["H0", "omegam", "sigma8"]
 OUT_PATH = (
     pathlib.Path(__file__).resolve().parent.parent
-    / "data" / "planck2018_compressed" / "distance_prior.json"
+    / "data" / "planck2018_compressed" / "posterior_proposal.json"
 )
 
 

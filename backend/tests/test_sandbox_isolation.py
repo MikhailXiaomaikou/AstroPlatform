@@ -37,6 +37,29 @@ class TestSubprocessSandboxIsolation:
         assert r.backend == "subprocess"
         assert r.variables.get("result") == "2"
 
+    def test_app_config_reload_does_not_accidentally_rehydrate_dotenv_secrets(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        """The default config reload must preserve the child's environment scrub."""
+
+        sentinel = "sandbox-must-not-read-this"
+        (tmp_path / ".env").write_text(
+            f"PLATFORM_DEEPSEEK_API_KEY={sentinel}\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+
+        result = _run(
+            "import importlib, os, app.config\n"
+            "importlib.reload(app.config)\n"
+            f"secret_rehydrated = os.getenv('PLATFORM_DEEPSEEK_API_KEY') == {sentinel!r}"
+        )
+
+        assert result.success is True, result.error
+        assert result.variables.get("secret_rehydrated") == "False"
+
     def test_cache_accessors_are_available(self):
         r = SubprocessBackend().execute(
             "rows = get_cached_results('latest_adql')\n"

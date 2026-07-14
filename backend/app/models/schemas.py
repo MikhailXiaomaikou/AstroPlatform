@@ -60,6 +60,13 @@ class EncryptedJSONType(TypeDecorator):
     def process_result_value(self, value, dialect):
         if value is None:
             return None
+        # PostgreSQL JSONB can contain legacy plaintext objects written before
+        # this column was encrypted.  Keep those rows readable; the next
+        # settings update writes them back as a Fernet-encrypted JSON string.
+        if isinstance(value, dict):
+            return value
+        if not isinstance(value, str):
+            return None
         try:
             decrypted = _get_fernet().decrypt(value.encode("utf-8"))
             return json.loads(decrypted)
@@ -73,6 +80,18 @@ class EncryptedJSONType(TypeDecorator):
                 return None
         except Exception:
             return None
+
+    def load_dialect_impl(self, dialect):
+        # The production schema historically created users.api_keys as JSONB.
+        # Keeping a Text implementation on PostgreSQL makes asyncpg bind the
+        # encrypted token as VARCHAR, which PostgreSQL correctly rejects for a
+        # JSONB column.  A JSONB scalar string preserves the ciphertext while
+        # using the database column's native bind/result processors.
+        if dialect.name == "postgresql":
+            from sqlalchemy.dialects.postgresql import JSONB
+
+            return dialect.type_descriptor(JSONB())
+        return dialect.type_descriptor(Text())
 
 
 class UUIDType(TypeDecorator):

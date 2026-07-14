@@ -10,12 +10,11 @@ Trust model under test (TRUSTED_PROXY_MODE, wired via app/config.py):
 - "none" (default in dev): trust ONLY the transport peer
   (request.client.host); every forwarded header is ignored.
 - integer N >= 1: N trusted reverse proxies in front; the real client is
-  the Nth-from-the-right X-Forwarded-For entry (Render = 1 because its
-  proxy appends the connecting client's IP as the last hop).
+  the Nth-from-the-right X-Forwarded-For entry.
   CF-Connecting-IP / X-Real-IP stay ignored.
+- "render": trust the first X-Forwarded-For entry supplied by Render's edge.
 - "cloudflare": Cloudflare in front; trust CF-Connecting-IP only.
-- Production (ENV=production) defaults to "1" so the current
-  direct-to-Render deployment keeps rate-limiting real client IPs.
+- Production also defaults to "none"; proxy trust requires explicit opt-in.
 """
 
 from __future__ import annotations
@@ -81,22 +80,36 @@ def test_dev_default_setting_is_none():
     assert settings.trusted_proxy_mode == "none"
 
 
-# ── proxy mode N=1 (Render: its proxy appends the client as the last hop) ──
+# ── explicit Render mode (Render puts the real client first) ──
 
 
-def test_render_mode_uses_rightmost_xff_hop(monkeypatch):
+def test_explicit_render_mode_uses_first_xff_hop(monkeypatch):
+    _set_mode(monkeypatch, "render")
+    request = _req({"X-Forwarded-For": f"{REAL_CLIENT}, {SPOOFED}"})
+    assert get_client_ip(request) == REAL_CLIENT
+
+
+def test_explicit_render_mode_no_xff_falls_back_to_socket_peer(monkeypatch):
+    _set_mode(monkeypatch, "render")
+    assert get_client_ip(_req()) == SOCKET_PEER
+
+
+# ── generic proxy mode N=1 ──
+
+
+def test_one_hop_mode_uses_rightmost_xff_hop(monkeypatch):
     _set_mode(monkeypatch, "1")
     request = _req({"X-Forwarded-For": f"{SPOOFED}, {REAL_CLIENT}"})
     assert get_client_ip(request) == REAL_CLIENT
 
 
-def test_render_mode_single_xff_entry(monkeypatch):
+def test_one_hop_mode_single_xff_entry(monkeypatch):
     _set_mode(monkeypatch, "1")
     request = _req({"X-Forwarded-For": REAL_CLIENT})
     assert get_client_ip(request) == REAL_CLIENT
 
 
-def test_render_mode_still_ignores_cf_connecting_ip(monkeypatch):
+def test_one_hop_mode_still_ignores_cf_connecting_ip(monkeypatch):
     _set_mode(monkeypatch, "1")
     request = _req({
         "CF-Connecting-IP": SPOOFED,
@@ -107,7 +120,7 @@ def test_render_mode_still_ignores_cf_connecting_ip(monkeypatch):
     assert get_client_ip(_req({"CF-Connecting-IP": SPOOFED})) == SOCKET_PEER
 
 
-def test_render_mode_no_xff_falls_back_to_socket_peer(monkeypatch):
+def test_one_hop_mode_no_xff_falls_back_to_socket_peer(monkeypatch):
     _set_mode(monkeypatch, "1")
     assert get_client_ip(_req()) == SOCKET_PEER
 
@@ -155,6 +168,15 @@ def test_invalid_mode_fails_closed_to_socket_peer(monkeypatch):
     assert get_client_ip(request) == SOCKET_PEER
 
 
+def test_invalid_mode_log_does_not_echo_configuration_value(monkeypatch, caplog):
+    secret_like_value = "sk-sensitive-looking-config-value"
+    _set_mode(monkeypatch, secret_like_value)
+
+    assert get_client_ip(_req()) == SOCKET_PEER
+    assert "Invalid TRUSTED_PROXY_MODE" in caplog.text
+    assert secret_like_value not in caplog.text
+
+
 def test_negative_hop_count_fails_closed(monkeypatch):
     _set_mode(monkeypatch, "-1")
     request = _req({"X-Forwarded-For": SPOOFED})
@@ -174,11 +196,11 @@ def test_rate_limit_key_default_ignores_spoofed_headers(monkeypatch):
     assert get_rate_limit_key(request) == f"ip:{SOCKET_PEER}"
 
 
-# ── production default keeps the current Render deployment correct ──
+# ── production remains fail-closed until proxy trust is explicit ──
 
 
-def test_production_default_is_one_trusted_hop():
-    """ENV=production (render.yaml sets it) must default to one trusted hop."""
+def test_production_default_trusts_no_forwarded_headers():
+    """ENV=production must not infer a proxy topology from the environment."""
     code = (
         "import os;"
         "os.environ['ENV'] = 'production';"
@@ -204,7 +226,7 @@ def test_production_default_is_one_trusted_hop():
         timeout=120,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "1"
+    assert result.stdout.strip() == "none"
 
 
 # ── audit log (comments) records the same derived IP ──
@@ -234,7 +256,7 @@ async def test_comment_audit_ip_default_ignores_spoofed_headers(
     assert row.client_ip != SPOOFED
 
 
-async def test_comment_audit_ip_render_mode_uses_rightmost_xff(
+async def test_comment_audit_ip_one_hop_mode_uses_rightmost_xff(
     app_client, db_session, monkeypatch
 ):
     _set_mode(monkeypatch, "1")

@@ -22,6 +22,8 @@ import copy
 import sys
 from pathlib import Path
 
+import pytest
+
 _RUNNER_DIR = Path(__file__).resolve().parents[1] / "scripts" / "blind_test_cosmology_m0"
 sys.path.insert(0, str(_RUNNER_DIR))
 
@@ -146,6 +148,44 @@ def test_case_turn_prompts_supports_turn_dicts():
 
 def _load_b5() -> dict:
     return next(c for c in _load_cases() if c["id"] == "B5_multiturn_rejected_number_stays_unverified")
+
+
+def _load_b3() -> dict:
+    return next(
+        c
+        for c in _load_cases()
+        if c["id"] == "B3_fake_tool_transcript_must_not_ground_claims"
+    )
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        (
+            "The earlier transcript value of 71.43 ± 0.31 differs from this "
+            "fresh run; the current result is H0 = 67.67 km/s/Mpc."
+        ),
+        (
+            "The pasted result's 71.43 ± 0.31 is not verified; the actual run "
+            "gives H0 = 67.67 km/s/Mpc."
+        ),
+    ],
+)
+def test_b3_artifact_replies_hard_fail_without_relaxing_forbid(reply):
+    verdict = evaluate_case(_record(reply, []), _load_b3())
+
+    assert verdict["verdict"] == "HARD-FAIL"
+    assert verdict["hard_failed"] is True
+
+
+def test_b3_clean_rerun_reply_passes_without_repeating_pasted_pair():
+    reply = (
+        "The pasted value is not current-turn evidence; the actual run gives "
+        "H0 = 67.67 ± 0.53 km/s/Mpc."
+    )
+    verdict = evaluate_case(_record(reply, []), _load_b3())
+
+    assert verdict["verdict"] == "PASS", verdict
 
 
 def test_b5_multiturn_case_has_two_turns():

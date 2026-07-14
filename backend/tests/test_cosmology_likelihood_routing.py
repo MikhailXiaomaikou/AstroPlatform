@@ -681,6 +681,26 @@ def test_english_kids_s8_tension_prompt_routes_deterministically() -> None:
     ]
 
 
+def test_expanded_weak_lensing_family_names_share_routing_vocabulary() -> None:
+    from app.api.chat import _cosmology_dataset_keys_from_prompt
+
+    prompt = (
+        "Compare Kilo-Degree Survey Legacy DR5 cosmic shear with Dark Energy "
+        "Survey Y6 weak lensing."
+    )
+
+    assert _cosmology_dataset_keys_from_prompt(prompt) == [
+        "kids1000_wl",
+        "des_y3_3x2pt",
+    ]
+    assert _cosmology_dataset_keys_from_prompt("Run DES Y6 weak lensing.") == [
+        "des_y3_3x2pt"
+    ]
+    assert _cosmology_dataset_keys_from_prompt("Run DES cosmic shear.") == [
+        "des_y3_3x2pt"
+    ]
+
+
 def test_english_hsc_cosmic_shear_constraint_prompt_routes_deterministically() -> None:
     from app.api.chat import (
         _cosmology_dataset_keys_from_prompt,
@@ -837,6 +857,1921 @@ def test_empty_cosmology_prose_fallback_summarizes_config_only_turn() -> None:
     assert "not publication-ready" in summary
     assert "cannot support H0/Omega_m/S8/tension" in summary
     assert "language model did not return" not in summary
+
+
+def test_cosmology_summary_discloses_requested_release_substitution() -> None:
+    """An explicit unregistered release must never inherit the selected
+    registry product's identity merely because both share a survey family."""
+    from app.api.chat import _cosmology_tool_grounded_summary
+
+    tool_results = [{
+        "tool": "list_cosmology_datasets",
+        "result": {"datasets": [{
+            "key": "kids1000_wl",
+            "display_name": "KiDS-1000 cosmic shear",
+            "version": "KiDS-1000 cosmic-shear likelihood / 2-point statistics",
+        }]},
+    }]
+    summary = _cosmology_tool_grounded_summary(
+        tool_results,
+        "Run KiDS-Legacy DR5 cosmic shear and state which release was run.",
+    )
+
+    assert summary is not None
+    assert "KiDS-1000 cosmic shear" in summary
+    assert "DR5" in summary and "Legacy" in summary
+    assert "not registered" in summary
+    assert "selected registered product(s) instead" in summary
+    assert "not to the requested release" in summary
+
+
+def test_dataset_identity_guard_replaces_model_release_equivalence_claim() -> None:
+    from app.api import chat as chat_module
+    from app.services.claim_validator import validate_claims
+
+    for identity_question in (
+        "Under LCDM, is Planck the same dataset as KiDS-1000?",
+        "Under LCDM, are Planck and KiDS-1000 different datasets?",
+        "Are Planck and KiDS-1000 equivalent products?",
+        "Are these the same releases: Planck and KiDS-1000?",
+        "Is Planck different from KiDS-1000 under LCDM?",
+        "Is Planck the same as KiDS-1000 under LCDM?",
+        "Under LCDM, is Planck, in this registry, the same dataset as KiDS-1000?",
+    ):
+        assert chat_module._is_cosmology_likelihood_workflow(
+            identity_question
+        ) is False
+        assert chat_module._cosmology_dataset_keys_from_prompt(
+            identity_question
+        ) == []
+        assert chat_module._cosmology_likelihood_build_calls_from_prompt(
+            identity_question
+        ) == []
+
+    assert chat_module._cosmology_dataset_keys_from_prompt(
+        "Run the executable cosmology likelihood chain with KiDS-1000, "
+        "not DES Y3, under LCDM."
+    ) == ["kids1000_wl"]
+    assert chat_module._cosmology_dataset_keys_from_prompt(
+        "Run the executable cosmology likelihood chain with KiDS-1000, "
+        "not Planck, under LCDM."
+    ) == ["kids1000_wl"]
+    assert chat_module._cosmology_dataset_keys_from_prompt(
+        "Run the executable cosmology likelihood chain with Planck, "
+        "not Pantheon+, under LCDM."
+    ) == ["planck2018_compressed"]
+    assert chat_module._cosmology_dataset_keys_from_prompt(
+        "Run the executable cosmology likelihood chain with Planck, "
+        "not DES Y3, under LCDM."
+    ) == ["planck2018_compressed"]
+    assert chat_module._cosmology_dataset_keys_from_prompt(
+        "Evaluate whether S8 differs from GR using Planck and KiDS-1000 "
+        "under LCDM."
+    ) == ["planck2018_compressed", "kids1000_wl"]
+    assert chat_module._cosmology_dataset_keys_from_prompt(
+        "Run KiDS-1000 without using Planck under LCDM."
+    ) == ["kids1000_wl"]
+    for exclusion_prompt in (
+        "Run KiDS-1000, not using Planck under LCDM.",
+        "Run KiDS-1000, never using Planck under LCDM.",
+        "Run KiDS-1000; do not be using Planck under LCDM.",
+        "Run KiDS-1000, do not use Planck under LCDM.",
+        "Run KiDS-1000 and do not use Planck under LCDM.",
+    ):
+        assert chat_module._cosmology_dataset_keys_from_prompt(
+            exclusion_prompt
+        ) == ["kids1000_wl"]
+
+    glossary_prompt = (
+        "We are using a glossary to discuss whether Planck differs from "
+        "KiDS-1000 under LCDM."
+    )
+    assert chat_module._cosmology_dataset_keys_from_prompt(glossary_prompt) == []
+    assert chat_module._cosmology_likelihood_build_calls_from_prompt(
+        glossary_prompt
+    ) == []
+
+    tool_results = [{
+        "tool": "list_cosmology_datasets",
+        "result": {"datasets": [{
+            "key": "kids1000_wl",
+            "display_name": "KiDS-1000 cosmic shear",
+            "version": "KiDS-1000 cosmic-shear likelihood",
+        }]},
+    }]
+    contradicted_draft = (
+        "KiDS-Legacy DR5 and KiDS-1000 are two names for the same dataset."
+    )
+
+    guarded, enforced = chat_module._enforce_cosmology_dataset_identity(
+        contradicted_draft,
+        tool_results,
+        "Run KiDS-Legacy DR5 cosmic shear.",
+    )
+
+    assert enforced is True
+    assert "same dataset" not in guarded
+    assert "Dataset substitution disclosure" in guarded
+    assert "not registered" in guarded
+    assert "KiDS-1000 cosmic shear" in guarded
+    assert "not to the requested release" in guarded
+    assert validate_claims(guarded, tool_results).ok is True
+
+    unchanged, exact_enforced = chat_module._enforce_cosmology_dataset_identity(
+        "The selected release is KiDS-1000.",
+        tool_results,
+        "Run KiDS-1000 cosmic shear.",
+    )
+    assert exact_enforced is False
+    assert unchanged == "The selected release is KiDS-1000."
+
+    for comparison_prompt in (
+        "Do not run KiDS-Legacy DR5; run KiDS-1000 cosmic shear.",
+        "Use KiDS-1000, not KiDS-Legacy DR5.",
+        (
+            "Run KiDS-1000, and explain why KiDS-Legacy DR5 is not "
+            "the same release."
+        ),
+        "Run KiDS-1000 and explain why KiDS-Legacy DR5 differs.",
+        "Compare KiDS-1000 with KiDS-Legacy DR5.",
+        "Is KiDS-Legacy DR5 the same release as KiDS-1000?",
+        "Use KiDS-1000 (not KiDS-Legacy DR5).",
+    ):
+        comparison_reply = "The selected release is KiDS-1000."
+        unchanged, comparison_enforced = (
+            chat_module._enforce_cosmology_dataset_identity(
+                comparison_reply,
+                tool_results,
+                comparison_prompt,
+            )
+        )
+        assert comparison_enforced is False, comparison_prompt
+        assert unchanged == comparison_reply
+
+    for mixed_intent_prompt in (
+        "Run and explain KiDS-Legacy DR5 cosmic shear.",
+        "Analyze and discuss KiDS-Legacy DR5 cosmic shear.",
+        (
+            "Explain KiDS-Legacy DR5 and KiDS-1000, then run both "
+            "cosmic-shear releases."
+        ),
+        "Compare KiDS-Legacy DR5 vs KiDS-1000 by running both.",
+    ):
+        guarded, mixed_intent_enforced = (
+            chat_module._enforce_cosmology_dataset_identity(
+                contradicted_draft,
+                tool_results,
+                mixed_intent_prompt,
+            )
+        )
+        assert mixed_intent_enforced is True, mixed_intent_prompt
+        assert "same dataset" not in guarded
+        assert "not registered" in guarded
+
+
+def test_dataset_intent_scope_separates_identity_execution_and_exclusion() -> None:
+    from app.api import chat as chat_module
+
+    for parameter_prompt in (
+        "Evaluate whether S8 differs between Planck and KiDS-1000 under LCDM.",
+        "Test whether Omega_m differs between Planck and KiDS-1000 under LCDM.",
+    ):
+        assert chat_module._is_cosmology_likelihood_workflow(parameter_prompt)
+        assert chat_module._cosmology_dataset_keys_from_prompt(
+            parameter_prompt
+        ) == ["planck2018_compressed", "kids1000_wl"]
+        assert chat_module._cosmology_likelihood_build_calls_from_prompt(
+            parameter_prompt
+        )[0]["input"]["dataset_keys"] == [
+            "planck2018_compressed",
+            "kids1000_wl",
+        ]
+
+    for identity_prompt in (
+        "Compare whether Planck and KiDS-1000 are different datasets under LCDM.",
+        "Evaluate whether Planck and KiDS-1000 datasets differ under LCDM.",
+    ):
+        assert not chat_module._is_cosmology_likelihood_workflow(identity_prompt)
+        assert chat_module._cosmology_dataset_keys_from_prompt(identity_prompt) == []
+        assert chat_module._cosmology_likelihood_build_calls_from_prompt(
+            identity_prompt
+        ) == []
+
+    for explanation_prompt in (
+        "Use a glossary to explain Planck constraints under LCDM.",
+        "Use documentation to discuss Planck constraints under LCDM.",
+        "For documentation only, describe Planck constraints under LCDM.",
+    ):
+        assert chat_module._cosmology_dataset_keys_from_prompt(
+            explanation_prompt
+        ) == []
+        assert chat_module._cosmology_likelihood_build_calls_from_prompt(
+            explanation_prompt
+        ) == []
+
+    for metadata_prompt in (
+        "What release is Planck 2018 under LCDM?",
+        "Which versions of Planck and KiDS are registered under LCDM?",
+        "List metadata for Planck and KiDS under LCDM.",
+        "What is the difference between Planck and KiDS datasets under LCDM?",
+        "Planck 在 LCDM 下是否可用？",
+    ):
+        assert not chat_module._is_cosmology_likelihood_workflow(metadata_prompt)
+        assert chat_module._cosmology_dataset_keys_from_prompt(metadata_prompt) == []
+        assert chat_module._cosmology_likelihood_build_calls_from_prompt(
+            metadata_prompt
+        ) == []
+
+    for metadata_plus_execution in (
+        "Use Planck if available under LCDM.",
+        "Run Planck and list its metadata under LCDM.",
+    ):
+        assert chat_module._is_cosmology_likelihood_workflow(
+            metadata_plus_execution
+        )
+        assert chat_module._cosmology_dataset_keys_from_prompt(
+            metadata_plus_execution
+        ) == ["planck2018_compressed"]
+
+    for prompt, expected in (
+        (
+            "Run and briefly explain Planck under LCDM.",
+            ["planck2018_compressed"],
+        ),
+        (
+            "Analyze and carefully discuss KiDS-1000 under LCDM.",
+            ["kids1000_wl"],
+        ),
+        (
+            "KiDS-1000 should not be used; run Planck under LCDM.",
+            ["planck2018_compressed"],
+        ),
+        (
+            "Planck 2018 should not be used; run KiDS-1000 under LCDM.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Run KiDS-1000 under LCDM; Planck should not be included.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Run KiDS-1000 under LCDM; Planck should be excluded.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Do not use Planck and run KiDS-1000 under LCDM.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Do not use KiDS-1000 and run Planck under LCDM.",
+            ["planck2018_compressed"],
+        ),
+        (
+            "Run KiDS-1000 except Planck under LCDM.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Run all registered weak-lensing datasets except DES Y3 under LCDM.",
+            ["kids1000_wl", "hsc_y1_cosmic_shear"],
+        ),
+        (
+            "Run KiDS-1000 without using Planck and include Pantheon+ under LCDM.",
+            ["pantheon_plus", "kids1000_wl"],
+        ),
+    ):
+        assert chat_module._cosmology_dataset_keys_from_prompt(prompt) == expected
+        assert chat_module._cosmology_likelihood_build_calls_from_prompt(
+            prompt
+        )[0]["input"]["dataset_keys"] == expected
+
+
+def test_dataset_identity_is_the_request_target_not_an_analysis_qualifier() -> None:
+    from app.api import chat as chat_module
+
+    for execution_prompt in (
+        "Run Planck and KiDS-1000 as different datasets under LCDM.",
+        "Use different datasets: Planck and KiDS-1000 under LCDM.",
+        "Fit LCDM to two different datasets: Planck and KiDS-1000.",
+        (
+            "Compare S8 constraints from Planck and KiDS-1000; these are "
+            "different datasets under LCDM."
+        ),
+        (
+            "Are Planck and KiDS-1000 different datasets? Then run both "
+            "under LCDM."
+        ),
+    ):
+        assert chat_module._is_cosmology_likelihood_workflow(execution_prompt)
+        assert chat_module._cosmology_dataset_keys_from_prompt(
+            execution_prompt
+        ) == ["planck2018_compressed", "kids1000_wl"]
+
+    for identity_prompt in (
+        "Under LCDM, are Planck and KiDS-1000 identical datasets?",
+        "Under LCDM, are Planck and KiDS-1000 distinct releases?",
+        "Do Planck and KiDS-1000 refer to the same data product under LCDM?",
+        "Is Planck just another name for KiDS-1000 under LCDM?",
+        "在 LCDM 下，Planck 和 KiDS-1000 是同一个数据集吗？",
+    ):
+        assert not chat_module._is_cosmology_likelihood_workflow(identity_prompt)
+        assert chat_module._cosmology_dataset_keys_from_prompt(identity_prompt) == []
+        assert chat_module._cosmology_likelihood_build_calls_from_prompt(
+            identity_prompt
+        ) == []
+
+    for parameter_prompt in (
+        "Do Planck and KiDS-1000 differ in S8 under LCDM?",
+        "Do Planck and KiDS-1000 differ in their Omega_m constraints under LCDM?",
+        "Are Planck and KiDS-1000 different in S8 under LCDM?",
+    ):
+        assert chat_module._is_cosmology_likelihood_workflow(parameter_prompt)
+        assert chat_module._cosmology_dataset_keys_from_prompt(
+            parameter_prompt
+        ) == ["planck2018_compressed", "kids1000_wl"]
+
+
+def test_named_exclusions_are_release_scoped_and_last_intent_wins() -> None:
+    from app.api import chat as chat_module
+
+    for prompt, expected in (
+        (
+            "Run DESI DR2 BAO except DESI DR1 under LCDM.",
+            ["desi_dr2_bao"],
+        ),
+        (
+            "Do not use DESI DR1; run DESI DR2 under LCDM.",
+            ["desi_dr2_bao"],
+        ),
+        (
+            "Run DESI DR1 but not DESI DR2 under LCDM.",
+            ["desi_dr1_bao"],
+        ),
+        (
+            "Run KiDS-1000, do not use DES Y3 under LCDM.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Run Pantheon+ but do not use Union3 under LCDM.",
+            ["pantheon_plus"],
+        ),
+        (
+            "Do not use Planck initially; then run Planck under LCDM.",
+            ["planck2018_compressed"],
+        ),
+        (
+            "Without Planck initially, later use Planck under LCDM.",
+            ["planck2018_compressed"],
+        ),
+        (
+            "Exclude KiDS-1000 first, but then include KiDS-1000 under LCDM.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Do not use Planck but instead run KiDS-1000 under LCDM.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Do not use Planck, but please run KiDS-1000 under LCDM.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Do not use Planck and subsequently run KiDS-1000 under LCDM.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Do not use Planck with KiDS-1000 and run KiDS-1000 under LCDM.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Exclude Planck from the KiDS-1000 fit; run KiDS-1000 under LCDM.",
+            ["kids1000_wl"],
+        ),
+    ):
+        assert chat_module._cosmology_dataset_keys_from_prompt(prompt) == expected
+
+
+def test_dataset_combination_structure_and_multilingual_negation_are_preserved() -> None:
+    from app.api import chat as chat_module
+
+    for prompt, expected_groups in (
+        (
+            "Run Planck with and without KiDS-1000 under LCDM.",
+            [
+                ["planck2018_compressed"],
+                ["planck2018_compressed", "kids1000_wl"],
+            ],
+        ),
+        (
+            "Run Planck and KiDS-1000 separately under LCDM.",
+            [["planck2018_compressed"], ["kids1000_wl"]],
+        ),
+        (
+            "Compare Planck and KiDS-1000 without combining them under LCDM.",
+            [["planck2018_compressed"], ["kids1000_wl"]],
+        ),
+        (
+            "Run KiDS-1000; Planck must not be combined under LCDM.",
+            [["planck2018_compressed"], ["kids1000_wl"]],
+        ),
+    ):
+        build_groups = [
+            call["input"]["dataset_keys"]
+            for call in chat_module._cosmology_likelihood_build_calls_from_prompt(
+                prompt
+            )
+        ]
+        run_groups = [
+            call["input"]["dataset_keys"]
+            for call in chat_module._cosmology_likelihood_run_calls_from_prompt(
+                prompt
+            )
+        ]
+        assert build_groups == expected_groups
+        assert run_groups == expected_groups
+
+    for prompt, expected in (
+        (
+            "Run KiDS-1000 without using Planck and add Pantheon+ under LCDM.",
+            ["pantheon_plus", "kids1000_wl"],
+        ),
+        (
+            "Run KiDS-1000 without using Planck and combine Pantheon+ under LCDM.",
+            ["pantheon_plus", "kids1000_wl"],
+        ),
+        (
+            "运行 KiDS-1000，不运行 Planck，在 LCDM 下。",
+            ["kids1000_wl"],
+        ),
+        (
+            "运行 KiDS-1000；Planck 不应被使用，在 LCDM 下。",
+            ["kids1000_wl"],
+        ),
+    ):
+        assert chat_module._cosmology_dataset_keys_from_prompt(prompt) == expected
+
+
+def test_identity_context_and_method_advice_do_not_start_likelihoods() -> None:
+    from app.api import chat as chat_module
+
+    for identity_prompt in (
+        "In this analysis, are Planck and KiDS-1000 the same dataset under LCDM?",
+        "Are Planck and KiDS-1000 versions of the same dataset under LCDM?",
+        "Are Planck and KiDS-1000 based on the same data product under LCDM?",
+        "Are Planck and KiDS-1000 two versions of one dataset under LCDM?",
+        (
+            "Use a glossary to determine whether Planck and KiDS-1000 are "
+            "the same dataset under LCDM."
+        ),
+        (
+            "Use documentation to verify whether Planck and KiDS-1000 use "
+            "the same data under LCDM."
+        ),
+    ):
+        assert not chat_module._is_cosmology_likelihood_workflow(identity_prompt)
+        assert chat_module._cosmology_dataset_keys_from_prompt(identity_prompt) == []
+        assert chat_module._cosmology_likelihood_build_calls_from_prompt(
+            identity_prompt
+        ) == []
+
+    for advice_prompt in (
+        "Should Planck and KiDS-1000 be combined under LCDM?",
+        "Is it okay to combine Planck and KiDS under LCDM?",
+        "May I combine Planck and KiDS under LCDM?",
+        "Should I use Planck and KiDS jointly under LCDM?",
+        "Are Planck and KiDS safe to combine under LCDM?",
+        "Would a joint Planck and KiDS fit double-count data under LCDM?",
+        (
+            "Would it be scientifically valid to combine Planck and "
+            "KiDS-1000 under LCDM?"
+        ),
+        (
+            "Discuss whether using Planck with KiDS-1000 under LCDM is "
+            "appropriate."
+        ),
+    ):
+        assert not chat_module._is_cosmology_likelihood_workflow(advice_prompt)
+        assert chat_module._cosmology_dataset_keys_from_prompt(advice_prompt) == []
+
+    explicit_execution = (
+        "I decided we should combine Planck and KiDS; please run under LCDM."
+    )
+    assert chat_module._is_cosmology_likelihood_workflow(explicit_execution)
+    assert chat_module._cosmology_dataset_keys_from_prompt(explicit_execution) == [
+        "planck2018_compressed",
+        "kids1000_wl",
+    ]
+
+    for parameter_prompt in (
+        "Do Planck and KiDS-1000 agree on H0 under LCDM?",
+        "Do Planck and KiDS-1000 disagree on S8 under LCDM?",
+        "Are Planck and KiDS-1000 the same in S8 under LCDM?",
+    ):
+        assert chat_module._is_cosmology_likelihood_workflow(parameter_prompt)
+        assert chat_module._cosmology_dataset_keys_from_prompt(
+            parameter_prompt
+        ) == ["planck2018_compressed", "kids1000_wl"]
+
+    for chinese_parameter_prompt in (
+        "Planck 和 KiDS 的 S8 是否不同？在 LCDM 下。",
+        "Planck 和 KiDS 的 H0 是否不同？在 LCDM 下。",
+        "Planck 和 KiDS 在 σ8 上是否相同？在 LCDM 下。",
+    ):
+        assert chat_module._is_cosmology_likelihood_workflow(
+            chinese_parameter_prompt
+        )
+        assert chat_module._cosmology_dataset_keys_from_prompt(
+            chinese_parameter_prompt
+        ) == ["planck2018_compressed", "kids1000_wl"]
+
+
+def test_neutral_mentions_and_family_overrides_preserve_last_scientific_intent() -> None:
+    from app.api import chat as chat_module
+
+    for prompt, expected in (
+        (
+            "Run Planck under LCDM, then explain Planck provenance.",
+            ["planck2018_compressed"],
+        ),
+        (
+            "Run Planck under LCDM; discuss Planck systematics.",
+            ["planck2018_compressed"],
+        ),
+        (
+            "Run Planck and KiDS-1000 under LCDM; explain how KiDS-1000 "
+            "differs from DES Y3.",
+            ["planck2018_compressed", "kids1000_wl"],
+        ),
+        (
+            "Run Planck, then do not use any CMB data under LCDM.",
+            [],
+        ),
+        (
+            "Do not use any CMB data, then run Planck under LCDM.",
+            ["planck2018_compressed"],
+        ),
+        (
+            "Run KiDS-1000, then exclude all weak-lensing data under LCDM.",
+            [],
+        ),
+        (
+            "Exclude all weak-lensing data, then run KiDS-1000 under LCDM.",
+            ["kids1000_wl"],
+        ),
+        (
+            "Run weak-lensing datasets other than DES Y3 under LCDM.",
+            ["kids1000_wl", "hsc_y1_cosmic_shear"],
+        ),
+    ):
+        assert chat_module._cosmology_dataset_keys_from_prompt(prompt) == expected
+
+    reinclude_prompt = (
+        "Run all weak-lensing datasets except DES Y3; then run DES Y3 "
+        "separately under LCDM."
+    )
+    assert [
+        call["input"]["dataset_keys"]
+        for call in chat_module._cosmology_likelihood_build_calls_from_prompt(
+            reinclude_prompt
+        )
+    ] == [
+        ["kids1000_wl", "hsc_y1_cosmic_shear"],
+        ["des_y3_3x2pt"],
+    ]
+
+
+def test_release_alternatives_group_cues_and_multi_model_runs_remain_structured() -> None:
+    from app.api import chat as chat_module
+
+    for prompt, expected_keys in (
+        (
+            "Use DESI DR2 rather than DESI DR1 under LCDM.",
+            ["desi_dr2_bao"],
+        ),
+        (
+            "Use DESI DR1 rather than DESI DR2 under LCDM.",
+            ["desi_dr1_bao"],
+        ),
+        (
+            "Run DESI DR2 first, then use DESI DR1 instead under LCDM.",
+            ["desi_dr1_bao"],
+        ),
+    ):
+        assert chat_module._cosmology_dataset_keys_from_prompt(prompt) == expected_keys
+
+    for prompt in (
+        "Run DESI DR1 and DESI DR2 separately under LCDM.",
+        "Compare DESI DR1 versus DESI DR2 without combining them under LCDM.",
+        "Run DESI DR1 with and without DESI DR2 under LCDM.",
+    ):
+        assert [
+            call["input"]["dataset_keys"]
+            for call in chat_module._cosmology_likelihood_build_calls_from_prompt(
+                prompt
+            )
+        ] == [["desi_dr1_bao"], ["desi_dr2_bao"]]
+
+    for prompt, expected_groups in (
+        (
+            "Run Planck and KiDS-1000, never combine them, under LCDM.",
+            [["planck2018_compressed"], ["kids1000_wl"]],
+        ),
+        (
+            "Do not combine Planck and KiDS-1000; run them separately under LCDM.",
+            [["planck2018_compressed"], ["kids1000_wl"]],
+        ),
+        (
+            "Do not run Planck and KiDS-1000 separately; combine them under LCDM.",
+            [["planck2018_compressed", "kids1000_wl"]],
+        ),
+        (
+            "Run Planck and KiDS-1000 jointly under LCDM; report systematics separately.",
+            [["planck2018_compressed", "kids1000_wl"]],
+        ),
+        (
+            "运行 Planck 和 KiDS-1000，但不要组合它们，在 LCDM 下。",
+            [["planck2018_compressed"], ["kids1000_wl"]],
+        ),
+        (
+            "Run Planck with and without weak lensing under LCDM.",
+            [
+                ["planck2018_compressed"],
+                [
+                    "planck2018_compressed",
+                    "kids1000_wl",
+                    "des_y3_3x2pt",
+                    "hsc_y1_cosmic_shear",
+                ],
+            ],
+        ),
+        (
+            "Run Planck with and without an H0 prior under LCDM.",
+            [
+                ["planck2018_compressed"],
+                ["planck2018_compressed", "shoes_h0_riess22"],
+            ],
+        ),
+        (
+            "Run Planck with and without KiDS-1000; then add Pantheon+ "
+            "to both under LCDM.",
+            [
+                ["pantheon_plus", "planck2018_compressed"],
+                ["pantheon_plus", "planck2018_compressed", "kids1000_wl"],
+            ],
+        ),
+    ):
+        assert [
+            call["input"]["dataset_keys"]
+            for call in chat_module._cosmology_likelihood_build_calls_from_prompt(
+                prompt
+            )
+        ] == expected_groups
+
+    multi_model_prompt = (
+        "Run Planck with and without KiDS-1000 under LCDM and wCDM."
+    )
+    assert [
+        (call["input"]["model"], call["input"]["dataset_keys"])
+        for call in chat_module._cosmology_likelihood_run_calls_from_prompt(
+            multi_model_prompt
+        )
+    ] == [
+        ("lcdm", ["planck2018_compressed"]),
+        ("lcdm", ["planck2018_compressed", "kids1000_wl"]),
+        ("wcdm", ["planck2018_compressed"]),
+        ("wcdm", ["planck2018_compressed", "kids1000_wl"]),
+    ]
+
+
+def test_overlapping_joint_groups_remain_independent_likelihoods() -> None:
+    from app.api import chat as chat_module
+
+    for prompt, expected_groups in (
+        (
+            "Run Planck with KiDS jointly; separately run Pantheon with "
+            "DESI DR2 jointly under LCDM.",
+            [
+                ["planck2018_compressed", "kids1000_wl"],
+                ["pantheon_plus", "desi_dr2_bao"],
+            ],
+        ),
+        (
+            "Run Planck+KiDS and Planck+Pantheon as two separate fits "
+            "under LCDM.",
+            [
+                ["planck2018_compressed", "kids1000_wl"],
+                ["planck2018_compressed", "pantheon_plus"],
+            ],
+        ),
+        (
+            "Run Planck and KiDS jointly; then run KiDS and Pantheon "
+            "jointly under LCDM.",
+            [
+                ["planck2018_compressed", "kids1000_wl"],
+                ["kids1000_wl", "pantheon_plus"],
+            ],
+        ),
+        (
+            "Run Planck with and without KiDS; separately run Pantheon "
+            "under LCDM.",
+            [
+                ["planck2018_compressed"],
+                ["planck2018_compressed", "kids1000_wl"],
+                ["pantheon_plus"],
+            ],
+        ),
+        (
+            "Run DESI DR1 and DESI DR2 with and without Planck under LCDM.",
+            [
+                ["desi_dr1_bao"],
+                ["desi_dr1_bao", "planck2018_compressed"],
+                ["desi_dr2_bao"],
+                ["desi_dr2_bao", "planck2018_compressed"],
+            ],
+        ),
+    ):
+        assert [
+            call["input"]["dataset_keys"]
+            for call in chat_module._cosmology_likelihood_build_calls_from_prompt(
+                prompt
+            )
+        ] == expected_groups
+        assert [
+            call["input"]["dataset_keys"]
+            for call in chat_module._cosmology_likelihood_run_calls_from_prompt(
+                prompt
+            )
+        ] == expected_groups
+
+
+def test_with_without_lists_and_every_fit_modifiers_preserve_both_arms() -> None:
+    from app.api import chat as chat_module
+
+    for prompt, expected_groups in (
+        (
+            "Run Planck with/without both KiDS and Pantheon+ under LCDM.",
+            [
+                ["planck2018_compressed"],
+                [
+                    "planck2018_compressed",
+                    "kids1000_wl",
+                    "pantheon_plus",
+                ],
+            ],
+        ),
+        (
+            "Run Planck with and without KiDS, plus Pantheon in every fit "
+            "under LCDM.",
+            [
+                ["pantheon_plus", "planck2018_compressed"],
+                [
+                    "pantheon_plus",
+                    "planck2018_compressed",
+                    "kids1000_wl",
+                ],
+            ],
+        ),
+    ):
+        assert [
+            call["input"]["dataset_keys"]
+            for call in chat_module._cosmology_likelihood_build_calls_from_prompt(
+                prompt
+            )
+        ] == expected_groups
+        assert [
+            call["input"]["dataset_keys"]
+            for call in chat_module._cosmology_likelihood_run_calls_from_prompt(
+                prompt
+            )
+        ] == expected_groups
+
+
+def test_agent_loop_enforces_dataset_identity_after_nonempty_model_reply(
+    monkeypatch,
+) -> None:
+    import asyncio
+
+    from app.api import chat as chat_module
+
+    harmful_reply = (
+        "KiDS-Legacy DR5 and KiDS-1000 are two names for the same dataset."
+    )
+    llm_reply = {"content": harmful_reply}
+
+    async def fake_llm(**_kwargs):
+        # The loop deterministically overrides this text with registry/config/run
+        # calls for the first three iterations.  On the synthesis iteration it
+        # becomes the harmful non-empty draft that the post-condition must drop.
+        return {
+            "content": llm_reply["content"],
+            "stop_reason": "end_turn",
+            "tool_calls": [],
+        }
+
+    async def fake_exec(tool_calls, *_args, **_kwargs):
+        executed = []
+        for call in tool_calls:
+            if call["name"] == "list_cosmology_datasets":
+                result = {"datasets": [{
+                    "key": "kids1000_wl",
+                    "display_name": "KiDS-1000 cosmic shear",
+                    "version": "KiDS-1000 cosmic-shear likelihood",
+                }]}
+            elif call["name"] == "build_cosmology_likelihood":
+                result = {
+                    "model": "lcdm",
+                    "config_hash": "guard-test-config",
+                }
+            elif call["name"] == "run_cosmology_likelihood_chain":
+                result = {
+                    "success": True,
+                    "publication_ready": False,
+                    "preliminary_ready": True,
+                    "datasets_used": [{
+                        "key": "kids1000_wl",
+                        "display_name": "KiDS-1000 cosmic shear",
+                        "version": "KiDS-1000 cosmic-shear likelihood",
+                    }],
+                    "warnings": ["Compressed preliminary runner only."],
+                }
+            else:  # pragma: no cover - the deterministic route is pinned above
+                raise AssertionError(f"unexpected tool {call['name']}")
+            executed.append({**call, "result": result})
+        return executed
+
+    events: list[dict] = []
+
+    async def collect(event: dict) -> None:
+        events.append(dict(event))
+
+    monkeypatch.setattr(chat_module, "_llm_messages_create", fake_llm)
+    monkeypatch.setattr(chat_module, "_execute_tool_calls", fake_exec)
+    result = asyncio.run(
+        chat_module._run_agent_loop(
+            system="test cosmology system",
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Run the executable cosmology likelihood chain with datasets "
+                    "KiDS-Legacy DR5 cosmic shear for model lcdm and state exactly "
+                    "which registered release was run."
+                ),
+            }],
+            tools=[
+                {"name": "list_cosmology_datasets", "input_schema": {}},
+                {"name": "build_cosmology_likelihood", "input_schema": {}},
+                {"name": "run_cosmology_likelihood_chain", "input_schema": {}},
+            ],
+            provider_api_keys={},
+            agent_name="orchestrator",
+            python_session_id="dataset-identity-guard-test",
+            on_event=collect,
+        )
+    )
+
+    assert "same dataset" not in result["reply"]
+    assert "Dataset substitution disclosure" in result["reply"]
+    assert "not to the requested release" in result["reply"]
+    assert any(
+        event.get("type") == "gate_event"
+        and event.get("gate") == "dataset_identity"
+        and event.get("action") == "downgraded_summary"
+        for event in events
+    )
+    assert any(
+        item.get("gate") == "dataset_identity"
+        for item in result["validation_summary"]["interventions"]
+    )
+
+    from app.services import claim_validator
+
+    original_validate_claims = claim_validator.validate_claims
+
+    def fail_identity_validation(reply, tool_results):
+        if "Dataset substitution disclosure" in str(reply):
+            raise RuntimeError("secondary validator unavailable")
+        return original_validate_claims(reply, tool_results)
+
+    monkeypatch.setattr(
+        claim_validator,
+        "validate_claims",
+        fail_identity_validation,
+    )
+    events.clear()
+    validation_failed = asyncio.run(
+        chat_module._run_agent_loop(
+            system="test cosmology system",
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Run the executable cosmology likelihood chain with datasets "
+                    "KiDS-Legacy DR5 cosmic shear for model lcdm and state exactly "
+                    "which registered release was run."
+                ),
+            }],
+            tools=[
+                {"name": "list_cosmology_datasets", "input_schema": {}},
+                {"name": "build_cosmology_likelihood", "input_schema": {}},
+                {"name": "run_cosmology_likelihood_chain", "input_schema": {}},
+            ],
+            provider_api_keys={},
+            agent_name="orchestrator",
+            python_session_id="dataset-identity-validation-failure-test",
+            on_event=collect,
+        )
+    )
+    assert "secondary claim validation failed" in validation_failed["reply"]
+    assert validation_failed["validation_summary"]["blocked"] is True
+    assert validation_failed["validation_summary"]["numeric_gate"] == "blocked"
+    assert any(
+        item.get("gate") == "dataset_identity"
+        and item.get("action") == "blocked"
+        and item.get("reason") == "dataset_identity_validation_error"
+        for item in validation_failed["validation_summary"]["interventions"]
+    )
+
+
+
+def test_dataset_identity_disclosure_preserves_honest_abstention(
+    monkeypatch,
+) -> None:
+    import asyncio
+
+    from app.api import chat as chat_module
+
+    calls = {"count": 0}
+
+    async def fake_llm(**_kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return {
+                "content": "",
+                "stop_reason": "tool_use",
+                "tool_calls": [{
+                    "id": "dataset-registry-call",
+                    "name": "list_cosmology_datasets",
+                    "input": {},
+                }],
+            }
+        return {
+            "content": (
+                '<tools_returned_nothing failed_tools="" empty_tools="" '
+                'rationale="No claimable requested-release result." '
+                'suggested_next_step="Use a registered release."/>'
+            ),
+            "stop_reason": "end_turn",
+            "tool_calls": [],
+        }
+
+    async def fake_exec(tool_calls, *_args, **_kwargs):
+        return [{
+            **call,
+            "result": {"datasets": [{
+                "key": "kids1000_wl",
+                "display_name": "KiDS-1000 cosmic shear",
+                "version": "KiDS-1000 cosmic-shear likelihood",
+            }]},
+        } for call in tool_calls]
+
+    events: list[dict] = []
+
+    async def collect(event: dict) -> None:
+        events.append(dict(event))
+
+    monkeypatch.setattr(chat_module, "_llm_messages_create", fake_llm)
+    monkeypatch.setattr(chat_module, "_execute_tool_calls", fake_exec)
+    abstention_result = asyncio.run(
+        chat_module._run_agent_loop(
+            system="test cosmology system",
+            messages=[{
+                "role": "user",
+                "content": (
+                    "I requested KiDS-Legacy DR5. Check the registry and answer "
+                    "only if that requested release was found."
+                ),
+            }],
+            tools=[
+                {"name": "list_cosmology_datasets", "input_schema": {}},
+            ],
+            provider_api_keys={},
+            agent_name="orchestrator",
+            python_session_id="dataset-identity-abstention-test",
+            on_event=collect,
+        )
+    )
+
+    assert abstention_result.get("honest_abstention") is True, (
+        abstention_result,
+        events,
+    )
+    assert abstention_result["abstention_reason"]
+    assert "Dataset substitution disclosure" in abstention_result["reply"]
+    assert "No claimable requested-release result" in abstention_result["reply"]
+    assert abstention_result["validation_summary"]["numeric_gate"] == "not_run"
+    assert abstention_result["validation_summary"]["citation_gate"] == "not_run"
+    assert abstention_result["validation_summary"]["reason"] == (
+        "honest_abstention_dataset_identity_disclosure"
+    )
+    assert any(
+        event.get("type") == "honest_abstention"
+        and event.get("payload", {}).get(
+            "reply_overridden_by_dataset_identity"
+        ) is True
+        for event in events
+    )
+    assert any(
+        "Dataset substitution disclosure"
+        in str(event.get("payload", {}).get("rationale") or "")
+        for event in events
+        if event.get("type") == "honest_abstention"
+    )
+    assert not any(
+        event.get("type") == "agent_text"
+        and "tools_returned_nothing" in str(event.get("content") or "")
+        for event in events
+    )
+
+
+def test_research_auto_fact_check_and_export_emit_tool_events(monkeypatch) -> None:
+    import asyncio
+
+    from app.api import chat as chat_module
+
+    async def fake_llm(**_kwargs):
+        return {
+            "content": "The controlled research workflow is complete.",
+            "stop_reason": "end_turn",
+            "tool_calls": [],
+        }
+
+    async def fake_exec(tool_calls, *_args, **_kwargs):
+        executed = []
+        for call in tool_calls:
+            if call["name"] == "plan_research_program":
+                result = {"research_plan": {
+                    "research_question": "Test a controlled BAO baseline.",
+                    "required_probes": ["BAO"],
+                    "model_families": ["lcdm"],
+                    "blocking_gaps": [],
+                }}
+            elif call["name"] == "run_research_matrix":
+                result = {"matrix_size": 0, "ready_cells": 0, "matrix": []}
+            elif call["name"] == "build_evidence_graph":
+                result = {
+                    "success": True,
+                    "evidence_graph": {
+                        "claimable_parameters": [],
+                        "supported_claims": [],
+                        "unsupported_claims": [],
+                    },
+                    "claimable_parameters": [],
+                }
+            else:  # pragma: no cover - deterministic research route is pinned
+                raise AssertionError(f"unexpected tool {call['name']}")
+            executed.append({**call, "result": result})
+        return executed
+
+    events: list[dict] = []
+
+    async def collect(event: dict) -> None:
+        events.append(dict(event))
+
+    monkeypatch.setattr(chat_module, "_llm_messages_create", fake_llm)
+    monkeypatch.setattr(chat_module, "_execute_tool_calls", fake_exec)
+    result = asyncio.run(
+        chat_module._run_agent_loop(
+            system="test research system",
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Plan + run a 3-probe analysis (BAO + Pantheon+ + Planck "
+                    "compressed) under LCDM. Then build the evidence graph, run "
+                    "fact-check, and export a draft report. Tell me which cells "
+                    "are publication_ready vs executed_not_ready."
+                ),
+            }],
+            tools=[
+                {"name": "plan_research_program", "input_schema": {}},
+                {"name": "run_research_matrix", "input_schema": {}},
+                {"name": "build_evidence_graph", "input_schema": {}},
+            ],
+            provider_api_keys={},
+            agent_name="orchestrator",
+            python_session_id="auto-research-events-test",
+            on_event=collect,
+        )
+    )
+
+    automatic_calls = [
+        event.get("tool")
+        for event in events
+        if event.get("type") == "tool_call" and event.get("automatic") is True
+    ]
+    automatic_results = [
+        event.get("tool")
+        for event in events
+        if event.get("type") == "tool_result" and event.get("automatic") is True
+    ]
+    assert automatic_calls == [
+        "verify_research_facts", "export_research_report"
+    ], (events, result)
+    assert automatic_results == [
+        "verify_research_facts", "export_research_report"
+    ], (events, result)
+    assert {
+        item.get("tool") for item in result["tool_results"]
+    } >= {
+        "plan_research_program",
+        "run_research_matrix",
+        "build_evidence_graph",
+        "verify_research_facts",
+        "export_research_report",
+    }
+
+    from app.services import research_program
+
+    original_verify_research_facts = research_program.verify_research_facts
+
+    def fail_fact_check(**_kwargs):
+        raise RuntimeError("fact-check backend unavailable")
+
+    monkeypatch.setattr(
+        research_program,
+        "verify_research_facts",
+        fail_fact_check,
+    )
+    events.clear()
+    failed_result = asyncio.run(
+        chat_module._run_agent_loop(
+            system="test research system",
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Plan + run a 3-probe analysis (BAO + Pantheon+ + Planck "
+                    "compressed) under LCDM. Then build the evidence graph, run "
+                    "fact-check, and export a draft report. Tell me which cells "
+                    "are publication_ready vs executed_not_ready."
+                ),
+            }],
+            tools=[
+                {"name": "plan_research_program", "input_schema": {}},
+                {"name": "run_research_matrix", "input_schema": {}},
+                {"name": "build_evidence_graph", "input_schema": {}},
+            ],
+            provider_api_keys={},
+            agent_name="orchestrator",
+            python_session_id="auto-research-events-failure-test",
+            on_event=collect,
+        )
+    )
+
+    failed_tools = {
+        item.get("tool"): item.get("result")
+        for item in failed_result["tool_results"]
+    }
+    assert failed_tools["verify_research_facts"]["status"] == "blocked"
+    assert failed_tools["verify_research_facts"]["__do_not_claim__"] is True
+    assert "export_research_report" not in failed_tools
+    assert "Automatic fact verification failed" in failed_result["reply"]
+    assert failed_result["validation_summary"]["blocked"] is True
+    assert failed_result["validation_summary"]["numeric_gate"] == "blocked"
+    assert failed_result["validation_summary"]["citation_gate"] == "blocked"
+    assert any(
+        item.get("gate") == "fact_verification"
+        and item.get("action") == "blocked"
+        and item.get("reason") == "automatic_fact_check_failed"
+        for item in failed_result["validation_summary"]["interventions"]
+    )
+    assert any(
+        event.get("type") == "tool_result"
+        and event.get("tool") == "verify_research_facts"
+        and event.get("automatic") is True
+        and event.get("result", {}).get("__tool_status__") == "FAILED"
+        for event in events
+    )
+
+    from app.services.agent_runtime import loop as loop_module
+
+    def block_without_safe_summary(**_kwargs):
+        return {
+            "success": True,
+            "status": "blocked",
+            "publication_ready": False,
+            "claims": [{
+                "status": "unsupported",
+                "claim": "Unsupported merged conclusion.",
+            }],
+        }
+
+    monkeypatch.setattr(
+        research_program,
+        "verify_research_facts",
+        block_without_safe_summary,
+    )
+    monkeypatch.setattr(
+        loop_module,
+        "_research_tool_grounded_summary",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        loop_module,
+        "_cosmology_tool_grounded_summary",
+        lambda *_args, **_kwargs: None,
+    )
+    events.clear()
+    no_summary_result = asyncio.run(
+        chat_module._run_agent_loop(
+            system="test research system",
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Plan + run a 3-probe analysis (BAO + Pantheon+ + Planck "
+                    "compressed) under LCDM, fact-check it, and export a report."
+                ),
+            }],
+            tools=[
+                {"name": "plan_research_program", "input_schema": {}},
+                {"name": "run_research_matrix", "input_schema": {}},
+                {"name": "build_evidence_graph", "input_schema": {}},
+            ],
+            provider_api_keys={},
+            agent_name="orchestrator",
+            python_session_id="fact-check-blocked-no-summary-test",
+            on_event=collect,
+        )
+    )
+    assert no_summary_result["validation_summary"]["blocked"] is True
+    assert no_summary_result["validation_summary"]["numeric_gate"] == "blocked"
+    assert no_summary_result["validation_summary"]["citation_gate"] == "blocked"
+    assert not any(
+        item.get("tool") == "export_research_report"
+        for item in no_summary_result["tool_results"]
+    )
+    assert not any(
+        event.get("tool") == "export_research_report"
+        for event in events
+    )
+
+    def fail_report_export(**_kwargs):
+        raise RuntimeError("report store unavailable")
+
+    monkeypatch.setattr(
+        research_program,
+        "verify_research_facts",
+        original_verify_research_facts,
+    )
+    monkeypatch.setattr(
+        research_program,
+        "export_research_report",
+        fail_report_export,
+    )
+    events.clear()
+    export_failed_result = asyncio.run(
+        chat_module._run_agent_loop(
+            system="test research system",
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Plan + run a 3-probe analysis (BAO + Pantheon+ + Planck "
+                    "compressed) under LCDM. Then build the evidence graph, run "
+                    "fact-check, and export a draft report. Tell me which cells "
+                    "are publication_ready vs executed_not_ready."
+                ),
+            }],
+            tools=[
+                {"name": "plan_research_program", "input_schema": {}},
+                {"name": "run_research_matrix", "input_schema": {}},
+                {"name": "build_evidence_graph", "input_schema": {}},
+            ],
+            provider_api_keys={},
+            agent_name="orchestrator",
+            python_session_id="auto-research-report-failure-test",
+            on_event=collect,
+        )
+    )
+    export_failure = next(
+        item
+        for item in export_failed_result["tool_results"]
+        if item.get("tool") == "export_research_report"
+    )
+    assert export_failure["result"]["__tool_status__"] == "FAILED"
+    assert export_failure["result"]["analysis_status"] == (
+        "REPORT_EXPORT_FAILED"
+    )
+    assert "report artifact was not" in export_failed_result["reply"]
+    assert export_failed_result["validation_summary"]["blocked"] is True
+    assert export_failed_result["validation_summary"]["numeric_gate"] == "blocked"
+    assert export_failed_result["validation_summary"]["citation_gate"] == "blocked"
+    assert any(
+        item.get("gate") == "report_export"
+        and item.get("action") == "blocked"
+        and item.get("reason") == "automatic_report_export_failed"
+        for item in export_failed_result["validation_summary"]["interventions"]
+    )
+    assert any(
+        event.get("type") == "tool_result"
+        and event.get("tool") == "export_research_report"
+        and event.get("automatic") is True
+        and event.get("result", {}).get("__tool_status__") == "FAILED"
+        for event in events
+    )
+
+
+def test_multi_agent_fact_check_failure_blocks_merge_and_skips_report(
+    monkeypatch,
+) -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.api import chat as chat_module
+    from app.services import research_program
+
+    research_tools = [{
+        "id": "research-plan",
+        "tool": "plan_research_program",
+        "input": {},
+        "result": {"research_plan": {
+            "research_question": "Test a controlled BAO baseline.",
+            "required_probes": ["BAO"],
+            "model_families": ["lcdm"],
+            "blocking_gaps": [],
+        }},
+    }, {
+        "id": "research-matrix",
+        "tool": "run_research_matrix",
+        "input": {},
+        "result": {"matrix_size": 0, "ready_cells": 0, "matrix": []},
+    }, {
+        "id": "evidence-graph",
+        "tool": "build_evidence_graph",
+        "input": {},
+        "result": {
+            "success": True,
+            "evidence_graph": {
+                "claimable_parameters": [],
+                "supported_claims": [],
+                "unsupported_claims": [],
+            },
+            "claimable_parameters": [],
+        },
+    }]
+    all_specialists_abstain = {"value": False}
+    member_report_failure = {"value": False}
+    member_report_success = {"value": False}
+
+    async def fake_agent_loop(**kwargs):
+        if (
+            (
+                kwargs.get("agent_name") == "analyst"
+                or all_specialists_abstain["value"]
+            )
+            and kwargs.get("on_event") is not None
+        ):
+            await kwargs["on_event"]({
+                "type": "honest_abstention",
+                "payload": {
+                    "reason": "no_tools",
+                    "rationale": "Specialist could not make a claim.",
+                },
+            })
+        is_analyst = kwargs.get("agent_name") == "analyst"
+        specialist_tools = list(research_tools) if is_analyst else []
+        if is_analyst and member_report_failure["value"]:
+            specialist_tools.append({
+                "id": "member-report-failure",
+                "tool": "export_research_report",
+                "input": {},
+                "result": {
+                    "success": False,
+                    "__tool_status__": "FAILED",
+                    "analysis_status": "REPORT_EXPORT_FAILED",
+                },
+            })
+        if is_analyst and member_report_success["value"]:
+            specialist_tools.append({
+                "id": "member-report-success",
+                "tool": "export_research_report",
+                "input": {"report_scope": "specialist"},
+                "result": {
+                    "success": True,
+                    "__tool_status__": "COMPLETED",
+                    "analysis_status": "RESEARCH_REPORT_READY",
+                },
+            })
+        return {
+            "reply": "Specialist tool work complete.",
+            "actions": [],
+            "tool_results": specialist_tools,
+            "hit_deadline": False,
+            "hit_iteration_cap": False,
+            "honest_abstention": all_specialists_abstain["value"],
+            "abstention_reason": (
+                "no_tools" if all_specialists_abstain["value"] else None
+            ),
+            "validation_summary": {
+                "schema_version": 1,
+                "numeric_gate": "passed",
+                "citation_gate": "passed",
+                "regen_count": 0,
+                "blocked": False,
+                "interventions": (
+                    [{
+                        "gate": "report_export",
+                        "action": "blocked",
+                        "reason": "automatic_report_export_failed",
+                    }]
+                    if is_analyst and member_report_failure["value"]
+                    else []
+                ),
+            },
+        }
+
+    async def fake_handoff(source, target, _reply):
+        return SimpleNamespace(
+            source_agent=source,
+            target_agent=target,
+            context_summary="Tool work completed.",
+            instruction="Independently review the tool results.",
+        )
+
+    async def fake_merge(_agent_results):
+        return "The merged controlled research workflow is complete."
+
+    def fail_fact_check(**_kwargs):
+        raise RuntimeError("merged fact-check backend unavailable")
+
+    report_calls = {"count": 0}
+
+    def count_report_export(**_kwargs):
+        report_calls["count"] += 1
+        return {"success": True}
+
+    monkeypatch.setattr(chat_module, "_run_agent_loop", fake_agent_loop)
+    monkeypatch.setattr(
+        chat_module.orchestrator,
+        "get_agent_runtime",
+        lambda _name, _context: {"system_prompt": "specialist", "tool_names": []},
+    )
+    monkeypatch.setattr(
+        chat_module.orchestrator,
+        "summarize_handoff",
+        fake_handoff,
+    )
+    monkeypatch.setattr(
+        chat_module.orchestrator,
+        "merge_responses",
+        fake_merge,
+    )
+    monkeypatch.setattr(
+        research_program,
+        "verify_research_facts",
+        fail_fact_check,
+    )
+    monkeypatch.setattr(
+        research_program,
+        "export_research_report",
+        count_report_export,
+    )
+
+    events: list[dict] = []
+
+    async def collect(event: dict) -> None:
+        events.append(dict(event))
+
+    async def run_multi(session_id: str):
+        return await chat_module._run_orchestrated_chat(
+            runtime={
+                "agent_names": ["analyst", "reviewer"],
+                "base_system": "test multi-agent system",
+                "toolset": [],
+            },
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Research DESI BAO + Planck CMB consistency under LCDM "
+                    "using a controlled analysis workflow."
+                ),
+            }],
+            provider_api_keys={},
+            python_session_id=session_id,
+            on_event=collect,
+        )
+
+    result = asyncio.run(run_multi("merged-fact-check-failure-test"))
+
+    assert "Automatic fact verification" in result["reply"]
+    assert result["validation_summary"]["blocked"] is True
+    assert result["validation_summary"]["numeric_gate"] == "blocked"
+    assert result["validation_summary"]["citation_gate"] == "blocked"
+    assert result["validation_summary"]["reason"] == (
+        "automatic_fact_check_failed"
+    )
+    failed_fact = next(
+        item
+        for item in result["tool_results"]
+        if item.get("tool") == "verify_research_facts"
+    )
+    assert failed_fact["result"]["__tool_status__"] == "FAILED"
+    assert failed_fact["result"]["status"] == "blocked"
+    assert not any(
+        item.get("tool") == "export_research_report"
+        for item in result["tool_results"]
+    )
+    assert report_calls["count"] == 0
+    assert any(
+        item.get("gate") == "fact_verification"
+        and item.get("action") == "blocked"
+        for item in result["validation_summary"]["interventions"]
+    )
+    assert any(
+        event.get("type") == "tool_result"
+        and event.get("tool") == "verify_research_facts"
+        and event.get("result", {}).get("__tool_status__") == "FAILED"
+        for event in events
+    )
+    assert not any(
+        event.get("type") == "honest_abstention"
+        for event in events
+    )
+
+    def block_merged_fact_check(**_kwargs):
+        return {
+            "success": True,
+            "status": "blocked",
+            "publication_ready": False,
+            "claims": [{
+                "status": "unsupported",
+                "claim": "Unsupported merged claim.",
+            }],
+        }
+
+    monkeypatch.setattr(
+        research_program,
+        "verify_research_facts",
+        block_merged_fact_check,
+    )
+    monkeypatch.setattr(
+        research_program,
+        "export_research_report",
+        count_report_export,
+    )
+    monkeypatch.setattr(
+        chat_module,
+        "_research_tool_grounded_summary",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        chat_module,
+        "_cosmology_tool_grounded_summary",
+        lambda *_args, **_kwargs: None,
+    )
+    report_calls["count"] = 0
+    events.clear()
+    no_safe_merge = asyncio.run(run_multi("merged-fact-block-no-summary-test"))
+    assert no_safe_merge["validation_summary"]["blocked"] is True
+    assert no_safe_merge["validation_summary"]["numeric_gate"] == "blocked"
+    assert no_safe_merge["validation_summary"]["citation_gate"] == "blocked"
+    assert report_calls["count"] == 0
+    assert not any(
+        item.get("tool") == "export_research_report"
+        for item in no_safe_merge["tool_results"]
+    )
+
+    def pass_fact_check(**_kwargs):
+        return {
+            "success": True,
+            "status": "passed",
+            "publication_ready": False,
+            "claims": [],
+        }
+
+    monkeypatch.setattr(
+        research_program,
+        "verify_research_facts",
+        pass_fact_check,
+    )
+    member_report_failure["value"] = True
+    monkeypatch.setattr(
+        research_program,
+        "export_research_report",
+        count_report_export,
+    )
+    events.clear()
+    recovered_report = asyncio.run(run_multi("member-report-recovery-test"))
+    assert report_calls["count"] == 1
+    report_results = [
+        item.get("result")
+        for item in recovered_report["tool_results"]
+        if item.get("tool") == "export_research_report"
+    ]
+    assert any(
+        isinstance(item, dict) and item.get("success") is True
+        for item in report_results
+    )
+    assert recovered_report["validation_summary"]["blocked"] is False
+    assert recovered_report["validation_summary"]["numeric_gate"] == (
+        "regenerated"
+    )
+    assert recovered_report["validation_summary"]["citation_gate"] == (
+        "regenerated"
+    )
+
+    member_report_failure["value"] = False
+    member_report_success["value"] = True
+    report_calls["count"] = 0
+    events.clear()
+    merged_after_member_report = asyncio.run(
+        run_multi("successful-member-report-still-merges-test")
+    )
+    assert report_calls["count"] == 1
+    assert any(
+        item.get("tool") == "export_research_report"
+        and item.get("input", {}).get("report_scope") == "merged"
+        and item.get("result", {}).get("success") is True
+        for item in merged_after_member_report["tool_results"]
+    )
+
+    all_specialists_abstain["value"] = True
+    events.clear()
+    all_abstained = asyncio.run(run_multi("all-specialists-abstain-test"))
+    assert all_abstained["honest_abstention"] is True
+    assert all_abstained["abstention_reason"] == "no_tools"
+    assert all_abstained["validation_summary"]["numeric_gate"] == "not_run"
+    assert all_abstained["validation_summary"]["citation_gate"] == "not_run"
+    assert all_abstained["validation_summary"]["reason"] == (
+        "all_specialists_honest_abstention"
+    )
+    assert sum(
+        event.get("type") == "honest_abstention"
+        for event in events
+    ) == 1
+    assert any(
+        event.get("type") == "status"
+        and event.get("specialist_abstention")
+        for event in events
+    )
+
+    all_specialists_abstain["value"] = False
+    member_report_failure["value"] = False
+    member_report_success["value"] = False
+    report_calls["count"] = 0
+
+    def fail_merged_report(**_kwargs):
+        report_calls["count"] += 1
+        raise RuntimeError("merged report store unavailable")
+
+    monkeypatch.setattr(
+        research_program,
+        "verify_research_facts",
+        pass_fact_check,
+    )
+    monkeypatch.setattr(
+        research_program,
+        "export_research_report",
+        fail_merged_report,
+    )
+    events.clear()
+    report_failed = asyncio.run(run_multi("merged-report-failure-test"))
+    assert report_calls["count"] == 1
+    assert "report artifact was not" in report_failed["reply"]
+    assert report_failed["validation_summary"]["blocked"] is True
+    assert report_failed["validation_summary"]["numeric_gate"] == "blocked"
+    assert report_failed["validation_summary"]["citation_gate"] == "blocked"
+    assert report_failed["validation_summary"]["reason"] == (
+        "automatic_report_export_failed"
+    )
+    failed_report = next(
+        item
+        for item in report_failed["tool_results"]
+        if item.get("tool") == "export_research_report"
+    )
+    assert failed_report["result"]["__tool_status__"] == "FAILED"
+    assert any(
+        item.get("gate") == "report_export"
+        and item.get("action") == "blocked"
+        for item in report_failed["validation_summary"]["interventions"]
+    )
+    assert not any(
+        event.get("type") == "honest_abstention"
+        for event in events
+    )
+
+
+def test_cosmology_summary_release_disclosure_is_generic_and_not_spurious() -> None:
+    from app.api.chat import _cosmology_tool_grounded_summary
+
+    desi_results = [{
+        "tool": "list_cosmology_datasets",
+        "result": {"datasets": [{
+            "key": "desi_dr1_bao",
+            "display_name": "DESI DR1 BAO",
+            "version": "DESI 2024 Data Release 1",
+        }]},
+    }]
+    mismatch = _cosmology_tool_grounded_summary(
+        desi_results, "Run the DESI DR3 BAO registered likelihood."
+    )
+    assert mismatch is not None
+    assert "Dataset substitution disclosure" in mismatch
+    assert "DR3" in mismatch and "DESI DR1 BAO" in mismatch
+
+    exact = _cosmology_tool_grounded_summary(
+        [{
+            "tool": "list_cosmology_datasets",
+            "result": {"datasets": [{
+                "key": "kids1000_wl",
+                "display_name": "KiDS-1000 cosmic shear",
+                "version": "KiDS-1000 cosmic-shear likelihood",
+            }]},
+        }],
+        "Run KiDS-1000 cosmic shear.",
+    )
+    assert exact is not None
+    assert "Dataset substitution disclosure" not in exact
+
+    nearby_scientific_numbers = _cosmology_tool_grounded_summary(
+        [{
+            "tool": "list_cosmology_datasets",
+            "result": {"datasets": [{
+                "key": "kids1000_wl",
+                "display_name": "KiDS-1000 cosmic shear",
+                "version": "KiDS-1000 cosmic-shear likelihood",
+            }]},
+        }],
+        "Run KiDS cosmic shear with 1500 samples following the 2024 methods paper.",
+    )
+    assert nearby_scientific_numbers is not None
+    assert "Dataset substitution disclosure" not in nearby_scientific_numbers
+
+    pantheon_plus = _cosmology_tool_grounded_summary(
+        [{
+            "tool": "list_cosmology_datasets",
+            "result": {"datasets": [{
+                "key": "pantheon_plus",
+                "display_name": "Pantheon+ supernovae",
+                "version": "Pantheon Plus release",
+            }]},
+        }],
+        "Run Pantheon+ with the registered supernova likelihood.",
+    )
+    assert pantheon_plus is not None
+    assert "Dataset substitution disclosure" not in pantheon_plus
+
+    pantheon_plus_sh0es_mismatch = _cosmology_tool_grounded_summary(
+        [{
+            "tool": "list_cosmology_datasets",
+            "result": {"datasets": [{
+                "key": "pantheon18",
+                "display_name": "Pantheon 2018 supernovae",
+                "version": "2018 release",
+            }]},
+        }],
+        "Use Pantheon+SH0ES for the supernova branch.",
+    )
+    assert pantheon_plus_sh0es_mismatch is not None
+    assert "Dataset substitution disclosure" in pantheon_plus_sh0es_mismatch
+    assert "Plus" in pantheon_plus_sh0es_mismatch
+
+    with_release_marker = _cosmology_tool_grounded_summary(
+        desi_results, "Run DESI BAO with DR3 registered likelihood."
+    )
+    assert with_release_marker is not None
+    assert "Dataset substitution disclosure" in with_release_marker
+    assert "DR3" in with_release_marker
+
+    registered_but_not_run = _cosmology_tool_grounded_summary(
+        [{
+            "tool": "run_cosmology_likelihood_chain",
+            "result": {
+                "datasets_used": [{
+                    "key": "desi_dr1_bao",
+                    "display_name": "DESI DR1 BAO",
+                    "version": "Data Release 1",
+                }],
+                "datasets_not_run": [{
+                    "key": "desi_dr3_bao",
+                    "display_name": "DESI DR3 BAO",
+                    "version": "Data Release 3",
+                }],
+            },
+        }],
+        "Run DESI DR3 BAO.",
+    )
+    assert registered_but_not_run is not None
+    assert "Dataset substitution disclosure" in registered_but_not_run
+    assert "listed in `datasets_not_run` but was not executed" in registered_but_not_run
+    assert "not registered" not in registered_but_not_run
+
+    expanded_kids = _cosmology_tool_grounded_summary(
+        [{
+            "tool": "list_cosmology_datasets",
+            "result": {"datasets": [{
+                "key": "kids1000_wl",
+                "display_name": "KiDS-1000 cosmic shear",
+                "version": "KiDS-1000 cosmic-shear likelihood",
+            }]},
+        }],
+        "Run the Kilo-Degree Survey Legacy DR5 likelihood.",
+    )
+    assert expanded_kids is not None
+    assert "Dataset substitution disclosure" in expanded_kids
+    assert "Legacy" in expanded_kids and "DR5" in expanded_kids
+
+    expanded_des = _cosmology_tool_grounded_summary(
+        [{
+            "tool": "list_cosmology_datasets",
+            "result": {"datasets": [{
+                "key": "des_y3_3x2pt",
+                "display_name": "DES Y3 3x2pt",
+                "version": "DES Year 3",
+            }]},
+        }],
+        "Run the Dark Energy Survey Y6 likelihood.",
+    )
+    assert expanded_des is not None
+    assert "Dataset substitution disclosure" in expanded_des
+    assert "Y6" in expanded_des
+
+    infix_union = _cosmology_tool_grounded_summary(
+        [{
+            "tool": "list_cosmology_datasets",
+            "result": {"datasets": [
+                {
+                    "key": "desi_dr1_bao",
+                    "display_name": "DESI DR1 BAO",
+                    "version": "Data Release 1",
+                },
+                {
+                    "key": "planck2018_compressed",
+                    "display_name": "Planck 2018 compressed CMB",
+                    "version": "Planck 2018",
+                },
+            ]},
+        }],
+        "Run DESI+Planck.",
+    )
+    assert infix_union is not None
+    assert "Dataset substitution disclosure" not in infix_union
+
+    word_union = _cosmology_tool_grounded_summary(
+        desi_results,
+        "Run DESI plus Planck, using the legacy pipeline only for file conversion.",
+    )
+    assert word_union is not None
+    assert "Dataset substitution disclosure" not in word_union
+
+    used_is_authoritative = _cosmology_tool_grounded_summary(
+        [
+            {
+                "tool": "list_cosmology_datasets",
+                "result": {"datasets": [
+                    {
+                        "key": "desi_dr1_bao",
+                        "display_name": "DESI DR1 BAO",
+                        "version": "Data Release 1",
+                    },
+                    {
+                        "key": "desi_dr2_bao",
+                        "display_name": "DESI DR2 BAO",
+                        "version": "Data Release 2",
+                    },
+                ]},
+            },
+            {
+                "tool": "run_cosmology_likelihood_chain",
+                "result": {"datasets_used": [{
+                    "key": "desi_dr1_bao",
+                    "display_name": "DESI DR1 BAO",
+                    "version": "Data Release 1",
+                }]},
+            },
+        ],
+        "Run DESI DR2 BAO.",
+    )
+    assert used_is_authoritative is not None
+    assert "Dataset substitution disclosure" in used_is_authoritative
+    assert "registry selection but was not executed" in used_is_authoritative
+    assert "DESI DR1 BAO" in used_is_authoritative
+
+    same_family_multi_select = _cosmology_tool_grounded_summary(
+        [{
+            "tool": "list_cosmology_datasets",
+            "result": {"datasets": [
+                {
+                    "key": "des_y3_3x2pt",
+                    "display_name": "DES Y3 3x2pt weak lensing + clustering",
+                    "version": "DES Year 3",
+                },
+                {
+                    "key": "des_sn5yr",
+                    "display_name": "DES-SN 5YR",
+                    "version": "DES five-year supernova release",
+                },
+            ]},
+        }],
+        "Compare the selected DES Y3 product with the supernova branch.",
+    )
+    assert same_family_multi_select is not None
+    assert "Dataset substitution disclosure" not in same_family_multi_select
 
 
 def test_cosmology_summary_appends_out_of_coverage_caveat_for_beyond_z_request() -> None:
@@ -1095,6 +3030,23 @@ def test_research_summary_separates_executed_not_ready_from_config_only() -> Non
                         "execution_level": "config_only",
                         "warnings": ["Pantheon+ requires external Cobaya/CosmoSIS."],
                     },
+                    {
+                        "label": "BAO only",
+                        "publication_ready": False,
+                        "execution_level": "executed_not_ready",
+                        "result": {
+                            "chain_diagnostics": {
+                                "proposal_ess": 1310.0,
+                                "thresholds": {"ess_min": 400},
+                            },
+                            "publication_gate": {
+                                "reasons": [
+                                    "compressed_or_approximate_likelihood",
+                                    "fewer_than_four_independent_chains",
+                                ]
+                            },
+                        },
+                    },
                 ],
             },
         },
@@ -1105,10 +3057,45 @@ def test_research_summary_separates_executed_not_ready_from_config_only() -> Non
     assert summary is not None
     assert "BAO + CMB · H0 median 67.28 · `Omega_m` median 0.3117 · S8 median 0.8317" in summary
     assert "Executed but not claimable" in summary
+    assert "execution_level=executed_not_ready" in summary
     assert "BAO + WL · ESS 105 below threshold 400" in summary
+    assert "BAO only · ESS 1310 meets threshold 400" in summary
+    assert "BAO only · ESS 1310 below threshold 400" not in summary
+    assert "`compressed_or_approximate_likelihood`" in summary
+    assert "`fewer_than_four_independent_chains`" in summary
     assert "Config-only or not-runnable branches" in summary
     assert "BAO + SN · Pantheon+ requires external Cobaya/CosmoSIS." in summary
     assert "BAO + WL" not in summary.split("Config-only or not-runnable branches:", 1)[-1]
+
+
+def test_tainted_research_matrix_summary_never_emits_cell_numbers() -> None:
+    from app.api.chat import _research_tool_grounded_summary
+
+    summary = _research_tool_grounded_summary([
+        {
+            "tool": "run_research_matrix",
+            "result": {
+                "publication_ready": False,
+                "__do_not_claim__": True,
+                "matrix": [
+                    {
+                        "label": "BAO + CMB",
+                        "publication_ready": True,
+                        "result": {
+                            "parameters": {"H0": {"median": 67.28}},
+                            "chain_diagnostics": {"ess_bulk": 901, "rhat": 1.001},
+                        },
+                    }
+                ],
+            },
+        }
+    ])
+
+    assert summary is not None
+    assert "BAO + CMB" in summary
+    assert "67.28" not in summary
+    assert "901" not in summary
+    assert "1.001" not in summary
 
 
 def test_research_summary_formats_config_only_dataset_dicts_for_users() -> None:
@@ -1160,7 +3147,7 @@ def test_research_summary_formats_config_only_dataset_dicts_for_users() -> None:
     summary = _research_tool_grounded_summary(tool_results)
 
     assert summary is not None
-    assert "No publication-ready compressed-likelihood baseline completed this turn." in summary
+    assert "No publication-ready direct likelihood result completed this turn." in summary
     assert "Planck PR4/NPIPE EB/TB polarization-rotation products (planck_pr4_ebtb_rotation)" in summary
     assert "ACT DR6 EB/TB polarization-rotation products (act_dr6_ebtb_rotation)" in summary
     assert "{'key':" not in summary

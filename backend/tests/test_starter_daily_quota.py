@@ -1,19 +1,22 @@
-"""Starter-tier daily quota on platform-funded chat calls (decision 2B).
+"""Daily quota on platform-funded chat calls (decision 2B + P0 hardening).
 
 New self-service signups land on the "starter" tier: 50 platform-funded
-chat calls per UTC day, so a fresh anonymous registration cannot burn the
-shared server DeepSeek key (the only platform-funded provider — Anthropic
-and OpenAI stay BYOK, see app/api/chat.py:_provider_api_keys). Calls that
-run on a user-supplied key are exempt. Pre-existing accounts
-(solo/lab/institution) are untouched.
+chat calls per UTC day. Anonymous callers receive the same allowance per
+trusted client IP. This protects the shared server DeepSeek key (the only
+platform-funded provider — Anthropic and OpenAI stay BYOK, see
+app/api/chat.py:_provider_api_keys). Calls that run on a user-supplied key
+are exempt. Pre-existing accounts (solo/lab/institution) are untouched.
 """
 
 import uuid
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from fastapi import HTTPException
 
 from app.auth import create_access_token, hash_password
+from app.config import settings
 from app.models.schemas import User
 from app.rate_limit import DailyQuota, daily_quota
 
@@ -27,6 +30,8 @@ def quota_isolation(monkeypatch):
     import app.rate_limit as rl
 
     monkeypatch.setattr(rl, "_get_quota_redis", lambda: None)
+    monkeypatch.setenv("ENV", "dev")
+    monkeypatch.delenv("RENDER", raising=False)
     daily_quota._usage.clear()
     daily_quota._reset_day.clear()
     yield
@@ -36,10 +41,10 @@ def quota_isolation(monkeypatch):
 
 @pytest.fixture
 def platform_key_env(monkeypatch):
-    """Simulate the production posture: shared server DeepSeek key present."""
+    """Simulate an operator explicitly enabling the shared DeepSeek key."""
     monkeypatch.setenv("PLATFORM_DEEPSEEK_API_KEY", SERVER_KEY)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.delenv("SHARED_DEEPSEEK_API_KEY_ENABLED", raising=False)
+    monkeypatch.setenv("SHARED_DEEPSEEK_API_KEY_ENABLED", "1")
     monkeypatch.delenv("DEFAULT_AI_BACKEND", raising=False)
 
 
@@ -62,6 +67,20 @@ async def _make_user(db_session, tier: str):
 def _seed_quota(user_id, n: int) -> None:
     for _ in range(n):
         daily_quota.check_and_increment(str(user_id), "starter", "api_calls")
+
+
+def _seed_anonymous_quota(client_ip: str, n: int) -> None:
+    for _ in range(n):
+        daily_quota.check_and_increment(
+            f"anonymous-ip:{client_ip}", "anonymous", "api_calls"
+        )
+
+
+def _request(client_ip: str = "203.0.113.7", headers: dict | None = None):
+    return SimpleNamespace(
+        client=SimpleNamespace(host=client_ip),
+        headers=headers or {},
+    )
 
 
 async def _fake_chat(**kwargs):
@@ -110,12 +129,95 @@ class TestDailyQuotaStarterLimits:
         }
 
 
-class TestStarterQuotaGateUnit:
-    def test_gate_skips_anonymous_user(self, platform_key_env):
+class TestAnonymousQuotaGate:
+    def test_anonymous_allows_50_then_blocks_51st(self, platform_key_env):
         from app.api.chat import _enforce_starter_daily_quota
 
-        # Anonymous traffic is handled by the per-IP limiter, never here.
-        _enforce_starter_daily_quota(None, {}, {})
+        request = _request()
+        provider_keys = {"deepseek": SERVER_KEY}
+        for _ in range(STARTER_DAILY_API_CALLS):
+            _enforce_starter_daily_quota(
+                None, {}, provider_keys, request=request
+            )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _enforce_starter_daily_quota(
+                None, {}, provider_keys, request=request
+            )
+
+        assert exc_info.value.status_code == 429
+        assert daily_quota.get_usage("anonymous-ip:203.0.113.7")["api_calls"] == 50
+
+    def test_anonymous_bucket_ignores_spoofed_forwarding_headers(
+        self, platform_key_env, monkeypatch
+    ):
+        from app.api.chat import _enforce_starter_daily_quota
+
+        monkeypatch.setattr(settings, "trusted_proxy_mode", "none", raising=False)
+        provider_keys = {"deepseek": SERVER_KEY}
+        socket_ip = "203.0.113.7"
+        _seed_anonymous_quota(socket_ip, STARTER_DAILY_API_CALLS)
+
+        with pytest.raises(HTTPException) as first:
+            _enforce_starter_daily_quota(
+                None,
+                {},
+                provider_keys,
+                request=_request(socket_ip, {"X-Forwarded-For": "198.51.100.1"}),
+            )
+        with pytest.raises(HTTPException) as second:
+            _enforce_starter_daily_quota(
+                None,
+                {},
+                provider_keys,
+                request=_request(socket_ip, {"X-Forwarded-For": "198.51.100.2"}),
+            )
+
+        assert first.value.status_code == second.value.status_code == 429
+
+    def test_anonymous_byok_is_exempt(self, platform_key_env):
+        from app.api.chat import _enforce_starter_daily_quota
+
+        client_ip = "203.0.113.7"
+        _seed_anonymous_quota(client_ip, STARTER_DAILY_API_CALLS)
+        _enforce_starter_daily_quota(
+            None,
+            {"api_provider": "deepseek"},
+            {"deepseek": "sk-user-own-deepseek"},
+            request=_request(client_ip),
+        )
+        assert daily_quota.get_usage(f"anonymous-ip:{client_ip}")["api_calls"] == 50
+
+    def test_hosted_shared_key_fails_closed_without_redis(
+        self, platform_key_env, monkeypatch
+    ):
+        from app.api.chat import _enforce_starter_daily_quota
+
+        monkeypatch.setenv("ENV", "production")
+        with pytest.raises(HTTPException) as exc_info:
+            _enforce_starter_daily_quota(
+                None,
+                {},
+                {"deepseek": SERVER_KEY},
+                request=_request(),
+            )
+
+        assert exc_info.value.status_code == 503
+        assert "quota service" in str(exc_info.value.detail)
+
+    async def test_anonymous_over_quota_rejected_before_sse_opens(
+        self, app_client, platform_key_env
+    ):
+        _seed_anonymous_quota("127.0.0.1", STARTER_DAILY_API_CALLS)
+        with patch("app.api.chat._build_runtime") as build_runtime:
+            response = await app_client.post(
+                "/api/chat/message/stream",
+                json=_chat_payload(),
+            )
+
+        assert response.status_code == 429
+        assert response.headers["content-type"].startswith("application/json")
+        build_runtime.assert_not_called()
 
 
 class TestStarterQuotaEnforcement:

@@ -1,0 +1,66 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+
+  # Frontend patch/minor updates are safe to propose automatically because the
+  # PR gate runs type-check, lint, unit tests, a production build, and browser
+  # journeys. Major updates remain deliberate architecture work.
+  - package-ecosystem: npm
+    directory: "/frontend"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:15"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 3
+    groups:
+      frontend-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+    commit-message:
+      prefix: "deps(frontend)"
+
+  # Base-image digests stay immutable in source. Dependabot may propose weekly
+  # refreshes, but every Docker update remains a reviewed PR gated by CI.
+  - package-ecosystem: docker
+    directory: "/backend"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:30"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "deps(backend-image)"
+
+  - package-ecosystem: docker
+    directory: "/frontend"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:45"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "deps(frontend-image)"
+
+# Python is intentionally excluded from automatic version PRs. Production uses
+# a universal, hash-locked requirements.lock and numerical-library changes can
+# alter scientific baselines; refresh it deliberately with uv, then require the
+# full backend suite and cosmology benchmarks before review.

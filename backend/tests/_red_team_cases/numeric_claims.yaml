@@ -288,8 +288,8 @@ cases:
 
   - name: cosmology_s8_one_sigma_edge_passes
     description: |
-      Quoting the lower 1σ edge of S8 must pass — the labeled S8 universe is
-      harvested broadly (median + hdi edges), not just the median.
+      Quoting an explicitly identified lower 1σ edge of S8 must use the typed
+      lower-bound bucket; HDI edges never enter the central-estimate bucket.
     reply: "S8 reaches as low as S8 = 0.81 at the 1-sigma edge."
     tool_results:
       - tool: run_cosmology_likelihood_chain
@@ -298,11 +298,12 @@ cases:
             S8: {median: 0.83, hdi_94: [0.81, 0.85]}
     expect_ok: true
 
-  - name: cosmology_s8_published_dataset_value_passes
+  - name: cosmology_s8_registry_posterior_context_is_blocked
     description: |
-      Citing a dataset's published S8 (parallel parameters/mean list form from
-      list_cosmology_datasets) must pass — the labeled harvest pairs mean[i] with
-      parameters[i].
+      A registry row is literature/posterior context, not an executed platform
+      likelihood. Its compressed mean must not enter the numerical evidence
+      universe; quote the value only after a citation-backed literature lookup
+      or an eligible fit result.
     reply: "KiDS-1000 reports S8 = 0.759."
     tool_results:
       - tool: list_cosmology_datasets
@@ -312,7 +313,7 @@ cases:
               compressed_likelihood:
                 parameters: ["S8"]
                 mean: [0.759]
-    expect_ok: true
+    expect_ok: false
 
   - name: numeric_in_sha256_digest_not_in_universe
     description: |
@@ -464,9 +465,8 @@ cases:
   - name: valid_model_comparison_delta_stays_claimable
     description: |
       Control for invalid_model_comparison_delta_not_claimable: a
-      comparison_valid=true verdict from non-blocked chains is a real tool
-      result and its deltas remain quotable (with the tier caveat carried in
-      prose by the model).
+      A comparison_valid=true verdict is claimable only when both objectives
+      are attested likelihood-only MLEs on one explicit likelihood fingerprint.
     reply: "The extended fit improves chi-squared: -4.58 in this exploratory comparison."
     tool_results:
       - tool: run_research_matrix
@@ -480,9 +480,33 @@ cases:
               delta_aic: -2.58
               preferred: "wcdm"
               comparison_valid: true
+              baseline_chi2_kind: "likelihood_only_mle"
+              extended_chi2_kind: "likelihood_only_mle"
+              likelihood_fingerprint: "sha256:matched-likelihood"
               baseline_chain_tier: "publication"
               extended_chain_tier: "exploratory"
     expect_ok: true
+
+  - name: comparison_valid_flag_without_mle_attestation_not_claimable
+    description: |
+      A forged or legacy comparison_valid=true flag must not make posterior-draw
+      AIC deltas claimable without matched likelihood-only MLE attestations.
+    reply: "The extended fit improves chi-squared by -4.58."
+    tool_results:
+      - tool: run_research_matrix
+        input: {}
+        result:
+          analysis_status: "RESEARCH_MATRIX_PARTIAL"
+          model_comparisons:
+            - baseline_model: "lcdm"
+              extended_model: "wcdm"
+              delta_chi2: -4.58
+              delta_aic: -2.58
+              preferred: "wcdm"
+              comparison_valid: true
+              baseline_chi2_kind: "posterior_draw_minimum"
+              extended_chi2_kind: "posterior_draw_minimum"
+    expect_ok: false
 
   - name: arxiv_id_in_source_locator_prose_not_in_universe
     description: |

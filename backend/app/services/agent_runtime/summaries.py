@@ -4,7 +4,15 @@ cosmology) used when model prose is empty, blocked, or timed out.
 Moved verbatim from app/api/chat.py (2026-07-03 god-file split).
 """
 
+import math
+import re
 from typing import Any
+
+from app.services.agent_runtime.prompt_routing import (
+    COSMOLOGY_DATASET_FAMILY_ALIASES,
+    COSMOLOGY_PLUS_RELEASE_FAMILIES,
+    _dataset_mention_is_non_execution,
+)
 
 
 def _tool_grounded_timeout_summary(tool_results: list[dict], timeout_s: int) -> str:
@@ -52,6 +60,17 @@ def _format_dataset_gap_item(item: Any) -> str:
             return key
         return "unnamed dataset"
     return str(item)
+
+
+def _finite_number(value: Any) -> float | None:
+    """Return a finite diagnostic number without accepting booleans."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _line_measurement_count_from_result(result: Any) -> int:
@@ -294,6 +313,280 @@ def _cosmology_max_z_coverage(tool_results: list[dict]) -> float | None:
     return zmax
 
 
+def _dataset_release_markers(text: str) -> dict[str, set[str]]:
+    """Extract release identifiers without interpreting scientific numbers.
+
+    The categories keep paper years separate from survey-scale names (for
+    example KiDS-1000), which avoids treating a nearby citation year as a
+    requested data release.  This deliberately recognises release *shapes*
+    rather than a case-specific list of survey names.
+    """
+    raw_text = str(text or "")
+    normalized = raw_text.lower().replace("_", " ").replace("-", " ")
+    normalized = re.sub(r"(?<=[a-z])(?=\d)|(?<=\d)(?=[a-z])", " ", normalized)
+    markers: dict[str, set[str]] = {"release": set(), "year": set(), "scale": set()}
+    for prefix, value in re.findall(
+        r"\b(dr|pr|y)\s*([0-9]+[a-z]?)\b", normalized, re.IGNORECASE
+    ):
+        markers["release"].add(f"{prefix.upper()}{value.upper()}")
+    for value in re.findall(r"\bdata\s+release\s*([0-9]+[a-z]?)\b", normalized):
+        markers["release"].add(f"DR{value.upper()}")
+    for value in re.findall(r"\b([0-9]+)\s*(?:yr|year)\b", normalized):
+        markers["release"].add(f"{value}yr")
+    if re.search(r"\blegacy\b", normalized):
+        markers["release"].add("Legacy")
+    if re.search(r"\bplus\b", normalized):
+        markers["release"].add("Plus")
+    for value in re.findall(r"\b(?:19|20)[0-9]{2}\b", normalized):
+        markers["year"].add(value)
+    for value in re.findall(r"\b[0-9]{3,4}\b", normalized):
+        if not re.fullmatch(r"(?:19|20)[0-9]{2}", value):
+            markers["scale"].add(value)
+    return markers
+
+
+def _dataset_family_token(item: dict[str, Any]) -> str:
+    """Derive a stable survey-family token from a registry key."""
+    key = str(item.get("key") or "").strip().lower()
+    head = key.split("_", 1)[0]
+    # kids1000 -> kids, planck2018 -> planck, spt3g -> spt.  Release
+    # comparison remains generic because the concrete marker is extracted
+    # independently from the complete key/display/version text.
+    return re.sub(r"[0-9]+[a-z]*$", "", head)
+
+
+def _markers_near_dataset_family(prompt: str, family: str) -> dict[str, set[str]]:
+    """Read only the dataset phrase around ``family``, not the whole prompt."""
+    found = {"release": set(), "year": set(), "scale": set()}
+    if not family:
+        return found
+    prompt_text = str(prompt or "")
+    separator = re.compile(
+        r"[,;/]|\s+\+\s+|\b(?:and|with|versus|vs)\b", re.IGNORECASE
+    )
+    aliases = COSMOLOGY_DATASET_FAMILY_ALIASES.get(family, (family,))
+
+    def family_matches():
+        for alias in aliases:
+            alias_pattern = re.escape(alias).replace(r"\ ", r"\s+")
+            yield from re.finditer(
+                rf"(?<![a-z0-9]){alias_pattern}(?![a-z0-9])",
+                prompt_text,
+                re.IGNORECASE,
+            )
+
+    matches = family_matches()
+    for match in matches:
+        if _dataset_mention_is_non_execution(
+            prompt_text, match.start(), match.end()
+        ):
+            continue
+        before = prompt_text[max(0, match.start() - 32) : match.start()]
+        after = prompt_text[match.end() : match.end() + 64]
+        after = re.split(
+            r"[\(\[]\s*(?:not|without|excluding?|avoid(?:ing)?)\b",
+            after,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
+        if family in COSMOLOGY_PLUS_RELEASE_FAMILIES and after.startswith("+"):
+            # Survey names such as Pantheon+ may be immediately followed by a
+            # companion label (Pantheon+SH0ES).  This is a release marker, not
+            # the infix dataset-union operator in "DESI + Planck".
+            found["release"].add("Plus")
+        for prefix, value in re.findall(
+            r"\bwith\s+(?:the\s+)?(?:registered\s+)?(dr|pr|y)\s*([0-9]+[a-z]?)\b",
+            after,
+            re.IGNORECASE,
+        ):
+            # "DESI BAO with DR3" still refers to DESI; the generic phrase
+            # separator below protects "DESI with Planck PR4" from assigning
+            # Planck's release to DESI.
+            found["release"].add(f"{prefix.upper()}{value.upper()}")
+        before = separator.split(before)[-1]
+        after = separator.split(after)[0]
+        markers = _dataset_release_markers(before + family + after)
+        markers["release"].discard("Legacy")
+        markers["release"].discard("Plus")
+        found["release"].update(markers["release"])
+        if re.search(r"\blegacy[\s_-]*$", before, re.IGNORECASE) or re.match(
+            r"^[\s_-]*legacy\b", after, re.IGNORECASE
+        ):
+            found["release"].add("Legacy")
+        if family in COSMOLOGY_PLUS_RELEASE_FAMILIES and (
+            after.startswith("+")
+            or re.match(r"^[\s_-]*plus\b", after, re.IGNORECASE)
+            or re.search(r"\bplus[\s_-]*$", before, re.IGNORECASE)
+        ):
+            found["release"].add("Plus")
+
+        # Bare years and 3-4 digit survey-scale identifiers are meaningful only
+        # when directly attached to the family name (Planck 2018, KiDS-1000).
+        # A wider phrase can contain a paper year, sample count, sky area, or
+        # redshift that must never be reinterpreted as a requested release.
+        left_identifier = re.search(
+            r"\b((?:19|20)[0-9]{2}|[0-9]{3,4})[\s_-]*$", before
+        )
+        right_identifier = re.match(
+            r"^[\s_-]*((?:19|20)[0-9]{2}|[0-9]{3,4})\b", after
+        )
+        for identifier_match in (left_identifier, right_identifier):
+            if identifier_match is None:
+                continue
+            identifier = identifier_match.group(1)
+            category = (
+                "year" if re.fullmatch(r"(?:19|20)[0-9]{2}", identifier) else "scale"
+            )
+            found[category].add(identifier)
+    return found
+
+
+def _cosmology_dataset_substitution_disclosures(
+    tool_results: list[dict], user_prompt: str
+) -> list[str]:
+    """Describe explicit requested-release markers absent from the selection.
+
+    Routing may map a survey family to its default registered product.  That is
+    useful for generic requests, but it must not silently relabel an explicitly
+    named release.  The comparison is registry-driven and works for DR/Y/PR,
+    year-labelled, ``Legacy``/``Plus``, and survey-scale releases.
+    """
+    registry_selected: dict[str, dict[str, Any]] = {}
+    used: dict[str, dict[str, Any]] = {}
+    not_run: dict[str, dict[str, Any]] = {}
+    for entry in tool_results or []:
+        result = entry.get("result")
+        if not isinstance(result, dict):
+            continue
+        for item in result.get("datasets") or []:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("key") or "").strip()
+            if key:
+                registry_selected[key] = item
+        for item in result.get("datasets_used") or []:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("key") or "").strip()
+            if key:
+                used[key] = item
+        for item in result.get("datasets_not_run") or []:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("key") or "").strip()
+            if key:
+                not_run[key] = item
+
+    if used:
+        # Once an execution tool reports datasets_used, those records are the
+        # only legitimate identity source for numerical results.  Earlier
+        # registry candidates remain useful solely to explain what was not run.
+        selected = dict(used)
+        registry_not_used = {
+            key: item for key, item in registry_selected.items() if key not in used
+        }
+    else:
+        selected = {
+            key: item
+            for key, item in registry_selected.items()
+            if key not in not_run
+        }
+        registry_not_used = {}
+
+    selected_by_family: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+    for key, item in selected.items():
+        selected_by_family.setdefault(_dataset_family_token(item), []).append((key, item))
+    not_run_by_family: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+    for key, item in not_run.items():
+        not_run_by_family.setdefault(_dataset_family_token(item), []).append((key, item))
+    registry_not_used_by_family: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+    for key, item in registry_not_used.items():
+        registry_not_used_by_family.setdefault(_dataset_family_token(item), []).append(
+            (key, item)
+        )
+
+    def marker_union(
+        items: list[tuple[str, dict[str, Any]]],
+    ) -> dict[str, set[str]]:
+        combined = {"release": set(), "year": set(), "scale": set()}
+        for key, item in items:
+            item_markers = _dataset_release_markers(
+                " ".join(
+                    str(item.get(field) or "")
+                    for field in ("key", "display_name", "version")
+                )
+            )
+            for category in combined:
+                combined[category].update(item_markers[category])
+        return combined
+
+    disclosures: list[str] = []
+    for family, family_items in selected_by_family.items():
+        requested = _markers_near_dataset_family(user_prompt, family)
+        if not any(requested.values()):
+            continue
+        selected_markers = marker_union(family_items)
+        missing_by_category = {
+            "release": requested["release"] - selected_markers["release"],
+            "year": set(),
+            "scale": set(),
+        }
+        # Compare a year/scale only when the registered product itself uses
+        # that kind of identifier; this filters nearby paper years.
+        if selected_markers["year"]:
+            missing_by_category["year"].update(
+                requested["year"] - selected_markers["year"]
+            )
+        if selected_markers["scale"]:
+            missing_by_category["scale"].update(
+                requested["scale"] - selected_markers["scale"]
+            )
+        missing = set().union(*missing_by_category.values())
+        if not missing:
+            continue
+        not_run_markers = marker_union(not_run_by_family.get(family, []))
+        registry_not_used_markers = marker_union(
+            registry_not_used_by_family.get(family, [])
+        )
+        requested_release_was_not_run = any(
+            missing_by_category[category] & not_run_markers[category]
+            for category in missing_by_category
+        )
+        requested_release_was_registry_only = any(
+            missing_by_category[category] & registry_not_used_markers[category]
+            for category in missing_by_category
+        )
+        selected_labels = [
+            f"{str(item.get('display_name') or key).strip()} (`{key}`)"
+            for key, item in family_items
+        ]
+        display_text = ", ".join(selected_labels)
+        marker_text = ", ".join(sorted(missing, key=str.lower))
+        if requested_release_was_not_run:
+            availability_text = (
+                "the requested release was listed in `datasets_not_run` but was not "
+                "executed in this turn"
+            )
+        elif requested_release_was_registry_only:
+            availability_text = (
+                "the requested release appeared in the registry selection but was not "
+                "executed in this turn"
+            )
+        else:
+            availability_text = (
+                "that requested release is not registered under those identifiers "
+                "for this turn"
+            )
+        disclosures.append(
+            "Dataset substitution disclosure: the prompt requested or named "
+            f"the {family or 'dataset'} release identifier(s) {marker_text}, but "
+            f"{availability_text}. The selected registered product(s) instead were "
+            f"{display_text}; any configuration or result belongs only to those "
+            "selected products, not to the requested release."
+        )
+    return disclosures
+
+
 def _cosmology_tool_grounded_summary(
     tool_results: list[dict], user_prompt: str = ""
 ) -> str | None:
@@ -349,6 +642,10 @@ def _cosmology_tool_grounded_summary(
     lines = ["Tool-grounded cosmology summary:"]
     if dataset_names:
         lines.append(f"- Registry selection: {', '.join(dataset_names)}.")
+    for disclosure in _cosmology_dataset_substitution_disclosures(
+        tool_results, user_prompt
+    ):
+        lines.append(f"- {disclosure}")
     if data_product_notes:
         lines.append(f"- Data products: {'; '.join(data_product_notes)}.")
     if citation_refs:
@@ -410,7 +707,7 @@ def _cosmology_tool_grounded_summary(
                 "unless a full external Cobaya/CosmoSIS chain has actually run."
             )
         else:
-            reason = "no publication-ready compressed posterior was produced"
+            reason = "no publication-ready full-likelihood posterior was produced"
             warnings = chain.get("warnings")
             if isinstance(warnings, list) and warnings:
                 reason = str(warnings[0])
@@ -465,6 +762,51 @@ def _cosmology_tool_grounded_summary(
     return "\n".join(lines) if len(lines) > 1 else None
 
 
+def _enforce_cosmology_dataset_identity(
+    reply: str,
+    tool_results: list[dict],
+    user_prompt: str,
+) -> tuple[str, bool]:
+    """Replace model prose when an executed release differs from the request.
+
+    Appending a correction is not sufficient: the draft may explicitly claim
+    that two differently named releases are equivalent.  In that case the
+    deterministic tool-grounded summary becomes the entire public reply, so the
+    contradicted narrative cannot survive above or below the correction.
+    """
+    disclosures = _cosmology_dataset_substitution_disclosures(
+        tool_results, user_prompt
+    )
+    if not disclosures:
+        return reply, False
+    safe_summary = _cosmology_tool_grounded_summary(tool_results, user_prompt)
+    if safe_summary:
+        return safe_summary, True
+    return (
+        "Dataset identity correction (tool-grounded):\n- "
+        + "\n- ".join(disclosures),
+        True,
+    )
+
+
+def _successful_research_report_export(tool_results: list[dict]) -> bool:
+    """Return true only when a report artifact actually completed."""
+    for item in tool_results:
+        if not isinstance(item, dict) or item.get("tool") != "export_research_report":
+            continue
+        result = item.get("result")
+        if not isinstance(result, dict) or result.get("success") is not True:
+            continue
+        statuses = {
+            str(result.get(key) or "").strip().upper()
+            for key in ("__tool_status__", "analysis_status", "status")
+        }
+        if statuses & {"FAILED", "ERROR", "BLOCKED", "CANCELLED", "TIMEOUT"}:
+            continue
+        return True
+    return False
+
+
 def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
     """Deterministic Research Mode summary that avoids unsupported numbers."""
     plan: dict[str, Any] | None = None
@@ -492,6 +834,10 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
     executed_not_ready_summaries: list[str] = []
     config_only_summaries: list[str] = []
     if isinstance(matrix, dict):
+        # Aggregate research matrices are diagnostic containers.  When the
+        # parent is tainted, a timeout/partial-summary path must not launder a
+        # child cell's numbers around the normal numeric-claim validator.
+        matrix_numbers_claimable = matrix.get("__do_not_claim__") is not True
         for cell in matrix.get("matrix") or []:
             if not isinstance(cell, dict):
                 continue
@@ -500,10 +846,18 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
             if cell.get("publication_ready") is True:
                 ready_cells.append(label)
                 result = cell.get("result") if isinstance(cell.get("result"), dict) else {}
-                params = result.get("parameters") if isinstance(result, dict) and isinstance(result.get("parameters"), dict) else {}
+                params = (
+                    result.get("parameters")
+                    if matrix_numbers_claimable
+                    and isinstance(result, dict)
+                    and isinstance(result.get("parameters"), dict)
+                    else {}
+                )
                 diagnostics = (
                     result.get("chain_diagnostics")
-                    if isinstance(result, dict) and isinstance(result.get("chain_diagnostics"), dict)
+                    if matrix_numbers_claimable
+                    and isinstance(result, dict)
+                    and isinstance(result.get("chain_diagnostics"), dict)
                     else {}
                 )
                 parts = [label]
@@ -525,7 +879,9 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
                 if isinstance(s8, dict) and s8.get("median") is not None:
                     parts.append(f"S8 median {_fmt_tool_number(s8.get('median'))}")
                 if isinstance(diagnostics, dict):
-                    ess = diagnostics.get("proposal_ess") or diagnostics.get("ess_bulk")
+                    ess = diagnostics.get("proposal_ess")
+                    if ess is None:
+                        ess = diagnostics.get("ess_bulk")
                     rhat = diagnostics.get("rhat")
                     if ess is not None:
                         parts.append(f"ESS {_fmt_tool_number(ess)}")
@@ -537,7 +893,9 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
                 result = cell.get("result") if isinstance(cell.get("result"), dict) else {}
                 diagnostics = (
                     result.get("chain_diagnostics")
-                    if isinstance(result, dict) and isinstance(result.get("chain_diagnostics"), dict)
+                    if matrix_numbers_claimable
+                    and isinstance(result, dict)
+                    and isinstance(result.get("chain_diagnostics"), dict)
                     else {}
                 )
                 warnings = [str(w) for w in cell.get("warnings") or [] if w]
@@ -548,7 +906,9 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
                 )
                 if execution_level == "executed_not_ready" or diagnostics:
                     detail_parts = [label]
-                    ess = diagnostics.get("proposal_ess") or diagnostics.get("ess_bulk")
+                    ess = diagnostics.get("proposal_ess")
+                    if ess is None:
+                        ess = diagnostics.get("ess_bulk")
                     rhat = diagnostics.get("rhat")
                     threshold = (
                         diagnostics.get("thresholds", {}).get("ess_min")
@@ -557,9 +917,21 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
                     )
                     if ess is not None:
                         if threshold is not None:
-                            detail_parts.append(
-                                f"ESS {_fmt_tool_number(ess)} below threshold {_fmt_tool_number(threshold)}"
-                            )
+                            ess_number = _finite_number(ess)
+                            threshold_number = _finite_number(threshold)
+                            if ess_number is not None and threshold_number is not None:
+                                comparison = (
+                                    "below" if ess_number < threshold_number else "meets"
+                                )
+                                detail_parts.append(
+                                    f"ESS {_fmt_tool_number(ess)} {comparison} threshold "
+                                    f"{_fmt_tool_number(threshold)}"
+                                )
+                            else:
+                                detail_parts.append(
+                                    f"ESS {_fmt_tool_number(ess)}; publication threshold "
+                                    f"{_fmt_tool_number(threshold)}"
+                                )
                         else:
                             detail_parts.append(f"ESS {_fmt_tool_number(ess)}")
                     elif diagnostics.get("ess_source") == "autocorr_failed":
@@ -571,6 +943,33 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
                         )
                     if rhat is not None:
                         detail_parts.append(f"Rhat {_fmt_tool_number(rhat)}")
+                    publication_gate = (
+                        result.get("publication_gate")
+                        if isinstance(result.get("publication_gate"), dict)
+                        else {}
+                    )
+                    gate_reasons = [
+                        str(reason)
+                        for reason in publication_gate.get("reasons") or []
+                        if reason
+                    ]
+                    publication_blocker = str(
+                        diagnostics.get("publication_blocker") or ""
+                    ).strip()
+                    if gate_reasons:
+                        detail_parts.append(
+                            "publication gate: "
+                            + ", ".join(f"`{reason}`" for reason in gate_reasons[:4])
+                            + (
+                                ""
+                                if len(gate_reasons) <= 4
+                                else f", +{len(gate_reasons) - 4} more"
+                            )
+                        )
+                    elif publication_blocker:
+                        detail_parts.append(publication_blocker)
+                    elif warnings:
+                        detail_parts.append(warnings[0])
                     detail_parts.append("not claimable")
                     executed_not_ready_summaries.append(" · ".join(detail_parts))
                 elif execution_level == "config_only" or datasets_not_run:
@@ -608,7 +1007,7 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
             (
                 "- The executable baseline below is compressed-likelihood preliminary only."
                 if ready_cells
-                else "- No publication-ready compressed-likelihood baseline completed this turn."
+                else "- No publication-ready direct likelihood result completed this turn."
             ),
             "",
         ])
@@ -633,12 +1032,12 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
             lines.append(f"- {note}")
     if ready_cells:
         lines.append(
-            "- Runnable compressed-likelihood preliminary cells: "
+            "- Numerically executed compressed-likelihood preliminary cells: "
             + ", ".join(ready_cells[:6])
             + ("." if len(ready_cells) <= 6 else f", +{len(ready_cells) - 6} more.")
         )
     else:
-        lines.append("- No publication-ready compressed-likelihood cell completed this turn.")
+        lines.append("- No publication-ready direct likelihood result completed this turn.")
 
     lines.extend(["", "Executed analyses"])
     if plan:
@@ -671,7 +1070,8 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
     lines.extend(["", "Robustness"])
     if executed_not_ready_summaries:
         lines.append(
-            "- Executed but not claimable because diagnostics were below publication threshold: "
+            "- Executed but not claimable (`execution_level=executed_not_ready`) "
+            "because publication requirements were not met: "
             + "; ".join(executed_not_ready_summaries[:5])
             + ("." if len(executed_not_ready_summaries) <= 5 else f"; +{len(executed_not_ready_summaries) - 5} more.")
         )
@@ -793,7 +1193,14 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
             row
             for row in gap_matrix
             if isinstance(row, dict)
-            and str(row.get("status")) in {"missing", "registered_config_only", "config_only", "partial"}
+            and str(row.get("status")) in {
+                "missing",
+                "registered_config_only",
+                "config_only",
+                "literature_context",
+                "context_only",
+                "partial",
+            }
         ]
         if missing_components:
             parts = []

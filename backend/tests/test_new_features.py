@@ -597,6 +597,45 @@ class TestInferenceRouting:
         assert calls == ["openai"]
 
     @pytest.mark.asyncio
+    async def test_explicit_request_keys_cannot_fall_back_to_server_env(self, monkeypatch):
+        from app.ai.inference_router import InferenceError, InferenceRouter
+
+        router = InferenceRouter()
+        calls: list[str] = []
+
+        async def fail_openai(*args, **kwargs):
+            calls.append("openai")
+            raise RuntimeError("invalid user key")
+
+        async def fail_if_platform_called(*args, **kwargs):
+            raise AssertionError("server-funded fallback must stay unavailable")
+
+        async def no_op_log(*args, **kwargs):
+            return None
+
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-server-openai")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-server-anthropic")
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-server-deepseek")
+        monkeypatch.delenv("LOCAL_MODEL_ENABLED", raising=False)
+        monkeypatch.delenv("OPENAI_CLI_ENABLED", raising=False)
+        monkeypatch.delenv("CLAUDE_CLI_ENABLED", raising=False)
+        monkeypatch.setattr(router.backends["openai"], "complete", fail_openai)
+        monkeypatch.setattr(router.backends["claude"], "complete", fail_if_platform_called)
+        monkeypatch.setattr(router.backends["deepseek"], "complete", fail_if_platform_called)
+        monkeypatch.setattr(router.backends["local"], "complete", fail_if_platform_called)
+        monkeypatch.setattr(router, "log_inference", no_op_log)
+
+        with pytest.raises(InferenceError, match="All configured AI backends failed"):
+            await router.route(
+                "orchestrator",
+                [{"role": "user", "content": "hello"}],
+                provider_api_keys={"openai": "sk-invalid-user-key"},
+                preferred_backend="openai",
+            )
+
+        assert calls == ["openai"]
+
+    @pytest.mark.asyncio
     async def test_local_backend_can_call_openai_cli(self, monkeypatch):
         from app.ai.inference_router import LocalBackend
         from app.ai.model_profiles import resolve_model_profile
@@ -647,6 +686,9 @@ class TestInferenceRouting:
         assert "--ephemeral" in captured["cmd"]
         assert "--sandbox" in captured["cmd"]
         assert "read-only" in captured["cmd"]
+        assert captured["cmd"].count("--disable") == 2
+        assert "shell_tool" in captured["cmd"]
+        assert "unified_exec" in captured["cmd"]
         assert "--ignore-user-config" in captured["cmd"]
         assert "--ignore-rules" in captured["cmd"]
         assert "--skip-git-repo-check" in captured["cmd"]

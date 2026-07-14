@@ -116,12 +116,15 @@ class DataProductSpec:
 
 @dataclass(frozen=True)
 class CompressedLikelihoodSpec:
-    """Small published Gaussian summary likelihood.
+    """Small published Gaussian record with an explicit statistical role.
 
-    This is deliberately not a prose conclusion.  It is a data vector,
-    covariance matrix, and precise source locator that can be combined by
-    the phase-1 analytic runner while full external likelihood packages
-    remain out of process.
+    A published posterior summary is *not* automatically a likelihood: it
+    already incorporates the source analysis priors and nuisance
+    marginalisation.  Runners may combine only ``external_prior`` or an
+    explicitly documented ``likelihood_approximation``.  ``proposal_only`` and
+    ``published_posterior_summary`` records remain useful for proposal design,
+    literature context, and overlap-aware tension displays, but never enter a
+    joint chi-square.
     """
 
     parameters: tuple[str, ...]
@@ -130,6 +133,13 @@ class CompressedLikelihoodSpec:
     source_locator: str
     approximation: str
     units: dict[str, str] = field(default_factory=dict)
+    statistical_role: Literal[
+        "published_posterior_summary",
+        "external_prior",
+        "likelihood_approximation",
+        "proposal_only",
+    ] = "published_posterior_summary"
+    source_prior: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -180,6 +190,27 @@ class CosmologyDatasetEntry:
         if self.compressed_likelihood is not None:
             result["compressed_likelihood"] = self.compressed_likelihood.to_dict()
         return result
+
+
+EXECUTABLE_COMPRESSED_STATISTICAL_ROLES = frozenset(
+    {"external_prior", "likelihood_approximation"}
+)
+
+
+def compressed_rows_are_executable(entry: CosmologyDatasetEntry) -> bool:
+    """Whether this entry's own Gaussian rows may enter joint chi-square.
+
+    Execution mode and statistical role are both required. This deliberately
+    excludes Planck's proposal-only parameter block; its independently encoded
+    CHW2019 distance-prior likelihood is handled by the CMB sampler instead.
+    """
+
+    spec = entry.compressed_likelihood
+    return bool(
+        spec is not None
+        and entry.execution_mode == "compressed_gaussian"
+        and spec.statistical_role in EXECUTABLE_COMPRESSED_STATISTICAL_ROLES
+    )
 
 
 MODEL_LABELS: dict[str, str] = {
@@ -288,7 +319,11 @@ def _s8_gaussian_constraints(
     out: list[tuple[float, float]] = []
     for entry in entries:
         spec = entry.compressed_likelihood
-        if spec is None or "S8" not in spec.parameters:
+        if (
+            spec is None
+            or not compressed_rows_are_executable(entry)
+            or "S8" not in spec.parameters
+        ):
             continue
         idx = list(spec.parameters).index("S8")
         var = float(np.asarray(spec.covariance, dtype=float)[idx][idx])

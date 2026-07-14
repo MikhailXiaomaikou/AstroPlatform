@@ -6,12 +6,27 @@ def test_provider_api_keys_include_shared_deepseek_key(monkeypatch):
 
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.setenv("PLATFORM_DEEPSEEK_API_KEY", "sk-shared-deepseek")
+    monkeypatch.setenv("SHARED_DEEPSEEK_API_KEY_ENABLED", "1")
 
     keys = _provider_api_keys({}, None)
 
     assert keys["deepseek"] == "sk-shared-deepseek"
     assert "openai" not in keys
     assert "anthropic" not in keys
+
+
+def test_provider_api_keys_require_explicit_shared_key_opt_in(monkeypatch):
+    from app.api.chat import _provider_api_keys
+    from app.config import settings
+
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("SHARED_DEEPSEEK_API_KEY_ENABLED", raising=False)
+    monkeypatch.setenv("PLATFORM_DEEPSEEK_API_KEY", "sk-shared-deepseek")
+    monkeypatch.setattr(settings, "shared_deepseek_api_key_enabled", False)
+
+    keys = _provider_api_keys({}, None)
+
+    assert "deepseek" not in keys
 
 
 def test_provider_api_keys_user_deepseek_overrides_shared_key(monkeypatch):
@@ -22,6 +37,22 @@ def test_provider_api_keys_user_deepseek_overrides_shared_key(monkeypatch):
     keys = _provider_api_keys({"api_keys": {"deepseek": "sk-user-deepseek"}}, None)
 
     assert keys["deepseek"] == "sk-user-deepseek"
+
+
+def test_selected_byok_does_not_receive_platform_fallback(monkeypatch):
+    from app.api.chat import _provider_api_keys
+
+    monkeypatch.setenv("PLATFORM_DEEPSEEK_API_KEY", "sk-shared-deepseek")
+
+    keys = _provider_api_keys(
+        {
+            "api_provider": "openai",
+            "api_keys": {"openai": "sk-user-openai"},
+        },
+        None,
+    )
+
+    assert keys == {"openai": "sk-user-openai"}
 
 
 def test_provider_api_keys_can_disable_shared_deepseek_key(monkeypatch):
@@ -50,6 +81,35 @@ def test_provider_api_keys_can_read_shared_deepseek_from_settings(monkeypatch):
     assert keys["deepseek"] == "sk-settings-deepseek"
 
 
+def test_admin_inference_shared_key_requires_explicit_opt_in(monkeypatch):
+    from app.api.inference import _shared_deepseek_available
+    from app.config import settings
+
+    monkeypatch.setenv("PLATFORM_DEEPSEEK_API_KEY", "sk-shared-deepseek")
+    monkeypatch.delenv("SHARED_DEEPSEEK_API_KEY_ENABLED", raising=False)
+    monkeypatch.setattr(settings, "shared_deepseek_api_key_enabled", False)
+
+    assert _shared_deepseek_available() is False
+
+
+def test_admin_inference_shared_key_accepts_explicit_opt_in(monkeypatch):
+    from app.api.inference import _shared_deepseek_available
+
+    monkeypatch.setenv("PLATFORM_DEEPSEEK_API_KEY", "sk-shared-deepseek")
+    monkeypatch.setenv("SHARED_DEEPSEEK_API_KEY_ENABLED", "true")
+
+    assert _shared_deepseek_available() is True
+
+
+def test_shared_key_rejects_unrecognized_flag_value(monkeypatch):
+    from app.api.chat import _provider_api_keys
+
+    monkeypatch.setenv("PLATFORM_DEEPSEEK_API_KEY", "sk-shared-deepseek")
+    monkeypatch.setenv("SHARED_DEEPSEEK_API_KEY_ENABLED", "enable-maybe")
+
+    assert "deepseek" not in _provider_api_keys({}, None)
+
+
 def test_resolve_model_profile_defaults_to_deepseek():
     from app.ai.model_profiles import resolve_model_profile
 
@@ -67,6 +127,7 @@ async def test_ai_backend_status_reports_shared_deepseek_backend(app_client, mon
     monkeypatch.delenv("LOCAL_MODEL_ENABLED", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.setenv("PLATFORM_DEEPSEEK_API_KEY", "sk-shared-deepseek")
+    monkeypatch.setenv("SHARED_DEEPSEEK_API_KEY_ENABLED", "1")
 
     resp = await app_client.get("/api/chat/ai_backend_status")
 

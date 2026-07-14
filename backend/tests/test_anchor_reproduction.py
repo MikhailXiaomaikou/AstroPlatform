@@ -1,9 +1,9 @@
 """T1-U10: the reproduce-anchor harness proves correctness, not just honesty.
 
-For every published anchor in the oracle table, run the real in-process chain and
-assert it lands on the published value within tolerance.  All currently-tabled
-anchors are compressed/diagonal/BAO and therefore fast; a full-cov-only anchor
-would be marked slow opt-in (none today).
+For every genuinely reproducible anchor in the oracle table, run the real
+in-process chain and assert it lands on the published value within tolerance.
+Published posterior summaries remain literature context and must not be sent
+through a sampler as if their posterior covariance were a likelihood.
 """
 from __future__ import annotations
 
@@ -16,10 +16,23 @@ from app.services.cosmology_oracle import PUBLISHED_ANCHORS, reproduce_anchor
 def test_all_fast_oracle_anchors_reproduce_within_tol():
     failures = []
     for a in PUBLISHED_ANCHORS:
+        if a.independence == "consistency":
+            continue
         out = reproduce_anchor(a)
         if not out["within_tol"]:
             failures.append((a.goal_key, out["reproduced_value"], a.value, a.tol))
     assert not failures, f"anchors not reproduced within tolerance: {failures}"
+
+
+def test_literature_posterior_anchor_is_not_run_as_a_likelihood():
+    out = reproduce_anchor(co.get_anchor("pantheon_plus_omegam"))
+
+    assert out["reproduction_attempted"] is False
+    assert out["reproduction_status"] == "literature_context_not_executed"
+    assert out["anchor_scope"] == "literature_context"
+    assert out["reproduced_value"] is None
+    assert out["within_tol"] is None
+    assert out["publication_ready"] is False
 
 
 def test_reproduce_anchor_result_shape():

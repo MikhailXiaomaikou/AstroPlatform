@@ -21,6 +21,7 @@ from app.services.analysis_validator import (
     verify_publication_language_attestation,
 )
 from app.services.claim_validator import (
+    enforce_scientific_conclusion_gate,
     scientific_conclusion_scope_violations,
     validate_claims,
 )
@@ -107,6 +108,156 @@ def test_strong_cosmology_synonyms_do_not_bypass_attestation_gate():
         r"The fit finds non-zero $w_a$ in w0waCDM relative to LambdaCDM.",
     )
     assert all(scientific_conclusion_scope_violations(claim, []) for claim in claims)
+
+
+def test_scientific_conclusion_sentence_scan_is_linear_on_long_spacing():
+    reply = (" " * 100_000) + "Dark energy evolves."
+    violations = scientific_conclusion_scope_violations(reply, [])
+    assert len(violations) == 1
+    assert violations[0].match_text == "Dark energy evolves."
+
+    repeated = "Dark energy evolves.\n" * 1_000
+    repeated_violations = scientific_conclusion_scope_violations(repeated, [])
+    assert len(repeated_violations) == 1_000
+    assert repeated_violations[0].line_number == 1
+    assert repeated_violations[-1].line_number == 1_000
+
+
+def test_dark_energy_conclusion_catalogue_handles_common_notation_linearly():
+    claims = (
+        "Dark energy evolves with redshift.",
+        "The fit favors time-varying dark energy.",
+        "The equation of state is dynamical.",
+        "We detect a nonzero time variation in the dark-energy equation of state.",
+        r"The fit finds non-zero $w_a$.",
+        r"The fit finds nonzero $w_a$.",
+        r"The fit finds $w_a$ is nonzero.",
+        r"The result has $w_a \neq 0$.",
+        r"The result has $w_a\neq0$.",
+        "The result has wₐ ≠ 0.",
+    )
+    assert all(scientific_conclusion_scope_violations(claim, []) for claim in claims)
+
+    bounded_insertion = "Dark energy " + ("a " * 25) + "evolves."
+    assert scientific_conclusion_scope_violations(bounded_insertion, [])
+
+    long_spacing = "Dark energy" + (" " * 100_000) + "evolves."
+    assert not scientific_conclusion_scope_violations(long_spacing, [])
+
+
+def test_decimal_points_do_not_split_scientific_conclusion_scope():
+    claims = (
+        "Dark energy at z=0.5 evolves.",
+        "Dark energy with w_a=-0.8 evolves.",
+        "The equation of state at z=0.5 is dynamical.",
+    )
+    assert all(scientific_conclusion_scope_violations(claim, []) for claim in claims)
+
+
+def test_expanded_headline_conclusions_require_exact_attestations():
+    attacks = (
+        "The Hubble tension is resolved.",
+        "Spatial curvature is favored over flat cosmology.",
+        "A nonzero neutrino mass is detected.",
+        "General relativity is ruled out.",
+    )
+    for claim in attacks:
+        violations = scientific_conclusion_scope_violations(claim, [])
+        assert violations, claim
+        replacement, enforced = enforce_scientific_conclusion_gate(claim, [])
+        assert enforced
+        assert claim not in replacement
+        assert "Scientific conclusion withheld" in replacement
+
+    safe_scope_statements = (
+        "The Hubble tension remains unresolved.",
+        "The data do not resolve the Hubble tension.",
+        "We test whether spatial curvature is favored.",
+        "No evidence for a nonzero neutrino mass is detected.",
+        "General relativity is not ruled out.",
+    )
+    assert all(
+        not scientific_conclusion_scope_violations(statement, [])
+        for statement in safe_scope_statements
+    )
+
+
+def test_chinese_headline_conclusions_cannot_bypass_attestation_gate():
+    attacks = (
+        "哈勃张力已经解决。",
+        "数据支持非零空间曲率。",
+        "我们检测到非零中微子质量。",
+        "广义相对论已被排除。",
+        "暗能量随时间演化。",
+        "宇宙学常数被排除。",
+    )
+    assert all(
+        scientific_conclusion_scope_violations(claim, []) for claim in attacks
+    )
+
+    safe = (
+        "哈勃张力仍未解决。",
+        "没有显著证据支持非零空间曲率。",
+        "尚未检测到非零中微子质量。",
+        "广义相对论未被排除。",
+        "我们正在检验暗能量是否随时间演化。",
+    )
+    assert all(
+        not scientific_conclusion_scope_violations(statement, [])
+        for statement in safe
+    )
+
+
+def test_hubble_tension_resolution_can_pass_only_with_matching_attestation():
+    manifest_hash = "sha256:" + "a" * 64
+    attestation_id = "hubble-resolution-001"
+    calibrated = [{
+        "tool": "run_cobaya_cosmology",
+        "result": {
+            "success": True,
+            "publication_ready": True,
+            "significance_ready": True,
+            "evidence_manifest_sha256": manifest_hash,
+            "data_fingerprint": "sha256:" + "b" * 64,
+            "likelihood_fingerprint": "sha256:" + "c" * 64,
+            "conclusion_attestations": [{
+                "schema_version": 1,
+                "artifact_type": "scientific_conclusion_attestation",
+                "attestation_id": attestation_id,
+                "claim_kind": "hubble_tension_resolution",
+                "claim_subject": "hubble_tension",
+                "data_fingerprint": "sha256:" + "b" * 64,
+                "likelihood_fingerprint": "sha256:" + "c" * 64,
+                "comparison_type": "tension_consistency_test",
+                "independence_verified": True,
+                "resolution_criterion_verified": True,
+                "calibration": {
+                    "method": "wilks",
+                    "verified": True,
+                    "assumptions_verified": True,
+                    "likelihood_only_mle_proven": True,
+                },
+                "manifest_sha256": manifest_hash,
+                "publication_ready": True,
+                "significance_ready": True,
+            }],
+        },
+    }]
+    cited = (
+        "The Hubble tension is resolved "
+        f"[evidence:{attestation_id}]."
+    )
+
+    assert not scientific_conclusion_scope_violations(cited, calibrated)
+    assert scientific_conclusion_scope_violations(
+        "The Hubble tension is resolved [evidence:wrong-branch].",
+        calibrated,
+    )
+    wrong_test = deepcopy(calibrated)
+    wrong_test[0]["result"]["conclusion_attestations"][0][
+        "comparison_type"
+    ] = "likelihood_ratio"
+    assert scientific_conclusion_scope_violations(cited, wrong_test)
 
 
 def test_paper_typed_numeric_gate_rejects_cross_quantity_equal_values():

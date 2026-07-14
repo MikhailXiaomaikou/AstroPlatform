@@ -69,8 +69,9 @@ RESEARCH_TOOL_SCHEMAS = [
             "registry by name and produces tighter compressed-likelihood cells. "
             "Only use this generic run_research_matrix when (a) a previous "
             "plan_research_program call returned a multi-vertical plan, or (b) the "
-            "user explicitly asks for a generic plan-derived matrix. Cite only "
-            "publication_ready=true cells as compressed-likelihood preliminary."
+            "user explicitly asks for a generic plan-derived matrix. The matrix "
+            "aggregate is diagnostic-only; use a direct signed result for any "
+            "numerical scientific claim."
         ),
         "input_schema": {
             "type": "object",

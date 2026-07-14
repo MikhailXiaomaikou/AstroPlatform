@@ -17,6 +17,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from app.api.alerts import router as alerts_router
 from app.api.anomalies import router as anomalies_router
 from app.api.automation import router as automation_router
+from app.api.bot_console import router as bot_console_router
 from app.api.auth import router as auth_router, require_admin_any
 from app.api.chat import router as chat_router
 from app.api.config import router as config_router
@@ -582,6 +583,7 @@ async def security_headers(request, call_next):
 app.include_router(alerts_router)
 app.include_router(anomalies_router)
 app.include_router(automation_router)
+app.include_router(bot_console_router)
 app.include_router(arxiv_router)
 app.include_router(auth_router)
 app.include_router(citation_graph_router)

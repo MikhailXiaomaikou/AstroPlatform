@@ -1,10 +1,16 @@
 # Standard Astro Deployment Guide
 
-Current production deploys use the Render blueprint in `render.yaml`.
+`render.yaml` defines the **target** production topology. As observed on
+2026-07-13, the current Render services (`astro-backend-h4x1` and
+`astro-frontend-tyfr`) predate this Blueprint and do not yet have its database
+migrations, persistent storage, Redis, or Celery workers. Do not sync the
+Blueprint directly: Render matches resources by exact name, so doing so would
+create a second stack instead of safely adopting the legacy services.
 
 ## Production Services
 
-The production Blueprint defines **5 services + 1 database** (`render.yaml` is the source of truth).
+The target production Blueprint defines **5 services + 1 database**
+(`render.yaml` is the source of truth for that target).
 
 | Service | Type | Purpose |
 |---|---|---|
@@ -20,10 +26,13 @@ research artifacts. The backend also has a persistent `/app/data` disk for
 gate-event logs, local caches, and export staging. Before syncing an existing
 Blueprint, set `S3_BUCKET`, `S3_ACCESS_KEY_ID`, and `S3_SECRET_ACCESS_KEY` on the
 backend, plus `S3_ENDPOINT_URL` for R2/MinIO; missing required values fail
-startup closed. On that existing backend also initialize
-`EVIDENCE_VERIFICATION_KEYS` to `{}` before the first sync that introduces the
-evidence-key configuration, because Render ignores newly added `sync: false`
-variables during Blueprint updates. See
+startup closed. On that existing backend also seed `JWT_SECRET`, `FERNET_KEY`,
+the independent `EVIDENCE_SIGNING_KEY`, and its stable
+`EVIDENCE_SIGNING_KEY_ID` from an external secret manager, and initialize
+`EVIDENCE_VERIFICATION_KEYS` to `{}` before the first sync. These values are
+deliberately `sync: false`: automatically generated values cannot be reliably
+escrowed and recovered. Render ignores newly added `sync: false` variables
+during Blueprint updates. See
 [`docs/OPERATIONS_RUNBOOK.md`](./docs/OPERATIONS_RUNBOOK.md) for this boundary,
 backup policy, and recovery steps.
 
@@ -32,12 +41,26 @@ Live URLs used by the current docs:
 - Backend: `https://astro-backend-h4x1.onrender.com`
 - Frontend: `https://astro-frontend-tyfr.onrender.com`
 
-Pushes to `main` deploy only after linked CI checks pass. Before the backend
-starts, Render runs `alembic upgrade head`; migration failure blocks the deploy.
+Before adoption, inventory and back up the existing database and files, test
+Alembic adoption against a clone, populate all `sync: false` variables, then
+choose either exact-name in-place adoption or a verified new-stack cutover.
+The choice affects cost, downtime, URLs, rollback, and data synchronization and
+therefore requires explicit operator approval. Follow
+[`docs/PRODUCTION_CUTOVER_CHECKLIST.md`](./docs/PRODUCTION_CUTOVER_CHECKLIST.md);
+do not treat a green CI run as authorization to provision paid resources.
+
+Target-topology pushes to `main` deploy only after linked CI checks pass. Before
+the backend starts, Render runs `alembic upgrade head`; migration failure blocks
+the deploy.
 Render deploys workers independently, so worker and beat run the read-only
 `scripts/wait_for_schema_head.py` gate before Celery starts. They poll until the
 database exactly matches the Alembic head shipped in their image and exit after
-15 minutes instead of running new task code against an old schema.
+15 minutes instead of running new task code against an old schema. Worker node
+names carry `RENDER_GIT_COMMIT`. Each Beat instance renews its own short-lived
+Redis release lease only after a successful scheduler tick; deep health
+requires every active lease to match the backend commit. It therefore rejects
+an old/mixed or stalled background release even when its schema revision is
+unchanged.
 
 ## Backend Environment
 
@@ -52,8 +75,10 @@ EVIDENCE_SIGNING_KEY=<independent-random-secret-at-least-32-bytes>
 EVIDENCE_SIGNING_KEY_ID=evidence-prod-v1
 # JSON map of retired key ids to secrets; normally empty until a rotation:
 EVIDENCE_VERIFICATION_KEYS={}
-CORS_ORIGINS=https://astro-frontend-tyfr.onrender.com,http://localhost:5173
+CORS_ORIGINS=https://<target-frontend>
 RATE_LIMIT_ENABLED=true
+SHARED_DEEPSEEK_API_KEY_ENABLED=false # public chat is BYOK-only
+TRUSTED_PROXY_MODE=none               # verify the target proxy before trusting headers
 REDIS_URL=redis://...                   # Blueprint injects Render Key Value URL
 PIPELINE_MODE=celery
 STORAGE_BACKEND=s3
@@ -107,10 +132,24 @@ GOOGLE_CLIENT_SECRET=...
 ADMIN_SECRET=<random-hex-32>
 PROVENANCE_VALIDATOR_HARDBLOCK=true          # default; set false only for an emergency warn-only downgrade
 ASTRO_RESEARCH_FOCUS=cosmology          # cosmology | all  (any other value fails closed to cosmology)
-TRUSTED_PROXY_MODE=1                    # none | <hop count> | cloudflare  (see paragraph below)
 ```
 
 `PROVENANCE_VALIDATOR_HARDBLOCK` defaults to hard-block mode. Leave it unset or set it to `true` so provenance-v2 citation violations block replies. Set it to `false` only as a temporary emergency downgrade to warning-only behavior.
+
+The reference production Blueprint makes **public chat BYOK-only**:
+`SHARED_DEEPSEEK_API_KEY_ENABLED=false`, and it does not declare a platform
+DeepSeek secret. Do not add a paid platform key merely to make an anonymous
+smoke test pass. Enabling shared inference is a separate operating decision
+that requires an approved budget, a global cost ceiling, per-user and per-IP
+abuse controls, a real-Redis failure/concurrency test, and verified client-IP
+behavior on the target proxy. The existing 50-per-UTC-day anonymous/starter
+counter is a defense in depth, not a global budget boundary. When enabled in
+production it requires Redis and returns `503` instead of using a per-process
+memory fallback. BYOK and a configured local backend are exempt, and an invalid
+BYOK is never allowed to fall back to a platform-funded provider.
+The separately declared Anthropic secret is available only to operator-owned
+flows that do not pass an explicit per-user provider-key map; it does not turn
+public chat into a shared-key path and still needs its own budget approval.
 
 Before upgrading a legacy local-volume deployment to integrity-required reads,
 inventory then backfill its existing objects from `backend/`:
@@ -126,18 +165,39 @@ metadata and are checked on every read.
 
 `ASTRO_RESEARCH_FOCUS` selects which active research module the process serves. This repository is cosmology-only, so `cosmology` (the `render.yaml` default) is the only active focus. See [Research module focus](#research-module-focus) below.
 
-`TRUSTED_PROXY_MODE` controls which client IP the backend believes for per-IP rate limiting and comment audit logs (`backend/app/rate_limit.py`). Forwarded headers are attacker-controlled unless a trusted reverse proxy sets them, so the default with `ENV=production` is `1`: exactly one trusted proxy (Render's) in front, whose appended rightmost `X-Forwarded-For` hop is the real client — the current Render deployment therefore needs no explicit setting. Outside production the default is `none` (trust only the socket peer, ignore all forwarded headers); set `TRUSTED_PROXY_MODE=none` explicitly if clients ever reach uvicorn directly under `ENV=production` (e.g. docker-compose with the backend port published and no proxy), `2`..`N` if you chain additional proxies, or `cloudflare` only if Cloudflare actually fronts the service (`CF-Connecting-IP` is honored in that mode alone). Unrecognized values fail closed to `none`.
+`TRUSTED_PROXY_MODE` controls which client IP the backend believes for per-IP
+rate limiting and comment audit logs (`backend/app/rate_limit.py`). Forwarded
+headers are attacker-controlled unless a trusted reverse proxy overwrites them.
+The Blueprint and every environment default use `none`: trust only the socket
+peer and ignore forwarded headers. `render` reads the first
+`X-Forwarded-For` item, matching Render's published staff description, but the
+platform's formal web-service documentation does not currently guarantee an
+ordering contract. Before selecting it, deploy a diagnostic that sends forged
+left and right XFF values through the real target service and prove which item
+Render replaces; keep platform-funded inference disabled until that check
+passes. See [Render's XFF behavior report](https://feedback.render.com/features/p/send-the-correct-xforwardedfor).
+Use `1`..`N` only for a separately documented append-only proxy chain, or
+`cloudflare` only when Cloudflare actually fronts the service
+(`CF-Connecting-IP` is honored in that mode alone). Unrecognized values fail
+closed to `none`.
+
+Production CORS trusts only explicit origins. Keep `CORS_ORIGINS` to the exact
+target frontend origin. The legacy downloaded `file://` admin page uses the
+opaque `null` origin and is not enabled in production unless an operator
+explicitly appends `,null`; prefer the same-origin `/admin` page.
 
 ## Frontend Environment
 
-Set these on `standard-astro-frontend`:
+Set these on `standard-astro-frontend` (the Blueprint derives the API URL from
+the backend's `RENDER_EXTERNAL_URL` automatically):
 
 ```bash
-VITE_API_URL=https://astro-backend-h4x1.onrender.com
+VITE_API_URL=https://<target-backend>.onrender.com
 VITE_GOOGLE_CLIENT_ID=...
 ```
 
-Render's static build receives the hosted `VITE_API_URL` above. The frontend
+Render's static build receives the hosted `VITE_API_URL` above. Production
+builds fail when it is absent; there is no hosted-backend fallback. The frontend
 Dockerfile defaults to `http://localhost:8000`, and Docker Compose repeats that
 value as an explicit build argument. Do not remove the Compose override: without
 it a local production-style browser test can silently exercise the hosted API.
@@ -147,16 +207,19 @@ it a local production-style browser test can silently exercise the hosted API.
 After deploy:
 
 ```bash
-curl https://astro-backend-h4x1.onrender.com/health
-curl --fail https://astro-backend-h4x1.onrender.com/health/deep
+cd backend
+EXPECTED_COMMIT=<full-render-git-sha> \
+  ./venv/bin/python scripts/verify_deployment.py https://<target-backend>
 curl https://astro-backend-h4x1.onrender.com/metrics
 ```
 
-`/health` is liveness only. `/health/deep` blocks readiness unless the database
+`/health` is liveness only. Render's bounded traffic gate is `/health/ready`.
+The post-deploy acceptance check `/health/deep` fails unless the database
 is at the image's exact Alembic head, `/app/data` is a real fsync-writable mount,
 the configured object store passes a checksum-verified round trip, Redis answers,
-and at least one Celery worker replies. It must not be weakened to work around an
-infrastructure failure.
+at least one Celery worker replies, every replying worker identifies the same
+commit as the backend, and every active tick-coupled Beat lease identifies that
+commit. It must not be weakened to work around an infrastructure failure.
 
 Manual smoke checks:
 
@@ -288,7 +351,11 @@ because background workers and durable queue/storage semantics are required.
   not stamp blindly.
 - `broker`: inspect the Render Key Value service and `REDIS_URL` binding.
 - `celery_worker`: inspect the worker deploy/logs and run
-  `celery -A celery_worker inspect ping` from a trusted shell.
+  `celery -A celery_worker inspect ping` from a trusted shell. A
+  `revision_mismatch` means an old worker is still consuming from the queue.
+- `celery_beat`: inspect every Beat deploy/log, Redis connectivity, scheduler
+  ticks, lease age, and commit. A stopped old instance remains deliberately
+  blocking until its 120-second lease expires.
 - `schema gate timed out`: the backend migration did not reach the image head;
   inspect the backend pre-deploy log. Do not bypass the worker/beat wait command.
 - `stale_job_reconciled`: a queued/running record exceeded the configured

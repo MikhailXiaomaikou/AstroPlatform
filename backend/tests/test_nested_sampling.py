@@ -106,7 +106,7 @@ def _registered_gaussian(dataset_key: str) -> dict:
     }
 
 
-def test_exact_registered_gaussian_can_be_publication_ready():
+def test_exact_registered_posterior_summary_stays_context_only():
     from app.services.nested_sampling import run_controlled_nested_sampler
 
     result = run_controlled_nested_sampler(
@@ -117,12 +117,39 @@ def test_exact_registered_gaussian_can_be_publication_ready():
     )
 
     assert result["success"] is True
-    assert result["publication_ready"] is True
-    assert result["analysis_status"] == "NESTED_SAMPLER_READY"
+    assert result["publication_ready"] is False
+    assert result["analysis_status"] == "CONTEXT_ONLY_INPUT"
+    assert "evidence" not in result and "parameters" not in result
+    assert result["likelihoods_used"] == []
+    used = result["likelihoods_not_run"][0]
+    assert used["source_machine_verified"] is False
+    assert used["statistical_role"] == "published_posterior_summary"
+    assert used["source_verification"] == (
+        "registered_published_posterior_summary_is_context_only"
+    )
+    assert used["citation"]
+    assert result["__do_not_claim__"]
+
+
+def test_exact_registered_external_prior_is_verified_but_still_diagnostic():
+    from app.services.nested_sampling import run_controlled_nested_sampler
+
+    result = run_controlled_nested_sampler(
+        parameters=[{"name": "H0", "prior": [50.0, 90.0]}],
+        gaussian_likelihood=_registered_gaussian("shoes_h0_riess22"),
+        sampler_config={"nlive": 70, "dlogz": 0.5},
+        random_seed=322,
+    )
+
+    assert result["success"] is True
+    assert result["publication_ready"] is False
+    assert result["analysis_status"] == "NESTED_SAMPLER_DIAGNOSTIC"
     used = result["likelihoods_used"][0]
     assert used["source_machine_verified"] is True
+    assert used["statistical_role"] == "external_prior"
     assert used["source_verification"] == "exact_registered_gaussian_match"
-    assert used["citation"]
+    assert result["chain_diagnostics"]["scientific_input_eligible"] is True
+    assert result["__do_not_claim__"]
 
 
 def test_dataset_key_cannot_launder_changed_gaussian_values():
@@ -139,9 +166,10 @@ def test_dataset_key_cannot_launder_changed_gaussian_values():
         random_seed=321,
     )
 
-    assert result["chain_diagnostics"]["numerical_quality_ready"] is True
+    assert result["analysis_status"] == "CONTEXT_ONLY_INPUT"
     assert result["publication_ready"] is False
-    used = result["likelihoods_used"][0]
+    assert "chain_diagnostics" not in result and "evidence" not in result
+    used = result["likelihoods_not_run"][0]
     assert used["source_verification"] == "registered_values_mismatch"
     # Untrusted citation metadata is not reflected into the provenance result.
     assert used["citation"] is None
@@ -152,8 +180,8 @@ def test_maxiter_before_dlogz_is_never_publication_ready():
     from app.services.nested_sampling import run_controlled_nested_sampler
 
     result = run_controlled_nested_sampler(
-        parameters=[{"name": "S8", "prior": [0.4, 1.2]}],
-        gaussian_likelihood=_registered_gaussian("kids1000_wl"),
+        parameters=[{"name": "H0", "prior": [50.0, 90.0]}],
+        gaussian_likelihood=_registered_gaussian("shoes_h0_riess22"),
         sampler_config={"nlive": 70, "dlogz": 0.01, "maxiter": 0},
         random_seed=321,
     )

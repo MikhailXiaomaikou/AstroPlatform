@@ -105,7 +105,12 @@ def evaluate_chain_diagnostics(
         # closed below with an explicit provenance reason.
         assess_data_likelihood=False,
     )
-    convergence_ready = bool(convergence_gate["eligible"])
+    # This tool can establish numerical convergence, but it cannot establish
+    # model adequacy or publication provenance.  Keep those two decisions
+    # separate: otherwise a perfectly healthy set of chains is mislabeled as
+    # non-converged merely because the standalone diagnostic has no likelihood
+    # receipt or predictive-check manifest.
+    convergence_ready = bool(convergence_gate["numerical_eligible"])
     publication_gate = {
         **convergence_gate,
         "eligible": False,
@@ -158,14 +163,10 @@ def evaluate_chain_diagnostics(
             "but it cannot certify scientific publication readiness without the fitted "
             "likelihood, verified data products, and runner provenance."
         ),
-        "__do_not_claim__": [
-            *(
-                []
-                if convergence_ready
-                else ["Do not call these chains converged; inspect the diagnostics first."]
-            ),
-            "Do not use standalone chain diagnostics as a scientific publication gate; likelihood/data provenance is missing.",
-        ],
+        # Machine-enforced guard.  Human-readable scope belongs in the message
+        # and warnings above; a list here bypassed validators that deliberately
+        # require the sentinel to be the literal boolean True.
+        "__do_not_claim__": True,
     }
 
 

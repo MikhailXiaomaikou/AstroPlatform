@@ -19,6 +19,7 @@ def nested_sampling(
     method: str = "dynesty",
     maxiter: int | None = None,
     dlogz: float = 0.5,
+    random_seed: int | None = None,
 ) -> dict[str, Any]:
     """Run nested sampling to compute Bayesian evidence and posterior.
 
@@ -27,27 +28,41 @@ def nested_sampling(
         prior_transform: function(u) -> theta, maps [0,1]^n to parameter space
         ndim: number of parameters
         nlive: number of live points
-        method: 'dynesty' or 'ultranest'
+        method: ``dynesty``. ``ultranest`` is rejected because UltraNest 4.5
+            exposes no isolated per-sampler RNG for deterministic replay.
+        random_seed: deterministic sampler/resampling seed (stable default).
         maxiter: maximum iterations
         dlogz: stopping criterion (evidence precision)
 
     Returns:
         dict with logZ, logZ_err, samples, weights, parameter_posteriors
     """
+    # Direct library/code-executor callers do not pass through the tool
+    # dispatcher. Give them a stable default rather than silently producing an
+    # unreceipted random evidence estimate.
+    effective_seed = 20260502 if random_seed is None else int(random_seed)
+
     if method == "dynesty":
         try:
             import dynesty
 
+            rng = np.random.default_rng(effective_seed)
+
             sampler = dynesty.NestedSampler(
                 log_likelihood, prior_transform, ndim,
                 nlive=nlive,
+                rstate=rng,
             )
             sampler.run_nested(maxiter=maxiter, dlogz=dlogz)
             results = sampler.results
 
             # Extract weighted samples
             from dynesty.utils import resample_equal
-            samples = resample_equal(results.samples, np.exp(results.logwt - results.logz[-1]))
+            samples = resample_equal(
+                results.samples,
+                np.exp(results.logwt - results.logz[-1]),
+                rstate=rng,
+            )
 
             return {
                 "logZ": float(results.logz[-1]),
@@ -57,35 +72,19 @@ def nested_sampling(
                 "n_iterations": results.niter,
                 "n_likelihood_calls": int(np.sum(results.ncall)),
                 "method": "dynesty",
+                "random_seed": effective_seed,
             }
-        except ImportError:
-            logger.warning("dynesty not available, falling back to ultranest")
-            method = "ultranest"
+        except ImportError as exc:
+            raise ImportError(
+                "dynesty is required for deterministic nested sampling; "
+                "UltraNest is disabled because it exposes no isolated RNG"
+            ) from exc
 
     if method == "ultranest":
-        try:
-            import ultranest
-
-            param_names = [f"p{i}" for i in range(ndim)]
-            sampler = ultranest.ReactiveNestedSampler(
-                param_names, log_likelihood, prior_transform,
-            )
-            result = sampler.run(min_num_live_points=nlive, dlogz=dlogz,
-                                max_ncalls=maxiter or 100000)
-
-            samples = result["posterior"]["points"]
-
-            return {
-                "logZ": float(result["logz"]),
-                "logZ_err": float(result["logzerr"]),
-                "samples": samples.tolist(),
-                "n_samples": len(samples),
-                "n_iterations": int(result.get("niter", 0)),
-                "n_likelihood_calls": int(result.get("ncall", 0)),
-                "method": "ultranest",
-            }
-        except ImportError:
-            raise ImportError("Neither dynesty nor ultranest is installed")
+        raise ValueError(
+            "UltraNest 4.5 does not expose an isolated per-sampler RNG; "
+            "deterministic replay is unsupported. Use method='dynesty'."
+        )
 
     raise ValueError(f"Unknown method: {method}")
 

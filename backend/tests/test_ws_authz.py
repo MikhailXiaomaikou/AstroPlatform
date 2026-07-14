@@ -8,7 +8,133 @@ broadcasts and pipeline progress.
 """
 
 import uuid
+
 import pytest
+
+
+class _FakeWebSocket:
+    def __init__(self, *, query_params=None, headers=None):
+        self.query_params = query_params or {}
+        self.headers = headers or {}
+        self.close_args = None
+
+    async def close(self, **kwargs):
+        self.close_args = kwargs
+
+
+@pytest.mark.asyncio
+async def test_ws_auth_rejects_query_jwt_in_production(monkeypatch):
+    """Access JWTs must not be carried in production URLs and proxy logs."""
+    from app.api import ws
+
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("CORS_ORIGINS", "https://allowed.example")
+    monkeypatch.setattr(
+        ws,
+        "decode_token",
+        lambda _token: pytest.fail("query-string JWT reached the decoder"),
+    )
+    websocket = _FakeWebSocket(
+        query_params={"token": "long-lived-access-token"},
+        headers={"origin": "https://allowed.example"},
+    )
+
+    assert await ws._authenticate_ws(websocket) is None
+    assert websocket.close_args == {
+        "code": ws._WS_CLOSE_UNAUTHORIZED,
+        "reason": "query-string token transport is disabled",
+    }
+
+
+@pytest.mark.asyncio
+async def test_ws_auth_keeps_query_jwt_for_local_development(monkeypatch):
+    """The query transport remains a dev-only compatibility bridge."""
+    from app.api import ws
+
+    user_id = uuid.uuid4()
+    monkeypatch.setenv("ENV", "dev")
+    monkeypatch.setattr(ws, "decode_token", lambda token: user_id if token == "dev-token" else None)
+    websocket = _FakeWebSocket(
+        query_params={"token": "dev-token"},
+        headers={"origin": "http://localhost:5173"},
+    )
+
+    assert await ws._authenticate_ws(websocket) == user_id
+    assert websocket.close_args is None
+
+
+@pytest.mark.asyncio
+async def test_ws_auth_accepts_bearer_subprotocol_in_production(monkeypatch):
+    """Production browser clients retain a non-URL authentication path."""
+    from app.api import ws
+
+    user_id = uuid.uuid4()
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("CORS_ORIGINS", "https://allowed.example")
+    monkeypatch.setattr(ws, "decode_token", lambda token: user_id if token == "header-token" else None)
+    websocket = _FakeWebSocket(
+        headers={
+            "origin": "https://allowed.example",
+            "sec-websocket-protocol": "bearer, header-token",
+        }
+    )
+
+    assert await ws._authenticate_ws(websocket) == user_id
+    assert websocket.close_args is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", ["null", "", "https://evil.example"])
+async def test_ws_auth_rejects_opaque_empty_and_unknown_browser_origins(
+    monkeypatch, origin
+):
+    from app.api import ws
+
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("CORS_ORIGINS", "https://allowed.example")
+    monkeypatch.setattr(
+        ws,
+        "decode_token",
+        lambda _token: pytest.fail("untrusted origin reached the decoder"),
+    )
+    websocket = _FakeWebSocket(
+        headers={
+            "origin": origin,
+            "sec-websocket-protocol": "bearer, header-token",
+        }
+    )
+
+    assert await ws._authenticate_ws(websocket) is None
+    assert websocket.close_args == {
+        "code": ws._WS_CLOSE_FORBIDDEN,
+        "reason": "origin not allowed",
+    }
+
+
+@pytest.mark.asyncio
+async def test_ws_auth_allows_non_browser_client_without_origin(monkeypatch):
+    from app.api import ws
+
+    user_id = uuid.uuid4()
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("CORS_ORIGINS", "https://allowed.example")
+    monkeypatch.setattr(ws, "decode_token", lambda _token: user_id)
+    websocket = _FakeWebSocket(
+        headers={"sec-websocket-protocol": "bearer, header-token"}
+    )
+
+    assert await ws._authenticate_ws(websocket) == user_id
+    assert websocket.close_args is None
+
+
+def test_ws_response_subprotocol_echoes_marker_not_token():
+    from app.api import ws
+
+    websocket = _FakeWebSocket(
+        headers={"sec-websocket-protocol": "bearer, sensitive.jwt.token"}
+    )
+
+    assert ws._ws_response_subprotocol(websocket) == "bearer"
 
 
 @pytest.mark.asyncio

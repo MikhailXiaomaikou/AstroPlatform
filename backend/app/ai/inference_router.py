@@ -339,7 +339,14 @@ class ClaudeBackend(LLMBackend):
             import anthropic
         except ImportError as exc:
             raise InferenceError("anthropic package not installed") from exc
-        key = api_key or (provider_api_keys or {}).get("anthropic") or os.getenv("ANTHROPIC_API_KEY", "")
+        # An explicit provider map is authoritative. A legacy generic api_key
+        # must never outrank it or cross provider boundaries during fallback
+        # (for example, sending an Anthropic key to DeepSeek).
+        key = (
+            (provider_api_keys or {}).get("anthropic")
+            if provider_api_keys is not None
+            else (api_key or os.getenv("ANTHROPIC_API_KEY", ""))
+        )
         if not key:
             raise InferenceError("Anthropic API key is not configured")
 
@@ -542,10 +549,13 @@ class OpenAICompatibleBackend(LLMBackend):
         }
 
     async def complete(self, messages, *, system=None, tools=None, max_tokens=4096, temperature=0.0, api_key=None, provider_api_keys=None, request_timeout=None, model_profile=None):
+        # When callers provide a provider-key map, use only this backend's
+        # entry. The generic legacy key has no provider identity and can leak
+        # credentials across fallback backends if it takes precedence here.
         key = (
-            api_key
-            or (provider_api_keys or {}).get(self.provider_name)
-            or os.getenv(self._key_env, "")
+            (provider_api_keys or {}).get(self.provider_name)
+            if provider_api_keys is not None
+            else (api_key or os.getenv(self._key_env, ""))
         )
         if not key and self._key_env != "LOCAL_MODEL_API_KEY":
             raise InferenceError(f"{self.backend_label} API key is not configured")
@@ -818,6 +828,13 @@ class LocalBackend(OpenAICompatibleBackend):
                     "--ephemeral",
                     "--sandbox",
                     "read-only",
+                    # Standard Astro exposes only its explicit JSON tool bridge.
+                    # The Codex CLI's own shell tools would bypass that allowlist
+                    # and could read arbitrary files even in a read-only sandbox.
+                    "--disable",
+                    "shell_tool",
+                    "--disable",
+                    "unified_exec",
                     "--skip-git-repo-check",
                     "--output-last-message",
                     str(output_path),
@@ -1039,11 +1056,23 @@ class InferenceRouter:
     def _backend_is_available(self, backend_name: str, provider_api_keys: dict[str, str] | None) -> bool:
         keys = provider_api_keys or {}
         if backend_name == "claude":
-            return bool(keys.get("anthropic") or os.getenv("ANTHROPIC_API_KEY", ""))
+            return bool(
+                keys.get("anthropic")
+                if provider_api_keys is not None
+                else os.getenv("ANTHROPIC_API_KEY", "")
+            )
         if backend_name == "openai":
-            return bool(keys.get("openai") or os.getenv("OPENAI_API_KEY", ""))
+            return bool(
+                keys.get("openai")
+                if provider_api_keys is not None
+                else os.getenv("OPENAI_API_KEY", "")
+            )
         if backend_name == "deepseek":
-            return bool(keys.get("deepseek") or os.getenv("DEEPSEEK_API_KEY", ""))
+            return bool(
+                keys.get("deepseek")
+                if provider_api_keys is not None
+                else os.getenv("DEEPSEEK_API_KEY", "")
+            )
         if backend_name == "local":
             return bool(
                 _env_flag("LOCAL_MODEL_ENABLED")

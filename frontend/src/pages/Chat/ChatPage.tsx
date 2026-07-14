@@ -1266,8 +1266,8 @@ export default function ChatPage() {
             Using {modelDisplayLabel(selectedModelStatus)}. Model selection is manual; fallback only runs after backend failure.
           </div>
         )}
-        {/* F4.1: top-of-chat banner when NEITHER a browser-stored key
-            NOR a server-side backend is configured.  Using the same
+        {/* F4.1: top-of-chat banner when no server-side backend is configured.
+            Using the same
             ApiKeyPrompt body below handles the key entry — this banner
             just surfaces the state loudly + links to the Settings page. */}
         {!aiBackendReady && serverBackendReady === false && (
@@ -1289,8 +1289,8 @@ export default function ChatPage() {
           >
             <div>
               <strong>AI backend not configured.</strong> Add an API key
-              below (stays in this browser by default) or configure one
-              server-side before sending messages. Anthropic, OpenAI, and
+              below (encrypted on the server) before sending messages.
+              Anthropic, OpenAI, and
               DeepSeek are all supported.
             </div>
             <button
@@ -1311,8 +1311,8 @@ export default function ChatPage() {
             </button>
           </div>
         )}
-        {/* When the server has a backend but the browser does not, Send
-            still works (falls back to server env).  Show a subtle note. */}
+        {/* When the server already has a backend, Send works immediately.
+            Show a subtle note while no key was saved in this page lifetime. */}
         {!hasKey && serverBackendReady === true && serverBackendList.length > 0 && (
           <div
             style={{
@@ -1326,7 +1326,7 @@ export default function ChatPage() {
             }}
           >
             Using server-side AI backend ({serverBackendList.join(", ")}).
-            You can add your own key below for better rate limits.
+            You can add your own encrypted server-side key for better rate limits.
           </div>
         )}
         {!aiBackendReady && (

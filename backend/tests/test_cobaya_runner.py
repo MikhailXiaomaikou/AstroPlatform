@@ -409,7 +409,13 @@ def test_real_verified_low_e_likelihood_removes_tau_approximation_block() -> Non
         data_verification=verified,
     )
 
-    assert result["publication_ready"] is True
+    # Verified lowE removes the data-substitution block and clears the
+    # numerical-reproducibility stage.  It still cannot become publication-
+    # ready until predictive checks, prior/systematics sensitivity, simulation
+    # recovery, and independent reproduction are attested separately.
+    assert result["publication_gate"]["numerical_eligible"] is True
+    assert result["publication_ready"] is False
+    assert "model_adequacy_attestation_missing" in result["preliminary_reasons"]
     assert result["approximate_likelihood_components"] == []
     assert "compressed_or_approximate_likelihood" not in result[
         "preliminary_reasons"
@@ -756,23 +762,31 @@ def test_external_envelope_enters_model_comparison_pairing() -> None:
         assert "delta_chi2" not in stats
         assert "data-vector length" in stats["note"]
 
-    # (b) the pair now yields a real comparison with hand-checkable deltas:
+    # (b) the pair yields hand-checkable diagnostic deltas, but the chain-file
+    # minimum is not a separately optimised likelihood-only MLE, so no model
+    # preference is claimable:
     # delta_chi2 = 8.0 - 10.25 = -2.25; delta_aic = 14.0 - 14.25 = -0.25.
     cmp = compute_model_comparison(lcdm, ok_lcdm)
     assert cmp["delta_chi2"] == -2.25
     assert cmp["delta_aic"] == -0.25
     assert cmp["delta_bic"] is None  # no N -> no BIC, honestly None
     assert cmp["n_extra_params"] == 1
-    assert cmp["comparison_valid"] is True
-    assert cmp["preferred"] == "inconclusive"  # |delta_aic| < 2
+    assert cmp["comparison_valid"] is False
+    assert cmp["preferred"] == "undetermined"
+    assert cmp["__do_not_claim__"] is True
+    assert "likelihood-only MLE" in cmp["comparison_warning"]
+    assert cmp["baseline_chi2_kind"] == "posterior_draw_minimum"
+    assert cmp["extended_chi2_kind"] == "posterior_draw_minimum"
 
     # Tier semantics preserved (do NOT relax): fit_statistics must not upgrade
-    # the chain. ok_lcdm is off-anchor -> exploratory, not claimable, and the
-    # comparison must carry the rendered caveat.
-    assert lcdm["chain_tier"] == "publication"
+    # the chain.  The baseline is numerically converged but has no separately
+    # attested model-adequacy manifest, while ok_lcdm is additionally off-anchor;
+    # both therefore remain exploratory and non-claimable.
+    assert lcdm["publication_gate"]["numerical_eligible"] is True
+    assert lcdm["chain_tier"] == "exploratory"
+    assert lcdm["publication_ready"] is False
     assert ok_lcdm["chain_tier"] == "exploratory"
     assert ok_lcdm["publication_ready"] is False
-    assert "exploratory-tier" in cmp["verdict_caveat"]
 
 
 def test_single_external_chain_is_preliminary_and_has_no_verdict() -> None:

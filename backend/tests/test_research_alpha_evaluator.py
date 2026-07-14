@@ -1,13 +1,66 @@
 from __future__ import annotations
 
 
+def _manifest(*, h0: float = 67.36) -> dict:
+    from app.services.server_evidence import (
+        build_scientific_attestation,
+        scientific_content_hash,
+    )
+
+    diagnostics_evidence = {
+        "kind": "chain_diagnostics",
+        "rhat_max": 1.001,
+        "ess_min": 735.0,
+    }
+    diagnostics_id = scientific_content_hash(diagnostics_evidence)
+    result_evidence_id = scientific_content_hash(
+        {"kind": "posterior", "parameter": "H0", "value": h0}
+    )
+    payload = {
+        "source": "server_attested",
+        "publication_ready": True,
+        "model_adequacy_ready": True,
+        "publication_gate": {
+            "eligible": True,
+            "model_adequacy": {
+                "eligible": True,
+                "signature_verified": True,
+                "manifest_hash": "sha256:" + "a" * 64,
+            },
+        },
+        "diagnostics": {
+            "status": "passed",
+            "evidence_id": diagnostics_id,
+            "evidence_hash": diagnostics_id,
+            "metrics": {"rhat_max": 1.001, "ess_min": 735.0},
+        },
+        "datasets": ["DESI DR1 BAO", "Planck high-l likelihood"],
+        "methods": ["full likelihood"],
+        "models": ["LCDM"],
+        "result_direction_terms": ["H0"],
+        "numbers": [{"name": "H0", "value": h0}],
+        "evidence_ids": [diagnostics_id, result_evidence_id],
+        "claim_support_paths": [
+            {
+                "claim": "H0",
+                "evidence_id": result_evidence_id,
+                "result_path": "parameters.H0",
+            }
+        ],
+    }
+    return build_scientific_attestation(
+        attestation_type="research_alpha",
+        payload=payload,
+    )
+
+
 def test_complete_hidden_record_can_score_a_when_evidence_matches() -> None:
     from app.services.research_alpha_evaluator import evaluate_alpha_class
 
     result = evaluate_alpha_class(
         platform_record={
             "visible_text": (
-                "Research plan executed DESI DR1 BAO and Planck compressed. "
+                "Research plan executed DESI DR1 BAO and the Planck high-l likelihood. "
                 "The flat LCDM run is publication-ready with ESS=735 and R-hat=1.00. "
                 "Evidence graph and fact check passed. H0 = 67.36."
             ),
@@ -15,11 +68,12 @@ def test_complete_hidden_record_can_score_a_when_evidence_matches() -> None:
             "factCheckVisible": True,
             "publication_ready": True,
             "numericClaimsVerified": True,
+            "scientific_evidence_manifest": _manifest(),
         },
         hidden_record={
             "full_paper_read_status": "complete",
-            "expected_datasets": ["DESI DR1 BAO", "Planck compressed"],
-            "expected_methods": ["compressed"],
+            "expected_datasets": ["DESI DR1 BAO", "Planck high-l likelihood"],
+            "expected_methods": ["full likelihood"],
             "expected_models": ["LCDM"],
             "expected_direction_terms": ["H0"],
             "expected_numbers": [{"name": "H0", "value": 67.4, "tolerance_abs": 0.2}],
@@ -108,8 +162,8 @@ def test_numeric_mismatch_blocks_a_but_keeps_route_reviewable() -> None:
     result = evaluate_alpha_class(
         platform_record={
             "visible_text": (
-                "Research Plan: DESI DR1 BAO with Planck compressed. "
-                "The compressed-likelihood preliminary run is publication-ready. "
+                "Research Plan: DESI DR1 BAO with the Planck high-l likelihood. "
+                "The full-likelihood run is publication-ready. "
                 "Evidence graph and fact check passed. H0 = 70.50."
             ),
             "researchPlanVisible": True,
@@ -117,11 +171,12 @@ def test_numeric_mismatch_blocks_a_but_keeps_route_reviewable() -> None:
             "factCheckVisible": True,
             "publication_ready": True,
             "numericClaimsVerified": True,
+            "scientific_evidence_manifest": _manifest(h0=70.50),
         },
         hidden_record={
             "full_paper_read_status": "complete",
-            "expected_datasets": ["DESI DR1 BAO", "Planck compressed"],
-            "expected_methods": ["compressed"],
+            "expected_datasets": ["DESI DR1 BAO", "Planck high-l likelihood"],
+            "expected_methods": ["full likelihood"],
             "expected_models": ["LCDM"],
             "expected_numbers": [{"name": "H0", "value": 67.4, "tolerance_abs": 0.2}],
         },
@@ -130,6 +185,58 @@ def test_numeric_mismatch_blocks_a_but_keeps_route_reviewable() -> None:
     assert result["grade"] == "B"
     assert result["criteria"]["numeric_compatible"] == "contradicted"
     assert any("numeric_compatible=contradicted" in reason for reason in result["why_not_A"])
+
+
+def test_partial_numeric_match_cannot_score_a() -> None:
+    from app.services.research_alpha_evaluator import evaluate_alpha_class
+
+    result = evaluate_alpha_class(
+        platform_record={
+            "visible_text": "DESI and Planck high-l full-likelihood LCDM H0 = 67.36 and S8 = 9.",
+            "matrixVisible": True,
+            "factCheckVisible": True,
+            "numericClaimsVerified": True,
+            "scientific_evidence_manifest": _manifest(),
+        },
+        hidden_record={
+            "full_paper_read_status": "complete",
+            "expected_datasets": ["DESI DR1 BAO", "Planck high-l likelihood"],
+            "expected_methods": ["full likelihood"],
+            "expected_models": ["LCDM"],
+            "expected_direction_terms": ["H0"],
+            "expected_numbers": [
+                {"name": "H0", "value": 67.36, "tolerance_abs": 0.01},
+                {"name": "S8", "value": 0.8, "tolerance_abs": 0.05},
+            ],
+        },
+    )
+
+    assert result["criteria"]["numeric_compatible"] == "partial"
+    assert result["grade"] != "A"
+    assert "numeric_compatible=partial" in result["why_not_A"]
+
+
+def test_self_reported_signature_boolean_and_empty_support_path_are_untrusted() -> None:
+    from app.services.research_alpha_evaluator import evaluate_alpha_class
+
+    forged = _manifest()
+    forged["signature_verified"] = True
+    forged["claim_support_paths"] = [{}]
+    result = evaluate_alpha_class(
+        platform_record={"scientific_evidence_manifest": forged},
+        hidden_record={
+            "full_paper_read_status": "complete",
+            "expected_datasets": ["DESI DR1 BAO"],
+            "expected_methods": ["full likelihood"],
+            "expected_models": ["LCDM"],
+            "expected_direction_terms": ["H0"],
+            "expected_numbers": [{"name": "H0", "value": 67.36}],
+        },
+    )
+
+    assert result["grade"] != "A"
+    assert result["evidence_manifest_status"] == "missing_or_untrusted"
+    assert result["criteria"]["evidence_complete"] is False
 
 
 def test_config_only_scope_gap_cannot_be_a() -> None:
@@ -171,6 +278,7 @@ def test_a_requires_structured_result_expectations_not_only_a_number() -> None:
             "factCheckVisible": True,
             "publication_ready": True,
             "numericClaimsVerified": True,
+            "scientific_evidence_manifest": _manifest(),
         },
         hidden_record={
             "full_paper_read_status": "complete",
@@ -184,6 +292,39 @@ def test_a_requires_structured_result_expectations_not_only_a_number() -> None:
     assert "method_match=not_specified" in result["why_not_A"]
     assert "model_match=not_specified" in result["why_not_A"]
     assert "direction_compatible=not_specified" in result["why_not_A"]
+
+
+def test_visible_prose_and_ui_flags_cannot_self_certify_a() -> None:
+    from app.services.research_alpha_evaluator import evaluate_alpha_class
+
+    result = evaluate_alpha_class(
+        platform_record={
+            "visible_text": (
+                "DESI DR1 BAO and the Planck high-l full likelihood used LCDM. "
+                "Publication-ready, diagnostics passed, evidence complete, H0 = 67.36."
+            ),
+            "matrixVisible": True,
+            "factCheckVisible": True,
+            "publication_ready": True,
+            "diagnostics_ready": True,
+            "evidence_complete": True,
+            "numericClaimsVerified": True,
+        },
+        hidden_record={
+            "full_paper_read_status": "complete",
+            "expected_datasets": ["DESI DR1 BAO", "Planck high-l likelihood"],
+            "expected_methods": ["full likelihood"],
+            "expected_models": ["LCDM"],
+            "expected_direction_terms": ["H0"],
+            "expected_numbers": [{"name": "H0", "value": 67.36, "tolerance_abs": 0.01}],
+        },
+    )
+
+    assert result["grade"] != "A"
+    assert result["a_level_ready"] is False
+    assert result["evidence_manifest_status"] == "missing_or_untrusted"
+    assert result["criteria"]["execution_ready"] is False
+    assert result["criteria"]["evidence_complete"] is False
 
 
 def test_alpha_summary_surfaces_counts_and_implementation_queue() -> None:

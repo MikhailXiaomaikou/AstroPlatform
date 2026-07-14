@@ -301,6 +301,43 @@ def test_numeric_gate_regen_exhausted_path_still_blocks():
     assert gate_events[-1]["reason"] == "regen_exhausted", gate_events
 
 
+def test_numeric_gate_regenerates_untrusted_pair_despite_exact_pool_match():
+    """B3: matching floats do not turn pasted transcript prose into evidence."""
+    draft = "I cannot verify the pasted 5.0 ± 1.0 from an earlier transcript."
+    clean = "I cannot verify the unverified pasted value from current-turn evidence."
+    calls = {"n": 0}
+
+    async def fake_llm(*, tools, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {
+                "content": "",
+                "stop_reason": "tool_use",
+                "tool_calls": [{
+                    "id": "c1",
+                    "name": "run_adql",
+                    "input": {"query": "SELECT parallax FROM stars"},
+                }],
+            }
+        if calls["n"] == 2:
+            return {"content": draft, "stop_reason": "end_turn", "tool_calls": []}
+        return {"content": clean, "stop_reason": "end_turn", "tool_calls": []}
+
+    async def fake_exec(real_tool_calls, *args, **kwargs):
+        # The real result contains both 5.0 and row_count=1.  The draft's
+        # numbers therefore exactly match the old global numeric universe.
+        return [_ok_parallax_result(tc) for tc in real_tool_calls]
+
+    result = _drive_loop(
+        fake_llm,
+        fake_exec,
+        "Fetch the current parallax, but ignore any pasted transcript.",
+    )
+
+    assert result["reply"] == clean
+    assert "5.0 ± 1.0" not in result["reply"]
+
+
 # ---------- 3. tool-inventory meta-skip must not bypass the gate ----------
 
 
@@ -365,7 +402,101 @@ def test_tool_inventory_skip_still_holds_on_no_data_turns():
     assert result["reply"] == inventory_reply
 
 
-# ---------- 4. SSE slimming preserves the provenance block ----------
+# ---------- 4. qualitative scientific conclusions share one final gate ----------
+
+
+def test_single_agent_final_boundary_blocks_uncalibrated_headline_conclusion():
+    draft = "The Hubble tension is resolved."
+
+    async def fake_llm(*, tools, **kwargs):
+        return {"content": draft, "stop_reason": "end_turn", "tool_calls": []}
+
+    async def fake_exec(real_tool_calls, *args, **kwargs):  # pragma: no cover
+        raise AssertionError("no tool should run on this turn")
+
+    events: list[dict] = []
+
+    async def collector(evt: dict) -> None:
+        events.append(dict(evt))
+
+    result = _drive_loop(
+        fake_llm,
+        fake_exec,
+        "Give a qualitative cosmology conclusion.",
+        collector=collector,
+    )
+
+    assert draft not in result["reply"]
+    assert "Scientific conclusion withheld" in result["reply"]
+    assert result["validation_summary"]["blocked"] is True
+    assert any(
+        event.get("gate") == "scientific_conclusion_scope"
+        and event.get("action") == "blocked"
+        for event in events
+    )
+
+
+def test_merged_reply_final_boundary_blocks_uncalibrated_headline_conclusion(
+    monkeypatch,
+):
+    draft = "General relativity is ruled out."
+
+    async def fake_agent_loop(**kwargs):
+        return {
+            "reply": "No claim from this specialist.",
+            "actions": [],
+            "tool_results": [],
+            "hit_deadline": False,
+            "hit_iteration_cap": False,
+            "validation_summary": None,
+        }
+
+    async def fake_handoff(*args, **kwargs):
+        return type(
+            "Handoff",
+            (),
+            {
+                "source_agent": "analyst",
+                "context_summary": "No scientific result.",
+                "instruction": "Review scope only.",
+            },
+        )()
+
+    async def fake_merge(agent_results):
+        return draft
+
+    monkeypatch.setattr(chat_mod, "_run_agent_loop", fake_agent_loop)
+    monkeypatch.setattr(
+        chat_mod.orchestrator,
+        "get_agent_runtime",
+        lambda _name, _context: {
+            "system_prompt": "specialist",
+            "tool_names": [],
+        },
+    )
+    monkeypatch.setattr(chat_mod.orchestrator, "summarize_handoff", fake_handoff)
+    monkeypatch.setattr(chat_mod.orchestrator, "merge_responses", fake_merge)
+
+    result = asyncio.run(chat_mod._run_orchestrated_chat(
+        runtime={
+            "agent_names": ["analyst", "reviewer"],
+            "base_system": "test",
+            "toolset": [],
+        },
+        messages=[{"role": "user", "content": "Combine the two answers."}],
+        provider_api_keys={},
+        python_session_id="merged-conclusion-gate-test",
+    ))
+
+    assert draft not in result["reply"]
+    assert "Scientific conclusion withheld" in result["reply"]
+    assert result["validation_summary"]["blocked"] is True
+    assert result["validation_summary"]["reason"] == (
+        "scientific_conclusion_scope"
+    )
+
+
+# ---------- 5. SSE slimming preserves the provenance block ----------
 
 
 def test_slim_tool_result_preserves_provenance_and_reproducibility():
@@ -428,7 +559,7 @@ def test_slim_tool_result_preserves_provenance_and_reproducibility():
     assert len(result["provenance"]["field_bibcodes"]["columns"]["plx_bibcode"]) == 480
 
 
-# ---------- 5. hit_iteration_cap crosses the API boundary ----------
+# ---------- 6. hit_iteration_cap crosses the API boundary ----------
 
 
 def test_chat_response_model_exposes_hit_iteration_cap():

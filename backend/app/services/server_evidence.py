@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 LEGACY_SERVER_EVIDENCE_SCHEMA_VERSION = 1
 SERVER_EVIDENCE_SCHEMA_VERSION = 2
 SERVER_EVIDENCE_SOURCE = "server_tool_execution"
+SCIENTIFIC_ATTESTATION_SCHEMA_VERSION = 1
+SCIENTIFIC_ATTESTATION_SOURCE = "server_scientific_attestation"
 _SERVER_EVIDENCE_MAX_RECORDS = 100
 _SERVER_EVIDENCE_RESULT_MAX_BYTES = 250_000
 
@@ -84,6 +86,114 @@ def _record_signature(payload: Mapping[str, Any], *, key: str) -> str:
         hashlib.sha256,
     ).hexdigest()
     return f"hmac-sha256:{digest}"
+
+
+def scientific_content_hash(value: Any) -> str:
+    """Return a canonical full SHA-256 identifier for scientific evidence."""
+
+    return "sha256:" + hashlib.sha256(_canonical_bytes(value)).hexdigest()
+
+
+def _scientific_attestation_signature(
+    payload: Mapping[str, Any], *, key: str
+) -> str:
+    digest = hmac.new(
+        key.encode("utf-8"),
+        b"standard-astro/scientific-attestation/v1\0"
+        + _canonical_bytes(payload),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"hmac-sha256:{digest}"
+
+
+def build_scientific_attestation(
+    *,
+    attestation_type: str,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Sign a canonical server-owned scientific manifest.
+
+    This is intentionally separate from client-authored result dictionaries.
+    Callers cannot unlock a publication/Strict-A gate by setting a
+    ``signature_verified`` boolean: the verifier below recomputes both the
+    content hash and HMAC with the configured evidence key.
+    """
+
+    if not isinstance(attestation_type, str) or not attestation_type.strip():
+        raise ValueError("attestation_type is required")
+    body = dict(_json_safe(dict(payload)))
+    for key in (
+        "schema_version",
+        "attestation_source",
+        "attestation_type",
+        "key_id",
+        "manifest_hash",
+        "signature",
+        "signature_verified",
+    ):
+        body.pop(key, None)
+    body.update(
+        {
+            "schema_version": SCIENTIFIC_ATTESTATION_SCHEMA_VERSION,
+            "attestation_source": SCIENTIFIC_ATTESTATION_SOURCE,
+            "attestation_type": attestation_type.strip(),
+            "key_id": settings.evidence_signing_key_id,
+        }
+    )
+    body["manifest_hash"] = scientific_content_hash(body)
+    body["signature"] = _scientific_attestation_signature(
+        body, key=settings.evidence_signing_key
+    )
+    return body
+
+
+def verify_scientific_attestation(
+    record: Any,
+    *,
+    expected_type: str,
+) -> bool:
+    """Verify scientific-manifest schema, type, hash, key id, and HMAC."""
+
+    if not isinstance(record, dict):
+        return False
+    if record.get("schema_version") != SCIENTIFIC_ATTESTATION_SCHEMA_VERSION:
+        return False
+    if record.get("attestation_source") != SCIENTIFIC_ATTESTATION_SOURCE:
+        return False
+    if record.get("attestation_type") != expected_type:
+        return False
+    manifest_hash = record.get("manifest_hash")
+    signature = record.get("signature")
+    if not isinstance(manifest_hash, str) or not isinstance(signature, str):
+        return False
+
+    unhashed = {
+        key: value
+        for key, value in record.items()
+        if key not in {"manifest_hash", "signature", "signature_verified"}
+    }
+    if not hmac.compare_digest(manifest_hash, scientific_content_hash(unhashed)):
+        return False
+    signed = {
+        key: value
+        for key, value in record.items()
+        if key not in {"signature", "signature_verified"}
+    }
+    key_id = record.get("key_id")
+    candidate_keys: list[str] = []
+    if isinstance(key_id, str) and key_id:
+        if key_id == settings.evidence_signing_key_id:
+            candidate_keys.append(settings.evidence_signing_key)
+        retired = settings.evidence_verification_keyring.get(key_id)
+        if retired:
+            candidate_keys.append(retired)
+    return any(
+        hmac.compare_digest(
+            signature,
+            _scientific_attestation_signature(signed, key=key),
+        )
+        for key in dict.fromkeys(key for key in candidate_keys if key)
+    )
 
 
 def _verification_keys(record: Mapping[str, Any]) -> list[str]:

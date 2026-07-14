@@ -258,6 +258,8 @@ async def _exec_fit_line_lfr_async(
     # Lazy package import: tests monkeypatch these names on app.services.ai_tools;
     # resolving at call time preserves pre-split behavior (module globals == package namespace).
     from app.services.ai_tools import _resolve_literature_measurement_cache
+    raw_seed = inp.get("seed")
+    effective_seed = 20260426 if raw_seed is None else int(raw_seed)
     arxiv_id_in = str(inp.get("arxiv_id") or "").strip()
     extract_summary: dict | None = None
     if arxiv_id_in:
@@ -1017,7 +1019,7 @@ async def _exec_fit_line_lfr_async(
                 delta=delta_fit,
                 K=2, nchains=4,
                 miniter=4000, maxiter=20000,
-                seed=int(inp.get("seed") or 20260426),
+                seed=effective_seed,
                 parallelize=False,
             )
             fit_method = "bayesian_xyerr_linmix"
@@ -1196,7 +1198,7 @@ async def _exec_fit_line_lfr_async(
     subsample_test: dict[str, Any] | None = None
     splits_input = inp.get("subsample_splits")
     if isinstance(splits_input, list) and len(splits_input) >= 2:
-        rng_sub = np.random.default_rng(int(inp.get("seed") or 20260426))
+        rng_sub = np.random.default_rng(effective_seed)
         n_boot = int(inp.get("subsample_n_boot") or 2000)
         sub_groups = _split_rows_by_redshift(accepted, splits_input)
         per_subsample: list[dict[str, Any]] = []
@@ -1289,6 +1291,7 @@ async def _exec_fit_line_lfr_async(
     result = {
         "success": True,
         "tool": "fit_line_lfr",
+        "seed": effective_seed,
         "result_granularity": "literature_measurement_fit",
         "supports_measurement_claims": relation_can_claim,
         "publication_readiness": publication_readiness,

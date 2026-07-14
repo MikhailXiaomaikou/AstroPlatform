@@ -21,11 +21,30 @@ def test_research_plan_routes_multiprobe_cosmology_to_dag() -> None:
         "union3",
         "planck2018_compressed",
     ]
-    # Tier 2A made des_sn5yr / union3 executable (compressed SN-only Ωm), so all
-    # five candidates now run in-process: no blocking gaps, and the plan upgrades
-    # from "mixed" to fully compressed-preliminary executable.
-    assert plan["executable_level"] == "compressed_preliminary"
-    assert plan["blocking_gaps"] == []
+    # Posterior-summary registry rows are literature context, not executable
+    # Gaussian likelihoods. Union3 still has its separate released-vector path,
+    # and Planck still has its separately encoded CHW2019 distance prior.
+    assert plan["executable_level"] == "mixed"
+    statuses = {item["key"]: item for item in plan["candidate_datasets"]}
+    assert statuses["pantheon_plus"]["execution_level"] == "context_only"
+    assert statuses["des_sn5yr"]["execution_level"] == "context_only"
+    assert statuses["pantheon_plus"]["compressed_record_scope"] == "literature_context"
+    assert statuses["pantheon_plus"]["claimable_parameters"] == []
+    assert statuses["pantheon_plus"]["literature_context_parameters"] == [
+        "H0",
+        "omegam",
+        "M_B",
+    ]
+    assert statuses["union3"]["execution_level"] == "compressed_preliminary"
+    assert statuses["planck2018_compressed"]["execution_level"] == "compressed_preliminary"
+    assert statuses["planck2018_compressed"]["compressed_record_scope"] == "literature_context"
+    assert statuses["planck2018_compressed"]["claimable_parameters"] == [
+        "H0",
+        "omegam",
+        "ombh2",
+        "ns",
+    ]
+    assert any("literature context" in gap for gap in plan["blocking_gaps"])
     assert any(cell["label"] == "BAO + CMB" for cell in plan["proposed_experiment_matrix"])
 
 
@@ -61,16 +80,19 @@ def test_research_matrix_runs_executable_cells_and_marks_config_gaps() -> None:
     )["research_plan"]
     result = run_research_matrix(research_plan=plan, n_samples=512)
 
-    assert result["analysis_status"] == "RESEARCH_MATRIX_PARTIAL"
+    assert result["analysis_status"] == "RESEARCH_MATRIX_DIAGNOSTIC"
+    assert result["__do_not_claim__"] is True
     assert result["ready_cells"] == 0
     assert all(cell["publication_ready"] is False for cell in result["matrix"])
-    assert any(
-        cell.get("result", {}).get("preliminary_ready") is True
-        and cell["dataset_keys"] == ["pantheon_plus"]
-        for cell in result["matrix"]
+    pantheon_only = next(
+        cell for cell in result["matrix"]
+        if cell["dataset_keys"] == ["pantheon_plus"]
     )
+    assert pantheon_only["execution_level"] == "context_only"
+    assert pantheon_only["non_executable_dataset_keys"] == ["pantheon_plus"]
+    assert "result" not in pantheon_only
     assert any(
-        cell["execution_level"] == "executed_not_ready"
+        cell["execution_level"] == "partial_dataset_run"
         and "pantheon_plus" in cell["dataset_keys"]
         and "planck2018_compressed" in cell["dataset_keys"]
         for cell in result["matrix"]
@@ -78,9 +100,8 @@ def test_research_matrix_runs_executable_cells_and_marks_config_gaps() -> None:
     charts = result["research_charts"]
     assert charts["chart_version"] == 1
     assert charts["matrix_status"]
-    assert charts["posterior_forest"]
+    assert charts["posterior_forest"] == []
     assert charts["diagnostics"]
-    assert any(row["parameter"] == "H0" for row in charts["posterior_forest"])
     assert any(row["status"] == "not_ready" for row in charts["matrix_status"])
 
 
@@ -561,6 +582,89 @@ def test_evidence_graph_flags_unsupported_final_reply_claims() -> None:
     assert graph["unsupported_claim_count"] >= 3
 
 
+def test_empty_evidence_graph_is_not_publication_ready() -> None:
+    from app.services.research_program import build_evidence_graph
+
+    graph = build_evidence_graph(tool_results=[])
+
+    assert graph["publication_ready"] is False
+    assert graph["__do_not_claim__"] is True
+    assert graph["has_support_path"] is False
+    assert graph["supported_claim_count"] == 0
+    assert graph["evidence_graph"]["nodes"] == []
+
+
+def test_evidence_and_fact_check_meta_tools_cannot_certify_each_other() -> None:
+    from app.services.research_program import (
+        build_evidence_graph,
+        verify_research_facts,
+    )
+
+    meta_results = [
+        {
+            "id": "meta-graph",
+            "tool": "build_evidence_graph",
+            "result": {
+                "success": True,
+                "publication_ready": True,
+                "parameters": {"H0": {"median": 71.4}},
+                "datasets_used": [{"key": "fabricated"}],
+                "evidence_graph": {"claimable_parameters": ["H0"]},
+            },
+        },
+        {
+            "id": "meta-fact",
+            "tool": "verify_research_facts",
+            "result": {
+                "success": True,
+                "publication_ready": True,
+                "parameters": {"H0": {"median": 71.4}},
+                "datasets_used": [{"key": "fabricated"}],
+            },
+        },
+    ]
+
+    graph = build_evidence_graph(tool_results=meta_results)
+    assert graph["publication_ready"] is False
+    assert graph["claimable_parameters"] == []
+    assert all(
+        node.get("scientific_evidence") is False
+        for node in graph["evidence_graph"]["nodes"]
+    )
+
+    report = verify_research_facts(
+        tool_results=meta_results,
+        final_reply="This compressed-likelihood preliminary result gives H0 = 71.4.",
+    )
+    assert report["publication_ready"] is False
+    assert report["status"] == "blocked"
+    assert any(claim["status"] == "unsupported" for claim in report["claims"])
+
+
+def test_real_scientific_result_still_builds_a_support_path() -> None:
+    from app.services.research_program import build_evidence_graph
+
+    graph = build_evidence_graph(tool_results=[{
+        "id": "science-1",
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {
+            "success": True,
+            "publication_ready": True,
+            "analysis_status": "CHAIN_READY",
+            "parameters": {"H0": {"median": 67.4}},
+            "datasets_used": [{"key": "desi_dr1_bao"}],
+        },
+    }])
+
+    assert graph["publication_ready"] is True
+    assert graph["__do_not_claim__"] is False
+    assert graph["has_support_path"] is True
+    assert graph["claimable_parameters"] == ["H0"]
+    assert graph["evidence_graph"]["supported_claims"][0][
+        "evidence_path"
+    ][-1] == "dataset:desi_dr1_bao"
+
+
 def test_fact_verifier_flags_unsupported_posterior_claims() -> None:
     from app.services.research_program import verify_research_facts
 
@@ -576,7 +680,7 @@ def test_fact_verifier_flags_unsupported_posterior_claims() -> None:
     assert "contradicted" in statuses
 
 
-def test_fact_verifier_accepts_publication_ready_matrix_claim_scope() -> None:
+def test_fact_verifier_does_not_promote_preliminary_matrix_via_meta_graph() -> None:
     from app.services.research_program import (
         build_evidence_graph,
         plan_research_program,
@@ -595,8 +699,11 @@ def test_fact_verifier_accepts_publication_ready_matrix_claim_scope() -> None:
         final_reply="This is a compressed-likelihood preliminary result for Omega_m.",
     )
 
-    assert report["status"] in {"passed", "warning"}
-    assert any(claim["status"] == "verified" for claim in report["claims"])
+    assert matrix["publication_ready"] is False
+    assert graph["publication_ready"] is False
+    assert report["status"] == "warning"
+    assert report["publication_ready"] is False
+    assert not any(claim["status"] == "verified" for claim in report["claims"])
 
 
 def test_fact_verifier_does_not_block_full_likelihood_limitations() -> None:

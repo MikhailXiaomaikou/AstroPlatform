@@ -12,6 +12,14 @@ tests/
 **/__pycache__/
 **/*.pyc
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.local/
+data/fits/
+data/gate_events*.jsonl
+*.db
+*.sqlite*
 *.png
 # Never bake local secrets into an image (Dockerfile does COPY . .)
-.env
+.env*
+!.env.example

@@ -1,6 +1,7 @@
 """Export endpoints for pipeline run results (CSV, VOTable, FITS, PDF)."""
 
 import csv
+import html as _stdlib_html
 import io
 import uuid
 from datetime import datetime, timezone
@@ -1847,15 +1848,9 @@ class ChatHtmlRequest(_BaseModel):
 
 
 def _html_escape(s: object) -> str:
-    """Minimal HTML escaping to prevent <script> tags in user content from landing. No markupsafe dependency."""
+    """Escape untrusted data with CodeQL's modeled standard-library sanitizer."""
     text = "" if s is None else str(s)
-    return (
-        text.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;")
-            .replace("'", "&#39;")
-    )
+    return _stdlib_html.escape(text, quote=True)
 
 
 def _render_user_content_as_html(content: str) -> str:
@@ -2022,6 +2017,11 @@ async def export_chat_as_html(
     parts.append('<html lang="en">')
     parts.append("<head>")
     parts.append('<meta charset="utf-8">')
+    parts.append(
+        '<meta http-equiv="Content-Security-Policy" '
+        'content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'; '
+        'object-src \'none\'; base-uri \'none\'; form-action \'none\'">'
+    )
     parts.append(f"<title>{title}</title>")
     parts.append('<meta name="viewport" content="width=device-width, initial-scale=1">')
     parts.append(f"<style>{_HTML_CSS}</style>")
@@ -2129,8 +2129,8 @@ async def export_chat_as_html(
                 offloaded = tool_result.get("__figures_offloaded__")
                 if isinstance(offloaded, int) and offloaded > 0:
                     parts.append(
-                        f'<div class="offload-note">📊 {offloaded} figure(s) '
-                        f"were trimmed from local cache and could not be "
+                        '<div class="offload-note">📊 One or more figures '
+                        "were trimmed from local cache and could not be "
                         "rehydrated. Re-run the Python cell to regenerate.</div>"
                     )
 

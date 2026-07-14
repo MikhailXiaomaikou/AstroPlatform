@@ -181,6 +181,27 @@ def _madau_igm(wave_angstrom: np.ndarray, z: float) -> np.ndarray:
 
 # ---------- Emission Lines ----------
 
+_EMISSION_LINES = (
+    (1216.0, 15.0),   # Ly-alpha
+    (3727.0, 3.0),    # [OII]
+    (4861.0, 1.0),    # H-beta (reference)
+    (4959.0, 1.3),    # [OIII] 4959
+    (5007.0, 4.0),    # [OIII] 5007
+    (6563.0, 2.87),   # H-alpha (Case B)
+    (6548.0, 0.3),    # [NII] 6548
+    (6584.0, 1.0),    # [NII] 6584
+)
+
+
+def _emission_line_profile(wave: np.ndarray, z: float) -> np.ndarray:
+    """Return the unit-strength line profile used by the fitter."""
+    profile = np.zeros_like(wave)
+    for lam_rest, rel_strength in _EMISSION_LINES:
+        lam_obs = lam_rest * (1 + z)
+        sigma = 3.0 * (1 + z)
+        profile += rel_strength * np.exp(-0.5 * ((wave - lam_obs) / sigma) ** 2)
+    return profile
+
 def _add_emission_lines(wave: np.ndarray, flux: np.ndarray, z: float,
                        uv_luminosity_factor: float = 1.0) -> np.ndarray:
     """Add emission line contributions to SED template.
@@ -189,26 +210,18 @@ def _add_emission_lines(wave: np.ndarray, flux: np.ndarray, z: float,
     """
     flux_out = flux.copy()
 
-    # Major emission lines: (rest wavelength, relative strength)
-    lines = [
-        (1216.0, 15.0),   # Ly-alpha
-        (3727.0, 3.0),    # [OII]
-        (4861.0, 1.0),    # H-beta (reference)
-        (4959.0, 1.3),    # [OIII] 4959
-        (5007.0, 4.0),    # [OIII] 5007
-        (6563.0, 2.87),   # H-alpha (Case B)
-        (6548.0, 0.3),    # [NII] 6548
-        (6584.0, 1.0),    # [NII] 6584
-    ]
-
     # Scale line strength by UV luminosity proxy
     uv_idx = np.argmin(np.abs(wave - 1500 * (1 + z)))
     base_strength = max(flux[uv_idx] * 0.05 * uv_luminosity_factor, 0)
 
-    for lam_rest, rel_strength in lines:
+    # Keep the scalar operation order stable for callers of this helper and
+    # for the equivalence regression used to validate the projected fitter.
+    for lam_rest, rel_strength in _EMISSION_LINES:
         lam_obs = lam_rest * (1 + z)
-        sigma = 3.0 * (1 + z)  # Line width in Angstrom (instrumental + intrinsic)
-        line_profile = rel_strength * base_strength * np.exp(-0.5 * ((wave - lam_obs) / sigma)**2)
+        sigma = 3.0 * (1 + z)
+        line_profile = rel_strength * base_strength * np.exp(
+            -0.5 * ((wave - lam_obs) / sigma) ** 2
+        )
         flux_out += line_profile
 
     return flux_out
@@ -235,16 +248,259 @@ def _synthetic_mag(wave: np.ndarray, flux: np.ndarray, band: str) -> float:
     sigma = fwhm / 2.3548
 
     response = np.exp(-0.5 * ((wave - center) / sigma) ** 2)
-    response /= np.trapezoid(response, wave) + 1e-30
+    response_integral = np.trapezoid(response, wave)
+    if not np.isfinite(response_integral) or response_integral <= 0:
+        return np.nan
+    response /= response_integral
 
-    f_nu = np.trapezoid(flux * response * wave**2, wave) / np.trapezoid(response * wave**2 / wave, wave)
+    denominator = np.trapezoid(response * wave**2 / wave, wave)
+    if not np.isfinite(denominator) or denominator <= 0:
+        return np.nan
+    f_nu = np.trapezoid(flux * response * wave**2, wave) / denominator
 
+    if not np.isfinite(f_nu):
+        return np.nan
     if f_nu <= 0:
         return 99.0
     return -2.5 * np.log10(f_nu) - 48.60
 
 
 # ---------- Main Fitting Functions ----------
+
+def _trapezoid_weights(x: np.ndarray) -> np.ndarray:
+    """Return weights whose dot product reproduces trapezoidal integration."""
+    dx = np.diff(x)
+    weights = np.empty_like(x, dtype=float)
+    weights[0] = dx[0] / 2.0
+    weights[-1] = dx[-1] / 2.0
+    weights[1:-1] = (dx[:-1] + dx[1:]) / 2.0
+    return weights
+
+
+_MODEL_Z_CHUNK_SIZE = 32
+
+
+def _make_redshift_grid(z_range: tuple[float, float], z_step: float) -> np.ndarray:
+    """Build an inclusive-on-grid redshift grid without exceeding its bound."""
+    z_min, z_max = (float(value) for value in z_range)
+    if not np.isfinite([z_min, z_max, z_step]).all():
+        raise ValueError("z_range and z_step must be finite")
+    if z_min < 0 or z_max < z_min:
+        raise ValueError("z_range must satisfy 0 <= z_min <= z_max")
+    if z_step <= 0:
+        raise ValueError("z_step must be positive")
+
+    ratio = (z_max - z_min) / z_step
+    # nextafter recovers exact mathematical integers such as 0.3 / 0.1 that
+    # binary floating point can represent one ULP below the integer.
+    n_steps = int(np.floor(np.nextafter(ratio, np.inf)))
+    grid = z_min + z_step * np.arange(n_steps + 1, dtype=float)
+    tolerance = 8 * np.finfo(float).eps * max(abs(z_min), abs(z_max), z_step, 1.0)
+    grid[np.abs(grid - z_max) <= tolerance] = z_max
+    return grid[grid <= z_max]
+
+
+def _prepare_model_fluxes(
+    templates: list[dict],
+    ebv_grid: list[float],
+) -> tuple[np.ndarray, np.ndarray, list[tuple[str, float]]]:
+    """Validate the shared wavelength grid and prepare template/dust fluxes."""
+    if not templates:
+        raise ValueError("At least one SED template is required")
+
+    wave_rest = np.asarray(templates[0]["wavelength"], dtype=float)
+    if (
+        wave_rest.ndim != 1
+        or len(wave_rest) < 2
+        or not np.isfinite(wave_rest).all()
+        or not np.all(np.diff(wave_rest) > 0)
+    ):
+        raise ValueError("Template wavelength grid must be finite and strictly increasing")
+
+    for template in templates:
+        template_wave = np.asarray(template["wavelength"], dtype=float)
+        if not np.array_equal(template_wave, wave_rest):
+            raise ValueError(
+                f"Template {template.get('name', '<unnamed>')} does not share the exact "
+                "wavelength grid"
+            )
+        template_flux = np.asarray(template["flux"], dtype=float)
+        if template_flux.shape != wave_rest.shape:
+            raise ValueError(
+                f"Template {template.get('name', '<unnamed>')} flux shape does not match "
+                "its wavelength grid"
+            )
+
+    # Preserve the legacy behavior that non-positive E(B-V) means no dust.
+    dust_factors = {
+        ebv: (
+            _calzetti_attenuation(wave_rest, ebv)
+            if ebv > 0
+            else np.ones_like(wave_rest)
+        )
+        for ebv in ebv_grid
+    }
+    combo_fluxes: list[np.ndarray] = []
+    combo_metadata: list[tuple[str, float]] = []
+    for template in templates:
+        template_flux = np.asarray(template["flux"], dtype=float)
+        for ebv in ebv_grid:
+            combo_fluxes.append(template_flux * dust_factors[ebv])
+            combo_metadata.append((template["name"], ebv))
+    return wave_rest, np.asarray(combo_fluxes), combo_metadata
+
+
+def _model_magnitude_chunk(
+    wave_rest: np.ndarray,
+    intrinsic_flux: np.ndarray,
+    z_values: np.ndarray,
+    bands: list[str],
+    *,
+    include_emission_lines: bool,
+    include_igm: bool,
+) -> np.ndarray:
+    """Project one bounded redshift chunk into model AB magnitudes."""
+    n_bands = len(bands)
+    n_z = len(z_values)
+    n_wave = len(wave_rest)
+
+    # projection[band, z, wavelength] maps an observed-frame SED directly to
+    # f_nu. It is _synthetic_mag's normalized Gaussian response and trapezoidal
+    # integration expressed as linear weights. Zero initialization is
+    # deliberate: uncovered band/redshift pairs are tracked by coverage and
+    # never consumed as numerical model values.
+    projection = np.zeros((n_bands, n_z, n_wave), dtype=float)
+    coverage = np.zeros((n_bands, n_z), dtype=bool)
+    igm = np.ones((n_z, n_wave), dtype=float)
+    line_projection = np.zeros((n_bands, n_z), dtype=float)
+    uv_indices = np.empty(n_z, dtype=np.intp)
+
+    for iz, z in enumerate(z_values):
+        wave_obs = wave_rest * (1 + z)
+        integration_weights = _trapezoid_weights(wave_obs)
+
+        if include_igm and z > 0.1:
+            igm[iz] = _madau_igm(wave_obs, z)
+
+        if include_emission_lines:
+            line_profile = _emission_line_profile(wave_obs, z)
+            uv_indices[iz] = np.argmin(np.abs(wave_obs - 1500 * (1 + z)))
+
+        for ib, band in enumerate(bands):
+            center, fwhm = _FILTER_PARAMS[band]
+            sigma = fwhm / 2.3548
+            response = np.exp(-0.5 * ((wave_obs - center) / sigma) ** 2)
+            response_integral = np.trapezoid(response, wave_obs)
+            if not np.isfinite(response_integral) or response_integral <= 0:
+                continue
+            response /= response_integral
+            denominator = np.trapezoid(response * wave_obs**2 / wave_obs, wave_obs)
+            if not np.isfinite(denominator) or denominator <= 0:
+                continue
+
+            band_projection = (
+                integration_weights * response * wave_obs**2 / denominator
+            )
+            if not np.isfinite(band_projection).all():
+                continue
+            projection[ib, iz] = band_projection
+            coverage[ib, iz] = True
+            if include_emission_lines:
+                line_projection[ib, iz] = band_projection @ line_profile
+
+    # Emission lines are added after IGM attenuation in the scalar algorithm.
+    # Their base strength is the attenuated flux nearest rest-frame 1500 A.
+    if include_emission_lines:
+        emission_strength = np.empty((len(intrinsic_flux), n_z), dtype=float)
+        for iz, uv_idx in enumerate(uv_indices):
+            emission_strength[:, iz] = np.maximum(
+                intrinsic_flux[:, uv_idx] * igm[iz, uv_idx] * 0.05,
+                0.0,
+            )
+
+    projection *= igm[np.newaxis, :, :]
+    f_nu = (
+        projection.reshape(n_bands * n_z, n_wave) @ intrinsic_flux.T
+    ).reshape(n_bands, n_z, len(intrinsic_flux)).transpose(2, 1, 0)
+
+    if include_emission_lines:
+        f_nu += (
+            emission_strength[:, :, np.newaxis]
+            * line_projection.T[np.newaxis, :, :]
+        )
+
+    # NaN is an explicit "model has no finite coverage" marker. It becomes an
+    # infinite chi-square in the fitter; it must not masquerade as magnitude 99.
+    model_mags = np.full_like(f_nu, np.nan)
+    covered = coverage.T[np.newaxis, :, :]
+    finite_flux = covered & np.isfinite(f_nu)
+    positive = finite_flux & (f_nu > 0)
+    model_mags[positive] = -2.5 * np.log10(f_nu[positive]) - 48.60
+    model_mags[finite_flux & (f_nu <= 0)] = 99.0
+    return model_mags
+
+
+def _iter_model_magnitude_chunks(
+    wave_rest: np.ndarray,
+    intrinsic_flux: np.ndarray,
+    z_grid: np.ndarray,
+    bands: list[str],
+    *,
+    include_emission_lines: bool,
+    include_igm: bool,
+    z_chunk_size: int | None = None,
+):
+    """Yield bounded projection chunks so memory does not scale as nz*nwave."""
+    chunk_size = _MODEL_Z_CHUNK_SIZE if z_chunk_size is None else z_chunk_size
+    if chunk_size <= 0:
+        raise ValueError("z_chunk_size must be positive")
+    for start in range(0, len(z_grid), chunk_size):
+        stop = min(start + chunk_size, len(z_grid))
+        yield start, stop, _model_magnitude_chunk(
+            wave_rest,
+            intrinsic_flux,
+            z_grid[start:stop],
+            bands,
+            include_emission_lines=include_emission_lines,
+            include_igm=include_igm,
+        )
+
+
+def _build_model_magnitude_grid(
+    templates: list[dict],
+    ebv_grid: list[float],
+    z_grid: np.ndarray,
+    bands: list[str],
+    *,
+    include_emission_lines: bool,
+    include_igm: bool,
+    z_chunk_size: int | None = None,
+) -> tuple[np.ndarray, list[tuple[str, float]]]:
+    """Compute every template/dust/redshift model without changing the grid.
+
+    Filter curves, IGM transmission, dust attenuation, and line profiles are
+    independent of at least one of the three fit axes.  Precomputing those
+    linear projections gives the same synthetic photometry while evaluating
+    all 30 x 8 template/dust combinations in one matrix multiplication.
+    """
+    wave_rest, intrinsic_flux, combo_metadata = _prepare_model_fluxes(
+        templates,
+        ebv_grid,
+    )
+    n_bands = len(bands)
+    n_z = len(z_grid)
+    model_mags = np.empty((len(intrinsic_flux), n_z, n_bands), dtype=float)
+    for start, stop, chunk in _iter_model_magnitude_chunks(
+        wave_rest,
+        intrinsic_flux,
+        z_grid,
+        bands,
+        include_emission_lines=include_emission_lines,
+        include_igm=include_igm,
+        z_chunk_size=z_chunk_size,
+    ):
+        model_mags[:, start:stop, :] = chunk
+    return model_mags, combo_metadata
 
 def fit_template_enhanced(
     magnitudes: dict[str, float],
@@ -287,89 +543,150 @@ def fit_template_enhanced(
     # denominator, n_bands, and ndof.  Exclude them up front so "data used" equals
     # "data contributing chi2".  Filter membership is z-independent.
     known_filter = np.array([b in _FILTER_PARAMS for b in bands])
-    valid = np.isfinite(obs_mags) & (obs_mags < 90) & (obs_errs > 0) & known_filter
+    valid = (
+        np.isfinite(obs_mags)
+        & (obs_mags < 90)
+        & np.isfinite(obs_errs)
+        & (obs_errs > 0)
+        & known_filter
+    )
     if np.sum(valid) < 2:
         return {"error": "Need at least 2 valid photometric bands with a known filter"}
 
     templates = _generate_sed_templates()
-    z_grid = np.arange(z_range[0], z_range[1] + z_step, z_step)
+    z_grid = _make_redshift_grid(z_range, z_step)
 
-    # Compute chi2 for all (z, template, E(B-V)) combinations
+    valid_bands = [band for band, is_valid in zip(bands, valid, strict=True) if is_valid]
+    wave_rest, intrinsic_flux, combo_metadata = _prepare_model_fluxes(
+        templates,
+        ebv_grid,
+    )
+
+    # Stream model magnitudes in bounded redshift chunks. The only nz-sized
+    # state is the one-dimensional marginalized log-likelihood, so a finer
+    # z_step cannot allocate projection[band, nz, wavelength] or a full
+    # model[template*dust, nz, band] cube.
+    obs_valid = obs_mags[valid]
+    errs_valid = obs_errs[valid]
+    inv_variance = 1.0 / errs_valid**2
+    inv_variance_sum = np.sum(inv_variance)
+    log_pz = np.full(len(z_grid), -np.inf, dtype=float)
     best_chi2 = np.inf
-    best_z = 0.0
-    best_template_name = ""
-    best_ebv = 0.0
-    chi2_grids: list[np.ndarray] = []
+    best_rank = len(combo_metadata) * len(z_grid)
+    best_combo = 0
+    best_iz = 0
 
-    for tmpl in templates:
-        for ebv in ebv_grid:
-            chi2_z = np.zeros(len(z_grid))
+    for start, stop, model_mags in _iter_model_magnitude_chunks(
+        wave_rest,
+        intrinsic_flux,
+        z_grid,
+        valid_bands,
+        include_emission_lines=include_emission_lines,
+        include_igm=include_igm,
+    ):
+        # A model cell must cover every input band used by the likelihood.
+        # Reject incomplete cells with chi2=inf rather than silently dropping a
+        # band or converting a non-finite synthetic magnitude to 99.
+        complete_model = np.isfinite(model_mags).all(axis=2)
+        safe_model_mags = np.where(np.isfinite(model_mags), model_mags, 0.0)
+        offsets = np.sum(
+            (obs_valid[np.newaxis, np.newaxis, :] - safe_model_mags)
+            * inv_variance[np.newaxis, np.newaxis, :],
+            axis=2,
+        ) / inv_variance_sum
+        residuals = (
+            obs_valid[np.newaxis, np.newaxis, :]
+            - safe_model_mags
+            - offsets[:, :, np.newaxis]
+        ) / errs_valid[np.newaxis, np.newaxis, :]
+        chi2 = np.sum(residuals**2, axis=2)
+        chi2[~complete_model | ~np.isfinite(chi2)] = np.inf
 
-            for iz, z in enumerate(z_grid):
-                # Shift template to observed frame
-                wave_obs = tmpl["wavelength"] * (1 + z)
-                flux = tmpl["flux"].copy()
+        finite_cells = np.isfinite(chi2)
+        if finite_cells.any():
+            chunk_best = float(np.min(chi2[finite_cells]))
+            candidate_combo, candidate_local_iz = np.nonzero(chi2 == chunk_best)
+            candidate_iz = candidate_local_iz + start
+            candidate_ranks = candidate_combo * len(z_grid) + candidate_iz
+            candidate_index = int(np.argmin(candidate_ranks))
+            candidate_rank = int(candidate_ranks[candidate_index])
+            if chunk_best < best_chi2 or (
+                chunk_best == best_chi2 and candidate_rank < best_rank
+            ):
+                best_chi2 = chunk_best
+                best_rank = candidate_rank
+                best_combo = int(candidate_combo[candidate_index])
+                best_iz = int(candidate_iz[candidate_index])
 
-                # Apply dust
-                if ebv > 0:
-                    flux *= _calzetti_attenuation(tmpl["wavelength"], ebv)
+        # Marginalize over template/dust combinations in log space for each z.
+        # The per-z minimum is only a numerical factor and is restored in
+        # log_pz, so absolute fit quality remains in the posterior.
+        min_chi2_at_z = np.min(chi2, axis=0)
+        finite_z = np.isfinite(min_chi2_at_z)
+        if finite_z.any():
+            scaled_sum = np.zeros(np.sum(finite_z), dtype=float)
+            for combo_chi2 in chi2:
+                scaled_sum += np.exp(
+                    -0.5 * (combo_chi2[finite_z] - min_chi2_at_z[finite_z])
+                )
+            log_pz[start:stop][finite_z] = (
+                np.log(scaled_sum) - 0.5 * min_chi2_at_z[finite_z]
+            )
 
-                # Apply IGM
-                if include_igm and z > 0.1:
-                    flux *= _madau_igm(wave_obs, z)
+    if not np.isfinite(best_chi2):
+        return {
+            "error": (
+                "No finite model likelihood: at least one requested band has no "
+                "template/filter coverage throughout z_range"
+            )
+        }
 
-                # Add emission lines
-                if include_emission_lines:
-                    flux = _add_emission_lines(wave_obs, flux, z)
-
-                # Compute synthetic magnitudes
-                model_mags = np.array([_synthetic_mag(wave_obs, flux, b) for b in bands])
-
-                # Analytical amplitude/offset marginalization.  The `valid` mask
-                # already excludes bands with NaN model magnitudes, so numerator,
-                # denominator, and chi2 sum over an identical band set.
-                offset = np.sum((obs_mags[valid] - model_mags[valid]) / obs_errs[valid]**2) / \
-                         np.sum(1.0 / obs_errs[valid]**2)
-                model_mags_shifted = model_mags + offset
-
-                chi2 = np.sum(((obs_mags[valid] - model_mags_shifted[valid]) / obs_errs[valid]) ** 2)
-                chi2_z[iz] = chi2
-
-                if chi2 < best_chi2:
-                    best_chi2 = chi2
-                    best_z = z
-                    best_template_name = tmpl["name"]
-                    best_ebv = ebv
-
-            chi2_grids.append(chi2_z)
-
-    # Accumulate P(z) = sum over (template, E(B-V)) of exp(-0.5 * chi2), with the
-    # GLOBAL minimum chi2 subtracted for numerical stability.  Subtracting each
-    # combo's own per-z minimum would make every template peak at 1.0 regardless
-    # of absolute fit quality, turning P(z) into a template head-count instead of
-    # a likelihood (see photo_z.py for the same convention).
-    pz = np.zeros(len(z_grid))
-    for chi2_z in chi2_grids:
-        pz += np.exp(-0.5 * (chi2_z - best_chi2))
+    best_z = z_grid[best_iz]
+    best_template_name, best_ebv = combo_metadata[best_combo]
+    finite_log_pz = np.isfinite(log_pz)
+    pz = np.zeros(len(z_grid), dtype=float)
+    pz[finite_log_pz] = np.exp(
+        log_pz[finite_log_pz] - np.max(log_pz[finite_log_pz])
+    )
 
     # Apply prior
-    if prior == "magnitude" and "i" in magnitudes:
-        i_mag = magnitudes["i"]
+    prior_applied = False
+    i_is_valid = "i" in bands and bool(valid[bands.index("i")])
+    if prior == "magnitude" and i_is_valid:
+        i_mag = float(magnitudes["i"])
         # Simplified single-type magnitude prior inspired by Benitez 2000.
         # NOTE: Benitez 2000 (Table 1) uses three galaxy types with different
         # (alpha, z_mt0, k_mt) parameters; this is a single-type approximation
         # P(z|m) ∝ z^2 * exp(-(z/z0)^1.5), z0 = 0.055*i - 0.8.
         # Coefficients are calibrated for typical photo-z surveys but do NOT
         # reproduce the original Benitez prior exactly.
-        z0 = 0.055 * i_mag - 0.8
-        z0 = max(z0, 0.01)
-        prior_pz = z_grid**2 * np.exp(-(z_grid / z0)**1.5)
-        pz *= prior_pz
+        z0 = max(0.055 * i_mag - 0.8, 0.01)
+        positive_z = z_grid > 0
+        log_prior = np.full(len(z_grid), -np.inf, dtype=float)
+        log_prior[positive_z] = (
+            2 * np.log(z_grid[positive_z]) - (z_grid[positive_z] / z0) ** 1.5
+        )
+        finite_log_prior = np.isfinite(log_prior)
+        if finite_log_prior.any():
+            prior_pz = np.zeros(len(z_grid), dtype=float)
+            prior_pz[finite_log_prior] = np.exp(
+                log_prior[finite_log_prior] - np.max(log_prior[finite_log_prior])
+            )
+            posterior_with_prior = pz * prior_pz
+            if np.isfinite(posterior_with_prior).all() and np.any(
+                posterior_with_prior > 0
+            ):
+                pz = posterior_with_prior
+                prior_applied = True
 
     # Normalize P(z)
-    pz_sum = np.trapezoid(pz, z_grid)
-    if pz_sum > 0:
+    pz_sum = np.trapezoid(pz, z_grid) if len(z_grid) > 1 else 0.0
+    if np.isfinite(pz_sum) and pz_sum > 0:
         pz /= pz_sum
+    elif len(z_grid) == 1 and pz[0] > 0:
+        pz[0] = 1.0
+    else:
+        return {"error": "No finite posterior probability over z_range"}
 
     # Compute z_phot from P(z) peak
     z_phot = z_grid[np.argmax(pz)]
@@ -399,6 +716,7 @@ def fit_template_enhanced(
         "chi2_reduced": float(best_chi2 / ndof),
         "n_bands": int(np.sum(valid)),
         "prior": prior,
+        "prior_applied": prior_applied,
         "pz_grid": z_grid.tolist(),
         "pz_values": pz.tolist(),
         "method": "enhanced_template",

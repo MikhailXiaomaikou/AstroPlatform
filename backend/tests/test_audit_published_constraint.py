@@ -60,6 +60,8 @@ def _mock_chain(parameters, publication_ready=True):
             "parameters": parameters,
             "publication_ready": publication_ready,
             "citations": [],
+            "datasets_used": [{"key": key} for key in dataset_keys],
+            "datasets_not_run": [],
         }
     return _fn
 
@@ -78,7 +80,7 @@ def test_audit_blocked_when_no_runnable_dataset():
     assert any("made_up" in u["key"] for u in r["audit_report"]["datasets_unavailable"])
 
 
-def test_audit_strong_tension(monkeypatch):
+def test_audit_withholds_tension_when_independence_is_unverified(monkeypatch):
     monkeypatch.setattr(
         "app.services.cosmology_likelihoods.run_likelihood_chain",
         _mock_chain({"H0": {"median": 67.4, "std": 0.5}}),
@@ -92,14 +94,14 @@ def test_audit_strong_tension(monkeypatch):
     assert r["analysis_status"] == "AUDIT_READY"
     comps = r["audit_report"]["comparisons"]
     assert len(comps) == 1
-    assert comps[0]["verdict"] == "STRONG_TENSION"
-    assert comps[0]["tension_sigma"] > 3
+    assert comps[0]["verdict"] == "INDEPENDENCE_UNVERIFIED_NOT_COMPARABLE"
+    assert comps[0]["tension_sigma"] is None
     assert any(c.get("role") == "audited_paper" for c in r["citations"])
     # anti-fabrication guard reaches the model
     assert "fabricat" in r["__message_to_model__"].lower()
 
 
-def test_audit_consistent(monkeypatch):
+def test_audit_does_not_label_consistent_without_independence(monkeypatch):
     monkeypatch.setattr(
         "app.services.cosmology_likelihoods.run_likelihood_chain",
         _mock_chain({"H0": {"median": 67.4, "std": 0.5}}),
@@ -109,8 +111,10 @@ def test_audit_consistent(monkeypatch):
         dataset_keys=["pantheon_plus"],
         claimed={"H0": [67.5, 0.6]},
     )
-    assert r["audit_report"]["comparisons"][0]["verdict"] == "CONSISTENT"
-    assert r["__tool_status__"] == "COMPLETED"
+    comparison = r["audit_report"]["comparisons"][0]
+    assert comparison["verdict"] == "INDEPENDENCE_UNVERIFIED_NOT_COMPARABLE"
+    assert comparison["tension_sigma"] is None
+    assert r["__tool_status__"] == "PARTIAL"
 
 
 def test_audit_not_reproduced_param(monkeypatch):
@@ -141,7 +145,32 @@ def test_audit_param_name_normalization(monkeypatch):
     )
     comps = r["audit_report"]["comparisons"]
     assert comps[0]["canonical"] == "omegam"
-    assert comps[0]["verdict"] in {"CONSISTENT", "MILD_TENSION", "STRONG_TENSION"}
+    assert comps[0]["verdict"] == "INDEPENDENCE_UNVERIFIED_NOT_COMPARABLE"
+
+
+def test_exploratory_reproduction_posterior_cannot_be_claimed(monkeypatch):
+    from app.services.claim_validator import validate_claims
+
+    monkeypatch.setattr(
+        "app.services.cosmology_likelihoods.run_likelihood_chain",
+        _mock_chain(
+            {"omegam": {"median": 0.315, "std": 0.007}},
+            publication_ready=False,
+        ),
+    )
+    result = audit_published_constraint(
+        model="lcdm",
+        dataset_keys=["desi_dr1_bao"],
+        claimed={"omegam": [0.298, 0.008]},
+    )
+
+    assert result["publication_ready"] is False
+    assert result["__do_not_claim__"] is True
+    validation = validate_claims(
+        "Omega_m = 0.315.",
+        [{"tool": "audit_published_constraint", "result": result}],
+    )
+    assert validation.ok is False
 
 
 def test_audit_overlapping_datasets_flagged(monkeypatch):
@@ -192,3 +221,19 @@ def test_audit_runs_external_status_dataset_when_execution_mode_is_available(mon
 
     assert r["analysis_status"] == "AUDIT_READY"
     assert r["audit_report"]["datasets_run"] == ["desi_dr1_bao"]
+
+
+@pytest.mark.parametrize("dataset_key", ["kids1000_wl", "pantheon_plus"])
+def test_audit_does_not_run_published_posterior_summary(dataset_key):
+    r = audit_published_constraint(
+        model="lcdm",
+        dataset_keys=[dataset_key],
+        claimed={"omegam": [0.3, 0.02]},
+    )
+
+    assert r["analysis_status"] == "BLOCKED"
+    assert r["audit_report"]["datasets_run"] == []
+    unavailable = r["audit_report"]["datasets_unavailable"]
+    assert unavailable[0]["key"] == dataset_key
+    assert "published_posterior_summary" in unavailable[0]["reason"]
+    assert r["__do_not_claim__"] is True

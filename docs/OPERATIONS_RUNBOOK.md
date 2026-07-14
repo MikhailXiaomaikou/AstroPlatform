@@ -25,15 +25,21 @@ Render disks are single-instance and disable zero-downtime instance swaps; plan
 a short backend interruption during deploys until gate-event/cache state moves
 to shared external storage and the disk can be removed.
 
-Before syncing an existing Blueprint, set `S3_BUCKET`, `S3_ACCESS_KEY_ID`, and
-`S3_SECRET_ACCESS_KEY` on the backend, plus `S3_ENDPOINT_URL` for R2/MinIO.
-Also pre-seed `EVIDENCE_VERIFICATION_KEYS` as `{}` when first introducing the
-evidence-key configuration, then replace it with the retained-key map before a
-rotation. Render ignores new `sync: false` values during an update; if required
-values are not pre-seeded, the deliberate
+Before syncing an existing Blueprint, seed stable `JWT_SECRET`, `FERNET_KEY`,
+independent `EVIDENCE_SIGNING_KEY`, and the matching stable
+`EVIDENCE_SIGNING_KEY_ID` values from an external secret manager. Also set
+`S3_BUCKET`, `S3_ACCESS_KEY_ID`, and `S3_SECRET_ACCESS_KEY` on the
+backend, plus `S3_ENDPOINT_URL` for R2/MinIO, and pre-seed
+`EVIDENCE_VERIFICATION_KEYS` as `{}` when first introducing the evidence-key
+configuration. Replace it with the retained-key map before a rotation. Render
+ignores new `sync: false` values during an update; if required values are not
+pre-seeded, the deliberate
 `STORAGE_BACKEND=s3` startup guard will stop the backend. Worker values reference
 the backend variables so both processes address the same bucket. Docker Compose
 uses local storage and shares the named FITS volume between backend and worker.
+Do not rotate JWT or Fernet merely to adopt the Blueprint: JWT rotation ends
+existing sessions, while Fernet rotation without a data migration makes stored
+BYOK records unreadable.
 
 ## 2. Release and migration procedure
 
@@ -41,6 +47,12 @@ Production schema changes have exactly one writer: Alembic.
 
 1. CI creates an empty PostgreSQL 16 database and runs `alembic upgrade head`,
    `alembic check`, the readiness schema probe, and a backup/restore round trip.
+   A second disposable PostgreSQL 16 database reconstructs the complete
+   13-table revision-002 `VARCHAR(36)` schema, upgrades valid representative
+   rows through the current head, and proves that a deliberately late dirty
+   UUID rolls every earlier type conversion back without changing data,
+   constraints, tables, or revision. CI also builds the backend and frontend
+   images from source-pinned base-image digests.
 2. Render waits for required GitHub checks because every deployable service uses
    `autoDeployTrigger: checksPass`.
 3. The backend image runs `alembic upgrade head` as its
@@ -50,9 +62,10 @@ Production schema changes have exactly one writer: Alembic.
    `exec celery`. They are read-only schema consumers and wait up to 15 minutes
    for the backend's migration; they never race new task code against the old
    schema or become additional migration writers.
-5. Render admits the backend only after `/health/deep` confirms the database is
-   at the image's exact Alembic head, the persistent disk is mounted and
-   fsync-writable, Redis answers, and at least one Celery worker responds.
+5. Render admits the backend only after `/health/ready` confirms database
+   connectivity and the image's exact Alembic head within its five-second
+   deadline. Deployment acceptance is not complete until `/health/deep` also
+   confirms durable storage, Redis, and at least one Celery worker.
 
 Never add `create_all`, `ALTER TABLE`, or `Table.create` to production startup.
 Every production schema change needs a reviewed Alembic revision.
@@ -83,7 +96,12 @@ Use this one-time, fail-closed adoption process:
 
 ## 3. Readiness contract
 
-`GET /health` is process liveness. `GET /health/deep` is deployment readiness.
+`GET /health` is process liveness. `GET /health/ready` is Render's bounded
+traffic-readiness gate: it runs only the database and exact-schema checks in
+parallel and fails closed before Render's five-second limit. `GET /health/deep`
+is the full post-deploy infrastructure check; it is deliberately not called
+every few seconds because its storage round trip writes an object and its
+Redis/Celery checks are heavier.
 
 | Component | Ready condition | Failure action |
 |---|---|---|
@@ -91,11 +109,21 @@ Use this one-time, fail-closed adoption process:
 | `schema` | DB revisions exactly equal all image Alembic heads | Block deployment; migrate, never stamp blindly |
 | `storage` | expected mount fsyncs and configured local/S3 storage passes a checksum-verified round trip | Block deployment; inspect disk or bucket credentials/policy |
 | `broker` | Redis ping succeeds when `PIPELINE_MODE=celery` | Block deployment |
-| `celery_worker` | at least one control-ping reply | Block deployment; inspect worker logs and broker |
+| `celery_worker` | at least one control-ping reply and every responding node identity carries the backend commit | Block deployment; inspect worker image/command, logs, and broker |
+| `celery_beat` | every active per-instance Redis lease was renewed by a successful scheduler tick and carries the backend commit | Block deployment; inspect every beat image, schedule, and broker |
 | `ai_backend` | server key or per-request BYOK is available | Informational; BYOK-only remains ready |
 
-The endpoint deliberately returns short labels only. Detailed exceptions remain
-in structured server logs.
+Both unauthenticated endpoints deliberately return short labels only. Detailed
+exceptions remain in structured server logs. A release is operationally
+accepted only when both `/health/ready` and `/health/deep` pass for the same
+known reported commit. Run the repository verifier with the exact expected
+release identity:
+
+```bash
+cd backend
+EXPECTED_COMMIT=<full-render-git-sha> \
+  ./venv/bin/python scripts/verify_deployment.py https://<target-backend>
+```
 
 ### Long-job delivery and reconciliation
 
@@ -111,6 +139,11 @@ reconciliation is longer than both. Render and Compose currently use:
 | hard task limit | 45,000 |
 | Redis visibility timeout | 46,800 |
 | stale job threshold | 50,400 |
+| Render worker graceful shutdown | 300 |
+
+The Starter worker uses `--concurrency=1` to avoid two scientific child
+processes competing for 512 MB. Raising concurrency requires a measured memory
+and queue-latency run on the target instance type.
 
 Changing these values out of order fails worker startup. On worker startup and
 every five minutes thereafter, `queued`/`running` rows older than the stale
@@ -172,6 +205,15 @@ The script writes one `standard-astro-*.tar.gz` containing:
 - `manifest.json` with SHA-256 hashes, Alembic revision, commit, Fernet key ID,
   and evidence-signing key ID.
 
+The backup refuses an unknown/non-SHA commit or an absent/`unrecorded` key ID.
+Those identifiers are recovery material: they make the required code checkout
+and externally escrowed secrets unambiguous without placing any secret value in
+the bundle. It also requires the database Alembic revision to equal the current
+code heads before `pg_dump`, then reads it again after the dump and discards the
+bundle if it changed. This prevents a concurrent migration from producing a
+manifest that describes a different schema snapshot; it does not replace the
+write freeze required to keep database and object storage mutually consistent.
+
 The bundle contains no database URL, JWT secret, Fernet key, API key, or other
 credential. Copy it off the Render disk after creation; a backup stored only on
 the protected disk is not an independent backup. `BACKUP_RETENTION_DAYS=N`
@@ -213,22 +255,38 @@ Prefer Render PITR for database incidents because it has a smaller RPO and
 creates an isolated recovery instance. Validate the recovery database before
 changing `DATABASE_URL` for backend, worker, and beat.
 
-For a portable bundle, restore into a new, empty PostgreSQL database and an
-empty storage directory:
+For a portable bundle, check out the manifest's exact commit, restore into a
+new PostgreSQL database with no non-system objects, and choose a storage path
+that does not yet exist:
 
 ```bash
 export DATABASE_URL='postgresql://.../astro_recovery'
 export RESTORE_STORAGE_DIR=/srv/astro-recovery-data
 export RESTORE_CONFIRM='restore:standard-astro-YYYYMMDDTHHMMSSZ-COMMIT'
+export RESTORE_EXPECTED_COMMIT='<full-40-character-manifest-commit>'
+export RESTORE_FERNET_KEY_ID='fernet-prod-2026-01'
+export RESTORE_EVIDENCE_SIGNING_KEY_ID='evidence-prod-v1'
 backend/scripts/ops/restore.sh /secure/standard-astro-YYYYMMDDTHHMMSSZ-COMMIT.tar.gz
 # Inside the backend image, use scripts/ops/restore.sh instead.
 ```
 
 The restore script rejects unsafe archive paths, verifies every manifest hash,
-refuses a non-empty database by default, and restores PostgreSQL in one
-transaction. `RESTORE_ALLOW_NONEMPTY_DB=1` and
-`RESTORE_ALLOW_STORAGE_OVERLAY=1` are emergency-only overrides and require the
-same explicit confirmation string.
+requires the manifest commit and both key identifiers to match the operator's
+explicit expectations, and requires the running checkout/image to be that same
+commit. It rejects non-system schemas and namespace objects plus publications,
+subscriptions, event triggers, non-default extensions, FDW objects, large
+objects, default ACLs, and other database-level user objects; there is no
+non-empty override. PostgreSQL is restored in one transaction, then the exact
+Alembic revision and `alembic check` must pass. An older bundle therefore has
+to be validated with its corresponding code revision before any forward
+migration.
+
+Storage is extracted only after database validation, into a temporary sibling
+directory, then published with an atomic no-replace rename (`renameat2` on
+Linux, `renamex_np` on macOS). An unsupported host fails closed; there is no
+overlay mode. A database validation failure can still leave the isolated
+recovery database modified; discard that database and start again rather than
+reusing it. There is no unchecked-success mode.
 
 After restore:
 
@@ -249,8 +307,9 @@ After restore:
   clone. For destructive mistakes, restore to a new PITR database instead.
 - If `/health/deep` reports `revision_mismatch`, stop deploys and compare
   `alembic current` with `alembic heads`.
-- If it reports `celery_worker: none`, inspect worker deployment/logs and Redis;
-  do not make Redis optional to force readiness green.
+- If it reports a missing or revision-mismatched worker/Beat lease, inspect the
+  worker identities, every Beat scheduler tick and Redis; do not make the
+  checks optional to force readiness green.
 - If it reports a missing persistent mount, do not redirect writes to the
   ephemeral container filesystem.
 - Record incident start time, affected commit/schema revision, recovery point,

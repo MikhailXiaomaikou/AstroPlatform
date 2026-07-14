@@ -97,8 +97,14 @@ def test_control_flat_de_extensions_still_run():
         dataset_keys=["desi_dr1_bao", "planck2018_compressed"],
         n_samples=400,
         random_seed=42,
+        # The importance proposal is intentionally fail-closed when its ESS
+        # collapses for the extra w dimension.  This control is about whether
+        # wCDM remains executable at all, so opt into the real emcee recovery
+        # path instead of expecting redacted low-ESS importance output.
+        allow_emcee_fallback=True,
     )
     assert r["analysis_status"] != "NO_COMPRESSED_LIKELIHOOD"
+    assert r["sampler"] == "compressed_emcee"
     assert "w" in (r.get("parameters") or {})
 
 

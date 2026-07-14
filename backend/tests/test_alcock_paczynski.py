@@ -13,7 +13,7 @@ Locks:
    within 1σ.
 3. 5 redshift pairs (z = 0.510 / 0.706 / 0.930 / 1.317 / 2.330) are used.
 4. DV-only z bins (0.295, 1.491) are correctly excluded.
-5. result envelope contains publication_ready + provenance + citations.
+5. result envelope contains a fail-closed publication gate + provenance + citations.
 """
 
 from __future__ import annotations
@@ -29,6 +29,9 @@ def test_alcock_paczynski_runs_without_external_config() -> None:
     assert result["success"] is True
     assert result["analysis_status"] == "ALCOCK_PACZYNSKI_READY"
     assert result["claim_scope"] == "alcock_paczynski_geometric_omega_m"
+    assert result["publication_ready"] is False
+    assert result["preliminary_ready"] is True
+    assert result["__do_not_claim__"] is True
 
 
 def test_alcock_paczynski_omega_m_consistent_with_desi_dr1() -> None:
