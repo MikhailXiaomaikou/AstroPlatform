@@ -40,7 +40,11 @@ python3.11 -m venv venv
 source venv/bin/activate
 pip install --require-hashes -r requirements.lock
 uvicorn app.main:app --reload --port 8000
+```
 
+在第二个终端中返回仓库根目录后运行：
+
+```bash
 # 终端 2：前端
 cd frontend
 npm ci

@@ -42,7 +42,11 @@ python3.11 -m venv venv
 source venv/bin/activate
 pip install --require-hashes -r requirements.lock
 uvicorn app.main:app --reload --port 8000
+```
 
+In a second terminal, return to the repository root and run:
+
+```bash
 # Terminal 2: frontend
 cd frontend
 npm ci
