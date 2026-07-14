@@ -41,6 +41,7 @@ evidence that a cosmological result is scientifically established.
 | SR-030 | High | Reproducibility receipts could be overwritten by stale tool-returned fields; `seed=0` could change inside a fitter; emcee/dynesty/time-series pipeline nodes did not consistently control their sampler or bootstrap RNG. | Re-stamp authoritative run/version/query fields and retain old receipts only as labelled upstream context; inject seeds before execution, derive stable per-node pipeline seeds, seed emcee and dynesty/resampling explicitly, preserve zero, and reject UltraNest where an isolated RNG is unavailable. | Forged-envelope, line-fit zero-seed, fit-RV, fit-isochrone, Bayesian pipeline, and Lomb-Scargle replay regressions. |
 | SR-031 | Critical | A cosmology central value could be certified by a coincidentally equal interval edge, uncertainty, proposal anchor, or unrelated parameter; dimensionless and Unicode-unit `value ± error` forms could also leave the error unchecked. | Maintain separate per-parameter universes for central estimates, lower/upper interval endpoints, and uncertainties; exclude context/proposal/tainted helpers; bind interval cues to the correct parameter and clause; and extract an adjacent uncertainty independently of physical-unit spelling. | Cross-statistic, cross-parameter, nested-taint, decimal-boundary, dimensionless-S8, Unicode-H0, and one-sigma-central regressions. |
 | SR-032 | Critical | Backtracking sentence/conclusion regexes could be driven superlinearly by untrusted prose, while naive period splitting let decimals such as `z=0.5` separate a dark-energy subject from its conclusion. | Replace both paths with linear sentence/token/span scans, incremental line accounting, decimal-aware boundaries, and the original 120-character semantic window. | Repeated-sentence and long-input scaling, decimal-bearing conclusion, long-intervening-clause, and TeX/Unicode `w_a` regressions; PR-head CodeQL open alerts: zero. |
+| SR-033 | Critical | A DESI `w0wa` A-readiness package could be assembled from proxy likelihoods, caller-written JSON, reused chains, partial interval agreement, or an internally signed claim of external review. | Freeze a hidden-answer commitment before execution; require the exact PR3 `plik` + ACT/PR4-lensing + DESI DR1 BAO + Pantheon+ profile; bind live likelihood anchors, full runtime/data/config hashes, four fresh chain identities, independent postprocessing, every interval statistic, and six run-derived adequacy records. Local HMAC can grant at most `A_READY_PENDING_EXTERNAL_REVIEW`; only a separately configured external Ed25519 reviewer key can grant `A`. Missing real runs remain `WITHHELD`. | Exact-profile drift/tamper, chain-reuse, forged-attestation, partial-number, adequacy-reuse, independent-postprocess, F2, and `A_READY`/strict-A accounting regressions. |
 
 ## Platform publication-export gate after remediation
 
@@ -87,6 +88,10 @@ independent reproduction.
     hashed, and bound to the exact run subject. A caller-written trust boolean,
     arbitrary evidence ID, or a valid manifest from another run cannot unlock
     publication or Strict-A status.
+14. A local runner or grader cannot attest its own peer review. Exact-likelihood
+    A-readiness is a distinct offline state; formal A additionally requires a
+    cryptographically independent external-review statement bound to the same
+    target, environment, chains, analysis, adequacy matrix, and support paths.
 
 The language attestation records a detector or reviewer gate outcome; it does
 not establish that the scientific content is correct. The manifest does not by
@@ -104,6 +109,16 @@ pair is useful for audit but does not supply that calibration. That hours-long
 scientific computation was not replaced by a shortcut or by relabelling the old
 chain; until it is run and independently checked, the platform must withhold
 that detection claim.
+
+The new strict DESI workflow has a narrower preregistered purpose: reproduce
+the four marginalized parameter intervals for the paper's
+DESI+CMB+PantheonPlus row. It does not calculate a Wilks p-value, Gaussian
+sigma, Bayes factor, or a discovery claim. Its exact-input preflight, software
+tests, and generated adequacy specifications are not scientific results. The
+state remains `WITHHELD` until fresh formal chains and every adequacy run have
+executed and passed; after that, the strongest automated state is
+`A_READY_PENDING_EXTERNAL_REVIEW`, while `strict_A_count` remains zero until
+an independent reviewer signs the closed package.
 
 Passing the software suite demonstrates that known unsupported claims are
 blocked; it does not establish a positive astrophysical result. The synthetic

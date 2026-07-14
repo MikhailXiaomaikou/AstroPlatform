@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "kind": "w0wa_exact_likelihood_code_commitment",
+  "profile_id": "desi_2024_vi_table3_desi_cmb_pantheonplus_v1",
+  "frozen_before_formal_run": true,
+  "likelihoods": [
+    "planck_2018_lowl.TT_clik",
+    "planck_2018_lowl.EE_clik",
+    "planck_2018_highl_plik.TTTEEE",
+    "act_dr6_lenslike.ACTDR6LensLike",
+    "bao.desi_2024_bao_all",
+    "sn.pantheonplus"
+  ],
+  "adequacy_likelihoods": [
+    "planck_NPIPE_highl_CamSpec.TTTEEE"
+  ],
+  "packages": {
+    "act_dr6_lenslike": "1.2.1",
+    "camb": "1.6.6",
+    "clipy-like": "0.15",
+    "cobaya": "3.6.2"
+  },
+  "wheel_sha256": {
+    "act_dr6_lenslike-1.2.1-py2.py3-none-any.whl": "sha256:bae5850191f51adeb2f5256441abf2a38cdbe9fc1e1d46c3bbe8937c50a53884",
+    "camb-1.6.6-py3-none-macosx_14_0_arm64.whl": "sha256:5fded11be64fea84f62dd82be0d947fdc37b749cdbf14308fce5c127d9edcd54",
+    "clipy_like-0.15-py3-none-any.whl": "sha256:9bf56a1c648cab345e9fcb7f83c9a79cd82f92e4f6fe4392900eec23b96f49d0",
+    "cobaya-3.6.2-py3-none-any.whl": "sha256:5e81da5900442c1a20a0ffa9c1ff212983106a7473b29555cecc2af3e4214da0"
+  },
+  "full_wheel_closure": {
+    "manifest_sha256": "sha256:2d7b9c173b39617ba698dc9a085ded5fde8874eec6ee2ba55f4b454f27ee1aaa",
+    "wheel_count": 52
+  },
+  "runtime_code_verification": "preflight_distribution_files_plus_loaded_likelihood_trees",
+  "trusted_artifacts": {
+    "canonical_config": "sha256:63d194d45238f7ecc4b18602cc1699c2b3059aa2628eeaf82f61a4e83398dd7a",
+    "data_manifest": "sha256:41b6ae2b1cc7c1a13cb59e5a12ed65233d5880e0bcc3c38ae0e270d9b8f853a8",
+    "dependency_lock": "sha256:f4cfe85aa7a7f08084eb1c8092784143e3fe711e44ed8379cd689278a119793d",
+    "reference_cases": "sha256:f2714ff4ff89bbf431638cab93da0222a0d4784a75f83da4a51bebdccbe166ac",
+    "wheel_manifest": "sha256:2d7b9c173b39617ba698dc9a085ded5fde8874eec6ee2ba55f4b454f27ee1aaa"
+  }
+}

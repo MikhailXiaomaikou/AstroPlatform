@@ -23,9 +23,7 @@ evidence = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = evidence
 _SPEC.loader.exec_module(evidence)
 
-CANONICAL = _SCRIPT_DIR / "w0wa_desi_sn_planck.yaml"
-FREE_MAP = _SCRIPT_DIR / "w0wa_desi_sn_planck_map.yaml"
-FIXED_MAP = _SCRIPT_DIR / "lcdm_desi_sn_planck_map.yaml"
+CANONICAL = _SCRIPT_DIR / "w0wa_desi_cmb_pantheonplus_exact.yaml"
 
 
 def _load_yaml(path: Path) -> dict:
@@ -74,6 +72,7 @@ def _chain_rows(
         "minuslogpost",
         "ombh2",
         "omch2",
+        "theta_MC_100",
         "H0",
         "tau",
         "ns",
@@ -88,6 +87,7 @@ def _chain_rows(
             rng.normal(6000.0, 3.0, n),
             rng.normal(0.0224, 0.0002, n),
             rng.normal(0.120, 0.002, n),
+            rng.normal(1.0411, 0.0004, n),
             rng.normal(68.0, 0.7, n),
             rng.normal(0.055, 0.006, n),
             rng.normal(0.965, 0.004, n),
@@ -132,19 +132,26 @@ def _build_synthetic_run(
     likelihood_mismatch: bool = False,
     data_mismatch: bool = False,
     failed_map: str | None = None,
+    chain_lengths: list[int] | None = None,
 ) -> tuple[dict, dict]:
     canonical = _load_yaml(CANONICAL)
-    free_config = _load_yaml(FREE_MAP)
-    fixed_config = _load_yaml(FIXED_MAP)
+    free_config, fixed_config = evidence.build_map_configs(canonical)
+    free_config_path = tmp_path / "free_map.yaml"
+    fixed_config_path = tmp_path / "fixed_map.yaml"
+    _write_yaml(free_config_path, free_config)
+    _write_yaml(fixed_config_path, fixed_config)
     inventory = _synthetic_inventory()
 
     chain_prefix = tmp_path / "chain"
     _write_yaml(_prefix_file(chain_prefix, ".input.yaml"), canonical)
     _write_yaml(_prefix_file(chain_prefix, ".updated.yaml"), canonical)
+    lengths = chain_lengths or [1600] * 4
+    if len(lengths) != 4:
+        raise ValueError("synthetic fixture requires four chain lengths")
     for index in range(1, 5):
         names, rows = _chain_rows(
             np.random.default_rng(1000 + index),
-            1600,
+            lengths[index - 1],
             w_shift=1.2 if shifted_chain and index == 4 else 0.0,
         )
         _write_table(_prefix_file(chain_prefix, f".{index}.txt"), names, rows)
@@ -176,14 +183,14 @@ def _build_synthetic_run(
     )
     evidence.write_completed_attestation(
         kind="map",
-        config_path=FREE_MAP,
+        config_path=free_config_path,
         prefix=free_prefix,
         data_inventory=free_inventory,
         returncode=1 if failed_map == "free" else 0,
     )
     evidence.write_completed_attestation(
         kind="map",
-        config_path=FIXED_MAP,
+        config_path=fixed_config_path,
         prefix=fixed_prefix,
         data_inventory=inventory,
         returncode=1 if failed_map == "fixed" else 0,
@@ -192,8 +199,8 @@ def _build_synthetic_run(
     kwargs = {
         "canonical_config_path": CANONICAL,
         "chain_prefix": chain_prefix,
-        "free_map_config_path": FREE_MAP,
-        "fixed_map_config_path": FIXED_MAP,
+        "free_map_config_path": free_config_path,
+        "fixed_map_config_path": fixed_config_path,
         "free_map_prefix": free_prefix,
         "fixed_map_prefix": fixed_prefix,
         "packages_path": tmp_path / "unused-packages",
@@ -209,16 +216,12 @@ def test_formal_config_is_strict_and_map_pair_is_generated_from_one_source():
     assert evidence.validate_canonical_config(canonical) == []
 
     generated_free, generated_fixed = evidence.build_map_configs(canonical)
-    committed_free = _load_yaml(FREE_MAP)
-    committed_fixed = _load_yaml(FIXED_MAP)
-    assert committed_free == generated_free
-    assert committed_fixed == generated_fixed
-    pair = evidence.validate_map_config_pair(committed_free, committed_fixed)
+    pair = evidence.validate_map_config_pair(generated_free, generated_fixed)
     assert pair["passed"] is True
-    assert committed_fixed["params"]["w"] == -1.0
-    assert committed_fixed["params"]["wa"] == 0.0
-    assert committed_free["likelihood"] == committed_fixed["likelihood"]
-    assert committed_free["sampler"]["minimize"]["ignore_prior"] is False
+    assert generated_fixed["params"]["w"] == -1.0
+    assert generated_fixed["params"]["wa"] == 0.0
+    assert generated_free["likelihood"] == generated_fixed["likelihood"]
+    assert generated_free["sampler"]["minimize"]["ignore_prior"] is False
 
 
 def test_complete_synthetic_evidence_emits_intervals_and_verified_map_delta(tmp_path):
@@ -227,7 +230,7 @@ def test_complete_synthetic_evidence_emits_intervals_and_verified_map_delta(tmp_
     diagnostics = manifest["posterior"]["diagnostics"]
     assert diagnostics["n_chains"] == 4
     assert all(
-        item["rank_normalized_rhat"] < 1.01 and item["bulk_ess"] >= 400
+        item["rank_normalized_rhat"] < 1.01 and item["bulk_ess"] >= 1000
         for item in diagnostics["parameters"].values()
     )
     assert set(manifest["posterior"]["intervals_68"]) == set(evidence.REPORT_PARAMETERS)
@@ -253,6 +256,26 @@ def test_complete_synthetic_evidence_emits_intervals_and_verified_map_delta(tmp_
     assert manifest["data"]["fingerprint"]
     assert manifest["environment"]["packages"]["cobaya"]
     assert manifest["manifest_sha256"].startswith("sha256:")
+
+
+def test_imbalanced_chain_lengths_fail_before_reporting_intervals(tmp_path):
+    manifest, _ = _build_synthetic_run(
+        tmp_path,
+        chain_lengths=[1600, 1600, 1600, 800],
+    )
+    diagnostics = manifest["posterior"]["diagnostics"]
+    assert diagnostics["chain_length_balance_passed"] is False
+    assert diagnostics["diagnostic_alignment_fraction_per_chain"] == pytest.approx(
+        [0.5, 0.5, 0.5, 1.0]
+    )
+    assert diagnostics["maximum_diagnostic_discarded_fraction"] == pytest.approx(
+        0.5
+    )
+    assert "chain_lengths:diagnostic_alignment_fraction_below_0.90" in (
+        diagnostics["reasons"]
+    )
+    assert manifest["publication_ready"] is False
+    assert "intervals_68" not in manifest["posterior"]
 
 
 def test_calibrated_comparison_emits_versioned_conclusion_attestations():

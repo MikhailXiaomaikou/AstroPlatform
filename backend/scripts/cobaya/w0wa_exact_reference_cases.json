@@ -1,0 +1,226 @@
+{
+  "schema_version": 2,
+  "profile_id": "desi_2024_vi_table3_desi_cmb_pantheonplus_v1",
+  "cases": [
+    {
+      "case_id": "planck_pr3_commander_tt_clik",
+      "parameterization": "canonical_sampled",
+      "likelihoods": [
+        "planck_2018_lowl.TT_clik"
+      ],
+      "point": {
+        "A_planck": 1.00008,
+        "logA": 3.1,
+        "ns": 0.9733,
+        "ombh2": 0.0224,
+        "omch2": 0.1172,
+        "tau": 0.0862,
+        "theta_MC_100": 1.04117,
+        "w": -1.0,
+        "wa": 0.0
+      },
+      "values": {
+        "planck_2018_lowl.TT_clik": {
+          "absolute_tolerance": 0.11,
+          "expected_chi2": 22.92
+        }
+      },
+      "source": {
+        "commit": "899f30a49f85de610dac321e91a1af50018e56aa",
+        "path": "tests/test_cosmo_planck_2018.py",
+        "point_symbol": "params_lowl_highTT_lensing",
+        "repository": "https://github.com/CobayaSampler/cobaya",
+        "test": "test_planck_2018_t_clik_camb",
+        "url": "https://github.com/CobayaSampler/cobaya/blob/899f30a49f85de610dac321e91a1af50018e56aa/tests/test_cosmo_planck_2018.py"
+      }
+    },
+    {
+      "case_id": "planck_pr3_simall_ee_clik_and_plik_ttteee",
+      "parameterization": "canonical_sampled",
+      "likelihoods": [
+        "planck_2018_lowl.EE_clik",
+        "planck_2018_highl_plik.TTTEEE"
+      ],
+      "point": {
+        "A_cib_217": 46.1,
+        "A_planck": 1.00044,
+        "A_sz": 7.08,
+        "calib_100T": 0.99974,
+        "calib_217T": 0.99819,
+        "gal545_A_100": 8.8,
+        "gal545_A_143": 11.01,
+        "gal545_A_143_217": 20.16,
+        "gal545_A_217": 95.5,
+        "galf_TE_A_100": 0.1138,
+        "galf_TE_A_100_143": 0.1346,
+        "galf_TE_A_100_217": 0.479,
+        "galf_TE_A_143": 0.225,
+        "galf_TE_A_143_217": 0.665,
+        "galf_TE_A_217": 2.082,
+        "ksz_norm": 0.0,
+        "logA": 3.0448,
+        "ns": 0.96605,
+        "ombh2": 0.022383,
+        "omch2": 0.12011,
+        "ps_A_100_100": 248.2,
+        "ps_A_143_143": 50.7,
+        "ps_A_143_217": 53.3,
+        "ps_A_217_217": 121.9,
+        "tau": 0.0543,
+        "theta_MC_100": 1.040909,
+        "w": -1.0,
+        "wa": 0.0,
+        "xi_sz_cib": 0.66
+      },
+      "values": {
+        "planck_2018_highl_plik.TTTEEE": {
+          "absolute_tolerance": 0.11,
+          "expected_chi2": 2344.93
+        },
+        "planck_2018_lowl.EE_clik": {
+          "absolute_tolerance": 0.11,
+          "expected_chi2": 396.05
+        }
+      },
+      "source": {
+        "commit": "899f30a49f85de610dac321e91a1af50018e56aa",
+        "path": "tests/test_cosmo_planck_2018.py",
+        "point_symbol": "params_lowTE_highTTTEEE_lensingcmblikes",
+        "repository": "https://github.com/CobayaSampler/cobaya",
+        "test": "test_planck_2018_p_clik_camb",
+        "url": "https://github.com/CobayaSampler/cobaya/blob/899f30a49f85de610dac321e91a1af50018e56aa/tests/test_cosmo_planck_2018.py"
+      }
+    },
+    {
+      "case_id": "desi_dr1_bao_gaussian",
+      "parameterization": "upstream_planck_sampled",
+      "likelihoods": [
+        "bao.desi_2024_bao_all"
+      ],
+      "point": {
+        "H0": 67.25,
+        "logA": 3.0929,
+        "ns": 0.9647522,
+        "omegabh2": 0.02225203,
+        "omegach2": 0.1198657,
+        "tau": 0.07888604
+      },
+      "values": {
+        "bao.desi_2024_bao_all": {
+          "absolute_tolerance": 0.02,
+          "expected_chi2": 21.37
+        }
+      },
+      "source": {
+        "commit": "899f30a49f85de610dac321e91a1af50018e56aa",
+        "path": "tests/test_cosmo_bao.py",
+        "point_symbol": "params_lowTEB_highTTTEEE",
+        "repository": "https://github.com/CobayaSampler/cobaya",
+        "test": "test_DESI_y1_camb",
+        "url": "https://github.com/CobayaSampler/cobaya/blob/899f30a49f85de610dac321e91a1af50018e56aa/tests/test_cosmo_bao.py"
+      }
+    },
+    {
+      "case_id": "pantheonplus_full_covariance",
+      "parameterization": "upstream_planck_sampled",
+      "likelihoods": [
+        "sn.pantheonplus"
+      ],
+      "point": {
+        "H0": 67.25,
+        "logA": 3.0929,
+        "ns": 0.9647522,
+        "omegabh2": 0.02225203,
+        "omegach2": 0.1198657,
+        "tau": 0.07888604
+      },
+      "values": {
+        "sn.pantheonplus": {
+          "absolute_tolerance": 0.1,
+          "expected_chi2": 1403.69
+        }
+      },
+      "source": {
+        "commit": "899f30a49f85de610dac321e91a1af50018e56aa",
+        "path": "tests/test_cosmo_sn.py",
+        "point_symbol": "params_lowTEB_highTTTEEE",
+        "repository": "https://github.com/CobayaSampler/cobaya",
+        "test": "test_sn_pantheonplus_camb",
+        "url": "https://github.com/CobayaSampler/cobaya/blob/899f30a49f85de610dac321e91a1af50018e56aa/tests/test_cosmo_sn.py"
+      }
+    },
+    {
+      "case_id": "planck_pr4_npipe_camspec_ttteee",
+      "parameterization": "upstream_planck_sampled",
+      "likelihoods": [
+        "planck_NPIPE_highl_CamSpec.TTTEEE"
+      ],
+      "theory_args": {
+        "lens_potential_accuracy": 1,
+        "halofit_version": "mead2020",
+        "bbn_predictor": "PArthENoPE_880.2_standard.dat"
+      },
+      "point": {
+        "logA": 3.04920413,
+        "ns": 0.96399503,
+        "theta_MC_100": 1.04240171,
+        "omegabh2": 0.02235048,
+        "omegach2": 0.12121379,
+        "tau": 0.05,
+        "A_planck": 0.99818025,
+        "amp_143": 10.35947284,
+        "amp_217": 18.67072461,
+        "amp_143x217": 7.54932654,
+        "n_143": 0.83715482,
+        "n_217": 0.94987418,
+        "n_143x217": 1.23385364,
+        "calTE": 0.98781552,
+        "calEE": 1.013345
+      },
+      "values": {
+        "planck_NPIPE_highl_CamSpec.TTTEEE": {
+          "absolute_tolerance": 0.1,
+          "expected_chi2": 11341.17
+        }
+      },
+      "source": {
+        "commit": "899f30a49f85de610dac321e91a1af50018e56aa",
+        "path": "tests/test_cosmo_planck_NPIPE.py",
+        "point_symbol": "cosmo_params+nuisance_params",
+        "repository": "https://github.com/CobayaSampler/cobaya",
+        "test": "test_planck_NPIPE_p_CamSpec_camb",
+        "url": "https://github.com/CobayaSampler/cobaya/blob/899f30a49f85de610dac321e91a1af50018e56aa/tests/test_cosmo_planck_NPIPE.py"
+      }
+    },
+    {
+      "case_id": "act_dr6_planck_pr4_lensing_baseline",
+      "parameterization": "upstream_fixed",
+      "likelihoods": [
+        "act_dr6_lenslike.ACTDR6LensLike"
+      ],
+      "point": {
+        "As": 2.15086031154146e-09,
+        "H0": 67.02393,
+        "ns": 0.9625356,
+        "ombh2": 0.02219218,
+        "omch2": 0.1203058,
+        "omnuh2": 0.00064,
+        "tau": 0.06574325
+      },
+      "values": {
+        "act_dr6_lenslike.ACTDR6LensLike": {
+          "absolute_tolerance": 0.1,
+          "expected_chi2": 21.2
+        }
+      },
+      "source": {
+        "commit": "b386ddbb5821c1216c709f051c9289292f174d30",
+        "path": "act_dr6_lenslike/tests/test_cobaya.py",
+        "point_symbol": "info.params",
+        "repository": "https://github.com/ACTCollaboration/act_dr6_lenslike",
+        "test": "test_actplanck_baseline",
+        "url": "https://github.com/ACTCollaboration/act_dr6_lenslike/blob/b386ddbb5821c1216c709f051c9289292f174d30/act_dr6_lenslike/tests/test_cobaya.py"
+      }
+    }
+  ]
+}

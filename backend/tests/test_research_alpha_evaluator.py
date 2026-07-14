@@ -1,63 +1,36 @@
 from __future__ import annotations
 
+from pathlib import Path
 
-def _manifest(*, h0: float = 67.36) -> dict:
-    from app.services.server_evidence import (
-        build_scientific_attestation,
-        scientific_content_hash,
+from tests.research_alpha_test_support import build_manifest
+
+
+def _manifest(tmp_path: Path, *, h0: float = 67.36) -> dict:
+    return build_manifest(tmp_path, h0=h0)
+
+
+def test_complete_hidden_record_scores_a_ready_pending_external_review(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from app.services import research_alpha_evaluator as evaluator
+
+    # This is an evaluator-routing unit test, not a production evidence
+    # fixture. Production exact-profile acceptance is covered by the manifest
+    # contract tests; the reusable synthetic manifest remains CI-withheld.
+    manifest = _manifest(tmp_path)
+    manifest["profile_id"] = "desi_2024_vi_table3_desi_cmb_pantheonplus_v1"
+    manifest["readiness_status"] = "A_READY_PENDING_EXTERNAL_REVIEW"
+    manifest["publication_gate"].update(
+        {"eligible": True, "numerical_eligible": True, "reasons": []}
+    )
+    monkeypatch.setattr(
+        evaluator,
+        "_trusted_alpha_manifest",
+        lambda manifest, expected_run_id=None: True,
     )
 
-    diagnostics_evidence = {
-        "kind": "chain_diagnostics",
-        "rhat_max": 1.001,
-        "ess_min": 735.0,
-    }
-    diagnostics_id = scientific_content_hash(diagnostics_evidence)
-    result_evidence_id = scientific_content_hash(
-        {"kind": "posterior", "parameter": "H0", "value": h0}
-    )
-    payload = {
-        "source": "server_attested",
-        "publication_ready": True,
-        "model_adequacy_ready": True,
-        "publication_gate": {
-            "eligible": True,
-            "model_adequacy": {
-                "eligible": True,
-                "signature_verified": True,
-                "manifest_hash": "sha256:" + "a" * 64,
-            },
-        },
-        "diagnostics": {
-            "status": "passed",
-            "evidence_id": diagnostics_id,
-            "evidence_hash": diagnostics_id,
-            "metrics": {"rhat_max": 1.001, "ess_min": 735.0},
-        },
-        "datasets": ["DESI DR1 BAO", "Planck high-l likelihood"],
-        "methods": ["full likelihood"],
-        "models": ["LCDM"],
-        "result_direction_terms": ["H0"],
-        "numbers": [{"name": "H0", "value": h0}],
-        "evidence_ids": [diagnostics_id, result_evidence_id],
-        "claim_support_paths": [
-            {
-                "claim": "H0",
-                "evidence_id": result_evidence_id,
-                "result_path": "parameters.H0",
-            }
-        ],
-    }
-    return build_scientific_attestation(
-        attestation_type="research_alpha",
-        payload=payload,
-    )
-
-
-def test_complete_hidden_record_can_score_a_when_evidence_matches() -> None:
-    from app.services.research_alpha_evaluator import evaluate_alpha_class
-
-    result = evaluate_alpha_class(
+    result = evaluator.evaluate_alpha_class(
         platform_record={
             "visible_text": (
                 "Research plan executed DESI DR1 BAO and the Planck high-l likelihood. "
@@ -68,10 +41,12 @@ def test_complete_hidden_record_can_score_a_when_evidence_matches() -> None:
             "factCheckVisible": True,
             "publication_ready": True,
             "numericClaimsVerified": True,
-            "scientific_evidence_manifest": _manifest(),
+            "run_id": "test-run-H0",
+            "scientific_evidence_manifest": manifest,
         },
         hidden_record={
             "full_paper_read_status": "complete",
+            "target_hash": "sha256:" + "1" * 64,
             "expected_datasets": ["DESI DR1 BAO", "Planck high-l likelihood"],
             "expected_methods": ["full likelihood"],
             "expected_models": ["LCDM"],
@@ -80,9 +55,48 @@ def test_complete_hidden_record_can_score_a_when_evidence_matches() -> None:
         },
     )
 
-    assert result["grade"] == "A"
+    assert result["grade"] == "A_READY"
     assert result["a_level_ready"] is True
-    assert result["why_not_A"] == []
+    assert result["strict_a"] is False
+    assert result["why_not_A"] == ["external_review=pending"]
+
+
+def test_numeric_boundary_combines_center_and_interval_width_tolerances() -> None:
+    from app.services import research_alpha_evaluator as evaluator
+
+    expected = {
+        "name": "H0",
+        "center": 50.0,
+        "lower_68": 40.0,
+        "upper_68": 60.0,
+        "uncertainty_minus": 10.0,
+        "uncertainty_plus": 10.0,
+    }
+    observed_center = 53.0
+    observed_sigma = 11.5
+    observed = {
+        "center": observed_center,
+        "lower_68": observed_center - observed_sigma,
+        "upper_68": observed_center + observed_sigma,
+        "uncertainty_minus": observed_sigma,
+        "uncertainty_plus": observed_sigma,
+    }
+    manifest = {"numbers": {"H0": observed}}
+    hidden = {"expected_numbers": [expected]}
+    assert evaluator._numeric_compatible(manifest, hidden) == "match"
+
+    # Crossing either independently preregistered boundary still fails even
+    # though all five interval fields remain present and algebraically aligned.
+    too_wide = 10.0 * 1.150001
+    manifest["numbers"]["H0"].update(
+        {
+            "lower_68": observed_center - too_wide,
+            "upper_68": observed_center + too_wide,
+            "uncertainty_minus": too_wide,
+            "uncertainty_plus": too_wide,
+        }
+    )
+    assert evaluator._numeric_compatible(manifest, hidden) != "match"
 
 
 def test_pending_hidden_record_never_scores_a_even_for_good_public_output() -> None:
@@ -156,7 +170,7 @@ def test_numeric_claim_is_not_verified_by_prose_keywords() -> None:
     assert "unsupported_numeric_risk" in result["flags"]
 
 
-def test_numeric_mismatch_blocks_a_but_keeps_route_reviewable() -> None:
+def test_numeric_mismatch_blocks_a_but_keeps_route_reviewable(tmp_path: Path) -> None:
     from app.services.research_alpha_evaluator import evaluate_alpha_class
 
     result = evaluate_alpha_class(
@@ -171,7 +185,8 @@ def test_numeric_mismatch_blocks_a_but_keeps_route_reviewable() -> None:
             "factCheckVisible": True,
             "publication_ready": True,
             "numericClaimsVerified": True,
-            "scientific_evidence_manifest": _manifest(h0=70.50),
+            "run_id": "test-run-H0",
+            "scientific_evidence_manifest": _manifest(tmp_path, h0=70.50),
         },
         hidden_record={
             "full_paper_read_status": "complete",
@@ -187,7 +202,7 @@ def test_numeric_mismatch_blocks_a_but_keeps_route_reviewable() -> None:
     assert any("numeric_compatible=contradicted" in reason for reason in result["why_not_A"])
 
 
-def test_partial_numeric_match_cannot_score_a() -> None:
+def test_partial_numeric_match_cannot_score_a(tmp_path: Path) -> None:
     from app.services.research_alpha_evaluator import evaluate_alpha_class
 
     result = evaluate_alpha_class(
@@ -196,7 +211,8 @@ def test_partial_numeric_match_cannot_score_a() -> None:
             "matrixVisible": True,
             "factCheckVisible": True,
             "numericClaimsVerified": True,
-            "scientific_evidence_manifest": _manifest(),
+            "run_id": "test-run-H0",
+            "scientific_evidence_manifest": _manifest(tmp_path),
         },
         hidden_record={
             "full_paper_read_status": "complete",
@@ -216,10 +232,12 @@ def test_partial_numeric_match_cannot_score_a() -> None:
     assert "numeric_compatible=partial" in result["why_not_A"]
 
 
-def test_self_reported_signature_boolean_and_empty_support_path_are_untrusted() -> None:
+def test_self_reported_signature_boolean_and_empty_support_path_are_untrusted(
+    tmp_path: Path,
+) -> None:
     from app.services.research_alpha_evaluator import evaluate_alpha_class
 
-    forged = _manifest()
+    forged = _manifest(tmp_path)
     forged["signature_verified"] = True
     forged["claim_support_paths"] = [{}]
     result = evaluate_alpha_class(
@@ -265,7 +283,9 @@ def test_config_only_scope_gap_cannot_be_a() -> None:
     assert any("execution_ready=False" in reason for reason in result["why_not_A"])
 
 
-def test_a_requires_structured_result_expectations_not_only_a_number() -> None:
+def test_a_requires_structured_result_expectations_not_only_a_number(
+    tmp_path: Path,
+) -> None:
     from app.services.research_alpha_evaluator import evaluate_alpha_class
 
     result = evaluate_alpha_class(
@@ -278,7 +298,8 @@ def test_a_requires_structured_result_expectations_not_only_a_number() -> None:
             "factCheckVisible": True,
             "publication_ready": True,
             "numericClaimsVerified": True,
-            "scientific_evidence_manifest": _manifest(),
+            "run_id": "test-run-H0",
+            "scientific_evidence_manifest": _manifest(tmp_path),
         },
         hidden_record={
             "full_paper_read_status": "complete",
@@ -333,8 +354,15 @@ def test_alpha_summary_surfaces_counts_and_implementation_queue() -> None:
     summary = summarize_alpha_evaluations([
         {
             "grade": "A",
+            "externally_reviewed": True,
             "hidden_record_status": "complete",
             "why_not_A": [],
+            "flags": [],
+        },
+        {
+            "grade": "A_READY",
+            "hidden_record_status": "complete",
+            "why_not_A": ["external_review=pending"],
             "flags": [],
         },
         {
@@ -351,10 +379,12 @@ def test_alpha_summary_surfaces_counts_and_implementation_queue() -> None:
         },
     ])
 
-    assert summary["total"] == 3
+    assert summary["total"] == 4
     assert summary["strict_A_count"] == 1
-    assert summary["B_or_better_count"] == 2
-    assert summary["grade_counts"] == {"A": 1, "B": 1, "E": 1}
+    assert summary["A_ready_count"] == 2
+    assert summary["A_ready_rate"] == 0.5
+    assert summary["B_or_better_count"] == 3
+    assert summary["grade_counts"] == {"A": 1, "A_READY": 1, "B": 1, "E": 1}
     assert summary["top_why_not_A"][0]["count"] == 1
     assert any("expected numerical constraints" in item["action"] for item in summary["implementation_queue"])
     assert any("unsupported_numeric_risk" in item["action"] for item in summary["implementation_queue"])

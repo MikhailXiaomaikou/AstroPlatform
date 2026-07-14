@@ -1,12 +1,11 @@
 # w0waCDM: DESI DR1 BAO + Pantheon+ SN + a CLIK-FREE Planck 2018 CMB stack
 # (CamSpec2021 high-l TT/TE/EE + native low-l TT/EE + native lensing), via Cobaya
-# + CAMB using Cobaya's OWN native official likelihoods.  NOTE: DESI 2024 VI's
-# published "CMB" is plik (PR3) high-l + PR4/ACT lensing — we use the clik-free
-# CamSpec+native stack because plik needs the clik C library (hard on macOS).
-# So this is a CLOSE proxy, NOT byte-identical: expect w0/wa within a few tenths
-# of a sigma of Table 3, not an exact match.
-# Target (DESI 2024 VI Table 3, DESI+CMB+PantheonPlus): w0 = -0.827 +- 0.063,
-# wa = -0.75 (+0.29/-0.25), ~2.5 sigma from LambdaCDM (w0=-1, wa=0).
+# + CAMB using Cobaya's native official likelihoods. This archived exploratory
+# profile is deliberately not the A-readiness profile: DESI 2024 VI used PR3
+# plik plus ACT DR6+Planck PR4 lensing. Modern Cobaya supports plik through
+# pure-Python clipy, so platform compatibility is no longer a valid reason to
+# substitute this CamSpec/native proxy. Proxy output must remain non-citable.
+# It contains no target interval, model-preference or significance statement.
 theory:
   camb:
     extra_args:

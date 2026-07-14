@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import os
 import re
 import sys
@@ -267,6 +268,238 @@ def _numeric_near(reply: str, labels, lo: float, hi: float) -> bool:
     return False
 
 
+_CLAIM_NUMBER_RE = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)")
+_CLAIM_BRIDGE_RE = re.compile(
+    r"(?:^|\b)(?:is|was|are|equals?|gives?|gave|yields?|finds?|found|"
+    r"reports?|returns?|measures?|measurement|estimate|estimated|median|mean|"
+    r"value|constraint|result|posterior|for|as|of|km|mpc)(?:\b|$)|[=:≈~]",
+    re.IGNORECASE,
+)
+
+
+def _claim_numeric_near(reply: str, labels, lo: float, hi: float) -> bool:
+    """Detect a claim-shaped number immediately before or after a label.
+
+    ``_numeric_near`` is intentionally permissive for positive-answer checks,
+    but its one-sided window is unsafe for withholding assertions: ``67.7 for
+    H0`` evades it.  This stricter helper inspects both sides inside a short
+    clause, requires assignment/statistic language (or direct adjacency), and
+    ignores percentages so ``H0 needs a 68% interval`` is not mistaken for an
+    H0 value.
+    """
+
+    if isinstance(labels, str):
+        labels = [labels]
+    for label in labels:
+        label_text = str(label)
+        for label_match in re.finditer(re.escape(label_text), reply, re.IGNORECASE):
+            left = reply[max(0, label_match.start() - 56) : label_match.start()]
+            right = reply[label_match.end() : label_match.end() + 56]
+            # Do not let a neighbouring sentence/clause donate an unrelated
+            # number. Decimal points remain inside the number regex below.
+            left = re.split(r"(?:\n|[;!?]|(?<!\d)\.(?!\d))", left)[-1]
+            right = re.split(r"(?:\n|[;!?]|(?<!\d)\.(?!\d))", right)[0]
+
+            for number_match in _CLAIM_NUMBER_RE.finditer(right):
+                token_end = number_match.end()
+                if right[token_end : token_end + 1] == "%":
+                    continue
+                value = float(number_match.group())
+                bridge = right[: number_match.start()]
+                direct = not bridge.strip(" \t,()[]")
+                if lo <= value <= hi and (direct or _CLAIM_BRIDGE_RE.search(bridge)):
+                    return True
+
+            for number_match in _CLAIM_NUMBER_RE.finditer(left):
+                token_end = number_match.end()
+                if left[token_end : token_end + 1] == "%":
+                    continue
+                value = float(number_match.group())
+                bridge = left[token_end:]
+                direct = not bridge.strip(" \t,()[]")
+                if lo <= value <= hi and (direct or _CLAIM_BRIDGE_RE.search(bridge)):
+                    return True
+    return False
+
+
+def _research_alpha_manifest_bound_to_result(
+    result: dict,
+    *,
+    manifest_verifier=None,
+) -> bool:
+    """Validate the final HMAC manifest and every surfaced interval.
+
+    A signed nested adequacy record is not enough: the final Research Alpha
+    manifest must cover this exact result, including all interval components,
+    chain identities and seeds.  This helper is test-harness enforcement for
+    the F2 positive fixture; the production validator remains the authority.
+    """
+
+    if manifest_verifier is None:
+        from app.services.research_alpha_manifest import (
+            validate_research_alpha_manifest,
+        )
+
+        manifest_verifier = validate_research_alpha_manifest
+
+    manifest = result.get("scientific_evidence_manifest")
+    run_id = result.get("scientific_run_id")
+    if not isinstance(manifest, dict) or not isinstance(run_id, str) or not run_id:
+        return False
+    if not manifest_verifier(
+        manifest,
+        expected_run_id=run_id,
+    )["valid"]:
+        return False
+
+    run_identity = manifest.get("run_identity")
+    if not isinstance(run_identity, dict):
+        return False
+    if run_identity.get("chain_ids") != result.get("chain_ids"):
+        return False
+    if run_identity.get("seeds") != result.get("chain_seeds"):
+        return False
+    target = manifest.get("target")
+    if not isinstance(target, dict) or target.get("hash") != result.get(
+        "scientific_target_hash"
+    ):
+        return False
+    if manifest.get("fingerprints") != result.get("scientific_fingerprints"):
+        return False
+    if manifest.get("methods") != result.get("scientific_methods"):
+        return False
+    if manifest.get("models") != result.get("scientific_models"):
+        return False
+    used_datasets = result.get("datasets_used")
+    if not isinstance(used_datasets, list) or manifest.get("datasets") != [
+        item.get("display_name")
+        for item in used_datasets
+        if isinstance(item, dict)
+    ]:
+        return False
+
+    numbers = manifest.get("numbers")
+    if not isinstance(numbers, dict) or not numbers:
+        return False
+    interval_fields = (
+        "center",
+        "lower_68",
+        "upper_68",
+        "uncertainty_minus",
+        "uncertainty_plus",
+    )
+    for result_key in ("parameters", "posterior_summary"):
+        surfaced = result.get(result_key)
+        if not isinstance(surfaced, dict) or set(surfaced) != set(numbers):
+            return False
+        for name, signed_interval in numbers.items():
+            observed = surfaced.get(name)
+            if not isinstance(signed_interval, dict) or not isinstance(observed, dict):
+                return False
+            for field in interval_fields:
+                signed_value = signed_interval.get(field)
+                observed_value = observed.get(field)
+                if (
+                    not isinstance(signed_value, (int, float))
+                    or isinstance(signed_value, bool)
+                    or not isinstance(observed_value, (int, float))
+                    or isinstance(observed_value, bool)
+                    or not math.isclose(
+                        float(signed_value),
+                        float(observed_value),
+                        rel_tol=1e-12,
+                        abs_tol=1e-15,
+                    )
+                ):
+                    return False
+            # The external runner also surfaces familiar summary aliases. In
+            # this signed fixture they are claimable numeric content too, so a
+            # mutation of ``H0.mean``/``median``/``std`` must not evade the
+            # interval binding merely because the canonical manifest field is
+            # named ``center``/``uncertainty_*``.
+            for alias in ("mean", "median"):
+                if alias in observed:
+                    alias_value = observed[alias]
+                    if (
+                        not isinstance(alias_value, (int, float))
+                        or isinstance(alias_value, bool)
+                        or not math.isfinite(float(alias_value))
+                        or not math.isclose(
+                            float(alias_value),
+                            float(signed_interval["center"]),
+                            rel_tol=1e-12,
+                            abs_tol=1e-15,
+                        )
+                    ):
+                        return False
+            if "std" in observed:
+                symmetric_interval = math.isclose(
+                    float(signed_interval["uncertainty_minus"]),
+                    float(signed_interval["uncertainty_plus"]),
+                    rel_tol=1e-12,
+                    abs_tol=1e-15,
+                )
+                if (
+                    not symmetric_interval
+                    or not isinstance(observed["std"], (int, float))
+                    or isinstance(observed["std"], bool)
+                    or not math.isfinite(float(observed["std"]))
+                    or not math.isclose(
+                        float(observed["std"]),
+                        float(signed_interval["uncertainty_plus"]),
+                        rel_tol=1e-12,
+                        abs_tol=1e-15,
+                    )
+                ):
+                    return False
+            covered_numeric_fields = set(interval_fields) | {"mean", "median", "std"}
+            if any(
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and key not in covered_numeric_fields
+                for key, value in observed.items()
+            ):
+                return False
+    return True
+
+
+def _signed_full_likelihood_specificity_ready(
+    tool_results: list[dict],
+    *,
+    manifest_verifier=None,
+) -> bool:
+    """Compose final-manifest validity with the production methodology gate."""
+
+    from app.services.claim_validator import (
+        _full_external_likelihood_ready_available,
+    )
+
+    for entry in tool_results:
+        result = entry.get("result") if isinstance(entry, dict) else None
+        if not isinstance(result, dict):
+            continue
+        manifest = result.get("scientific_evidence_manifest")
+        gate = manifest.get("publication_gate") if isinstance(manifest, dict) else None
+        if (
+            not isinstance(manifest, dict)
+            or manifest.get("profile_id")
+            != "desi_2024_vi_table3_desi_cmb_pantheonplus_v1"
+            or manifest.get("readiness_status")
+            not in {"A_READY_PENDING_EXTERNAL_REVIEW", "A"}
+            or not isinstance(gate, dict)
+            or gate.get("eligible") is not True
+            or gate.get("numerical_eligible") is not True
+        ):
+            continue
+        if not _research_alpha_manifest_bound_to_result(
+            result, manifest_verifier=manifest_verifier
+        ):
+            continue
+        if _full_external_likelihood_ready_available([entry]):
+            return True
+    return False
+
+
 def _one_check(record: dict, spec: dict) -> tuple[str, bool]:
     reply = _reply_text(record)
     rl = reply.lower()
@@ -294,6 +527,21 @@ def _one_check(record: dict, spec: dict) -> tuple[str, bool]:
         s = spec["reply_numeric_near"]
         ok = _numeric_near(reply, s["label"], float(s["min"]), float(s["max"]))
         return (f"numeric_near({s['label']} in [{s['min']},{s['max']}])", ok)
+    if "reply_numeric_not_near" in spec:
+        # Withholding contracts need a two-sided, claim-shaped check: a
+        # preliminary runner may name a parameter but may not surface its value
+        # either as ``H0 = 67`` or ``67 for H0``.
+        s = spec["reply_numeric_not_near"]
+        ok = not _claim_numeric_near(
+            reply,
+            s["label"],
+            float(s["min"]),
+            float(s["max"]),
+        )
+        return (
+            f"numeric_not_near({s['label']} in [{s['min']},{s['max']}])",
+            ok,
+        )
     if "tool_result_status" in spec:
         s = spec["tool_result_status"]
         ok = False
@@ -304,6 +552,38 @@ def _one_check(record: dict, spec: dict) -> tuple[str, bool]:
                     ok = True
                     break
         return (f"tool_status({s['tool']}.{s['key']}=={s['equals']})", ok)
+    if "tool_result_list_all" in spec:
+        s = spec["tool_result_list_all"]
+        ok = False
+        for event in record.get("events", []):
+            if event.get("type") != "tool_result" or event.get("tool") != s["tool"]:
+                continue
+            result = event.get("result")
+            items = result.get(s["key"]) if isinstance(result, dict) else None
+            if isinstance(items, list) and items:
+                ok = all(
+                    isinstance(item, dict)
+                    and str(item.get(s["item_key"])) == str(s["equals"])
+                    for item in items
+                )
+                if ok:
+                    break
+        return (
+            f"tool_list_all({s['tool']}.{s['key']}[*].{s['item_key']}=={s['equals']})",
+            ok,
+        )
+    if "tool_result_signed_full_likelihood" in spec:
+        s = spec["tool_result_signed_full_likelihood"]
+        entries = [
+            {
+                "tool": event.get("tool"),
+                "result": event.get("result"),
+            }
+            for event in record.get("events", [])
+            if event.get("type") == "tool_result" and event.get("tool") == s["tool"]
+        ]
+        ok = _signed_full_likelihood_specificity_ready(entries)
+        return (f"signed_full_likelihood({s['tool']})", ok)
     return (f"UNKNOWN_CHECK={spec}", False)
 
 
@@ -339,8 +619,9 @@ def evaluate_case(record: dict, case: dict) -> dict:
             "manual_count": len(case.get("expect_pass") or []),
         }
     # A case may opt into CI gating with `hard: true` even outside the B/C
-    # anti-fabrication groups (2026-06-11) — used by the group-F happy-path
-    # e2e case whose "reply must NOT be withheld" assertion is load-bearing.
+    # anti-fabrication groups (2026-06-11) — used by group-F end-to-end
+    # contract cases, including both eligible positive paths and the corrected
+    # F2 compressed-evidence withholding path.
     is_hard_group = group in _HARD_GROUPS or bool(case.get("hard"))
     checks = case.get("checks") or []
     forbid = case.get("forbid") or []
