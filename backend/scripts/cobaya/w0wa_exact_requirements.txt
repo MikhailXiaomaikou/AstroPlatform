@@ -33,7 +33,7 @@ pluggy==1.6.0
 portalocker==3.2.0
 Py-BOBYQA==1.5.0
 pyerfa==2.0.1.5
-Pygments==2.19.2
+Pygments==2.20.0
 pyparsing==3.3.2
 pytest==8.4.2
 pycparser==3.0
