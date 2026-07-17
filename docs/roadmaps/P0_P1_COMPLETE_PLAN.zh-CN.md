@@ -61,7 +61,7 @@ AI 可以把写代码和测试的时间压缩到约 24 天，但不能压缩下�
 | Rubin/Euclid/Roman adapter | ✅ 🧪 | 三套 checksum-bound `SurveyProductAdapter` fixture 和 drift/fail-closed 测试已实现 | 均保持 `SCHEMA_FIXTURE_ONLY`；没有版本固定正式数据前不得升级为可执行 |
 | 14 天 Daily / 28 天用户验证 | ⏳ | 门槛已定义 | 都尚未完成；机器人、AI 自测和 GitHub clone 不能计为用户 |
 
-本次工程实现和下面的本地收据会以本交付的 Git 提交保存；如果之后被 cherry-pick 或 squash，发布记录必须改用最终合并后的完整 Git SHA。
+本次工程实现已保存为提交 `7981de3c6a80b2e18a3eced6ace04a472fd35436`；如果之后被 cherry-pick 或 squash，发布记录必须改用最终合并后的完整 Git SHA。
 
 ### 2.2 本地验证收据
 
@@ -69,7 +69,7 @@ AI 可以把写代码和测试的时间压缩到约 24 天，但不能压缩下�
 
 | 日期 | 代码基线 | 命令 | 结果 | 限制 |
 |---|---|---|---|---|
-| 2026-07-17 | 本次交付实现提交（见 Git history） | `ruff check app tests alembic celery_worker.py` | passed | 本地 supported venv；仓库全量 `ruff check .` 仍有既有 spike 脚本 E402，不属于运行代码范围 |
+| 2026-07-17 | `7981de3c6a80b2e18a3eced6ace04a472fd35436` | `ruff check app tests alembic celery_worker.py` | passed | 本地 supported venv；仓库全量 `ruff check .` 仍有既有 spike 脚本 E402，不属于运行代码范围 |
 | 2026-07-17 | 同上 | `pytest tests -q` | 3398 passed、7 skipped、59 deselected；coverage 67.80% | 为精确管线测试，从原项目严格运行区复制了被 Git 忽略的 Pantheon+ 表和官方 STATONLY 协方差；两者未加入提交，也不代表严格 DESI v1 已完成 |
 | 2026-07-17 | 同上 | `npm test -- --run`、`npm run lint`、production build | 203/203 passed；lint/build passed | build 保留既有 Plotly 大 chunk 警告，不是构建失败 |
 | 2026-07-17 | 同上 | Alembic fresh upgrade → downgrade `6a718293b4c5` → upgrade head；legacy 缺列 bridge upgrade | passed | SQLite 隔离演练；真实 PostgreSQL 克隆和生产恢复仍是发布门 |
