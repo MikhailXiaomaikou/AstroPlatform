@@ -137,6 +137,21 @@ and returns
 `correlated_tension_withheld` with `tension_sigma=null`. Optional DR1 reference
 cells are config-only and remain separate; no cell ever mixes DR1 and DR2.
 
+## Next-generation survey schema fixtures
+
+Rubin, Euclid, and Roman have a separate fail-closed
+`SurveyProductAdapter` registry. It records release/schema versions, logical
+fields and units, coordinate/time/redshift conventions, covariance/masks/
+selection, coverage/checksum policy, access/licence metadata, and a restricted
+claim scope. As of 2026-07-17 all three entries are
+`SCHEMA_FIXTURE_ONLY`: none can query an archive or support a scientific
+measurement. Euclid Q1 being publicly released does not change that status,
+because no exact Q1 catalogue export and product SHA-256 have been pinned.
+
+See `docs/SURVEY_PRODUCT_SCHEMAS.md` for the undergraduate-level explanation,
+official source links, and promotion checklist. The existing
+`scripts/audit_registry.py` includes the fixture integrity audit.
+
 ### DESI `w0wa` exact offline profile
 
 The preregistered DESI 2024 VI interval-reproduction workflow is separate from

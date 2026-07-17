@@ -1,0 +1,193 @@
+{
+  "registry_schema_version": 1,
+  "key": "euclid_q1_catalog_fixture_v1",
+  "survey": "euclid",
+  "display_name": "Euclid Q1 catalogue adapter fixture",
+  "maturity": "SCHEMA_FIXTURE_ONLY",
+  "release": {
+    "name": "Quick Data Release 1",
+    "version": "Q1-2025-03-19",
+    "status": "released",
+    "official_url": "https://euclid.esac.esa.int/dr/q1/",
+    "checked_utc": "2026-07-17T00:00:00Z"
+  },
+  "schema": {
+    "name": "logical_catalog_contract",
+    "version": "fixture-v1",
+    "source_document_url": "https://euclid.esac.esa.int/dr/q1/dpdd/frontpage.html"
+  },
+  "fields": [
+    {
+      "name": "object_id",
+      "source_name": null,
+      "data_type": "string",
+      "unit": null,
+      "required": true,
+      "description": "Logical source identifier; a specific Q1 table/column mapping is not vendored."
+    },
+    {
+      "name": "ra",
+      "source_name": null,
+      "data_type": "float64",
+      "unit": "deg",
+      "required": true,
+      "description": "Logical right ascension in the declared coordinate frame."
+    },
+    {
+      "name": "dec",
+      "source_name": null,
+      "data_type": "float64",
+      "unit": "deg",
+      "required": true,
+      "description": "Logical declination in the declared coordinate frame."
+    },
+    {
+      "name": "observation_time",
+      "source_name": null,
+      "data_type": "float64",
+      "unit": "day",
+      "required": false,
+      "description": "Logical observation time; table-specific scale and format are not mapped."
+    },
+    {
+      "name": "photometric_redshift",
+      "source_name": null,
+      "data_type": "float64",
+      "unit": "dimensionless",
+      "required": false,
+      "description": "Logical PHZ value; no physical Q1 source column is pinned by this fixture."
+    },
+    {
+      "name": "spectroscopic_redshift",
+      "source_name": null,
+      "data_type": "float64",
+      "unit": "dimensionless",
+      "required": false,
+      "description": "Logical SPE value; no physical Q1 source column is pinned by this fixture."
+    }
+  ],
+  "coordinates": {
+    "spatial_frame": "ICRS",
+    "longitude_field": "ra",
+    "latitude_field": "dec",
+    "unit": "deg",
+    "equinox": null,
+    "status": "logical_fixture_not_source_mapped"
+  },
+  "time_system": {
+    "field": "observation_time",
+    "scale": "unknown",
+    "format": "unknown",
+    "reference_position": "unknown",
+    "status": "must_be_pinned_per_physical_table"
+  },
+  "redshift": {
+    "types": [
+      "photometric",
+      "spectroscopic"
+    ],
+    "value_fields": [
+      "photometric_redshift",
+      "spectroscopic_redshift"
+    ],
+    "uncertainty_fields": [],
+    "uncertainty_status": "not_mapped",
+    "status": "product_families_declared_but_columns_unpinned"
+  },
+  "linked_products": {
+    "covariance": {
+      "status": "not_registered",
+      "kind": null,
+      "field": null,
+      "artifact": {
+        "source_url": null,
+        "version": null,
+        "sha256": null
+      }
+    },
+    "mask": {
+      "status": "declared_by_q1_documentation_but_unpinned",
+      "kind": null,
+      "field": null,
+      "artifact": {
+        "source_url": null,
+        "version": null,
+        "sha256": null
+      }
+    },
+    "selection": {
+      "status": "not_registered",
+      "kind": null,
+      "field": null,
+      "artifact": {
+        "source_url": null,
+        "version": null,
+        "sha256": null
+      }
+    }
+  },
+  "coverage": {
+    "status": "declared_by_official_q1_documentation",
+    "sky_area_sq_deg": 63.1,
+    "regions": [
+      "Euclid Deep Field North",
+      "Euclid Deep Field South",
+      "Euclid Deep Field Fornax"
+    ],
+    "temporal_start": null,
+    "temporal_stop": null,
+    "source_url": "https://euclid.esac.esa.int/dr/q1/expsup/master.html"
+  },
+  "integrity": {
+    "algorithm": "sha256",
+    "product_sha256": null,
+    "checksum_scope": "no_specific_q1_archive_product_registered",
+    "required_before_source_pinned": true
+  },
+  "access": {
+    "archive_url": "https://eas.esac.esa.int/sas/",
+    "authentication": "verify_for_selected_archive_service_at_execution",
+    "rate_limit": "unknown",
+    "artifact_host_allowlist": [
+      "euclid.esac.esa.int",
+      "eas.esac.esa.int"
+    ],
+    "offline_behavior": "fail_closed"
+  },
+  "license": {
+    "identifier": null,
+    "url": "https://euclid.esac.esa.int/dr/q1/dpdd/frontpage.html",
+    "status": "documentation_licence_only_verify_data_product_terms"
+  },
+  "supported_claim_scope": [
+    "schema_fixture_compatibility",
+    "declared_release_status",
+    "logical_field_presence",
+    "officially_declared_coverage"
+  ],
+  "official_sources": [
+    {
+      "authority": "European Space Agency and Euclid Consortium",
+      "url": "https://euclid.esac.esa.int/dr/q1/dpdd/frontpage.html",
+      "document_version": "DPDD-2.0-DM-10.0.4-FDM-10.0.4-EDEN-3.1",
+      "checked_utc": "2026-07-17T00:00:00Z"
+    },
+    {
+      "authority": "European Space Agency and Euclid Consortium",
+      "url": "https://euclid.esac.esa.int/dr/q1/expsup/master.html",
+      "document_version": "Q1-documentation-release-1",
+      "checked_utc": "2026-07-17T00:00:00Z"
+    },
+    {
+      "authority": "European Space Agency",
+      "url": "https://www.esa.int/Science_Exploration/Space_Science/Euclid/Euclid_opens_data_treasure_trove_offers_glimpse_of_deep_fields",
+      "document_version": "release-notice-2025-03-19",
+      "checked_utc": "2026-07-17T00:00:00Z"
+    }
+  ],
+  "limitations": [
+    "Q1 is released and its versioned documentation is public, but this fixture does not pin a physical catalogue export or its checksum.",
+    "Logical field names are not a substitute for a selected Q1 table's exact column mapping.",
+    "No covariance or selection function is registered, so cosmological inference is outside this fixture's claim scope."
+  ]
+}
