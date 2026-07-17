@@ -205,6 +205,7 @@ OPENAI_CLI_PRIORITY_TOOL_NAMES = [
     "demagnify_sample",
     "run_cosmology_likelihood_chain",
     "run_cosmology_robustness_matrix",
+    "run_dark_energy_evidence_matrix",
     "plan_research_program",
 ]
 

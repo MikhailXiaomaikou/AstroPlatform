@@ -147,7 +147,8 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 "DM/DH/DV_over_rs; r_s(z_drag) is identical to r_d."
             ),
             url=(
-                "https://raw.githubusercontent.com/CobayaSampler/bao_data/master/"
+                "https://raw.githubusercontent.com/CobayaSampler/bao_data/"
+                "b7b8a36e9bccb063081f811f323cada21ab5fbdd/"
                 "desi_bao_dr2/desi_gaussian_bao_ALL_GCcomb_cov.txt"
             ),
             format="DESI DR2 / CobayaSampler bao_data ASCII matrix",
@@ -158,9 +159,10 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 label="DESI Collaboration 2025 DR2 BAO measurements",
                 year=2025,
                 arxiv="2503.14738",
+                doi="10.1103/tr6y-kpc6",
             ),
             DatasetCitation(
-                label="DESI Collaboration 2025 DR2 cosmological constraints",
+                label="DESI Collaboration 2025 DR2 Ly-alpha BAO measurements",
                 year=2025,
                 arxiv="2503.14739",
             ),
@@ -189,7 +191,8 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 product_type="bao_measurement_vector",
                 role="measurement_vector",
                 url=(
-                    "https://raw.githubusercontent.com/CobayaSampler/bao_data/master/"
+                    "https://raw.githubusercontent.com/CobayaSampler/bao_data/"
+                    "b7b8a36e9bccb063081f811f323cada21ab5fbdd/"
                     "desi_bao_dr2/desi_gaussian_bao_ALL_GCcomb_mean.txt"
                 ),
                 format="ASCII table",
@@ -202,7 +205,8 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 product_type="bao_covariance_matrix",
                 role="covariance",
                 url=(
-                    "https://raw.githubusercontent.com/CobayaSampler/bao_data/master/"
+                    "https://raw.githubusercontent.com/CobayaSampler/bao_data/"
+                    "b7b8a36e9bccb063081f811f323cada21ab5fbdd/"
                     "desi_bao_dr2/desi_gaussian_bao_ALL_GCcomb_cov.txt"
                 ),
                 format="ASCII matrix",
@@ -213,7 +217,10 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             DataProductSpec(
                 product_type="bao_bin_products",
                 role="bin_level_measurements",
-                url="https://github.com/CobayaSampler/bao_data/tree/master/desi_bao_dr2",
+                url=(
+                    "https://github.com/CobayaSampler/bao_data/tree/"
+                    "b7b8a36e9bccb063081f811f323cada21ab5fbdd/desi_bao_dr2"
+                ),
                 format="ASCII mean/cov pairs",
                 description=(
                     "Per-tracer DESI DR2 BAO mean/covariance files for BGS, LRG "

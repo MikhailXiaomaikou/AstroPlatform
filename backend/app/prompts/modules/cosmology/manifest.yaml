@@ -6,11 +6,11 @@ status: active
 prompt_file: prompt.md
 
 # Tools loaded for this module = core (via core/infrastructure.yaml)
-#                              + cosmology-specific (25)
+#                              + cosmology-specific (26)
 #                              + overlap (14, shared with N+1 modules)
-# Total: 18 + 25 + 14 = 57 visible tools.
+# Total: 18 + 26 + 14 = 58 visible tools.
 tools:
-  # ── cosmology-specific (25) ──
+  # ── cosmology-specific (26) ──
   - assess_bao_bin_anomaly
   - audit_published_constraint
   - build_cosmology_likelihood
@@ -34,6 +34,7 @@ tools:
   - run_cmb_rotation_likelihood
   - run_cosmology_likelihood_chain
   - run_cosmology_robustness_matrix
+  - run_dark_energy_evidence_matrix
   - run_nested_sampler
   - run_research_matrix
   # spot_check_literature_value removed (2026-05-20): real cosmology H0/sigma8/S8 tensions

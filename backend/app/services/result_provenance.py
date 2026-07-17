@@ -552,6 +552,7 @@ _COMPUTE_TOOLS = {
     "load_cosmology_data_product",
     "build_cosmology_likelihood", "build_cosmology_robustness_matrix",
     "run_cosmology_likelihood_chain", "run_cosmology_robustness_matrix",
+    "run_dark_energy_evidence_matrix",
     "run_cmb_rotation_likelihood",
     "run_nested_sampler", "evaluate_chain_diagnostics", "run_research_matrix",
     # 2026-05-28 backfill: DESI BAO Alcock-Paczynski per-bin diagnostic.

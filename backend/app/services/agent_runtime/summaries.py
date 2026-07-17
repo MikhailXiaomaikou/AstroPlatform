@@ -607,6 +607,7 @@ def _cosmology_tool_grounded_summary(
         elif tool in {
             "run_cosmology_likelihood_chain",
             "run_cosmology_robustness_matrix",
+            "run_dark_energy_evidence_matrix",
             "run_cmb_rotation_likelihood",
         }:
             chain = result

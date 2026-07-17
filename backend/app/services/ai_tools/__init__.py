@@ -824,6 +824,7 @@ async def _execute_tool_inner(
         # "run_cosmology_likelihood_chain", "run_cmb_rotation_likelihood",
         # "run_nested_sampler", "evaluate_chain_diagnostics",
         # "build_cosmology_robustness_matrix", "run_cosmology_robustness_matrix",
+        # "run_dark_energy_evidence_matrix",
         # "assess_bao_bin_anomaly", "audit_published_constraint",
         # "compute_theory_cmb_spectrum".
         elif tool_name in _COSMOLOGY_TOOL_NAMES:
