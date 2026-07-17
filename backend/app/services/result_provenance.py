@@ -39,11 +39,10 @@ EMPTY = "empty"
 # the methodology downgrade is never silent.
 METHOD_DOWNGRADED = "method_downgraded"
 # Cosmology MCMC tier (2026-05-20): chain ran with claimable input but ESS or
-# R-hat is below publication threshold. Posterior may be discussed in chat
-# (median, range, qualitative trend) but MUST NOT be cited as a published
-# constraint and is excluded from the bibcode pool.  Distinct from PARTIAL
-# (which carries __do_not_claim__=True) so EXPLORATORY-aware consumers can
-# treat it as a soft warning rather than a hard block.
+# R-hat is below publication threshold. Posterior diagnostics remain visible
+# in structured results, but values are withheld from ordinary reply prose,
+# MUST NOT be cited, and are excluded from the bibcode pool. Distinct from
+# PARTIAL so consumers can distinguish diagnostics from a hard run failure.
 EXPLORATORY = "exploratory"
 _VALID_ORIGINS = {REAL_ARCHIVE, CACHED_REAL, USER_UPLOADED, SYNTHETIC, UNAVAILABLE}
 
