@@ -86,13 +86,22 @@ Use this one-time, fail-closed adoption process:
    psql "$DATABASE_URL" -c 'select * from alembic_version'
    ```
 
-3. Against the disposable clone only, run `alembic stamp head`, then
-   `alembic check` and the backend tests. Stamping records history; it does not
-   repair schema drift.
-4. If `alembic check` reports any operation, stop and write a bridge migration.
-   Do not stamp production.
-5. Only after the clone reports no drift, take a new production backup, stamp
-   production once, and deploy. Verify `/health/deep` immediately.
+3. Reconstruct the candidate matching revision in a second empty PostgreSQL 16
+   database. Compare the complete schemas before any stamp: tables, columns,
+   types, defaults, nullability, primary/foreign/unique constraints, indexes,
+   enums, and required extensions must all match. Comparing table names alone
+   is not sufficient.
+4. Only when that structural comparison is exact, stamp the disposable clone
+   to the matching revision, then run `alembic check`, the intended upgrade,
+   migration tests, and representative-row checks. Stamping records history;
+   it does not repair schema drift.
+5. If any structural difference exists, stop and write a reviewed bridge
+   migration with a real PostgreSQL 16 rollback drill. Do not stamp either the
+   clone or production to hide the difference.
+6. Only after the clone proves the exact adoption and upgrade path, take a new
+   production backup, obtain the required production approval, stamp production
+   once to the proven matching revision, and deploy. Verify `/health/deep`
+   immediately.
 
 ## 3. Readiness contract
 
@@ -303,6 +312,13 @@ After restore:
 
 - Prefer forward-fix migrations. An application rollback is safe only when the
   new schema remains backward compatible with the old image.
+- Freeze writes and snapshot the target before a rollback. If the target has
+  accepted any unique writes or object versions, keep both target and rollback
+  destination read-only until those changes are enumerated, idempotently
+  reconciled, and checksum/row validated. Switch API, frontend, worker, beat,
+  database, and storage together, then require database and release-owner
+  approval before restoring writes. A normal 30-minute cutover budget does not
+  authorize dropping data during a longer incident recovery.
 - Do not run Alembic downgrade against production before testing it on a PITR
   clone. For destructive mistakes, restore to a new PITR database instead.
 - If `/health/deep` reports `revision_mismatch`, stop deploys and compare
