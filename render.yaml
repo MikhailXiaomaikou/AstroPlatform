@@ -66,6 +66,10 @@ services:
       - key: FERNET_KEY
         # Losing this key makes stored BYOK credentials unreadable.
         sync: false
+      - key: DELETION_TOMBSTONE_KEY
+        # Stable across database restores. If omitted, FERNET_KEY is used;
+        # an independent externally escrowed value is clearer for rotation.
+        sync: false
       - key: EVIDENCE_SIGNING_KEY
         # Keep this independent from JWT_SECRET and retain old verification
         # keys according to docs/OPERATIONS_RUNBOOK.md.
@@ -86,6 +90,26 @@ services:
       # that also requires a verified client-IP trust mode and global cost cap.
       - key: SHARED_DEEPSEEK_API_KEY_ENABLED
         value: "false"
+      # Hosted-alpha access and P1 dark-launch controls. These declarations
+      # describe the target Blueprint; they do not mean it has been deployed.
+      - key: SIGNUP_MODE
+        value: invite_only
+      - key: CLAIM_AUDIT_ENABLED
+        value: "false"
+      - key: CLAIM_AUDIT_EXECUTION_MODE
+        value: celery
+      - key: CLAIM_AUDIT_REGISTERED_TIMEOUT_SECONDS
+        value: "1800"
+      - key: PRODUCT_ANALYTICS_RETENTION_DAYS
+        value: "30"
+      # Populate all three before a separately approved Claim Audit enablement.
+      # These identify the real operator; they are not a legal-compliance flag.
+      - key: PRIVACY_OPERATOR_NAME
+        sync: false
+      - key: PRIVACY_CONTACT
+        sync: false
+      - key: PRIVACY_JURISDICTION
+        sync: false
       - key: TRUSTED_PROXY_MODE
         # Do not trust forwarded IP headers until the target Render service has
         # passed the forged-XFF diagnostic documented in DEPLOYMENT.md.
@@ -178,6 +202,11 @@ services:
           name: standard-astro-backend
           type: web
           envVarKey: FERNET_KEY
+      - key: DELETION_TOMBSTONE_KEY
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: DELETION_TOMBSTONE_KEY
       - key: EVIDENCE_SIGNING_KEY
         fromService:
           name: standard-astro-backend
@@ -200,6 +229,38 @@ services:
           envVarKey: ANTHROPIC_API_KEY
       - key: PIPELINE_MODE
         value: celery
+      - key: CLAIM_AUDIT_ENABLED
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: CLAIM_AUDIT_ENABLED
+      - key: CLAIM_AUDIT_EXECUTION_MODE
+        value: celery
+      - key: CLAIM_AUDIT_REGISTERED_TIMEOUT_SECONDS
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: CLAIM_AUDIT_REGISTERED_TIMEOUT_SECONDS
+      - key: PRODUCT_ANALYTICS_RETENTION_DAYS
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: PRODUCT_ANALYTICS_RETENTION_DAYS
+      - key: PRIVACY_OPERATOR_NAME
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: PRIVACY_OPERATOR_NAME
+      - key: PRIVACY_CONTACT
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: PRIVACY_CONTACT
+      - key: PRIVACY_JURISDICTION
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: PRIVACY_JURISDICTION
       - key: SCHEMA_WAIT_TIMEOUT_SECONDS
         value: "900"
       - key: CELERY_TASK_SOFT_TIME_LIMIT_SECONDS
