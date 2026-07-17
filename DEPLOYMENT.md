@@ -71,6 +71,7 @@ ENV=production
 DATABASE_URL=postgresql://...          # Render internal DB URL; backend converts to asyncpg
 JWT_SECRET=<random-hex-32>
 FERNET_KEY=<random-secret-stored-outside-the-database>
+DELETION_TOMBSTONE_KEY=<stable-hmac-secret-stored-outside-the-database>
 EVIDENCE_SIGNING_KEY=<independent-random-secret-at-least-32-bytes>
 EVIDENCE_SIGNING_KEY_ID=evidence-prod-v1
 # JSON map of retired key ids to secrets; normally empty until a rotation:
@@ -78,6 +79,14 @@ EVIDENCE_VERIFICATION_KEYS={}
 CORS_ORIGINS=https://<target-frontend>
 RATE_LIMIT_ENABLED=true
 SHARED_DEEPSEEK_API_KEY_ENABLED=false # public chat is BYOK-only
+SIGNUP_MODE=invite_only               # hosted alpha; local dev may use public
+CLAIM_AUDIT_ENABLED=false             # dark until P0/P1 release gates pass
+CLAIM_AUDIT_EXECUTION_MODE=celery
+CLAIM_AUDIT_REGISTERED_TIMEOUT_SECONDS=1800
+PRODUCT_ANALYTICS_RETENTION_DAYS=30
+PRIVACY_OPERATOR_NAME=<real-operator-name>
+PRIVACY_CONTACT=<monitored-privacy-contact>
+PRIVACY_JURISDICTION=<actual-hosting-and-operator-jurisdiction>
 TRUSTED_PROXY_MODE=none               # verify the target proxy before trusting headers
 REDIS_URL=redis://...                   # Blueprint injects Render Key Value URL
 PIPELINE_MODE=celery
@@ -89,6 +98,41 @@ S3_SECRET_ACCESS_KEY=...
 STORAGE_REQUIRE_INTEGRITY=true          # fail closed if SHA-256 metadata is missing
 PORT=8000
 ```
+
+These are **target settings**, not evidence that the current hosted services
+already run this release. Keep `CLAIM_AUDIT_ENABLED=false` through migration,
+restore testing, the P0 observation window, and the required Daily stability
+gate. Enabling it is a later release decision, not a routine configuration
+sync.
+
+`SIGNUP_MODE=invite_only` applies to the hosted research alpha. The
+development example remains `public` so a new local checkout is usable without
+an invitation service. `SHARED_DEEPSEEK_API_KEY_ENABLED=false` is independent:
+an invitation permits account creation but does not permit use of an
+operator-funded model key.
+
+Product analytics are opt-in per account. The event collector accepts only
+scrubbed product metadata and Celery Beat schedules a daily purge using
+`PRODUCT_ANALYTICS_RETENTION_DAYS=30`. Monitor both Beat and the purge task;
+setting an environment variable does not prove that expired rows were deleted.
+Claim text, prompts, paper titles, URL/DOI identifiers, tool arguments, raw
+errors, and scientific values are forbidden from analytics. See
+[`PRIVACY.md`](./PRIVACY.md) for the bilingual user-facing framework.
+
+Account deletion writes a signed external tombstone before disabling the
+account and dispatching asynchronous erasure. `DELETION_TOMBSTONE_KEY` must be
+the same on every process that checks or executes deletion and must survive a
+database restore. If it is left unset, the application uses `FERNET_KEY` for
+backwards compatibility; a separately escrowed key is clearer for rotation.
+The returned 30-day `backup_expiry` is a retention target, not a cloud backup
+control. Configure and test database snapshot and object-version expiry at the
+provider, and retain each external tombstone until no older backup can restore
+that account.
+
+The three `PRIVACY_*` values must describe the real instance. Application
+startup requires them when Claim Audit is enabled in production, but that
+validation is not legal review. Publish actual subprocessors, infrastructure
+log retention, backup retention, and user-request procedures separately.
 
 `EVIDENCE_SIGNING_KEY` is deliberately independent from `JWT_SECRET` and is
 required in production. New server tool-evidence records carry
