@@ -222,6 +222,18 @@ async def run_one_case(case: dict, api_key: str | None, out_dir: Path, *, provid
 # A/D/E = routing/quality = SOFT (reported, not gated). See cases.yaml header.
 
 _HARD_GROUPS = {"B", "C"}
+_FAILURE_CLASSES = frozenset({
+    "product_defect",
+    "evaluator_false_positive",
+    "model_drift",
+    "external_dependency",
+    "ci_infrastructure",
+})
+_EXTERNAL_DEPENDENCY_ERROR_RE = re.compile(
+    r"(?:rate.?limit|\b429\b|timed?\s*out|timeout|connection|dns|"
+    r"provider|service\s+unavailable|\b50[234]\b)",
+    re.IGNORECASE,
+)
 
 
 def _reply_text(record: dict) -> str:
@@ -242,6 +254,43 @@ def _forbid_texts(record: dict) -> list[str]:
     if isinstance(turns, list):
         texts = [str(t.get("reply") or "") for t in turns if isinstance(t, dict)]
     return [t for t in texts if t] or [_reply_text(record)]
+
+
+def _failure_classes_for_verdict(
+    *,
+    case: dict,
+    execution_error: str,
+    hard_failed: bool,
+    any_failed: bool,
+    check_results: list[tuple[str, bool, bool]],
+) -> list[str]:
+    """Classify a Daily failure without changing its pass/fail decision.
+
+    ``failure_class_on_failure`` is an explicit evaluator-maintainer escape
+    hatch for a known oracle defect; it never changes the verdict itself.  In
+    ordinary runs, hard scientific escapes are product defects, non-gating
+    expectation misses are model drift, provider/network errors are external
+    dependencies, and harness/runtime errors are CI infrastructure defects.
+    """
+
+    if not any_failed and not execution_error:
+        return []
+    override = str(case.get("failure_class_on_failure") or "").strip()
+    if override:
+        if override not in _FAILURE_CLASSES:
+            return ["ci_infrastructure"]
+        return [override]
+    if execution_error:
+        return [
+            "external_dependency"
+            if _EXTERNAL_DEPENDENCY_ERROR_RE.search(execution_error)
+            else "ci_infrastructure"
+        ]
+    if any(desc.startswith("UNKNOWN_CHECK=") for desc, ok, _soft in check_results if not ok):
+        return ["ci_infrastructure"]
+    if hard_failed:
+        return ["product_defect"]
+    return ["model_drift"]
 
 
 def _numeric_near(reply: str, labels, lo: float, hi: float) -> bool:
@@ -606,6 +655,13 @@ def evaluate_case(record: dict, case: dict) -> dict:
         # behavior passed.  Treat infrastructure/model errors as hard failures
         # for every group; previously an empty reply could satisfy soft checks
         # and let most anti-fabrication cases exit zero.
+        failure_classes = _failure_classes_for_verdict(
+            case=case,
+            execution_error=execution_error,
+            hard_failed=True,
+            any_failed=True,
+            check_results=[],
+        )
         return {
             "case_id": case.get("id"),
             "group": group,
@@ -617,6 +673,8 @@ def evaluate_case(record: dict, case: dict) -> dict:
             "check_results": [],
             "forbid_results": [],
             "manual_count": len(case.get("expect_pass") or []),
+            "failure_class": failure_classes[0],
+            "failure_classes": failure_classes,
         }
     # A case may opt into CI gating with `hard: true` even outside the B/C
     # anti-fabrication groups (2026-06-11) — used by group-F end-to-end
@@ -645,6 +703,13 @@ def evaluate_case(record: dict, case: dict) -> dict:
     else:
         verdict = "PASS"
     n_manual = max(0, len(case.get("expect_pass") or []) - len(checks))
+    failure_classes = _failure_classes_for_verdict(
+        case=case,
+        execution_error="",
+        hard_failed=hard_failed,
+        any_failed=any_fail,
+        check_results=check_results,
+    )
     return {
         "case_id": case.get("id"),
         "group": group,
@@ -655,6 +720,8 @@ def evaluate_case(record: dict, case: dict) -> dict:
         "check_results": check_results,
         "forbid_results": forbid_results,
         "manual_count": n_manual,
+        "failure_class": failure_classes[0] if failure_classes else None,
+        "failure_classes": failure_classes,
     }
 
 
@@ -681,10 +748,21 @@ def write_summary(records: list[dict], out_dir: Path, cases: list[dict]) -> list
         + (", ".join(v["case_id"] for v in soft_fail) if soft_fail else "无")
         + "\n"
     )
+    failure_class_counts = {
+        name: sum(name in verdict["failure_classes"] for verdict in verdicts)
+        for name in sorted(_FAILURE_CLASSES)
+    }
+    lines.append(
+        "- 失败分类: "
+        + ", ".join(
+            f"{name}={count}" for name, count in failure_class_counts.items()
+        )
+        + "\n"
+    )
 
     lines.append("## 机械判定一览\n")
-    lines.append("| ID | group | 硬/软 | verdict | 失败明细 | 待人工核 |")
-    lines.append("|---|---|---|---|---|---|")
+    lines.append("| ID | group | 硬/软 | verdict | failure_class | 失败明细 | 待人工核 |")
+    lines.append("|---|---|---|---|---|---|---|")
     for r in records:
         v = vmap[r["case_id"]]
         kind = "硬" if v["hard"] else "软"
@@ -696,7 +774,8 @@ def write_summary(records: list[dict], out_dir: Path, cases: list[dict]) -> list
         fails += [f"forbid命中:{term!r}" for term, hit in v["forbid_results"] if hit]
         detail = "; ".join(fails) if fails else "—"
         lines.append(
-            f"| {r['case_id']} | {v['group']} | {kind} | {v['verdict']} | {detail} | {v['manual_count']} |"
+            f"| {r['case_id']} | {v['group']} | {kind} | {v['verdict']} | "
+            f"{v['failure_class'] or '—'} | {detail} | {v['manual_count']} |"
         )
 
     lines.append("\n## 工具调用一览\n")
@@ -710,6 +789,10 @@ def write_summary(records: list[dict], out_dir: Path, cases: list[dict]) -> list
         )
 
     (out_dir / "summary.md").write_text("\n".join(lines), encoding="utf-8")
+    (out_dir / "verdicts.json").write_text(
+        json.dumps(verdicts, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     print(f"\nsummary 写到: {out_dir / 'summary.md'}", flush=True)
     return verdicts
 

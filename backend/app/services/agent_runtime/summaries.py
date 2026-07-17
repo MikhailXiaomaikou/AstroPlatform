@@ -313,6 +313,45 @@ def _cosmology_max_z_coverage(tool_results: list[dict]) -> float | None:
     return zmax
 
 
+def _cosmology_outside_coverage_disclosure(
+    tool_results: list[dict],
+    user_prompt: str,
+) -> str | None:
+    """Return a deterministic disclosure for an out-of-coverage request.
+
+    ``list_cosmology_datasets`` now returns a structured coverage verdict when
+    the agent loop passes the requested redshift.  The fallback calculation
+    keeps older stored tool records safe and makes the final reply independent
+    of provider wording.
+    """
+
+    requested_z = _cosmology_requested_redshift(user_prompt)
+    if requested_z is None:
+        return None
+    structured_outside = False
+    for entry in tool_results or []:
+        result = entry.get("result")
+        if isinstance(result, dict) and result.get("coverage_status") == "outside":
+            structured_outside = True
+            break
+    coverage_zmax = _cosmology_max_z_coverage(tool_results)
+    if not structured_outside and not (
+        coverage_zmax is not None and requested_z > coverage_zmax + 1e-9
+    ):
+        return None
+    range_text = (
+        f" (the registered measurements end at z = {coverage_zmax:g})"
+        if coverage_zmax is not None
+        else ""
+    )
+    return (
+        "Coverage status: outside. The requested redshift is beyond the "
+        f"selected dataset's measured range{range_text}. Any value there is "
+        "a model-dependent extrapolation, not a measurement or data constraint "
+        "from that dataset."
+    )
+
+
 def _dataset_release_markers(text: str) -> dict[str, set[str]]:
     """Extract release identifiers without interpreting scientific numbers.
 

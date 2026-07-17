@@ -2691,6 +2691,7 @@ def list_cosmology_datasets(
     probe: str | None = None,
     status: DatasetStatus | None = None,
     dataset_keys: list[str] | None = None,
+    requested_redshift: float | None = None,
 ) -> dict[str, Any]:
     requested_keys = [str(key).strip() for key in (dataset_keys or []) if str(key).strip()]
     unknown_keys = [key for key in requested_keys if key not in _REGISTRY]
@@ -2699,14 +2700,68 @@ def list_cosmology_datasets(
         if requested_keys
         else list(_REGISTRY.values())
     )
-    entries = [
-        entry.to_dict()
+    selected_entries = [
+        entry
         for entry in registry_entries
         if (probe is None or entry.probe == probe)
         and (status is None or entry.status == status)
     ]
+    entries = [entry.to_dict() for entry in selected_entries]
     if not requested_keys:
         entries.sort(key=lambda item: item["key"])
+    coverage_evaluations: list[dict[str, Any]] = []
+    known_intervals: list[tuple[float, float]] = []
+    if requested_redshift is not None:
+        requested_z = float(requested_redshift)
+        for entry in selected_entries:
+            coverage = entry.z_coverage
+            if coverage is None:
+                coverage_evaluations.append({
+                    "dataset_key": entry.key,
+                    "coverage_status": "unknown",
+                    "requested_redshift": requested_z,
+                    "z_coverage_min": None,
+                    "z_coverage_max": None,
+                })
+                continue
+            z_min, z_max = float(coverage[0]), float(coverage[1])
+            known_intervals.append((z_min, z_max))
+            coverage_evaluations.append({
+                "dataset_key": entry.key,
+                "coverage_status": (
+                    "within" if z_min <= requested_z <= z_max else "outside"
+                ),
+                "requested_redshift": requested_z,
+                "z_coverage_min": z_min,
+                "z_coverage_max": z_max,
+            })
+        evaluation_states = {
+            item["coverage_status"] for item in coverage_evaluations
+        }
+        if "within" in evaluation_states:
+            coverage_status = "within"
+        elif evaluation_states == {"outside"}:
+            coverage_status = "outside"
+        else:
+            coverage_status = "unknown"
+    else:
+        requested_z = None
+        coverage_status = "not_requested"
+        known_intervals = [
+            (float(entry.z_coverage[0]), float(entry.z_coverage[1]))
+            for entry in selected_entries
+            if entry.z_coverage is not None
+        ]
+    z_coverage_min = (
+        min(interval[0] for interval in known_intervals)
+        if known_intervals
+        else None
+    )
+    z_coverage_max = (
+        max(interval[1] for interval in known_intervals)
+        if known_intervals
+        else None
+    )
     return {
         "success": True,
         "registry_version": "2026-04-30",
@@ -2714,6 +2769,11 @@ def list_cosmology_datasets(
         "datasets": entries,
         "requested_dataset_keys": requested_keys,
         "unknown_dataset_keys": unknown_keys,
+        "coverage_status": coverage_status,
+        "requested_redshift": requested_z,
+        "z_coverage_min": z_coverage_min,
+        "z_coverage_max": z_coverage_max,
+        "coverage_evaluations": coverage_evaluations,
         "supported_models": {
             key: {"label": MODEL_LABELS[key], "parameters": list(params)}
             for key, params in SUPPORTED_MODELS.items()

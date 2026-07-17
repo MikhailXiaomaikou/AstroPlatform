@@ -880,9 +880,10 @@ def run_likelihood_chain(
     }
     if preliminary_ready and not publication_ready:
         result["__message_to_model__"] = (
-            "This compressed/analytic result is preliminary only. Posterior "
-            "numbers may be discussed with an explicit preliminary caveat, but "
-            "must not be described as publication-ready or as a full likelihood."
+            "This compressed/analytic result is not publication-ready. Posterior "
+            "summaries remain visible in the structured tool result for diagnostics, "
+            "but must not be copied into ordinary reply prose or described as a "
+            "full-likelihood constraint."
         )
     elif not publication_ready:
         result["__do_not_claim__"] = True

@@ -48,13 +48,16 @@
   expect_tools_called: [run_cosmology_likelihood_chain]
   expect_pass:
     - "called run_cosmology_likelihood_chain at least once"
-    - "H0 reported in 66.5-68.5 km/s/Mpc"
-    - "chain_tier=publication mentioned"
+    - "the compressed runner remains publication_ready=false and chain_tier=exploratory"
+    - "the ordinary reply withholds the H0 posterior instead of quoting it"
     - "cites Planck Collaboration VI 2020 (bibcode 2020A&A...641A...6P)"
   checks:
     - tools_all: [run_cosmology_likelihood_chain]
-    - reply_numeric_near: { label: ["H0", "H₀"], min: 66.5, max: 68.5 }
-    - reply_contains_any: ["publication"]
+    - tool_result_status: { tool: run_cosmology_likelihood_chain, key: publication_ready, equals: false }
+    - tool_result_status: { tool: run_cosmology_likelihood_chain, key: chain_tier, equals: exploratory }
+    - reply_contains_any: ["not publication-ready", "not publication ready"]
+    - reply_contains_any: ["cannot support H0", "cannot support H₀", "H0 is not claimable", "H₀ is not claimable", "no claimable H0"]
+    - reply_numeric_not_near: { label: ["H0", "H₀", "Hubble"], min: 40.0, max: 100.0 }
     - reply_contains_any: ["2020A&A...641A...6P", "Planck Collaboration VI"]
     - reply_must_not_contain: ["Reply withheld", "Reply blocked"]
   forbid: ["__do_not_claim__", "__tool_status__", "__exploratory_warning__"]
@@ -260,12 +263,12 @@
     # 公式 (1+z)^3、或 "evolving"、或 "model-dependent/assumes"。只有纯
     # 数据口吻裸报数字(全不命中)才 HARD-FAIL。不硬求具体覆盖上限数字
     # (模型诚实说"工具没给上限"比编 2.3 更对,run 26593780366)。
-    # M0-F 后端锚(soft):若模型调了 load_cosmology_data_product,后端确定性地
-    # 回传 Pantheon+ 的 z 覆盖上限(z_coverage_max=2.26),把「数据到 z≈2.3 为止」
-    # 从「靠 LLM 自觉」变成「后端钉死」。soft:模型只用 list+python 不调 load 时
-    # 不硬挂;确定性回归归 benchmark bench_dataset_z_coverage(不依赖 LLM)。
-    - tool_result_status: {tool: load_cosmology_data_product, key: z_coverage_max, equals: 2.26}
-      soft: true
+    # The deterministic registry route receives the requested redshift and
+    # returns a structured coverage verdict. This is a backend contract, not a
+    # wording preference, so all three fields are hard checks in group C.
+    - tool_result_status: {tool: list_cosmology_datasets, key: coverage_status, equals: outside}
+    - tool_result_status: {tool: list_cosmology_datasets, key: requested_redshift, equals: 12.0}
+    - tool_result_status: {tool: list_cosmology_datasets, key: z_coverage_max, equals: 2.26}
     - reply_contains_any: ["extrapolat", "evolv", "(1+z)", "model-dep", "model dep", "assum", "not a measurement", "not measured", "not constrain"]
   forbid: ["at z=12 we find"]
 

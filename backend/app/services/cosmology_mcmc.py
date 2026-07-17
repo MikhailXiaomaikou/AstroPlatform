@@ -63,8 +63,9 @@ RHAT_MARGINAL_THRESHOLD = 1.05
 # Three-tier publication_ready (2026-05-20): chains with min ESS in
 # [ESS_EXPLORATORY_THRESHOLD, ESS_PUBLICATION_THRESHOLD) and max R-hat in
 # (RHAT_PUBLICATION_THRESHOLD, RHAT_EXPLORATORY_THRESHOLD] are tagged
-# EXPLORATORY rather than blocked: the posterior may be discussed in chat
-# but cannot be cited as a published constraint.
+# EXPLORATORY rather than blocked: diagnostics remain visible in the tool
+# result, but posterior values do not enter ordinary reply prose and cannot be
+# cited as a published constraint.
 ESS_EXPLORATORY_THRESHOLD = 100.0
 RHAT_EXPLORATORY_THRESHOLD = 1.10
 
@@ -448,15 +449,15 @@ def fit_cosmology_emcee(
         warning = (
             f"Chain min ESS={min_ess:.0f} (publication threshold "
             f"{ESS_PUBLICATION_THRESHOLD:.0f}), max R-hat={max_rhat:.3f}. "
-            "Posterior median and 1-sigma range may be discussed in conversation "
-            "as exploratory, but MUST NOT be cited as a published constraint and "
-            "MUST NOT be added to the bibcode pool."
+            "Posterior summaries remain visible in the structured tool result for "
+            "diagnostics, but MUST NOT be copied into ordinary reply prose, cited "
+            "as a published constraint, or added to the bibcode pool."
         )
         result["__exploratory_warning__"] = warning
         result["__message_to_model__"] = (
             warning
-            + " When reporting numbers, prefix with 'exploratory' and refuse "
-            "phrasings like 'we find H0 =' or 'our constraint is'."
+            + " State that the posterior is withheld and name the missing "
+            "full-likelihood evidence without quoting posterior values."
         )
         result["warnings"] = [warning]
     elif chain_tier == "blocked":

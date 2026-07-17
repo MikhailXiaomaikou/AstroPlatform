@@ -196,6 +196,14 @@ COSMOLOGY_TOOL_SCHEMAS = [
                     "items": {"type": "string"},
                     "description": "Optional explicit dataset keys to list; preserves the requested order.",
                 },
+                "requested_redshift": {
+                    "type": "number",
+                    "description": (
+                        "Optional redshift requested by the user. The result returns "
+                        "coverage_status=within/outside/unknown against each selected "
+                        "dataset's registered measurement range."
+                    ),
+                },
             },
         },
     },
@@ -929,12 +937,24 @@ def _exec_get_cosmology_run_status(
 
 
 def _exec_list_cosmology_datasets(inp: dict) -> dict:
+    import math
+
     from app.services.cosmology_likelihoods import list_cosmology_datasets
 
+    requested_redshift = inp.get("requested_redshift")
+    if isinstance(requested_redshift, bool) or not isinstance(
+        requested_redshift, (int, float)
+    ):
+        requested_redshift = None
+    elif not math.isfinite(float(requested_redshift)):
+        requested_redshift = None
     return list_cosmology_datasets(
         probe=str(inp.get("probe") or "").strip() or None,
         status=str(inp.get("status") or "").strip() or None,
         dataset_keys=inp.get("dataset_keys") if isinstance(inp.get("dataset_keys"), list) else None,
+        requested_redshift=(
+            float(requested_redshift) if requested_redshift is not None else None
+        ),
     )
 
 

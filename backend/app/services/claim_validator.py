@@ -4972,8 +4972,8 @@ def is_empty_turn(tool_results: Any) -> bool:
 
         # EXPLORATORY (2026-05-20): cosmology MCMC chain with ESS/R-hat below
         # publication threshold but above exploratory floor + claimable input.
-        # The posterior may be discussed in chat; this turn is therefore not
-        # an empty turn even when status tokens look concerning.
+        # Its structured diagnostics keep the turn non-empty, while the final
+        # agent-loop boundary separately withholds posterior values from prose.
         exploratory_unblocked = (
             any(tok == "EXPLORATORY" for tok in status_tokens)
             and inner.get("__do_not_claim__") is not True

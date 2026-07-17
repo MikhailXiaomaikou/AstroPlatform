@@ -46,6 +46,12 @@ from app.services.agent_runtime.line_relation import (
     _table_extraction_arxiv_ids,
     _verified_line_relation_seed_candidates,
 )
+from app.services.agent_runtime.honesty import (
+    nonpublication_posterior_refusal,
+    nonpublication_posterior_values,
+    untrusted_evidence_echo_values,
+    untrusted_evidence_refusal,
+)
 from app.services.agent_runtime.prompt_routing import (
     _compact_tool_results_for_evidence,
     _cosmology_dataset_keys_from_prompt,
@@ -66,6 +72,8 @@ from app.services.agent_runtime.runtime_config import (
     _workflow_budget_config,
 )
 from app.services.agent_runtime.summaries import (
+    _cosmology_outside_coverage_disclosure,
+    _cosmology_requested_redshift,
     _cosmology_tool_grounded_summary,
     _enforce_cosmology_dataset_identity,
     _line_fit_partial_from_result,
@@ -135,6 +143,7 @@ def _active_research_focus() -> str:
 _NUMERIC_GATE_FAMILY = frozenset({
     "numeric_claims", "zero_data", "cjk_filter", "fact_verification",
     "empty_reply_fallback", "dataset_identity", "report_export",
+    "untrusted_evidence_echo", "nonpublication_posterior", "dataset_coverage",
 })
 # Gates whose interventions concern citations / literature narrative.
 _CITATION_GATE_FAMILY = frozenset({
@@ -1086,15 +1095,17 @@ async def _run_agent_loop(
             # memory/Python detours. The auto-selected key list is the safe
             # contract for the rest of this turn.
             registry_dataset_keys = _cosmology_dataset_keys_from_prompt(latest_user_text)
+            requested_redshift = _cosmology_requested_redshift(latest_user_text)
+            registry_input: dict[str, Any] = {}
+            if registry_dataset_keys:
+                registry_input["dataset_keys"] = registry_dataset_keys
+            if requested_redshift is not None:
+                registry_input["requested_redshift"] = requested_redshift
             text = ""
             tool_calls_in_turn = [{
                 "id": f"auto_cosmo_registry_{uuid.uuid4().hex}",
                 "name": "list_cosmology_datasets",
-                "input": (
-                    {"dataset_keys": registry_dataset_keys}
-                    if registry_dataset_keys
-                    else {}
-                ),
+                "input": registry_input,
             }]
             forced_tool_call_override = True
             await _emit({
@@ -3126,6 +3137,72 @@ async def _run_agent_loop(
                 )
         except Exception as e:
             logger.debug("Fallback synthesis validation skipped: %s", e)
+
+    # Daily B4/B5 final post-condition.  Negated phrases such as
+    # ``H0 = <value> cannot be confirmed`` are intentionally not positive
+    # claims to the normal validator, but they still repeat the rejected user
+    # number.  Replace the complete reply with a number-free refusal after all
+    # model rewrites, banners, deterministic summaries, and fallbacks.
+    _echo_draft = clean_reply
+    echoed_untrusted_values = untrusted_evidence_echo_values(
+        clean_reply,
+        messages,
+        all_tool_results,
+    )
+    if echoed_untrusted_values:
+        clean_reply = untrusted_evidence_refusal()
+        fabrication_stats["blocked"] = True
+        await _gate_event(
+            "untrusted_evidence_echo",
+            "blocked",
+            reason="user_supplied_number_repeated",
+            details={"value_count": len(echoed_untrusted_values)},
+            draft=_echo_draft,
+            final=clean_reply,
+        )
+
+    # Daily F2 final post-condition.  A successful exploratory runner may keep
+    # its posterior in the structured tool result for diagnostics, but when
+    # publication_ready=false (or __do_not_claim__ is set), those values must
+    # not flow into ordinary final prose even with an "exploratory" caveat.
+    _posterior_draft = clean_reply
+    escaped_posterior_values = nonpublication_posterior_values(
+        clean_reply,
+        all_tool_results,
+    )
+    if escaped_posterior_values:
+        clean_reply = (
+            _cosmology_tool_grounded_summary(all_tool_results, latest_user_text)
+            or nonpublication_posterior_refusal()
+        )
+        fabrication_stats["regenerations"] += 1
+        await _gate_event(
+            "nonpublication_posterior",
+            "downgraded_summary",
+            reason="posterior_values_withheld",
+            details={"value_count": len(escaped_posterior_values)},
+            draft=_posterior_draft,
+            final=clean_reply,
+        )
+
+    # Daily C2 final post-condition.  Structured coverage metadata is the
+    # authority; append its plain-language consequence so a provider cannot
+    # omit the distinction between a measurement and a model extrapolation.
+    coverage_disclosure = _cosmology_outside_coverage_disclosure(
+        all_tool_results,
+        latest_user_text,
+    )
+    if coverage_disclosure and coverage_disclosure not in clean_reply:
+        _coverage_draft = clean_reply
+        clean_reply = clean_reply.rstrip() + "\n\n" + coverage_disclosure
+        fabrication_stats["regenerations"] += 1
+        await _gate_event(
+            "dataset_coverage",
+            "disclosed",
+            reason="outside_registered_coverage",
+            draft=_coverage_draft,
+            final=clean_reply,
+        )
 
     # Final qualitative-science post-condition.  This runs after every model,
     # regeneration, identity correction, deterministic research summary, and

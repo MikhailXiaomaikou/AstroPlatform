@@ -27,7 +27,10 @@ gh workflow run daily.yml --ref main \
     Records the ideal direct route the case was designed around. See
     next section for why we keep this separate.
 - `runner.py` — driver. Reads cases.yaml, calls `app.api.chat`, dumps
-  per-case JSON + `summary.md` into `results_<timestamp>/`.
+  per-case JSON, `summary.md`, and machine-readable `verdicts.json` into
+  `results_<timestamp>/`. Every failed verdict carries one operational owner:
+  `product_defect`, `evaluator_false_positive`, `model_drift`,
+  `external_dependency`, or `ci_infrastructure`.
 
 ## Why `expect_tools_called` is empty for A2 / A3
 

@@ -573,8 +573,9 @@ def _run_sampling_likelihood_chain(
             exploratory_reasons.append("publication gate: " + rendered)
     exploratory_warning = (
         "Exploratory chain (" + "; ".join(exploratory_reasons) + "). "
-        "Posterior median and 1-sigma range may be discussed as exploratory, but MUST "
-        "NOT be cited as a published constraint and MUST NOT be added to the bibcode pool."
+        "Posterior summaries remain visible in the structured tool result for "
+        "diagnostics, but MUST NOT be copied into ordinary reply prose, cited as "
+        "a constraint, or added to the bibcode pool."
         if chain_tier == "exploratory" else None
     )
     # Honest claim scope (2026-06-12): a chain where NO compressed Gaussian
@@ -717,8 +718,8 @@ def _run_sampling_likelihood_chain(
         result["warnings"] = list(result.get("warnings") or []) + [exploratory_warning]
         result["__message_to_model__"] = (
             exploratory_warning
-            + " When reporting numbers, prefix with 'exploratory' and refuse "
-            "phrasings like 'we find H0 =' or 'our constraint is'."
+            + " State that the posterior is withheld and name the missing "
+            "full-likelihood evidence without quoting posterior values."
         )
     elif chain_tier == "blocked":
         result["__do_not_claim__"] = True
