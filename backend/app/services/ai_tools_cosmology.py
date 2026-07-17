@@ -1,6 +1,6 @@
 """Cosmology AI tools — extracted from ai_tools/__init__.py (H1 split, 2026-05-26).
 
-The 13 likelihood / MCMC / robustness tools whose implementations are thin
+The 16 likelihood / MCMC / robustness tools whose implementations are thin
 wrappers over the cosmology_mcmc / cosmology_likelihoods /
 cosmology_data_products / cmb_rotation_likelihoods / nested_sampling /
 chain_diagnostics service modules.
@@ -34,6 +34,7 @@ COSMOLOGY_TOOL_NAMES = frozenset(
         "evaluate_chain_diagnostics",
         "build_cosmology_robustness_matrix",
         "run_cosmology_robustness_matrix",
+        "run_dark_energy_evidence_matrix",
         "assess_bao_bin_anomaly",
         "audit_published_constraint",
         "compute_theory_cmb_spectrum",
@@ -452,6 +453,11 @@ COSMOLOGY_TOOL_SCHEMAS = [
                     "type": "boolean",
                     "description": "Whether to add weak-lensing robustness cells. Default: false unless the user asks for WL/cosmic shear.",
                 },
+                "bao_dataset_key": {
+                    "type": "string",
+                    "enum": ["desi_dr1_bao", "desi_dr2_bao"],
+                    "description": "BAO release used by every matrix cell. Default: desi_dr1_bao for backward compatibility.",
+                },
                 "sampler": {
                     "type": "string",
                     "description": "Sampler label for generated configs. Default: mcmc.",
@@ -493,8 +499,47 @@ COSMOLOGY_TOOL_SCHEMAS = [
                     "type": "boolean",
                     "description": "Whether to add weak-lensing robustness cells. Default: false unless the user asks for WL/cosmic shear.",
                 },
+                "bao_dataset_key": {
+                    "type": "string",
+                    "enum": ["desi_dr1_bao", "desi_dr2_bao"],
+                    "description": "BAO release used by every matrix cell. Default: desi_dr1_bao for backward compatibility.",
+                },
                 "random_seed": {"type": "integer", "description": "Deterministic sample seed."},
                 "n_samples": {"type": "integer", "description": "Posterior sample count per runnable cell."},
+            },
+            "required": ["model"],
+        },
+    },
+    {
+        "name": "run_dark_energy_evidence_matrix",
+        "description": (
+            "Read byte-pinned official DESI DR2+CMB+SN posterior chains from an "
+            "operator-provided local mirror and compare Pantheon+, Union3, and "
+            "DES-SN5YR cells without treating the chains as likelihoods. The "
+            "tool never downloads data, fails closed when an artifact is absent "
+            "or modified, and withholds numerical tension significance because "
+            "the cells share DESI/CMB observations and no cross-covariance is registered."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "model": {
+                    "type": "string",
+                    "enum": ["lcdm", "wcdm", "w0wa_cdm"],
+                    "description": "Model family. The frozen v1 official-chain registry currently contains only w0wa_cdm headline combinations; other models fail closed.",
+                },
+                "supernova_sets": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["pantheon_plus", "union3", "des_sn5yr"],
+                    },
+                    "description": "Official DESI SN combination tokens. Default: all three headline sets.",
+                },
+                "include_desi_dr1_reference": {
+                    "type": "boolean",
+                    "description": "Add separate config-only DR1 reference cells. DR1 and DR2 are never combined in one likelihood. Default: false.",
+                },
             },
             "required": ["model"],
         },
@@ -1073,6 +1118,7 @@ def _exec_build_cosmology_robustness_matrix(inp: dict) -> dict:
             supernova_sets=([str(key) for key in supernova_sets] if supernova_sets else None),
             include_h0_prior=bool(inp.get("include_h0_prior", True)),
             include_weak_lensing=bool(inp.get("include_weak_lensing", False)),
+            bao_dataset_key=str(inp.get("bao_dataset_key") or "desi_dr1_bao"),
             sampler=str(inp.get("sampler") or "mcmc"),
         )
     except Exception as exc:
@@ -1098,6 +1144,7 @@ def _exec_run_cosmology_robustness_matrix(inp: dict) -> dict:
             supernova_sets=([str(key) for key in supernova_sets] if supernova_sets else None),
             include_h0_prior=bool(inp.get("include_h0_prior", True)),
             include_weak_lensing=bool(inp.get("include_weak_lensing", False)),
+            bao_dataset_key=str(inp.get("bao_dataset_key") or "desi_dr1_bao"),
             random_seed=int(inp["random_seed"]) if inp.get("random_seed") is not None else None,
             n_samples=int(inp.get("n_samples") or 4000),
         )
@@ -1112,6 +1159,40 @@ def _exec_run_cosmology_robustness_matrix(inp: dict) -> dict:
             "__message_to_model__": (
                 "Compressed cosmology robustness execution failed. Do not quote "
                 "robustness, posterior shifts, AIC/BIC, or tension claims."
+            ),
+        }
+
+
+def _exec_run_dark_energy_evidence_matrix(inp: dict) -> dict:
+    from app.services.cosmology_likelihoods import run_dark_energy_evidence_matrix
+
+    try:
+        supernova_sets = inp.get("supernova_sets")
+        if supernova_sets is not None and not isinstance(supernova_sets, list):
+            raise ValueError("supernova_sets must be a list")
+        return run_dark_energy_evidence_matrix(
+            model=str(inp.get("model") or ""),
+            supernova_sets=(
+                [str(key) for key in supernova_sets]
+                if supernova_sets
+                else None
+            ),
+            include_desi_dr1_reference=bool(
+                inp.get("include_desi_dr1_reference", False)
+            ),
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "publication_ready": False,
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "__do_not_claim__": True,
+            "__message_to_model__": (
+                "Official DESI DR2 evidence-matrix validation failed. Do not "
+                "quote posterior intervals or tension significance."
             ),
         }
 
@@ -1225,6 +1306,10 @@ async def dispatch_cosmology(
         # Off the event loop: runs a sampler per matrix cell (~11 s/cell), so a
         # multi-cell matrix blocks for ~1 min. See run_cosmology_likelihood_chain.
         return await asyncio.to_thread(_exec_run_cosmology_robustness_matrix, tool_input)
+    elif tool_name == "run_dark_energy_evidence_matrix":
+        # Reading and hashing a local official-chain mirror can be substantial;
+        # keep file I/O and weighted summaries off the async event loop.
+        return await asyncio.to_thread(_exec_run_dark_energy_evidence_matrix, tool_input)
     elif tool_name == "assess_bao_bin_anomaly":
         return _exec_assess_bao_bin_anomaly(tool_input)
     elif tool_name == "audit_published_constraint":

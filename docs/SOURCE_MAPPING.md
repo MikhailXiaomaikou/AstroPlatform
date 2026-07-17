@@ -100,6 +100,43 @@ explicitly preliminary. Overlapping samples
 declare reciprocal `do_not_combine_with` pairs (DESI vs SDSS/eBOSS BAO,
 the SN compilations among themselves); violating combinations block.
 
+### DESI DR2 official posterior-combination registry
+
+The DR2 BAO mean/covariance likelihood files remain ordinary dataset entries.
+Their CobayaSampler URLs are pinned to immutable commit
+`b7b8a36e9bccb063081f811f323cada21ab5fbdd`; the vendored mean and covariance
+SHA-256 digests are respectively
+`9ac154ab583ce759c0f7eef3c978c7c70a6ead2d18774caceadf1a350a640585` and
+`252a143274c8a07c78694c119617d36594f6d7965d00319ca611c6ffb886e509`.
+
+The official DESI DR2 model + BAO + CMB + SN chains are a separate
+**analysis-combination registry**, because a posterior chain is not a reusable
+likelihood factor. The first frozen registry version contains the three
+headline `base_w_wa` combinations with uncalibrated Pantheon+, Union3, and
+DES-SN5YR. Every config, checkpoint and four-part chain is pinned to the DESI
+v1.0 manifest at
+`https://data.desi.lbl.gov/public/papers/y3/bao-cosmo-params/`; the manifest
+itself is pinned as
+`df78872aa8b2d3473a9e8de78f498180efd7cbcbeb18211ce4787fac52067ee5`.
+The registry audit checks artifact roles, hashes, parameter mappings and the
+Pantheon+ calibration warning.
+
+`run_dark_energy_evidence_matrix` never downloads these roughly 245 MiB of
+chains. An operator must provide a complete local mirror through
+`DESI_DR2_OFFICIAL_CHAIN_ROOT`. Missing files, checksum changes, invalid
+weights, mismatched headers, failed checkpoint convergence or insufficient
+weight ESS produce `WITHHELD` cells with no intervals. The official
+`pantheonplus` component is explicitly not the platform's SH0ES-calibrated
+`pantheon_plus` entry, and the official Planck/NPIPE/ACT CMB stack is not the
+platform's `planck2018_compressed` record.
+
+The three headline combinations share DESI and CMB observations. Until a
+byte-pinned cross-covariance or paired-resampling product is registered, the
+Tension Lab reports centers, interval widths and empirical 2D display grids,
+and returns
+`correlated_tension_withheld` with `tension_sigma=null`. Optional DR1 reference
+cells are config-only and remain separate; no cell ever mixes DR1 and DR2.
+
 ### DESI `w0wa` exact offline profile
 
 The preregistered DESI 2024 VI interval-reproduction workflow is separate from

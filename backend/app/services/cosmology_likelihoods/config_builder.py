@@ -80,28 +80,30 @@ def build_likelihood_config(
 def build_robustness_matrix(
     *,
     model: str,
+    bao_dataset_key: str = "desi_dr1_bao",
     supernova_sets: list[str] | None = None,
     include_h0_prior: bool = True,
     include_weak_lensing: bool = False,
     sampler: str = "mcmc",
 ) -> dict[str, Any]:
     model_key = _validate_model(model)
+    bao_key = _validate_robustness_bao_dataset_key(bao_dataset_key)
     sn_keys = list(supernova_sets) if supernova_sets is not None else ["pantheon_plus"]
     if not sn_keys:
         sn_keys = ["pantheon_plus"]
     matrix: list[dict[str, Any]] = []
 
     base_combos: list[tuple[str, list[str]]] = [
-        ("BAO only", ["desi_dr1_bao"]),
+        ("BAO only", [bao_key]),
         ("SN only", [sn_keys[0]]),
         ("CMB only", ["planck2018_compressed"]),
-        ("BAO + CMB", ["desi_dr1_bao", "planck2018_compressed"]),
+        ("BAO + CMB", [bao_key, "planck2018_compressed"]),
     ]
     if include_weak_lensing:
         base_combos.append((
             "BAO + CMB + weak lensing",
             [
-                "desi_dr1_bao",
+                bao_key,
                 "planck2018_compressed",
                 "kids1000_wl",
                 "des_y3_3x2pt",
@@ -112,10 +114,10 @@ def build_robustness_matrix(
         label = get_cosmology_dataset(sn_key).display_name
         if sn_key != sn_keys[0]:
             base_combos.append((f"{label} only", [sn_key]))
-        base_combos.append((f"BAO + {label}", ["desi_dr1_bao", sn_key]))
+        base_combos.append((f"BAO + {label}", [bao_key, sn_key]))
         base_combos.append((f"{label} + CMB", [sn_key, "planck2018_compressed"]))
         base_combos.append(
-            (f"BAO + {label} + CMB", ["desi_dr1_bao", sn_key, "planck2018_compressed"])
+            (f"BAO + {label} + CMB", [bao_key, sn_key, "planck2018_compressed"])
         )
 
     for label, keys in base_combos:
@@ -152,6 +154,7 @@ def build_robustness_matrix(
         "publication_ready": False,
         "__do_not_claim__": True,
         "model": model_key,
+        "bao_dataset_key": bao_key,
         "matrix_size": len(matrix),
         "matrix": matrix,
         "__message_to_model__": (
@@ -160,6 +163,16 @@ def build_robustness_matrix(
             "request publication-ready chains before making scientific claims."
         ),
     }
+
+
+def _validate_robustness_bao_dataset_key(value: str) -> str:
+    key = str(value or "").strip().lower()
+    allowed = {"desi_dr1_bao", "desi_dr2_bao"}
+    if key not in allowed:
+        raise ValueError(
+            "bao_dataset_key must be 'desi_dr1_bao' or 'desi_dr2_bao'"
+        )
+    return key
 
 
 def _validate_model(model: str) -> str:

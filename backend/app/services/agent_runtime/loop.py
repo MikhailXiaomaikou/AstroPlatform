@@ -528,6 +528,7 @@ async def _run_agent_loop(
             tr.get("tool") in {
                 "run_cosmology_likelihood_chain",
                 "run_cosmology_robustness_matrix",
+                "run_dark_energy_evidence_matrix",
             }
             for tr in all_tool_results
         )
@@ -697,6 +698,7 @@ async def _run_agent_loop(
                 if t.get("name") in {
                     "run_cosmology_likelihood_chain",
                     "run_cosmology_robustness_matrix",
+                    "run_dark_energy_evidence_matrix",
                 }
             ]
         elif cosmology_likelihood_workflow and cosmology_likelihood_config_done:

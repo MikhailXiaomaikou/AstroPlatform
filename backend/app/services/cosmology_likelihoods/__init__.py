@@ -78,7 +78,31 @@ from app.services.cosmology_likelihoods.config_builder import (
     _combination_warnings,  # noqa: F401
     _selection_warnings,  # noqa: F401
     _collect_citations,  # noqa: F401
+    _validate_robustness_bao_dataset_key,  # noqa: F401
     _config_hash,  # noqa: F401
+)
+
+from app.services.cosmology_likelihoods.analysis_registry import (
+    DESI_DR2_ANALYSIS_REGISTRY_VERSION,  # noqa: F401
+    DESI_DR2_CHAIN_RELEASE_VERSION,  # noqa: F401
+    DESI_DR2_CHAIN_ROOT_URL,  # noqa: F401
+    DESI_DR2_CHAIN_LANDING_URL,  # noqa: F401
+    DESI_DR2_CHAIN_MANIFEST_URL,  # noqa: F401
+    DESI_DR2_CHAIN_MANIFEST_SHA256,  # noqa: F401
+    DESI_DR2_CHAIN_CACHE_ENV,  # noqa: F401
+    OfficialChainArtifact,  # noqa: F401
+    CosmologyAnalysisEntry,  # noqa: F401
+    OfficialChainValidationError,  # noqa: F401
+    _ANALYSIS_REGISTRY,  # noqa: F401
+    list_cosmology_analyses,  # noqa: F401
+    get_cosmology_analysis,  # noqa: F401
+    summarize_official_analysis,  # noqa: F401
+    audit_cosmology_analysis_registry,  # noqa: F401
+)
+
+from app.services.cosmology_likelihoods.dark_energy_matrix import (
+    build_overlap_safe_tension_summaries,  # noqa: F401
+    run_dark_energy_evidence_matrix,  # noqa: F401
 )
 
 from app.services.cosmology_likelihoods.data_io import (
@@ -287,6 +311,8 @@ _NAMESPACE_MODULES = tuple(
         "core",
         "registry",
         "config_builder",
+        "analysis_registry",
+        "dark_energy_matrix",
         "data_io",
         "distances",
         "growth",

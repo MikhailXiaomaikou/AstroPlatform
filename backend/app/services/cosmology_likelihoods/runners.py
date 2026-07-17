@@ -30,6 +30,7 @@ from app.services.cosmology_likelihoods.config_builder import (
     _collect_citations,
     _combination_warnings,
     _config_hash,
+    _validate_robustness_bao_dataset_key,
     _validate_dataset_selection,
     _validate_model,
 )
@@ -922,6 +923,7 @@ def run_likelihood_chain(
 def run_robustness_matrix(
     *,
     model: str,
+    bao_dataset_key: str = "desi_dr1_bao",
     supernova_sets: list[str] | None = None,
     include_h0_prior: bool = True,
     include_weak_lensing: bool = False,
@@ -929,20 +931,21 @@ def run_robustness_matrix(
     n_samples: int = 4000,
 ) -> dict[str, Any]:
     model_key = _validate_model(model)
+    bao_key = _validate_robustness_bao_dataset_key(bao_dataset_key)
     sn_keys = list(supernova_sets) if supernova_sets is not None else ["pantheon_plus"]
     if not sn_keys:
         sn_keys = ["pantheon_plus"]
     combos: list[tuple[str, list[str]]] = [
-        ("BAO only", ["desi_dr1_bao"]),
+        ("BAO only", [bao_key]),
         ("SN only", [sn_keys[0]]),
         ("CMB only", ["planck2018_compressed"]),
-        ("BAO + CMB", ["desi_dr1_bao", "planck2018_compressed"]),
+        ("BAO + CMB", [bao_key, "planck2018_compressed"]),
     ]
     if include_weak_lensing:
         combos.append((
             "BAO + CMB + weak lensing",
             [
-                "desi_dr1_bao",
+                bao_key,
                 "planck2018_compressed",
                 "kids1000_wl",
                 "des_y3_3x2pt",
@@ -953,9 +956,9 @@ def run_robustness_matrix(
         label = get_cosmology_dataset(sn_key).display_name
         if sn_key != sn_keys[0]:
             combos.append((f"{label} only", [sn_key]))
-        combos.append((f"BAO + {label}", ["desi_dr1_bao", sn_key]))
+        combos.append((f"BAO + {label}", [bao_key, sn_key]))
         combos.append((f"{label} + CMB", [sn_key, "planck2018_compressed"]))
-        combos.append((f"BAO + {label} + CMB", ["desi_dr1_bao", sn_key, "planck2018_compressed"]))
+        combos.append((f"BAO + {label} + CMB", [bao_key, sn_key, "planck2018_compressed"]))
     if include_h0_prior:
         combos.extend([
             (label + " + SH0ES H0", keys + ["shoes_h0_riess22"])
@@ -1066,6 +1069,7 @@ def run_robustness_matrix(
         "__do_not_claim__": True,
         "claim_scope": "robustness_matrix_diagnostic",
         "model": model_key,
+        "bao_dataset_key": bao_key,
         "matrix_size": len(matrix),
         "ready_cells": len(ready_cells),
         "include_weak_lensing": bool(include_weak_lensing),

@@ -1588,6 +1588,47 @@ def _should_build_cosmology_robustness_matrix(text: str) -> bool:
     return len(sn_sets) >= 2 and any(tok in prompt for tok in robustness_tokens)
 
 
+def _cosmology_bao_dataset_key_from_prompt(text: str) -> str:
+    """Choose a BAO release only when the user names it explicitly.
+
+    DR1 remains the compatibility default. A bare "DESI" must not silently
+    opt an existing workflow into DR2.
+    """
+
+    prompt = str(text or "").lower()
+    if re.search(
+        r"(?<![a-z0-9])desi[\s_-]*(?:bao[\s_-]*)?dr[\s_-]*2(?![a-z0-9])",
+        prompt,
+    ):
+        return "desi_dr2_bao"
+    return "desi_dr1_bao"
+
+
+def _should_run_dark_energy_evidence_matrix(text: str) -> bool:
+    prompt = str(text or "").lower()
+    if _cosmology_bao_dataset_key_from_prompt(prompt) != "desi_dr2_bao":
+        return False
+    if len(_cosmology_supernova_sets_from_prompt(prompt)) < 2:
+        return False
+    matrix_tokens = (
+        "evidence matrix",
+        "robustness matrix",
+        "tension lab",
+        "chain matrix",
+        "证据矩阵",
+        "鲁棒性矩阵",
+        "张力实验室",
+    )
+    comparison_tokens = ("compare", "comparison", "比较", "对比")
+    return any(token in prompt for token in matrix_tokens) or (
+        any(token in prompt for token in comparison_tokens)
+        and any(
+            token in prompt
+            for token in ("w0wa", "cpl", "dark energy", "dark-energy", "暗能量")
+        )
+    )
+
+
 def _dataset_keys_named_after(
     text: str,
     start: int,
@@ -1948,6 +1989,7 @@ def _cosmology_likelihood_build_calls_from_prompt(text: str) -> list[dict[str, A
                     "include_h0_prior": "sh0es" in str(text or "").lower()
                     or "h0 prior" in str(text or "").lower()
                     or "h₀ prior" in str(text or "").lower(),
+                    "bao_dataset_key": _cosmology_bao_dataset_key_from_prompt(text),
                 },
             }
             for model in models
@@ -1988,6 +2030,42 @@ def _cosmology_direct_route_from_prompt(text: str) -> list[dict[str, Any]] | Non
     t = raw.lower()
     if not t:
         return None
+
+    if _should_run_dark_energy_evidence_matrix(raw):
+        explicit_models = []
+        if _prompt_term_last_intent(
+            t,
+            r"(?<![a-z0-9])(?:w0wa(?:[\s_-]*cdm)?|cpl)(?![a-z0-9])",
+        ):
+            explicit_models.append("w0wa_cdm")
+        if _prompt_term_last_intent(
+            t,
+            r"(?<![a-z0-9])wcdm(?![a-z0-9])",
+        ):
+            explicit_models.append("wcdm")
+        if _prompt_term_last_intent(
+            t,
+            r"(?<![a-z0-9])(?:lcdm|λcdm)(?![a-z0-9])",
+        ):
+            explicit_models.append("lcdm")
+        # The registered headline DR2 matrix is base_w_wa. Defaulting this
+        # dedicated route to LCDM would silently select a known capability gap.
+        model = explicit_models[0] if explicit_models else "w0wa_cdm"
+        wants_dr1_reference = (
+            bool(re.search(r"(?<![a-z0-9])dr[\s_-]*1(?![a-z0-9])", t))
+            and any(token in t for token in ("reference", "compare", "comparison", "参考", "对比"))
+        )
+        return [
+            {
+                "id": f"direct_route_{uuid.uuid4().hex}",
+                "name": "run_dark_energy_evidence_matrix",
+                "input": {
+                    "model": model,
+                    "supernova_sets": _cosmology_supernova_sets_from_prompt(raw),
+                    "include_desi_dr1_reference": wants_dr1_reference,
+                },
+            }
+        ]
 
     # Only phrases whose comparison target is unequivocally SH0ES. Vague
     # triggers ("compare cosmologies", "delta h0", "luminosity-distance
@@ -2103,6 +2181,7 @@ def _cosmology_likelihood_run_calls_from_prompt(text: str) -> list[dict[str, Any
                     "include_h0_prior": "sh0es" in str(text or "").lower()
                     or "h0 prior" in str(text or "").lower()
                     or "h₀ prior" in str(text or "").lower(),
+                    "bao_dataset_key": _cosmology_bao_dataset_key_from_prompt(text),
                 },
             }
             for model in run_models
