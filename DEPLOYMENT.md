@@ -72,6 +72,8 @@ DATABASE_URL=postgresql://...          # Render internal DB URL; backend convert
 JWT_SECRET=<random-hex-32>
 FERNET_KEY=<random-secret-stored-outside-the-database>
 DELETION_TOMBSTONE_KEY=<stable-hmac-secret-stored-outside-the-database>
+DELETION_TOMBSTONE_KEY_ID=deletion-prod-v1
+DELETION_TOMBSTONE_VERIFICATION_KEYS={}
 EVIDENCE_SIGNING_KEY=<independent-random-secret-at-least-32-bytes>
 EVIDENCE_SIGNING_KEY_ID=evidence-prod-v1
 # JSON map of retired key ids to secrets; normally empty until a rotation:
@@ -83,6 +85,10 @@ SIGNUP_MODE=invite_only               # hosted alpha; local dev may use public
 CLAIM_AUDIT_ENABLED=false             # dark until P0/P1 release gates pass
 CLAIM_AUDIT_EXECUTION_MODE=celery
 CLAIM_AUDIT_REGISTERED_TIMEOUT_SECONDS=1800
+CLAIM_AUDIT_WORKER_LEASE_SECONDS=120  # redelivery takeover window
+CLAIM_AUDIT_HEARTBEAT_SECONDS=30      # must stay below half the lease
+CLAIM_AUDIT_MAX_ACTIVE_PER_USER=2    # durable per-account queued/running cap
+ARTIFACT_CLEANUP_GRACE_SECONDS=86400 # commit-ACK/orphan safety window
 PRODUCT_ANALYTICS_RETENTION_DAYS=30
 PRIVACY_OPERATOR_NAME=<real-operator-name>
 PRIVACY_CONTACT=<monitored-privacy-contact>
@@ -99,6 +105,17 @@ STORAGE_REQUIRE_INTEGRITY=true          # fail closed if SHA-256 metadata is mis
 PORT=8000
 ```
 
+The S3/R2 credential is also part of the account-deletion boundary. In
+addition to ordinary read/write access, it must be able to inspect bucket
+versioning, enumerate exact-key versions, and delete both versions and delete
+markers. For AWS IAM this means bucket-level `s3:GetBucketVersioning` and
+`s3:ListBucketVersions`, plus object-level `s3:GetObject`, `s3:PutObject`,
+`s3:DeleteObject`, and `s3:DeleteObjectVersion` on the configured bucket/prefix
+(use the equivalent permissions for R2/MinIO). Object Lock, MFA Delete, or a
+provider policy that prevents version deletion makes the deletion gate fail
+closed. Prove these permissions with a disposable versioned object before
+traffic; a normal current-version delete is not sufficient.
+
 These are **target settings**, not evidence that the current hosted services
 already run this release. Keep `CLAIM_AUDIT_ENABLED=false` through migration,
 restore testing, the P0 observation window, and the required Daily stability
@@ -112,26 +129,37 @@ an invitation permits account creation but does not permit use of an
 operator-funded model key.
 
 Product analytics are opt-in per account. The event collector accepts only
-scrubbed product metadata and Celery Beat schedules a daily purge using
+scrubbed product metadata and Celery Beat schedules an hourly purge using
 `PRODUCT_ANALYTICS_RETENTION_DAYS=30`. Monitor both Beat and the purge task;
 setting an environment variable does not prove that expired rows were deleted.
 Claim text, prompts, paper titles, URL/DOI identifiers, tool arguments, raw
 errors, and scientific values are forbidden from analytics. See
 [`PRIVACY.md`](./PRIVACY.md) for the bilingual user-facing framework.
 
-Account deletion writes a signed external tombstone before disabling the
-account and dispatching asynchronous erasure. `DELETION_TOMBSTONE_KEY` must be
-the same on every process that checks or executes deletion and must survive a
-database restore. If it is left unset, the application uses `FERNET_KEY` for
-backwards compatibility; a separately escrowed key is clearer for rotation.
+Tool, pipeline, and large research-job uploads first create a durable
+`artifact_cleanup_queue` discovery row. The owner/reference ledger and removal
+of that row commit together; a five-minute Beat task only removes an unclaimed
+object after `ARTIFACT_CLEANUP_GRACE_SECONDS` and rechecks every trusted
+reference first. Keep the default 24-hour window unless the longest measured
+upload plus database-recovery window proves a different value safe. Monitor
+queue age, retries, and `last_error_class`; do not manually clear rows merely
+to make the queue look healthy.
+
+Account deletion writes a signed external tombstone at a stable, key-independent
+object path before disabling the account and dispatching asynchronous erasure.
+`DELETION_TOMBSTONE_KEY` and its id must be the same on every process and must
+survive a database restore. Before rotation, move the retired id/secret into
+`DELETION_TOMBSTONE_VERIFICATION_KEYS`; never remove a retired key while a
+legacy v1 tombstone or restorable backup may still depend on it. Production
+startup fails when the current key or key id is absent.
 The returned 30-day `backup_expiry` is a retention target, not a cloud backup
 control. Configure and test database snapshot and object-version expiry at the
 provider, and retain each external tombstone until no older backup can restore
 that account.
 
-The three `PRIVACY_*` values must describe the real instance. Application
-startup requires them when Claim Audit is enabled in production, but that
-validation is not legal review. Publish actual subprocessors, infrastructure
+The three `PRIVACY_*` values must describe the real instance. Every production
+process requires them at startup, regardless of the Claim Audit feature flag,
+and `/privacy` publishes them to users. That validation is not legal review. Publish actual subprocessors, infrastructure
 log retention, backup retention, and user-request procedures separately.
 
 `EVIDENCE_SIGNING_KEY` is deliberately independent from `JWT_SECRET` and is
@@ -310,6 +338,12 @@ The scripts never include JWT, Fernet, API, or database credentials. RPO/RTO,
 explicit restore confirmation, secret-key recovery, quarterly drills, and the
 full incident procedure are defined in
 [`docs/OPERATIONS_RUNBOOK.md`](./docs/OPERATIONS_RUNBOOK.md).
+
+Versioning is for recovery, not an excuse to retain a deleted account. The
+provider lifecycle must preserve ordinary recovery versions for the published
+backup window while the deletion worker retains permission to erase every
+version of an account-owned key immediately. Record and test both rules; a
+bucket lifecycle screenshot alone does not prove account erasure.
 
 ## Research module focus
 

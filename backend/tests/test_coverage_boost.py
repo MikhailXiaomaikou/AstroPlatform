@@ -897,7 +897,8 @@ class TestPipelineEngine:
 
         key = _build_node_cache_key("Denoise", {"sigma": 3}, [], {})
         assert key is not None
-        assert key.startswith("pipeline_node:Denoise:")
+        assert key.startswith("pipeline_node:")
+        assert ":Denoise:" in key
 
     def test_build_node_cache_key_with_parents(self):
         from app.pipeline.engine import _build_node_cache_key

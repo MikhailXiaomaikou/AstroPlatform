@@ -168,6 +168,52 @@ describe("Auth helper functions", () => {
     expect(localStorageMock.removeItem).toHaveBeenCalledWith("astro_token");
   });
 
+  it("isolates analytics consent and tracking sessions between browser accounts", async () => {
+    const {
+      activateBrowserUser,
+      default: api,
+      getPrivacyPreferences,
+      isBrowserAnalyticsEnabled,
+    } = await import("../api/client");
+
+    activateBrowserUser("user-a");
+    sessionStorage.setItem("astro_tracking_session_id", "session-a");
+    let resolveUserA: ((value: { data: { analytics_enabled: boolean; consented_at: null; retention_days: number; research_records_retained_until_user_deletion: boolean } }) => void) | undefined;
+    const userAResponse = new Promise<{ data: { analytics_enabled: boolean; consented_at: null; retention_days: number; research_records_retained_until_user_deletion: boolean } }>((resolve) => {
+      resolveUserA = resolve;
+    });
+    const getSpy = vi.spyOn(api, "get").mockReturnValueOnce(userAResponse);
+    const staleRequest = getPrivacyPreferences();
+
+    activateBrowserUser("user-b");
+    expect(sessionStorage.getItem("astro_tracking_session_id")).toBeNull();
+    resolveUserA?.({
+      data: {
+        analytics_enabled: true,
+        consented_at: null,
+        retention_days: 30,
+        research_records_retained_until_user_deletion: true,
+      },
+    });
+    await staleRequest;
+
+    expect(isBrowserAnalyticsEnabled()).toBe(false);
+    expect(store["astro_analytics_enabled:user-b"]).toBeUndefined();
+
+    getSpy.mockResolvedValueOnce({
+      data: {
+        analytics_enabled: true,
+        consented_at: null,
+        retention_days: 30,
+        research_records_retained_until_user_deletion: true,
+      },
+    });
+    await getPrivacyPreferences();
+    expect(isBrowserAnalyticsEnabled()).toBe(true);
+    expect(store["astro_analytics_enabled:user-b"]).toBe("1");
+    getSpy.mockRestore();
+  });
+
   it("register stores token in localStorage", async () => {
     const { default: api, register } = await import("../api/client");
 

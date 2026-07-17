@@ -11,7 +11,13 @@ app.services.ai_tools.
 import os
 from typing import Any
 
-from app.services.ai_tools import _session_cache_key, get_cached_results, logger
+from app.services.ai_tools import (
+    _resolved_session_cache_key,
+    _session_cache_key,
+    get_session_cached_results,
+    logger,
+    store_session_results,
+)
 from app.services.ai_tools.literature import _arxiv_id_from_table_input
 
 TOOL_SCHEMAS = [
@@ -197,25 +203,10 @@ def _measurement_rows_from_cache_payload(payload: Any) -> list[dict[str, Any]]:
 
 def _resolve_literature_measurement_cache(cache_key: str, python_session_id: str | None) -> tuple[list[dict[str, Any]], str]:
     requested = (cache_key or "latest_literature_tables").strip() or "latest_literature_tables"
-    candidates = [requested]
-    session_key = _session_cache_key(requested, python_session_id)
-    if session_key:
-        candidates.insert(0, session_key)
-    if requested == "latest_literature_tables":
-        session_default = _session_cache_key("latest_literature_tables", python_session_id)
-        if session_default:
-            candidates.insert(0, session_default)
-
-    seen: set[str] = set()
-    for candidate in candidates:
-        if not candidate or candidate in seen:
-            continue
-        seen.add(candidate)
-        payload = get_cached_results(candidate)
-        rows = _measurement_rows_from_cache_payload(payload)
-        if rows:
-            return rows, candidate
-    return [], requested
+    resolved = _resolved_session_cache_key(requested, python_session_id)
+    payload = get_session_cached_results(requested, python_session_id)
+    rows = _measurement_rows_from_cache_payload(payload)
+    return (rows, resolved) if rows else ([], resolved)
 
 
 def _resolve_multiple_literature_caches(
@@ -412,7 +403,7 @@ async def _exec_extract_literature_tables(
     """
     # Lazy package import: tests monkeypatch these names on app.services.ai_tools;
     # resolving at call time preserves pre-split behavior (module globals == package namespace).
-    from app.services.ai_tools import _cached_extract_arxiv_tables_payload, store_search_results
+    from app.services.ai_tools import _cached_extract_arxiv_tables_payload
     from app.api.arxiv import extract_arxiv_tables_payload  # noqa: F401  (kept for callers)
 
     # Prefer the real chat session id, but fall back to the Python/session
@@ -495,23 +486,22 @@ async def _exec_extract_literature_tables(
     raw_cache_key = _session_cache_key(raw_cache_key_base, python_session_id) or raw_cache_key_base
     cache_key = latest_cache_key if line_measurements else raw_cache_key
     cache_value = _literature_table_cache_payload(payload, cache_key)
-    store_search_results(cache_key, cache_value)
-    if line_measurements:
-        # Only fit-ready extractions update the session's latest measurement
-        # cache.  A later raw-only / zero-measurement extraction must not wipe
-        # a previously successful ALPINE/REBELS/etc. cache; otherwise the next
-        # fit_line_lfr(default latest_literature_tables) sees an empty sample.
-        if cache_key != "latest_literature_tables":
-            store_search_results("latest_literature_tables", cache_value)
-    else:
-        existing_latest = get_cached_results(latest_cache_key)
-        if not existing_latest and latest_cache_key != "latest_literature_tables":
-            existing_latest = get_cached_results("latest_literature_tables")
+    store_session_results(
+        "latest_literature_tables" if line_measurements else raw_cache_key_base,
+        python_session_id,
+        cache_value,
+    )
+    if not line_measurements:
+        # A raw-only extraction must not wipe an earlier fit-ready cache in this
+        # session, and it must never inspect another session's global fallback.
+        existing_latest = get_session_cached_results(
+            "latest_literature_tables", python_session_id
+        )
         if not existing_latest:
             # No fit-ready cache exists yet; keeping a latest raw cache preserves
             # old UX for "extract then inspect raw tables" while still preventing
             # zero-row overwrites after a successful extraction.
-            store_search_results(latest_cache_key, cache_value)
+            store_session_results("latest_literature_tables", python_session_id, cache_value)
 
     bibcodes = [
         str(row.get("bibcode") or "").strip()

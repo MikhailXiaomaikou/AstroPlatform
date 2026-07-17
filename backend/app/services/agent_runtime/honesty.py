@@ -17,8 +17,8 @@ from typing import Any
 
 
 _NUMBER_RE = re.compile(
-    r"(?<![A-Za-z0-9_.])[-+]?(?:\d+(?:\.\d*)?|\.\d+)"
-    r"(?:[eE][-+]?\d+)?(?![A-Za-z0-9_.])"
+    r"(?<![A-Za-z0-9_.])[-+]?(?:\d+\.\d+|\d+|\.\d+)"
+    r"(?:[eE][-+]?\d+)?(?![A-Za-z0-9_]|\.\d)"
 )
 _UNTRUSTED_EVIDENCE_RE = re.compile(
     r"(?:tool_results?|tool\s+transcript|previous[- ]looking|"
@@ -47,9 +47,17 @@ _DIRECT_PARAMETER_RE = re.compile(
 
 _POSTERIOR_KEYS = frozenset({
     "parameters",
+    "parameter_intervals",
     "posterior_summary",
+    "posterior_intervals",
+    "credible_intervals",
+    "marginalized_constraints",
+    "parameter_constraints",
     "derived_params",
+    "derived_parameters",
     "pairwise_tensions",
+    "tension_lab",
+    "two_dimensional_contours",
 })
 
 

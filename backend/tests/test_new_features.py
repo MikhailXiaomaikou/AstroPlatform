@@ -215,10 +215,10 @@ print("ok")
 
     def test_adql_accessor_prefers_session_specific_cache(self):
         from app.services.code_executor import execute_python
-        from app.services.ai_tools import store_search_results
+        from app.services.ai_tools import store_search_results, store_session_results
 
         store_search_results("latest_adql", [{"value": "global"}])
-        store_search_results("latest_adql:session-1", [{"value": "session"}])
+        store_session_results("latest_adql", "session-1", [{"value": "session"}])
 
         r = execute_python("rows = get_adql_results(); print(rows[0]['value'])", session_id="session-1")
         assert r.success
@@ -226,9 +226,9 @@ print("ok")
 
     def test_generic_cached_results_accessor_is_exposed(self):
         from app.services.code_executor import execute_python
-        from app.services.ai_tools import store_search_results
+        from app.services.ai_tools import store_session_results
 
-        store_search_results("latest_adql:session-cache", [{"value": "session"}])
+        store_session_results("latest_adql", "session-cache", [{"value": "session"}])
 
         r = execute_python(
             "rows = get_cached_results('latest_adql')\n"
@@ -278,13 +278,17 @@ print("ok")
         from app.services import code_executor
 
         monkeypatch.setattr(ai_tools, "_search_result_cache", {}, raising=False)
+        monkeypatch.setattr(ai_tools, "_search_result_cache_owners", {}, raising=False)
         ai_tools.store_search_results("latest", [{"name": "global"}])
-        ai_tools.store_search_results("latest_adql:dispatch-session", [{"value": "session"}])
+        ai_tools.store_session_results(
+            "latest_adql", "dispatch-session", [{"value": "session"}]
+        )
         ai_tools._search_result_cache["bad:dispatch-session"] = (lambda value: value, time.time())
+        ai_tools._search_result_cache_owners["bad:dispatch-session"] = "dispatch-session"
 
         context = code_executor._collect_subprocess_cache_context("dispatch-session")
 
-        assert context["latest"] == [{"name": "global"}]
+        assert "latest" not in context
         assert context["latest_adql:dispatch-session"] == [{"value": "session"}]
         assert context["latest_adql"] == [{"value": "session"}]
         assert "bad:dispatch-session" not in context
@@ -1035,11 +1039,12 @@ class TestInferenceRouting:
         assert "reasoning_effort" not in captured[-1]
 
     def test_adql_results_unwraps_single_resultset_wrapper(self):
-        from app.services.ai_tools import store_search_results
+        from app.services.ai_tools import store_session_results
         from app.services.code_executor import execute_python
 
-        store_search_results(
-            "latest_adql:wrapped",
+        store_session_results(
+            "latest_adql",
+            "wrapped",
             [
                 {
                     "service": "gaia",

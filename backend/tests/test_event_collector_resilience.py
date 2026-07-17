@@ -23,8 +23,8 @@ async def test_inline_flush_failure_does_not_propagate(monkeypatch):
     monkeypatch.setattr(ec, "async_session", broken_session)
     # The second track() hits FLUSH_SIZE and triggers the inline flush;
     # surviving both calls without an exception IS the regression assertion.
-    await collector.track("session.started", {})
-    await collector.track("session.started", {})
+    await collector.track("session.started", {}, consent_verified=True)
+    await collector.track("session.started", {}, consent_verified=True)
     # flush() drains the buffer before writing; the failed batch is dropped,
     # not retried forever on the request path.
     assert collector.buffer == []
@@ -40,7 +40,7 @@ async def test_flush_still_raises_for_direct_callers(monkeypatch):
         raise RuntimeError("analytics DB unavailable")
 
     monkeypatch.setattr(ec, "async_session", broken_session)
-    await collector.track("session.started", {})
+    await collector.track("session.started", {}, consent_verified=True)
     try:
         await collector.flush()
     except RuntimeError:

@@ -47,6 +47,13 @@ from app.models.schemas import (  # noqa: E402, F401
     User,
 )
 from app.models.research_records import ProvenanceRecord, ResearchJob  # noqa: E402, F401
+from app.models.claim_audit_records import (  # noqa: E402, F401
+    AccountDeletionTombstone,
+    ClaimAudit,
+    EvidencePack,
+    Invitation,
+    PrivacyPreference,
+)
 
 target_metadata = Base.metadata
 

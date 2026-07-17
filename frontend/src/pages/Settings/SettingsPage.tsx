@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  deleteAccount,
   getOperationLog,
   clearOperationLog,
   getApiKeys,
@@ -12,8 +13,11 @@ import {
   AI_MODEL_OPTIONS,
   DEFAULT_AI_PROVIDER,
   DEFAULT_AI_MODEL_BY_PROVIDER,
+  getPrivacyPreferences,
+  updatePrivacyPreferences,
 } from "../../api/client";
 import type { ProviderMeta } from "../../api/client";
+import { useAuth } from "../../context/AuthContext";
 
 const PROVIDERS: Record<string, ProviderMeta> = {
   anthropic: { name: "Anthropic (Claude)", prefix: "sk-ant-" },
@@ -260,9 +264,252 @@ export default function SettingsPage() {
         )}
       </section>
 
+      <PrivacyControls />
       <CoordinateConverter />
       <OperationLogSection />
     </div>
+  );
+}
+
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
+
+function GoogleDeletionReauth({
+  disabled,
+  onCredential,
+}: {
+  disabled: boolean;
+  onCredential: (credential: string) => void;
+}) {
+  const buttonRef = useRef<HTMLDivElement>(null);
+  const [ready, setReady] = useState(Boolean(window.google));
+
+  const receiveCredential = useCallback((response: { credential: string }) => {
+    onCredential(response.credential);
+  }, [onCredential]);
+
+  useEffect(() => {
+    if (!GOOGLE_CLIENT_ID || window.google) return;
+    const existing = document.getElementById("google-gsi-settings-script") as HTMLScriptElement | null;
+    const markReady = () => setReady(true);
+    if (existing) {
+      existing.addEventListener("load", markReady, { once: true });
+      return () => existing.removeEventListener("load", markReady);
+    }
+    const script = document.createElement("script");
+    script.id = "google-gsi-settings-script";
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.defer = true;
+    script.crossOrigin = "anonymous";
+    script.onload = markReady;
+    document.head.appendChild(script);
+    return () => { script.onload = null; };
+  }, []);
+
+  useEffect(() => {
+    if (!ready || !window.google || !buttonRef.current || !GOOGLE_CLIENT_ID) return;
+    buttonRef.current.replaceChildren();
+    window.google.accounts.id.initialize({
+      client_id: GOOGLE_CLIENT_ID,
+      callback: receiveCredential,
+    });
+    window.google.accounts.id.renderButton(buttonRef.current, {
+      theme: "outline",
+      size: "large",
+      width: 300,
+      text: "continue_with",
+      shape: "rectangular",
+      logo_alignment: "left",
+    });
+  }, [ready, receiveCredential]);
+
+  if (!GOOGLE_CLIENT_ID) return null;
+  return (
+    <div
+      ref={buttonRef}
+      aria-label="Re-authenticate with Google before account deletion"
+      style={{ opacity: disabled ? .5 : 1, pointerEvents: disabled ? "none" : "auto" }}
+    />
+  );
+}
+
+function PrivacyControls() {
+  const { user, logout } = useAuth();
+  const [analyticsEnabled, setAnalyticsEnabled] = useState(false);
+  const [analyticsRetentionDays, setAnalyticsRetentionDays] = useState(30);
+  const [privacyLoading, setPrivacyLoading] = useState(true);
+  const [privacyPending, setPrivacyPending] = useState(false);
+  const [privacyMessage, setPrivacyMessage] = useState<string | null>(null);
+  const [confirmation, setConfirmation] = useState("");
+  const [password, setPassword] = useState("");
+  const [googleCredential, setGoogleCredential] = useState("");
+  const [deletePending, setDeletePending] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deletionReceipt, setDeletionReceipt] = useState<{
+    receipt: string;
+    backupExpiry: string;
+    scheduled: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    void getPrivacyPreferences()
+      .then((preference) => {
+        if (!cancelled) {
+          setAnalyticsEnabled(preference.analytics_enabled);
+          setAnalyticsRetentionDays(preference.retention_days);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setPrivacyMessage(apiErrorMessage(error, "Could not load privacy preferences."));
+      })
+      .finally(() => { if (!cancelled) setPrivacyLoading(false); });
+    return () => { cancelled = true; };
+  }, [user]);
+
+  async function setConsent(enabled: boolean) {
+    setPrivacyPending(true);
+    setPrivacyMessage(null);
+    try {
+      const preference = await updatePrivacyPreferences(enabled);
+      setAnalyticsEnabled(preference.analytics_enabled);
+      setAnalyticsRetentionDays(preference.retention_days);
+      setPrivacyMessage(preference.analytics_enabled
+        ? `Optional product analytics enabled. Research content is excluded and events expire after ${preference.retention_days} days.`
+        : "Product analytics disabled. Existing analytics events were deleted.");
+    } catch (error: unknown) {
+      setPrivacyMessage(apiErrorMessage(error, "Could not save the privacy preference."));
+    } finally {
+      setPrivacyPending(false);
+    }
+  }
+
+  async function requestDeletion(event: React.FormEvent) {
+    event.preventDefault();
+    if (!user || confirmation !== user.username) return;
+    setDeletePending(true);
+    setDeleteError(null);
+    try {
+      const response = await deleteAccount({
+        confirmation,
+        password: password || undefined,
+        googleCredential: googleCredential || undefined,
+      });
+      const receipt = {
+        receipt: response.receipt,
+        backupExpiry: response.backup_expiry,
+        scheduled: response.cleanup_scheduled,
+      };
+      setDeletionReceipt(receipt);
+      // Account deletion is stronger than logout: remove research drafts,
+      // workspace caches, operation logs, provider choices, and tracking state
+      // controlled by this origin on the current browser.
+      localStorage.clear();
+      sessionStorage.clear();
+      logout({ state: { accountDeletionReceipt: receipt } });
+    } catch (error: unknown) {
+      setDeleteError(apiErrorMessage(error, "Account deletion could not be safely scheduled."));
+    } finally {
+      setDeletePending(false);
+    }
+  }
+
+  return (
+    <section className="settings-section" aria-labelledby="privacy-heading">
+      <h2 id="privacy-heading">Privacy and deletion</h2>
+      <p className="settings-desc">
+        Research records and private Evidence Packs remain until you delete them or your account.
+        Optional product analytics use only coarse product metadata, expire after {analyticsRetentionDays} days, and never
+        include claims, prompts, paper titles, URLs, DOI values, tool parameters, raw errors, or scientific numbers.
+      </p>
+      <p className="settings-desc">
+        See the hosted <a href="/privacy">Privacy Notice / 隐私说明</a> for this instance&apos;s
+        operator, contact, jurisdiction, retention, and deletion behavior.
+      </p>
+      <p className="settings-desc">
+        Successful account deletion also clears Standard Astro site storage in this browser.
+        Other browsers and downloaded files must be cleared separately.
+      </p>
+
+      <label style={{ display: "flex", gap: 10, alignItems: "flex-start", margin: "12px 0" }}>
+        <input
+          type="checkbox"
+          checked={analyticsEnabled}
+          disabled={privacyLoading || privacyPending || !user}
+          onChange={(event) => { void setConsent(event.target.checked); }}
+          style={{ marginTop: 3 }}
+        />
+        <span>
+          <strong>Share privacy-filtered product analytics</strong><br />
+          <span className="settings-desc">Off by default. Turning it off also removes your existing product events.</span>
+        </span>
+      </label>
+      {privacyMessage && <p className="settings-msg">{privacyMessage}</p>}
+
+      <details style={{ marginTop: 18 }}>
+        <summary style={{ color: "var(--color-red, #a73030)", cursor: "pointer", fontWeight: 650 }}>
+          Delete my account and research data
+        </summary>
+        {deletionReceipt ? (
+          <div className="settings-msg settings-msg-ok" role="status" style={{ marginTop: 12 }}>
+            <strong>Account disabled and deletion accepted.</strong>
+            <p>Save this one-time receipt: <code>{deletionReceipt.receipt}</code></p>
+            <p>
+              Cleanup {deletionReceipt.scheduled ? "was queued" : "will be retried by reconciliation"}.
+              Backup exclusion remains enforced by a restore-safe tombstone; backup expiry is {new Date(deletionReceipt.backupExpiry).toLocaleString()}.
+            </p>
+          </div>
+        ) : (
+          <form onSubmit={requestDeletion} className="settings-key-form" style={{ display: "grid", gap: 10, marginTop: 12 }}>
+            <p className="settings-desc" style={{ margin: 0 }}>
+              This immediately stops login and cancels active research jobs. Data cleanup continues asynchronously.
+              Type <strong>{user?.username}</strong> and re-authenticate to continue.
+            </p>
+            <label>
+              Confirm username
+              <input
+                className="settings-input"
+                value={confirmation}
+                onChange={(event) => setConfirmation(event.target.value)}
+                autoComplete="off"
+              />
+            </label>
+            <label>
+              Current password
+              <input
+                className="settings-input"
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                autoComplete="current-password"
+              />
+            </label>
+            {user?.google_linked && (
+              <div>
+                <span className="settings-desc">Or re-authenticate with the linked Google account:</span>
+                <GoogleDeletionReauth
+                  disabled={deletePending}
+                  onCredential={(credential) => {
+                    setGoogleCredential(credential);
+                    setDeleteError(null);
+                  }}
+                />
+                {googleCredential && <span className="settings-desc">Google re-authentication received.</span>}
+              </div>
+            )}
+            {deleteError && <p className="settings-msg settings-msg-err">{deleteError}</p>}
+            <button
+              type="submit"
+              className="btn-danger-sm"
+              disabled={deletePending || confirmation !== user?.username || (!password && !googleCredential)}
+            >
+              {deletePending ? "Scheduling safe deletion…" : "Permanently delete account"}
+            </button>
+          </form>
+        )}
+      </details>
+    </section>
   );
 }
 

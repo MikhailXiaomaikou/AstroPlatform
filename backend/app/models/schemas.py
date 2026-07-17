@@ -132,6 +132,15 @@ class User(Base):
     google_id: Mapped[str | None] = mapped_column(String(255), unique=True)
     avatar_url: Mapped[str | None] = mapped_column(Text)
     display_name: Mapped[str | None] = mapped_column(String(255))
+    # Authentication checks this value on every request.  Account deletion
+    # therefore revokes an existing JWT immediately, before the asynchronous
+    # data-erasure task has finished walking the user's records.
+    account_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="ACTIVE", server_default="ACTIVE", index=True
+    )
+    deletion_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

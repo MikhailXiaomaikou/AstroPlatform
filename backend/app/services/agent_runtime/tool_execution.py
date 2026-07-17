@@ -47,7 +47,11 @@ def _checkpoint_cache_refs(tool_name: str, result: Any, python_session_id: str) 
         refs.append("latest")
     elif tool_name == "search_lightcurve":
         refs.append("latest_lightcurve")
-    elif tool_name == "run_python":
+    # Every tool executes inside the same trusted Python/cache namespace.  A
+    # search-only workflow still creates owner-scoped cache entries, so account
+    # deletion must be able to discover the namespace even when run_python was
+    # never called.
+    if python_session_id and python_session_id != "default":
         refs.append(f"python_session:{python_session_id}")
     if isinstance(result, dict) and result.get("figures"):
         refs.append("figures")
@@ -414,6 +418,7 @@ async def _execute_tool_calls(
             tool_name, tool_input, api_key, provider_api_keys, python_session_id,
             user_id=user_id, chat_session_id=chat_session_id,
             progress_callback=_emit_tool_progress,
+            _python_session_scope_is_trusted=True,
         ))
         start = _time.monotonic()
         while not task.done():

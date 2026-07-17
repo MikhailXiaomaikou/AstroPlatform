@@ -113,6 +113,13 @@ def _official_matrix_cell(model: str, sn_selection: str) -> dict[str, Any]:
         "source_url": entry.source_url,
         "paper_arxiv": entry.paper_arxiv,
         "paper_doi": entry.paper_doi,
+        "analysis_contract": {
+            "release": entry.release,
+            "parameter_map": dict(entry.parameter_map),
+            "weight_column": entry.weight_column,
+            "burn_in_rule": entry.burn_in_rule,
+            "chain_format": entry.chain_format,
+        },
         "license": {
             "name": entry.license_name,
             "url": entry.license_url,

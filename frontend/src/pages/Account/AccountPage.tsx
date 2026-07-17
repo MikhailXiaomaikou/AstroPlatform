@@ -1,13 +1,19 @@
 import { useState } from "react";
+import { Navigate } from "react-router-dom";
 import SettingsPage from "../Settings/SettingsPage";
 import ResearchHistoryPage from "../ResearchHistory/ResearchHistoryPage";
 import UserToolsPage from "../UserTools/UserToolsPage";
+import { useAuth } from "../../context/AuthContext";
 
 export default function AccountPage() {
+  const { user, loading } = useAuth();
   const [tab, setTab] = useState<"settings" | "research" | "tools">(() => {
     const requested = new URLSearchParams(window.location.search).get("tab");
     return requested === "tools" || requested === "research" ? requested : "settings";
   });
+
+  if (loading) return <div className="fits-loading">Loading account…</div>;
+  if (!user) return <Navigate to="/auth" replace />;
 
   return (
     <div className="account-page">

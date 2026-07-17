@@ -12,7 +12,7 @@ app.services.ai_tools.
 import asyncio
 from typing import Any
 
-from app.services.ai_tools import get_cached_results, logger
+from app.services.ai_tools import get_session_cached_results, logger, store_session_results
 
 TOOL_SCHEMAS = [
     {
@@ -342,7 +342,9 @@ def _exec_get_async_job_status(inp: dict, *, user_id: str | None = None) -> dict
 
 
 
-async def _exec_fit_isochrone(inp: dict) -> dict:
+async def _exec_fit_isochrone(
+    inp: dict, python_session_id: str = "default"
+) -> dict:
     """Execute isochrone fitting on observed CMD data.
 
     Always auto-extracts data from cached search results if arrays are not
@@ -372,7 +374,7 @@ async def _exec_fit_isochrone(inp: dict) -> dict:
         bp_rp_list, abs_mag_list, plx_list, av_list = [], [], [], []
 
         # Source 1: search_objects cache ("latest")
-        search_cache = get_cached_results("latest")
+        search_cache = get_session_cached_results("latest", python_session_id)
         if search_cache:
             for r in search_cache:
                 extra = r.get("extra", {}) if isinstance(r, dict) else {}
@@ -393,9 +395,11 @@ async def _exec_fit_isochrone(inp: dict) -> dict:
 
         # Source 2: ADQL result cache (run_adql stores here, NOT in "latest")
         if not bp_rp_list:
-            adql_cache = get_cached_results("latest_adql")
+            adql_cache = get_session_cached_results("latest_adql", python_session_id)
             if not adql_cache:
-                adql_set = get_cached_results("latest_adql_set")
+                adql_set = get_session_cached_results(
+                    "latest_adql_set", python_session_id
+                )
                 if isinstance(adql_set, dict):
                     adql_cache = adql_set.get("rows") or adql_set.get("data")
             if isinstance(adql_cache, dict):
@@ -765,7 +769,6 @@ async def _exec_crossmatch_catalogs(inp: dict, python_session_id: str = "default
     """Cross-match two catalogs obtained via ADQL queries."""
     # Lazy package import: tests monkeypatch these names on app.services.ai_tools;
     # resolving at call time preserves pre-split behavior (module globals == package namespace).
-    from app.services.ai_tools import store_search_results
     import pandas as pd
     from app.api.integration import execute_adql_query, ADQLRequest
     from app.services.crossmatch_engine import get_crossmatch_engine
@@ -844,8 +847,7 @@ async def _exec_crossmatch_catalogs(inp: dict, python_session_id: str = "default
     rows = truncated.where(truncated.notna(), None).to_dict(orient="records")
 
     # Cache for the Python sandbox
-    store_search_results("latest_crossmatch", rows)
-    store_search_results(f"latest_crossmatch:{python_session_id}", rows)
+    store_session_results("latest_crossmatch", python_session_id, rows)
 
     return {
         "match_count": total,

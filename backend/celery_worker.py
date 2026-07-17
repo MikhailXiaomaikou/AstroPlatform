@@ -135,6 +135,8 @@ celery_app.conf.include = [
     "app.services.isochrone_tasks",
     "app.services.alert_tasks",
     "app.tasks.ai_tools_tasks",
+    "app.tasks.claim_audit_tasks",
+    "app.tasks.privacy_tasks",
 ]
 
 
@@ -149,6 +151,22 @@ def _build_beat_schedule() -> dict[str, dict[str, object]]:
         "reconcile-stale-research-jobs": {
             "task": "ai_tools.reconcile_stale_jobs",
             "schedule": 300.0,  # every 5 minutes
+        },
+        "reconcile-account-deletions": {
+            "task": "privacy.reconcile_deletions",
+            "schedule": 300.0,
+        },
+        "reconcile-stale-claim-audits": {
+            "task": "claim_audit.reconcile_stale",
+            "schedule": 300.0,
+        },
+        "purge-expired-product-events": {
+            "task": "privacy.purge_expired_product_events",
+            "schedule": 3600.0,
+        },
+        "purge-uncommitted-artifacts": {
+            "task": "privacy.purge_artifact_cleanup_queue",
+            "schedule": 300.0,
         },
     }
     if _boolean_env("ENABLE_TRANSIENT_ALERT_INGEST"):

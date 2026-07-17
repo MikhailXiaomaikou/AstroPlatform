@@ -29,11 +29,13 @@ from app.api.followup import router as followup_router
 from app.api.health import router as health_router
 from app.api.integration import router as integration_router
 from app.api.jobs import router as jobs_router
+from app.api.claim_audits import router as claim_audits_router
 from app.api.isochrones import router as isochrones_router
 from app.api.inference import router as inference_router
 from app.api.arxiv import router as arxiv_router
 from app.api.pipeline import router as pipeline_router
 from app.api.paper import router as paper_router
+from app.api.privacy import router as privacy_router
 from app.api.research import router as research_router
 from app.api.settings import router as settings_router
 from app.api.scheduler import router as scheduler_router
@@ -85,6 +87,8 @@ def _migrate_add_columns(connection):
             ("google_id", "VARCHAR(255)"),
             ("avatar_url", "TEXT"),
             ("display_name", "VARCHAR(255)"),
+            ("account_status", "VARCHAR(32) NOT NULL DEFAULT 'ACTIVE'"),
+            ("deletion_requested_at", "TIMESTAMP"),
         ]
         for col_name, col_type in migrations:
             if col_name not in existing:
@@ -202,6 +206,18 @@ def _migrate_add_columns(connection):
                     logger.info("Added column chat_sessions.%s", col_name)
                 except Exception as e:
                     logger.warning("Migration chat_sessions.%s skipped: %s", col_name, e)
+
+    # --- Server-signed completed research-job evidence ---
+    if "research_jobs" in inspector.get_table_names():
+        existing_rj = {c["name"] for c in inspector.get_columns("research_jobs")}
+        if "attestation" not in existing_rj:
+            try:
+                connection.execute(sqlalchemy.text(
+                    "ALTER TABLE research_jobs ADD COLUMN attestation TEXT"
+                ))
+                logger.info("Added column research_jobs.attestation")
+            except Exception as e:
+                logger.warning("Migration research_jobs.attestation skipped: %s", e)
 
     # --- InferenceLog manual model selection metadata ---
     if "inference_logs" in inspector.get_table_names():
@@ -631,9 +647,11 @@ app.include_router(health_router)
 app.include_router(inference_router)
 app.include_router(integration_router)
 app.include_router(jobs_router)
+app.include_router(claim_audits_router)
 app.include_router(isochrones_router)
 app.include_router(pipeline_router)
 app.include_router(paper_router)
+app.include_router(privacy_router)
 app.include_router(research_router)
 app.include_router(scheduler_router)
 app.include_router(sessions_router)

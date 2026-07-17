@@ -1,10 +1,14 @@
 """Auth API — registration, login, Google OAuth, user profile, Stripe subscription."""
 
+import hashlib
+import hmac
 import logging
 import secrets
+import uuid
+from datetime import datetime, timedelta, timezone
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -15,13 +19,16 @@ from app.auth import (
     get_current_user,
     hash_password,
     local_dev_no_auth_enabled,
+    require_not_tombstoned,
     verify_password,
 )
 from app.config import settings
 from app.models.database import get_db
+from app.models.claim_audit_records import Invitation
 from app.models.schemas import SetupKey, User
 from app.rate_limit import limiter
 from app.utils.usernames import (
+    INTERNAL_EMAIL_DOMAIN,
     internal_email_for_username,
     normalize_username,
     preferred_username,
@@ -80,6 +87,34 @@ class SetupKeyInfo(BaseModel):
     used_by_email: str | None = None
 
 
+class GenerateInvitationsRequest(BaseModel):
+    count: int = 1
+    label: str = "alpha"
+    expires_in_days: int = 14
+
+
+class GenerateMigrationInvitationRequest(BaseModel):
+    setup_key_id: str
+    expires_in_days: int = 14
+
+
+class RedeemInvitationRequest(BaseModel):
+    invitation_key: str
+    username: str
+    password: str
+
+
+class InvitationInfo(BaseModel):
+    id: str
+    key_prefix: str
+    label: str
+    target_user_id: str | None
+    used: bool
+    used_at: str | None
+    expires_at: str
+    revoked: bool
+
+
 class SubscribeRequest(BaseModel):
     tier: str  # "solo", "lab", "institution"
 
@@ -88,6 +123,7 @@ class SubscribeRequest(BaseModel):
 
 _USERNAME_MIN_LENGTH = 3
 _USERNAME_MAX_LENGTH = 32
+_INVITATION_KEY_PREFIX = "ASTRO-INV-"
 
 
 def _clean_username(raw: str) -> str:
@@ -104,6 +140,34 @@ def _clean_username(raw: str) -> str:
 async def _username_exists(db: AsyncSession, username: str) -> bool:
     result = await db.execute(select(User.id).where(User.username == username))
     return result.scalar_one_or_none() is not None
+
+
+def _validate_password(password: str) -> None:
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    if len(password) > 128:
+        raise HTTPException(status_code=400, detail="Password must be at most 128 characters")
+
+
+def _invitation_digest(raw_key: str) -> str:
+    """Return a keyed digest so a database leak cannot reveal invite tokens."""
+
+    return hmac.new(
+        settings.fernet_key.encode("utf-8"),
+        raw_key.strip().encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _new_invitation_key() -> str:
+    return f"{_INVITATION_KEY_PREFIX}{secrets.token_urlsafe(24)}"
+
+
+def _require_open_signup(*, invitation: bool = False) -> None:
+    if settings.signup_mode == "closed":
+        raise HTTPException(status_code=403, detail="New account creation is closed")
+    if settings.signup_mode == "invite_only" and not invitation:
+        raise HTTPException(status_code=403, detail="An invitation is required")
 
 
 async def _unique_username(db: AsyncSession, *candidates: str, fallback: str = "user") -> str:
@@ -123,15 +187,13 @@ async def _unique_username(db: AsyncSession, *candidates: str, fallback: str = "
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 @limiter.limit("10/minute")
 async def register(request: Request, req: RegisterRequest, db: AsyncSession = Depends(get_db)):
+    _require_open_signup()
     username = _clean_username(req.username)
     existing = await db.execute(select(User).where(User.username == username))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Username already registered")
 
-    if len(req.password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
-    if len(req.password) > 128:
-        raise HTTPException(status_code=400, detail="Password must be at most 128 characters")
+    _validate_password(req.password)
 
     user = User(
         username=username,
@@ -161,9 +223,14 @@ async def login(request: Request, req: LoginRequest, db: AsyncSession = Depends(
     username = _clean_username(req.username)
     result = await db.execute(select(User).where(User.username == username))
     user = result.scalar_one_or_none()
-    if user is None or not verify_password(req.password, user.password_hash):
+    if (
+        user is None
+        or str(user.account_status or "").upper() != "ACTIVE"
+        or not verify_password(req.password, user.password_hash)
+    ):
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
+    await require_not_tombstoned(user, db)
     token = create_access_token(user.id)
     return TokenResponse(access_token=token)
 
@@ -195,6 +262,9 @@ async def google_login(request: Request, req: GoogleLoginRequest, db: AsyncSessi
     user = result.scalar_one_or_none()
 
     if user:
+        if str(user.account_status or "").upper() != "ACTIVE":
+            raise HTTPException(status_code=401, detail="Account is disabled")
+        await require_not_tombstoned(user, db)
         # Update profile info from Google
         if not user.username:
             user.username = await _unique_username(
@@ -215,6 +285,9 @@ async def google_login(request: Request, req: GoogleLoginRequest, db: AsyncSessi
     user = result.scalar_one_or_none()
 
     if user:
+        if str(user.account_status or "").upper() != "ACTIVE":
+            raise HTTPException(status_code=401, detail="Account is disabled")
+        await require_not_tombstoned(user, db)
         user.google_id = google_id
         if not user.username:
             user.username = await _unique_username(
@@ -230,7 +303,10 @@ async def google_login(request: Request, req: GoogleLoginRequest, db: AsyncSessi
         await db.commit()
         return TokenResponse(access_token=create_access_token(user.id))
 
-    # 3. Create new user (handle race condition with concurrent requests)
+    # 3. Create new user (handle race condition with concurrent requests).
+    # Existing linked accounts can always sign in; only account creation is
+    # controlled by SIGNUP_MODE.
+    _require_open_signup()
     random_pw = secrets.token_urlsafe(32)
     username = await _unique_username(
         db,
@@ -331,14 +407,19 @@ async def setup_key_login(request: Request, req: SetupKeyRequest, db: AsyncSessi
     if not setup_key:
         raise HTTPException(status_code=401, detail="Invalid setup key")
 
-    # If already used, log in as the bound user
+    # A setup key is never a reusable credential. Previously used keys must be
+    # converted by an operator into a one-time migration invitation.
     if setup_key.used_by:
-        result = await db.execute(select(User).where(User.id == setup_key.used_by))
-        user = result.scalar_one_or_none()
-        if not user:
-            raise HTTPException(status_code=401, detail="User associated with this key no longer exists")
-        token = create_access_token(user.id)
-        return TokenResponse(access_token=token)
+        raise HTTPException(
+            status_code=410,
+            detail="Setup key already redeemed; request a migration invitation",
+        )
+
+    if settings.signup_mode != "public":
+        raise HTTPException(
+            status_code=410,
+            detail="Legacy setup keys are disabled; use a one-time invitation",
+        )
 
     # First use: create a new account bound to this key
     random_suffix = secrets.token_hex(4)
@@ -450,7 +531,11 @@ async def require_admin_any(
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
         try:
-            from app.auth import decode_token
+            from app.auth import (
+                decode_token,
+                require_active_account,
+                require_not_tombstoned,
+            )
             from app.models.schemas import User
             from sqlalchemy import select
 
@@ -459,6 +544,14 @@ async def require_admin_any(
                 await db.execute(select(User).where(User.id == user_id))
             ).scalar_one_or_none()
             if user is not None:
+                # A JWT remains cryptographically valid until its expiry.  The
+                # database status and restore-safe tombstone are therefore the
+                # authority for every admin request too, not only normal user
+                # endpoints.
+                user = await require_not_tombstoned(
+                    require_active_account(user),
+                    db,
+                )
                 import os
                 admin_usernames = {
                     u.strip()
@@ -487,6 +580,11 @@ async def generate_setup_keys(
 ):
     """Generate batch of setup keys for beta distribution."""
     await _require_admin(request)
+    if settings.signup_mode != "public":
+        raise HTTPException(
+            status_code=410,
+            detail="Legacy setup keys are disabled; create invitations instead",
+        )
     import secrets
 
     if req.count < 1 or req.count > 100:
@@ -525,6 +623,248 @@ async def list_setup_keys(request: Request, db: AsyncSession = Depends(get_db)):
         )
         for sk, u in rows
     ]
+
+
+@router.post("/invitations", status_code=status.HTTP_201_CREATED)
+async def generate_invitations(
+    request: Request,
+    response: Response,
+    req: GenerateInvitationsRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create one-time invites; raw values are returned exactly once."""
+
+    await _require_admin(request)
+    if req.count < 1 or req.count > 100:
+        raise HTTPException(status_code=400, detail="Count must be 1-100")
+    if req.expires_in_days < 1 or req.expires_in_days > 30:
+        raise HTTPException(status_code=400, detail="Expiry must be 1-30 days")
+    label = req.label.strip()[:255] or "alpha"
+    expires_at = datetime.now(timezone.utc) + timedelta(days=req.expires_in_days)
+    raw_keys: list[str] = []
+    for _ in range(req.count):
+        raw_key = _new_invitation_key()
+        db.add(
+            Invitation(
+                key_hash=_invitation_digest(raw_key),
+                key_prefix=raw_key[:16],
+                label=label,
+                expires_at=expires_at,
+            )
+        )
+        raw_keys.append(raw_key)
+    await db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return {
+        "invitations": raw_keys,
+        "expires_at": expires_at.isoformat(),
+        "warning": "These invitation keys will not be shown again.",
+        "link_format": "/auth#invite=<invitation-key>",
+    }
+
+
+@router.post("/migration-invitations", status_code=status.HTTP_201_CREATED)
+async def generate_migration_invitation(
+    request: Request,
+    response: Response,
+    req: GenerateMigrationInvitationRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Convert a previously redeemed SetupKey account to password login."""
+
+    await _require_admin(request)
+    if req.expires_in_days < 1 or req.expires_in_days > 30:
+        raise HTTPException(status_code=400, detail="Expiry must be 1-30 days")
+    try:
+        setup_key_id = uuid.UUID(req.setup_key_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Setup key not found") from exc
+    setup_key = (
+        await db.execute(
+            select(SetupKey)
+            .where(SetupKey.id == setup_key_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if setup_key is None or setup_key.used_by is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Only a redeemed setup key can receive a migration invitation",
+        )
+    target_user = (
+        await db.execute(
+            select(User)
+            .where(User.id == setup_key.used_by)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if target_user is None or str(target_user.account_status or "").upper() != "ACTIVE":
+        raise HTTPException(status_code=409, detail="Migration account is unavailable")
+    now = datetime.now(timezone.utc)
+    migration_invites = (
+        await db.execute(
+            select(Invitation)
+            .where(Invitation.target_user_id == setup_key.used_by)
+            .with_for_update()
+        )
+    ).scalars().all()
+    if any(row.used_by is not None for row in migration_invites):
+        raise HTTPException(
+            status_code=409,
+            detail="This setup-key account has already completed migration",
+        )
+    if any(
+        row.used_by is None
+        and row.revoked_at is None
+        and (row.expires_at.replace(tzinfo=timezone.utc) if row.expires_at.tzinfo is None else row.expires_at) > now
+        for row in migration_invites
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="An active migration invitation already exists for this account",
+        )
+    raw_key = _new_invitation_key()
+    expires_at = now + timedelta(days=req.expires_in_days)
+    db.add(
+        Invitation(
+            key_hash=_invitation_digest(raw_key),
+            key_prefix=raw_key[:16],
+            label=f"setup-key-migration:{setup_key.label}"[:255],
+            target_user_id=setup_key.used_by,
+            expires_at=expires_at,
+        )
+    )
+    await db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return {
+        "invitation": raw_key,
+        "expires_at": expires_at.isoformat(),
+        "warning": "This migration invitation will not be shown again.",
+        "link_format": "/auth#invite=<invitation-key>",
+    }
+
+
+@router.get("/invitations", response_model=list[InvitationInfo])
+async def list_invitations(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    await _require_admin(request)
+    rows = (
+        await db.execute(select(Invitation).order_by(Invitation.created_at.desc()))
+    ).scalars().all()
+    return [
+        InvitationInfo(
+            id=str(row.id),
+            key_prefix=row.key_prefix,
+            label=row.label,
+            target_user_id=str(row.target_user_id) if row.target_user_id else None,
+            used=row.used_by is not None,
+            used_at=row.used_at.isoformat() if row.used_at else None,
+            expires_at=row.expires_at.isoformat(),
+            revoked=row.revoked_at is not None,
+        )
+        for row in rows
+    ]
+
+
+@router.post("/invitations/redeem", response_model=TokenResponse)
+@limiter.limit("5/minute")
+async def redeem_invitation(
+    request: Request,
+    req: RedeemInvitationRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    _require_open_signup(invitation=True)
+    raw_key = req.invitation_key.strip()
+    if not raw_key.startswith(_INVITATION_KEY_PREFIX) or len(raw_key) > 256:
+        raise HTTPException(status_code=401, detail="Invalid invitation")
+    username = _clean_username(req.username)
+    _validate_password(req.password)
+    invite = (
+        await db.execute(
+            select(Invitation)
+            .where(Invitation.key_hash == _invitation_digest(raw_key))
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    now = datetime.now(timezone.utc)
+    if invite is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired invitation")
+    expires_at = invite.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if (
+        invite.used_by is not None
+        or invite.revoked_at is not None
+        or expires_at <= now
+    ):
+        raise HTTPException(status_code=401, detail="Invalid or expired invitation")
+
+    if invite.target_user_id is not None:
+        user = (
+            await db.execute(
+                select(User).where(User.id == invite.target_user_id).with_for_update()
+            )
+        ).scalar_one_or_none()
+        if user is None or str(user.account_status or "").upper() != "ACTIVE":
+            raise HTTPException(status_code=409, detail="Migration account is unavailable")
+        conflict = (
+            await db.execute(
+                select(User.id).where(
+                    User.username == username,
+                    User.id != user.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if conflict is not None:
+            raise HTTPException(status_code=400, detail="Username already registered")
+        user.username = username
+        if user.email.endswith(f"@{INTERNAL_EMAIL_DOMAIN}"):
+            user.email = internal_email_for_username(username)
+        await require_not_tombstoned(user, db)
+        user.password_hash = hash_password(req.password)
+        user.display_name = username
+        # Legacy deployments could issue more than one migration token for
+        # the same account. Redeeming any one atomically revokes all siblings,
+        # and the used target invitation permanently records migration.
+        sibling_invites = (
+            await db.execute(
+                select(Invitation)
+                .where(
+                    Invitation.target_user_id == user.id,
+                    Invitation.id != invite.id,
+                )
+                .with_for_update()
+            )
+        ).scalars().all()
+        for sibling in sibling_invites:
+            if sibling.used_by is None and sibling.revoked_at is None:
+                sibling.revoked_at = now
+    else:
+        if await _username_exists(db, username):
+            raise HTTPException(status_code=400, detail="Username already registered")
+        user = User(
+            username=username,
+            email=internal_email_for_username(username),
+            password_hash=hash_password(req.password),
+            subscription_tier="starter",
+            display_name=username,
+        )
+        db.add(user)
+        await db.flush()
+
+    invite.used_by = user.id
+    invite.used_at = now
+    try:
+        await db.commit()
+        await db.refresh(user)
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Invitation redemption conflict") from exc
+    return TokenResponse(access_token=create_access_token(user.id))
 
 
 @router.post("/subscribe")

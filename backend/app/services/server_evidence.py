@@ -196,6 +196,74 @@ def verify_scientific_attestation(
     )
 
 
+def _utc_timestamp_identity(value: datetime | str | None) -> str | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return str(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def research_job_attestation_payload(
+    *,
+    job_id: str,
+    owner_id: str | uuid.UUID,
+    session_id: str | uuid.UUID | None,
+    tool_name: str,
+    inputs_hash: str,
+    args: Any,
+    args_replayable: bool,
+    result: Any,
+    background_backend: str,
+    completed_at: datetime | str | None,
+) -> dict[str, Any]:
+    """Return the exact immutable fields covered by a research-job HMAC."""
+
+    return {
+        "job_id": str(job_id),
+        "owner_id": str(owner_id),
+        "session_id": str(session_id) if session_id is not None else None,
+        "tool_name": str(tool_name),
+        "inputs_hash": str(inputs_hash),
+        "args_hash": scientific_content_hash(args if args_replayable else {}),
+        "args_replayable": bool(args_replayable),
+        "result_hash": scientific_content_hash(result),
+        "background_backend": str(background_backend),
+        "completed_at": _utc_timestamp_identity(completed_at),
+    }
+
+
+def build_research_job_attestation(**kwargs: Any) -> dict[str, Any]:
+    """Sign one completed, owner-bound server research-job result."""
+
+    return build_scientific_attestation(
+        attestation_type="research_job_result",
+        payload=research_job_attestation_payload(**kwargs),
+    )
+
+
+def verify_research_job_attestation(
+    record: Any,
+    **kwargs: Any,
+) -> bool:
+    """Verify the HMAC and bind it to the ResearchJob row being consumed."""
+
+    if not verify_scientific_attestation(
+        record,
+        expected_type="research_job_result",
+    ):
+        return False
+    expected = research_job_attestation_payload(**kwargs)
+    return all(record.get(key) == value for key, value in expected.items())
+
+
 def _verification_keys(record: Mapping[str, Any]) -> list[str]:
     """Resolve trusted verification keys without accepting unknown key ids."""
 

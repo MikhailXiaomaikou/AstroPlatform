@@ -1510,8 +1510,10 @@ class TestChatMultiAgentRouting:
         from app.services.code_executor import clear_session_vars
 
         clear_session_vars("chat-replay")
+        runtime_session_ids: list[str] = []
 
         async def fake_run_orchestrated_chat(**kwargs):
+            runtime_session_ids.append(kwargs["python_session_id"])
             return {"reply": "ok", "actions": []}
 
         with patch("app.api.chat._run_orchestrated_chat", new=fake_run_orchestrated_chat):
@@ -1539,7 +1541,8 @@ class TestChatMultiAgentRouting:
 
         assert resp.status_code == 200
         from app.services.code_executor import execute_python
-        replay_check = execute_python("print(x)", session_id="chat-replay")
+        assert runtime_session_ids and runtime_session_ids[0] != "chat-replay"
+        replay_check = execute_python("print(x)", session_id=runtime_session_ids[0])
         assert replay_check.success
         assert replay_check.stdout.strip() == "42"
 

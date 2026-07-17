@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60 * 4  # 4 hours; WebSocket puts JWT in the URL where proxy logs can capture it — shorter expiry limits the window after theft
     fernet_key: str = ""
+    deletion_tombstone_key: str = ""
+    deletion_tombstone_key_id: str = ""
+    deletion_tombstone_verification_keys: str = ""
     admin_secret: str = ""
 
     # Scientific evidence is signed independently from login tokens.  The
@@ -156,6 +159,24 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     shared_deepseek_api_key_enabled: bool = False
 
+    # The hosted research alpha is invitation-only and the claim-audit product
+    # stays dark until its scientific and privacy gates have passed. Local
+    # development can opt in explicitly without changing production defaults.
+    signup_mode: str = "invite_only" if _ENV == "production" else "public"
+    claim_audit_enabled: bool = False
+    claim_audit_execution_mode: str = (
+        "celery" if _ENV == "production" else "inline"
+    )
+    claim_audit_registered_timeout_seconds: int = 30 * 60
+    claim_audit_worker_lease_seconds: int = 120
+    claim_audit_heartbeat_seconds: int = 30
+    claim_audit_max_active_per_user: int = 2
+    artifact_cleanup_grace_seconds: int = 24 * 60 * 60
+    product_analytics_retention_days: int = 30
+    privacy_operator_name: str = ""
+    privacy_contact: str = ""
+    privacy_jurisdiction: str = ""
+
     # Docker image digest for reproducibility
     docker_image_digest: str = ""
 
@@ -198,6 +219,43 @@ class Settings(BaseSettings):
                     "Without a stable key, encrypted user API keys become unreadable "
                     "after every restart. Set ENV=dev to use the development fallback."
                 )
+        if not self.deletion_tombstone_key:
+            if _ENV == "dev":
+                self.deletion_tombstone_key = self.fernet_key
+            else:
+                raise ValueError(
+                    "DELETION_TOMBSTONE_KEY must be set in production and "
+                    "escrowed independently of database backups"
+                )
+        self.deletion_tombstone_key_id = str(
+            self.deletion_tombstone_key_id or ""
+        ).strip()
+        if not self.deletion_tombstone_key_id:
+            if _ENV == "dev":
+                self.deletion_tombstone_key_id = "dev-current"
+            else:
+                raise ValueError(
+                    "DELETION_TOMBSTONE_KEY_ID must be set in production"
+                )
+        if any(ch.isspace() for ch in self.deletion_tombstone_key_id):
+            raise ValueError("DELETION_TOMBSTONE_KEY_ID must not contain whitespace")
+        deletion_keyring = self.deletion_tombstone_verification_keyring
+        current_deletion_key = deletion_keyring.get(self.deletion_tombstone_key_id)
+        if (
+            current_deletion_key is not None
+            and current_deletion_key != self.deletion_tombstone_key
+        ):
+            raise ValueError(
+                "DELETION_TOMBSTONE_VERIFICATION_KEYS contains the current key "
+                "id with a different secret"
+            )
+        if (
+            _ENV == "production"
+            and len(self.deletion_tombstone_key.encode("utf-8")) < 32
+        ):
+            raise ValueError(
+                "DELETION_TOMBSTONE_KEY must contain at least 32 bytes in production"
+            )
         self.storage_backend = str(self.storage_backend or "local").strip().lower()
         if self.storage_backend not in {"local", "s3"}:
             raise ValueError("STORAGE_BACKEND must be 'local' or 's3'")
@@ -235,6 +293,82 @@ class Settings(BaseSettings):
                 "Hosted production must use an isolated model service or a "
                 "provider API backend."
             )
+
+        self.signup_mode = str(self.signup_mode or "public").strip().lower()
+        if self.signup_mode not in {"public", "invite_only", "closed"}:
+            raise ValueError(
+                "SIGNUP_MODE must be 'public', 'invite_only', or 'closed'"
+            )
+        if _ENV == "production" and self.signup_mode == "public":
+            raise ValueError(
+                "Production signup cannot fail open; set SIGNUP_MODE=invite_only "
+                "or SIGNUP_MODE=closed"
+            )
+        if (
+            _ENV == "production"
+            and self.signup_mode == "invite_only"
+            and not str(self.admin_secret or "").strip()
+        ):
+            raise ValueError(
+                "ADMIN_SECRET must be set for production invite-only signup"
+            )
+        self.claim_audit_execution_mode = str(
+            self.claim_audit_execution_mode or ""
+        ).strip().lower()
+        if self.claim_audit_execution_mode not in {"celery", "inline"}:
+            raise ValueError(
+                "CLAIM_AUDIT_EXECUTION_MODE must be 'celery' or 'inline'"
+            )
+        if _ENV == "production" and self.claim_audit_execution_mode != "celery":
+            raise ValueError(
+                "Production Claim Audit must use the Celery worker lifecycle"
+            )
+        if not 30 <= int(self.claim_audit_registered_timeout_seconds) <= 12 * 60 * 60:
+            raise ValueError(
+                "CLAIM_AUDIT_REGISTERED_TIMEOUT_SECONDS must be between 30 and 43200"
+            )
+        if not 60 <= int(self.claim_audit_worker_lease_seconds) <= 15 * 60:
+            raise ValueError(
+                "CLAIM_AUDIT_WORKER_LEASE_SECONDS must be between 60 and 900"
+            )
+        if not 5 <= int(self.claim_audit_heartbeat_seconds) < int(
+            self.claim_audit_worker_lease_seconds
+        ) / 2:
+            raise ValueError(
+                "CLAIM_AUDIT_HEARTBEAT_SECONDS must be at least 5 and less "
+                "than half CLAIM_AUDIT_WORKER_LEASE_SECONDS"
+            )
+        if not 1 <= int(self.claim_audit_max_active_per_user) <= 20:
+            raise ValueError(
+                "CLAIM_AUDIT_MAX_ACTIVE_PER_USER must be between 1 and 20"
+            )
+        if not 3600 <= int(self.artifact_cleanup_grace_seconds) <= 7 * 24 * 60 * 60:
+            raise ValueError(
+                "ARTIFACT_CLEANUP_GRACE_SECONDS must be between 3600 and 604800"
+            )
+        if not 1 <= int(self.product_analytics_retention_days) <= 365:
+            raise ValueError(
+                "PRODUCT_ANALYTICS_RETENTION_DAYS must be between 1 and 365"
+            )
+        if _ENV == "production" and int(self.product_analytics_retention_days) > 30:
+            raise ValueError(
+                "Production product analytics retention cannot exceed 30 days"
+            )
+        if _ENV == "production":
+            missing_privacy_fields = [
+                name
+                for name, value in (
+                    ("PRIVACY_OPERATOR_NAME", self.privacy_operator_name),
+                    ("PRIVACY_CONTACT", self.privacy_contact),
+                    ("PRIVACY_JURISDICTION", self.privacy_jurisdiction),
+                )
+                if not str(value or "").strip()
+            ]
+            if missing_privacy_fields:
+                raise ValueError(
+                    "A production user entry point requires "
+                    + ", ".join(missing_privacy_fields)
+                )
 
         self.evidence_signing_key_id = str(
             self.evidence_signing_key_id or ""
@@ -284,6 +418,37 @@ class Settings(BaseSettings):
             raise ValueError(
                 "EVIDENCE_SIGNING_KEY must contain at least 32 bytes in production."
             )
+
+    @property
+    def deletion_tombstone_verification_keyring(self) -> dict[str, str]:
+        """Parse retired deletion-ledger keys used only for verification."""
+
+        raw = str(self.deletion_tombstone_verification_keys or "").strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "DELETION_TOMBSTONE_VERIFICATION_KEYS must be a JSON object "
+                "mapping key ids to secrets"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                "DELETION_TOMBSTONE_VERIFICATION_KEYS must be a JSON object "
+                "mapping key ids to secrets"
+            )
+        normalized: dict[str, str] = {}
+        for raw_key_id, raw_secret in parsed.items():
+            key_id = str(raw_key_id or "").strip()
+            secret = str(raw_secret or "")
+            if not key_id or any(ch.isspace() for ch in key_id) or not secret:
+                raise ValueError(
+                    "DELETION_TOMBSTONE_VERIFICATION_KEYS requires non-empty, "
+                    "whitespace-free key ids and non-empty secrets"
+                )
+            normalized[key_id] = secret
+        return normalized
 
     @property
     def evidence_verification_keyring(self) -> dict[str, str]:

@@ -12,7 +12,7 @@ import asyncio
 import re
 from typing import Any
 
-from app.services.ai_tools import _session_cache_key, logger
+from app.services.ai_tools import _session_cache_key, logger, store_session_results
 
 TOOL_SCHEMAS = [
     {
@@ -285,8 +285,7 @@ async def _extract_and_cache_paper_measurements(
       1. Runs the spike module in run_in_executor (sync httpx + LLM call,
          prevents blocking the event loop)
       2. Converts passed records to the fit_line_lfr-compatible schema and writes
-         to the session-scoped `latest_literature_tables:<sid>` cache plus the
-         raw `latest_literature_tables` key
+         only to the caller's `latest_literature_tables` cache namespace
       3. failed_mismatch / failed_no_cell records are not cached
          (claim_validator automatically rejects any AI citations of them)
 
@@ -296,7 +295,6 @@ async def _extract_and_cache_paper_measurements(
     """
     # Lazy package import: tests monkeypatch these names on app.services.ai_tools;
     # resolving at call time preserves pre-split behavior (module globals == package namespace).
-    from app.services.ai_tools import store_search_results
     if not arxiv_id:
         return {
             "success": False,
@@ -372,9 +370,7 @@ async def _extract_and_cache_paper_measurements(
         "tables": [],
     }
     if line_measurements:
-        store_search_results(cache_key, cache_payload)
-        if cache_key != "latest_literature_tables":
-            store_search_results("latest_literature_tables", cache_payload)
+        store_session_results("latest_literature_tables", python_session_id, cache_payload)
 
     return {
         "success": True,

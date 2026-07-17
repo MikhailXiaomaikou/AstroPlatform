@@ -103,6 +103,62 @@ export interface UserProfile {
   google_linked: boolean;
 }
 
+const ACTIVE_BROWSER_USER_KEY = "astro_active_user_id";
+const ANALYTICS_CONSENT_PREFIX = "astro_analytics_enabled:";
+const LEGACY_ANALYTICS_CONSENT_KEY = "astro_analytics_enabled";
+const TRACKING_SESSION_KEYS = [
+  "astro_tracking_session_id",
+  "astro_tracking_event_count",
+  "astro_current_page",
+] as const;
+
+/**
+ * Bind browser-only privacy state to the authenticated server identity.
+ * This prevents consent and tracking sessions from crossing accounts on a
+ * shared browser. The server remains the source of truth for consent.
+ */
+export function activateBrowserUser(userId: string): void {
+  const normalized = userId.trim();
+  const previous = localStorage.getItem(ACTIVE_BROWSER_USER_KEY);
+  if (!normalized) return;
+  if (previous !== normalized) {
+    for (const key of TRACKING_SESSION_KEYS) sessionStorage.removeItem(key);
+  }
+  localStorage.setItem(ACTIVE_BROWSER_USER_KEY, normalized);
+  // Fail closed until this session refreshes consent from the server.
+  localStorage.removeItem(`${ANALYTICS_CONSENT_PREFIX}${normalized}`);
+  localStorage.removeItem(LEGACY_ANALYTICS_CONSENT_KEY);
+}
+
+function activeBrowserUserId(): string | null {
+  return localStorage.getItem(ACTIVE_BROWSER_USER_KEY)?.trim() || null;
+}
+
+function analyticsConsentKey(userId: string | null): string | null {
+  return userId ? `${ANALYTICS_CONSENT_PREFIX}${userId}` : null;
+}
+
+export function isBrowserAnalyticsEnabled(): boolean {
+  const key = analyticsConsentKey(activeBrowserUserId());
+  return key !== null && localStorage.getItem(key) === "1";
+}
+
+function storeBrowserAnalyticsConsent(enabled: boolean, expectedUserId: string | null): void {
+  // An older in-flight response must never update the next account's gate.
+  if (!expectedUserId || activeBrowserUserId() !== expectedUserId) return;
+  const key = analyticsConsentKey(expectedUserId);
+  if (key) localStorage.setItem(key, enabled ? "1" : "0");
+  localStorage.removeItem(LEGACY_ANALYTICS_CONSENT_KEY);
+}
+
+function clearBrowserIdentity(): void {
+  const consentKey = analyticsConsentKey(activeBrowserUserId());
+  if (consentKey) localStorage.removeItem(consentKey);
+  localStorage.removeItem(ACTIVE_BROWSER_USER_KEY);
+  localStorage.removeItem(LEGACY_ANALYTICS_CONSENT_KEY);
+  for (const key of TRACKING_SESSION_KEYS) sessionStorage.removeItem(key);
+}
+
 export async function register(username: string, password: string): Promise<TokenResponse> {
   const { data } = await api.post<TokenResponse>("/api/auth/register", { username, password });
   localStorage.setItem("astro_token", data.access_token);
@@ -121,6 +177,20 @@ export async function setupKeyLogin(setupKey: string): Promise<TokenResponse> {
   return data;
 }
 
+export async function redeemInvitation(
+  invitationKey: string,
+  username: string,
+  password: string,
+): Promise<TokenResponse> {
+  const { data } = await api.post<TokenResponse>("/api/auth/invitations/redeem", {
+    invitation_key: invitationKey,
+    username,
+    password,
+  });
+  localStorage.setItem("astro_token", data.access_token);
+  return data;
+}
+
 export async function googleLogin(credential: string): Promise<TokenResponse> {
   const { data } = await api.post<TokenResponse>("/api/auth/google", { credential });
   localStorage.setItem("astro_token", data.access_token);
@@ -129,6 +199,7 @@ export async function googleLogin(credential: string): Promise<TokenResponse> {
 
 export function logout() {
   localStorage.removeItem("astro_token");
+  clearBrowserIdentity();
   if (!isLocalNoAuthEnabledByEnv()) {
     localStorage.removeItem("astro_local_no_auth");
   }
@@ -162,6 +233,71 @@ export async function trackEvent(
 
 export async function getProfile(): Promise<UserProfile> {
   const { data } = await api.get<UserProfile>("/api/auth/me");
+  return data;
+}
+
+export interface RuntimeConfig {
+  focus: string;
+  signup_mode: "public" | "invite_only" | "closed";
+  claim_audit_enabled: boolean;
+  analytics_requires_consent: boolean;
+  privacy_notice?: {
+    operator_name: string;
+    contact: string;
+    jurisdiction: string;
+    notice_url: string;
+  };
+}
+
+export async function getRuntimeConfig(): Promise<RuntimeConfig> {
+  const { data } = await api.get<RuntimeConfig>("/api/config");
+  return data;
+}
+
+export interface PrivacyPreferences {
+  analytics_enabled: boolean;
+  consented_at: string | null;
+  retention_days: number;
+  research_records_retained_until_user_deletion: boolean;
+}
+
+export async function getPrivacyPreferences(): Promise<PrivacyPreferences> {
+  const expectedUserId = activeBrowserUserId();
+  const { data } = await api.get<PrivacyPreferences>("/api/privacy/preferences");
+  storeBrowserAnalyticsConsent(data.analytics_enabled, expectedUserId);
+  return data;
+}
+
+export async function updatePrivacyPreferences(
+  analyticsEnabled: boolean,
+): Promise<PrivacyPreferences> {
+  const expectedUserId = activeBrowserUserId();
+  const { data } = await api.put<PrivacyPreferences>("/api/privacy/preferences", {
+    analytics_enabled: analyticsEnabled,
+  });
+  storeBrowserAnalyticsConsent(data.analytics_enabled, expectedUserId);
+  return data;
+}
+
+export interface AccountDeletionReceipt {
+  status: "DELETION_PENDING";
+  receipt: string;
+  cleanup_scheduled: boolean;
+  backup_expiry: string;
+}
+
+export async function deleteAccount(payload: {
+  confirmation: string;
+  password?: string;
+  googleCredential?: string;
+}): Promise<AccountDeletionReceipt> {
+  const { data } = await api.delete<AccountDeletionReceipt>("/api/auth/account", {
+    data: {
+      confirmation: payload.confirmation,
+      password: payload.password || null,
+      google_credential: payload.googleCredential || null,
+    },
+  });
   return data;
 }
 
@@ -1333,6 +1469,158 @@ export async function cancelResearchJob(jobId: string): Promise<Record<string, u
 
 export async function retryResearchJob(jobId: string): Promise<Record<string, unknown>> {
   const { data } = await api.post(`/api/jobs/${encodeURIComponent(jobId)}/retry`);
+  return data;
+}
+
+export type ClaimAuditLifecycle =
+  | "QUEUED"
+  | "RUNNING"
+  | "COMPLETED"
+  | "FAILED_RETRYABLE"
+  | "FAILED_FINAL"
+  | "CANCELLED";
+
+export type ClaimAuditVerdict = "SUPPORTED" | "WITHHELD" | "CAPABILITY_GAP";
+export type ClaimParseCoverage = "complete" | "unparsed_residual";
+
+export interface ClaimAuditNormalizedClaim {
+  claim_id: string;
+  text: string;
+  verdict: ClaimAuditVerdict;
+  parse_coverage: ClaimParseCoverage;
+  supporting_evidence_ids: string[];
+}
+
+export interface ClaimAuditSummary {
+  audit_id: string;
+  request_hash: string;
+  lifecycle_status: ClaimAuditLifecycle;
+  scientific_verdict: ClaimAuditVerdict | null;
+  mode: "audit_only" | "execute_registered";
+  claim_text: string;
+  source: { kind: "doi" | "arxiv" | "bibcode" | "url"; value: string };
+  evidence_input_refs: string[];
+  dataset_hints: string[];
+  normalized_claims: ClaimAuditNormalizedClaim[];
+  capability_gaps: Array<Record<string, unknown>>;
+  evidence_record_ids: string[];
+  child_job_ids: string[];
+  evidence_graph: {
+    nodes?: Array<Record<string, unknown>>;
+    edges?: Array<{ from: string; to: string; kind: string }>;
+    supported_claims?: Array<Record<string, unknown>>;
+    unsupported_claims?: Array<Record<string, unknown>>;
+  } | null;
+  fact_check_report: Record<string, unknown> | null;
+  error: string | null;
+  error_class: string | null;
+  retry_count: number;
+  evidence_pack: {
+    pack_id: string;
+    status: string;
+    schema_version: number;
+    manifest_hash: string;
+    key_id: string;
+    download_url: string;
+    finalized_at: string;
+  } | null;
+  created_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  can_cancel: boolean;
+  can_retry: boolean;
+}
+
+export interface ClaimAuditCreatePayload {
+  claim_text: string;
+  source: ClaimAuditSummary["source"];
+  evidence_input_refs?: string[];
+  dataset_hints?: string[];
+  mode: "audit_only" | "execute_registered";
+  session_id?: string;
+}
+
+export async function createClaimAudit(
+  payload: ClaimAuditCreatePayload,
+): Promise<ClaimAuditSummary> {
+  const { data } = await api.post<ClaimAuditSummary>(
+    "/api/research/claim-audits",
+    payload,
+  );
+  return data;
+}
+
+export async function listClaimAudits(): Promise<{
+  items: ClaimAuditSummary[];
+  total: number;
+}> {
+  const { data } = await api.get("/api/research/claim-audits");
+  return data;
+}
+
+export async function getClaimAudit(auditId: string): Promise<ClaimAuditSummary> {
+  const { data } = await api.get<ClaimAuditSummary>(
+    `/api/research/claim-audits/${auditId}`,
+  );
+  return data;
+}
+
+export async function cancelClaimAudit(auditId: string): Promise<ClaimAuditSummary> {
+  const { data } = await api.post<ClaimAuditSummary>(
+    `/api/research/claim-audits/${auditId}/cancel`,
+  );
+  return data;
+}
+
+export async function retryClaimAudit(auditId: string): Promise<ClaimAuditSummary> {
+  const { data } = await api.post<ClaimAuditSummary>(
+    `/api/research/claim-audits/${auditId}/retry`,
+  );
+  return data;
+}
+
+export async function deleteClaimAudit(auditId: string): Promise<void> {
+  await api.delete(`/api/research/claim-audits/${auditId}`);
+}
+
+export async function downloadEvidencePack(packId: string): Promise<Blob> {
+  const { data } = await api.get<Blob>(
+    `/api/research/evidence-packs/${packId}/download`,
+    { responseType: "blob" },
+  );
+  return data;
+}
+
+export interface EvidencePackVerification {
+  valid: boolean;
+  reason?: string;
+  audit_id?: string;
+  scientific_verdict?: ClaimAuditVerdict;
+  key_id?: string;
+  manifest_hash?: string;
+}
+
+export async function verifyEvidencePack(
+  packId: string,
+): Promise<EvidencePackVerification> {
+  const { data } = await api.post<EvidencePackVerification>(
+    "/api/research/evidence-packs/verify",
+    { pack_id: packId },
+  );
+  return data;
+}
+
+export async function verifyEvidencePackFile(
+  file: File,
+  packId?: string,
+): Promise<EvidencePackVerification> {
+  const form = new FormData();
+  form.append("file", file);
+  if (packId) form.append("pack_id", packId);
+  const { data } = await api.post<EvidencePackVerification>(
+    "/api/research/evidence-packs/verify",
+    form,
+  );
   return data;
 }
 

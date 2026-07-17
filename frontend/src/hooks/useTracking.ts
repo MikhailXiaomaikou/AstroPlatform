@@ -1,13 +1,12 @@
-import { useCallback, useMemo } from "react";
+import { useCallback } from "react";
 // Single source of truth for the backend base URL — do not re-implement
 // the fallback here, or tracking silently posts to a stale host when the
 // backend moves (fetch errors below are swallowed by design).
-import { API_BASE_URL } from "../api/client";
+import { API_BASE_URL, isBrowserAnalyticsEnabled } from "../api/client";
 
 const SESSION_KEY = "astro_tracking_session_id";
 const PAGE_KEY = "astro_current_page";
 const EVENT_COUNT_KEY = "astro_tracking_event_count";
-
 function getOrCreateSessionId(): string {
   const existing = sessionStorage.getItem(SESSION_KEY);
   if (existing) return existing;
@@ -32,7 +31,7 @@ function buildPayload(eventType: string, eventData: Record<string, unknown>, ses
 }
 
 export function useTracking() {
-  const sessionId = useMemo(() => getOrCreateSessionId(), []);
+  const sessionId = getOrCreateSessionId();
 
   const setCurrentPage = useCallback((pageName: string) => {
     sessionStorage.setItem(PAGE_KEY, pageName);
@@ -41,7 +40,11 @@ export function useTracking() {
   const getEventCount = useCallback(() => Number(sessionStorage.getItem(EVENT_COUNT_KEY) || "0"), []);
 
   const track = useCallback((eventType: string, data: Record<string, unknown> = {}) => {
-    const payload = buildPayload(eventType, data, sessionId);
+    if (!isBrowserAnalyticsEnabled()) return;
+    // Identity changes clear the stored session. Resolve it at event time so
+    // a long-lived component cannot reuse the previous account's session id.
+    const currentSessionId = getOrCreateSessionId();
+    const payload = buildPayload(eventType, data, currentSessionId);
     incrementEventCount();
 
     fetch(`${API_BASE_URL}/api/events/track`, {
@@ -55,7 +58,7 @@ export function useTracking() {
       body: payload,
       keepalive: true,
     }).catch(() => {});
-  }, [sessionId]);
+  }, []);
 
   return { track, sessionId, setCurrentPage, getEventCount };
 }

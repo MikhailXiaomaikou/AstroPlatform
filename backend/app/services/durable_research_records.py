@@ -10,6 +10,7 @@ session and therefore remain non-blocking.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import gzip
 import json
 import logging
@@ -20,11 +21,12 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, delete, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.research_records import ProvenanceRecord, ResearchJob
+from app.models.schemas import User
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +66,10 @@ _RESULT_NOT_PRESENT = object()
 
 class ResearchJobPersistenceError(RuntimeError):
     """A critical research-job lifecycle transition was not made durable."""
+
+
+class ResearchJobOwnerInactive(ResearchJobPersistenceError):
+    """The owner was deleted or became inactive before the transition."""
 
 
 def _uuid_or_none(value: Any) -> uuid.UUID | None:
@@ -128,15 +134,26 @@ def _persistable_result(job: dict[str, Any]) -> Any:
     ).encode("utf-8")
     if len(encoded) <= MAX_INLINE_RESULT_BYTES:
         return safe
-
     owner = str(job.get("user_id") or "unowned").replace("/", "_")
     job_id = str(job.get("job_id") or "unknown").replace("/", "_")
     key = f"jobs/{owner}/{job_id}/result.json.gz"
     try:
+        from app.services.artifact_cleanup import (
+            renew_artifact_cleanup_grace_sync,
+            stage_artifact_cleanup_sync,
+        )
         from app.storage import get_storage_metadata, upload_fits
 
+        # Commit discovery before upload. The ResearchJob transaction removes
+        # this row only when the artifact stub and attestation commit together.
+        stage_artifact_cleanup_sync(
+            key,
+            user_id=job.get("user_id"),
+            reason_class="uncommitted_job_result",
+        )
         compressed = gzip.compress(encoded, compresslevel=6, mtime=0)
         upload_fits(key, compressed)
+        renew_artifact_cleanup_grace_sync(key)
         metadata = get_storage_metadata(key)
         return {
             "_artifact_ref": key,
@@ -156,13 +173,43 @@ def _persistable_result(job: dict[str, Any]) -> Any:
         return safe
 
 
+def prepare_job_result(
+    *,
+    job_id: str,
+    owner_id: str | uuid.UUID,
+    result: Any,
+) -> Any:
+    """Bound a completed result for durable storage, offloading large JSON."""
+
+    return _persistable_result(
+        {
+            "job_id": str(job_id),
+            "user_id": str(owner_id),
+            "result": result,
+        }
+    )
+
+
 def hydrate_result(result: Any) -> Any:
     """Resolve a large-result artifact stub back to its JSON value."""
     if not isinstance(result, dict) or not result.get("_artifact_ref"):
         return result
-    from app.storage import download_fits
+    from app.storage import StorageIntegrityError, download_fits
 
     raw = download_fits(str(result["_artifact_ref"]))
+    # ``download_fits`` checks the object's current metadata/sidecar. The
+    # completed-job HMAC covers the original stub hash, so compare against that
+    # immutable value as well. Otherwise an object-store writer could replace
+    # both bytes and mutable metadata after job completion.
+    expected_hash = str(result.get("sha256") or "").strip().lower()
+    actual_hash = hashlib.sha256(raw).hexdigest()
+    if len(expected_hash) != 64 or not hmac.compare_digest(
+        actual_hash,
+        expected_hash,
+    ):
+        raise StorageIntegrityError(
+            "Research-job artifact differs from its signed completion record"
+        )
     if result.get("content_encoding") == "gzip":
         raw = gzip.decompress(raw)
     return json.loads(raw.decode("utf-8"))
@@ -246,10 +293,37 @@ def _save_job_once(
     args: dict,
     replayable: bool,
     result_payload: Any = _RESULT_NOT_PRESENT,
+    staged_artifact_ref: str | None = None,
 ) -> None:
     """Perform one idempotent lifecycle upsert attempt."""
     with Session(_engine()) as db:
         row = db.get(ResearchJob, str(job["job_id"]))
+        raw_owner = job.get("user_id")
+        requested_owner = _uuid_or_none(raw_owner)
+        if raw_owner not in (None, "") and requested_owner is None:
+            raise ResearchJobOwnerInactive("Research job owner is invalid")
+        if (
+            row is not None
+            and requested_owner is not None
+            and row.user_id is not None
+            and row.user_id != requested_owner
+        ):
+            raise ResearchJobOwnerInactive("Research job owner cannot be changed")
+        owner_id = requested_owner or (row.user_id if row is not None else None)
+        if owner_id is not None:
+            # This row lock is the serialization point with account deletion.
+            # If persistence wins, deletion waits and then removes the new
+            # record. If deletion wins, the refreshed status is non-ACTIVE and
+            # no late database row can be recreated.
+            account_status = db.scalar(
+                select(User.account_status)
+                .where(User.id == owner_id)
+                .with_for_update()
+            )
+            if str(account_status or "").upper() != "ACTIVE":
+                raise ResearchJobOwnerInactive(
+                    "Refusing to persist research state for an inactive account"
+                )
         if row is None:
             row = ResearchJob(
                 job_id=str(job["job_id"]),
@@ -278,6 +352,37 @@ def _save_job_once(
         row.completed_at = _datetime_from_value(
             job.get("completed_at"), allow_none=True
         )
+        if (
+            row.status.lower() == "completed"
+            and result_payload is not _RESULT_NOT_PRESENT
+            and row.user_id is not None
+        ):
+            from app.services.server_evidence import build_research_job_attestation
+
+            row.attestation = build_research_job_attestation(
+                job_id=row.job_id,
+                owner_id=row.user_id,
+                session_id=row.session_id,
+                tool_name=row.tool_name,
+                inputs_hash=row.inputs_hash,
+                args=row.args or {},
+                args_replayable=row.args_replayable,
+                result=row.result,
+                background_backend=row.background_backend,
+                completed_at=row.completed_at,
+            )
+        elif row.status.lower() != "completed":
+            # A retry or replay must earn a new completion attestation. Never
+            # carry a prior run's signature across a non-terminal transition.
+            row.attestation = None
+        if staged_artifact_ref is not None:
+            from app.models.claim_audit_records import ArtifactCleanupQueue
+
+            db.execute(
+                delete(ArtifactCleanupQueue).where(
+                    ArtifactCleanupQueue.artifact_ref == staged_artifact_ref
+                )
+            )
         db.commit()
 
 
@@ -287,9 +392,35 @@ def save_job(job: dict[str, Any]) -> None:
     A job transition is user-visible scientific state, not telemetry.  Callers
     must never continue as though it were durable after this function raises.
     """
+    owner_id = _uuid_or_none(job.get("user_id"))
+    if owner_id is not None:
+        # This check deliberately happens before ``_persistable_result``. A
+        # large result is uploaded there, so checking only inside the SQL
+        # upsert could leave an unreferenced research object after deletion.
+        from app.services.account_deletion import external_deletion_tombstone_exists
+
+        if external_deletion_tombstone_exists(owner_id):
+            raise ResearchJobOwnerInactive(
+                "Refusing to persist research state after account deletion"
+            )
+
     args, replayable = _persistable_args(job.get("args") or {})
     result_payload = (
         _persistable_result(job) if "result" in job else _RESULT_NOT_PRESENT
+    )
+    source_result = job.get("result")
+    uploaded_artifact_ref = (
+        str(result_payload["_artifact_ref"])
+        if (
+            isinstance(result_payload, dict)
+            and result_payload.get("_artifact_ref")
+            and not (
+                isinstance(source_result, dict)
+                and source_result.get("_artifact_ref")
+                == result_payload.get("_artifact_ref")
+            )
+        )
+        else None
     )
     last_error: Exception | None = None
     for attempt in range(1, JOB_PERSIST_MAX_ATTEMPTS + 1):
@@ -299,8 +430,25 @@ def save_job(job: dict[str, Any]) -> None:
                 args=args,
                 replayable=replayable,
                 result_payload=result_payload,
+                staged_artifact_ref=uploaded_artifact_ref,
             )
             return
+        except ResearchJobOwnerInactive:
+            if uploaded_artifact_ref is not None:
+                from app.storage import delete_fits_all_versions
+
+                try:
+                    delete_fits_all_versions(uploaded_artifact_ref)
+                    from app.services.artifact_cleanup import clear_artifact_cleanup_sync
+
+                    clear_artifact_cleanup_sync(uploaded_artifact_ref)
+                except Exception:
+                    logger.critical(
+                        "Could not remove late research artifact %s",
+                        uploaded_artifact_ref,
+                        exc_info=True,
+                    )
+            raise
         except Exception as exc:
             last_error = exc
             if attempt >= JOB_PERSIST_MAX_ATTEMPTS:
@@ -336,6 +484,11 @@ def save_job(job: dict[str, Any]) -> None:
         if last_error is not None
         else None,
     )
+    # Do not delete here: a PostgreSQL COMMIT can succeed while its ACK is
+    # lost. In that ambiguity, deleting would destroy an artifact that may
+    # already have a valid ResearchJob ledger. The pre-upload cleanup row is
+    # atomic with the ResearchJob commit: success removes it; true failure
+    # leaves it for the reference-checking sweeper after the grace window.
     raise ResearchJobPersistenceError(
         f"Could not persist research job {job.get('job_id')} after "
         f"{JOB_PERSIST_MAX_ATTEMPTS} attempts"

@@ -15,7 +15,7 @@ import hashlib
 from copy import deepcopy
 from typing import Any
 
-from app.services.ai_tools import _session_cache_key, get_cached_results
+from app.services.ai_tools import get_session_cached_results
 from app.services.ai_tools.catalog_queries import _exec_search
 from app.services.ai_tools.literature import _exec_literature
 
@@ -226,13 +226,7 @@ def _inject_pipeline_random_seeds(
 def _exec_get_cached_results(inp: dict, python_session_id: str = "default") -> dict:
     """Return full cached search results."""
     max_n = inp.get("max_results", 50)
-    # Prefer the session-scoped cache so concurrent sessions don't read each
-    # other's "latest" results; fall back to the global key for the default
-    # (unscoped) session, mirroring code_executor.get_search_results_for_session.
-    scoped_key = _session_cache_key("latest", python_session_id)
-    results = (get_cached_results(scoped_key) if scoped_key else None)
-    if results is None:
-        results = get_cached_results("latest")
+    results = get_session_cached_results("latest", python_session_id)
     if results is None:
         return {"results": [], "message": "No recent search results cached. Run a search first."}
     return {"results": results[:max_n], "total": len(results)}

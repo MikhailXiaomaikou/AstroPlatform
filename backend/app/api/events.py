@@ -15,7 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import require_admin_any
 from app.auth import get_optional_user
+from app.config import settings
 from app.models.database import get_db
+from app.models.claim_audit_records import PrivacyPreference
 from app.models.schemas import User, UserEvent
 from app.rate_limit import limiter
 from app.services.event_collector import ALLOWED_EVENT_TYPES, event_collector, get_event_stats
@@ -46,9 +48,11 @@ def _require_admin(user: User) -> User:
 def _parse_period(period: str) -> timedelta:
     normalized = period.strip().lower()
     if normalized.endswith("d"):
-        return timedelta(days=int(normalized[:-1]))
+        delta = timedelta(days=int(normalized[:-1]))
+        return min(delta, timedelta(days=settings.product_analytics_retention_days))
     if normalized.endswith("h"):
-        return timedelta(hours=int(normalized[:-1]))
+        delta = timedelta(hours=int(normalized[:-1]))
+        return min(delta, timedelta(days=settings.product_analytics_retention_days))
     raise HTTPException(status_code=400, detail="Unsupported period format")
 
 
@@ -58,17 +62,33 @@ async def track_event_endpoint(
     request: Request,
     payload: TrackEventRequest,
     user: User | None = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db),
 ):
     if payload.event_type not in ALLOWED_EVENT_TYPES:
         raise HTTPException(status_code=400, detail="Unsupported event type")
+
+    if user is None:
+        return {"tracked": False, "reason": "consent_required"}
+    consent = bool(
+        await db.scalar(
+            select(PrivacyPreference.analytics_enabled).where(
+                PrivacyPreference.user_id == user.id
+            )
+        )
+    )
+    if not consent:
+        return {"tracked": False, "reason": "consent_required"}
 
     await event_collector.track(
         event_type=payload.event_type,
         event_data=payload.event_data,
         user_id=user.id if user else None,
         session_id=payload.session_id,
-        duration_ms=payload.duration_ms,
+        # Client supplied numbers are not trustworthy analytics. Request
+        # duration is measured by server middleware when needed.
+        duration_ms=None,
         page=payload.page,
+        consent_verified=True,
     )
     return {"tracked": True}
 
@@ -130,10 +150,17 @@ async def export_events(
     if format != "csv":
         raise HTTPException(status_code=400, detail="Only csv export is supported")
 
+    retention_cutoff = datetime.now(timezone.utc) - timedelta(
+        days=settings.product_analytics_retention_days
+    )
+    normalized_start = (
+        start if start.tzinfo is not None else start.replace(tzinfo=timezone.utc)
+    )
+    effective_start = max(normalized_start, retention_cutoff)
     rows = (
         await db.execute(
             select(UserEvent)
-            .where(UserEvent.timestamp >= start, UserEvent.timestamp <= end)
+            .where(UserEvent.timestamp >= effective_start, UserEvent.timestamp <= end)
             .order_by(UserEvent.timestamp.asc())
         )
     ).scalars().all()

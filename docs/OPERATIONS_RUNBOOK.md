@@ -171,6 +171,16 @@ the message after a `PipelineRun` row is created, the scheduler commits that row
 as terminal `failed / celery_dispatch_failed` with `completed_at` set and moves
 the schedule to its next cadence; it never leaves a run permanently `pending`.
 
+Research-object creation has a second reconciliation path. Before an upload or
+before a generic tool result is registered to its owner, the service commits an
+`artifact_cleanup_queue` row. A successful owner-ledger commit removes that row
+in the same transaction. Beat scans due rows every five minutes, checks all
+trusted database references again, then permanently deletes every object
+version only when no reference exists. The default grace period is 86,400
+seconds. Alert on rows older than that window, rising `attempt_count`, or a
+non-empty `last_error_class`; never bulk-delete queue rows without reconciling
+their object and owner ledgers.
+
 ## 4. Backup policy and objectives
 
 Render continuously backs up paid PostgreSQL for PITR. The recovery window is
@@ -188,6 +198,14 @@ Operational targets:
 | `/app/data` events/cache | Render daily disk snapshot plus weekly portable export | 24 hours | 4 hours |
 | JWT/Fernet/evidence-signing secrets | external secret manager, versioned key IDs | manual change only | 1 hour |
 | Whole service | DB recovery + disk recovery + redeploy | 24 hours | 4 hours |
+
+The object-store service credential must support bucket version-status reads,
+version enumeration, and permanent deletion of versions/delete markers. On AWS
+these are `s3:GetBucketVersioning`, `s3:ListBucketVersions`,
+`s3:DeleteObject`, and `s3:DeleteObjectVersion`, in addition to normal object
+read/write permissions. Test the equivalent R2/MinIO policy with a disposable
+multi-version key during every restore/deletion drill. A current-version-only
+delete does not satisfy the account-erasure gate.
 
 RPO/RTO are targets, not claims of successful recovery. Run a recovery exercise
 at least quarterly and record actual data loss and elapsed time.

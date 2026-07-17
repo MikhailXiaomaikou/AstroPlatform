@@ -22,6 +22,7 @@ from app.services.ai_tools import (
     build_adql_rows,
     logger,
     store_adql_result_set,
+    store_session_results,
 )
 
 TOOL_SCHEMAS = [
@@ -312,7 +313,6 @@ def _suggest_actions_for_results(results: list) -> list[dict]:
 async def _exec_search(inp: dict, python_session_id: str = "default") -> dict:
     # Lazy package import: tests monkeypatch these names on app.services.ai_tools;
     # resolving at call time preserves pre-split behavior (module globals == package namespace).
-    from app.services.ai_tools import store_search_results
     from app.connectors.registry import CONNECTORS_KEYS, get_connector
     from app.connectors.availability import (
         build_unavailable_response,
@@ -341,8 +341,7 @@ async def _exec_search(inp: dict, python_session_id: str = "default") -> dict:
 
     sources = [s for s in sources if is_available(s)]
     if unavailable_sources and not sources:
-        store_search_results("latest", [])
-        store_search_results(f"latest:{python_session_id}", [])
+        store_session_results("latest", python_session_id, [])
         return build_unavailable_response(unavailable_sources, tool_name="search_objects")
 
     parsed = parse_natural_query(query)
@@ -407,8 +406,7 @@ async def _exec_search(inp: dict, python_session_id: str = "default") -> dict:
             })
 
     # Cache results for later retrieval by get_last_search_results
-    store_search_results("latest", all_results)
-    store_search_results(f"latest:{python_session_id}", all_results)
+    store_session_results("latest", python_session_id, all_results)
 
     result = {
         "results": all_results,
@@ -910,7 +908,6 @@ async def _exec_query_high_velocity_stars(
     """Focused Gaia DR3 high-velocity candidate query for v_esc workflows."""
     # Lazy package import: tests monkeypatch these names on app.services.ai_tools;
     # resolving at call time preserves pre-split behavior (module globals == package namespace).
-    from app.services.ai_tools import store_search_results
     from app.api.integration import ADQLRequest, execute_adql_query
 
     limit = _bounded_int(inp.get("limit"), default=500, min_value=50, max_value=2000)
@@ -1036,7 +1033,7 @@ async def _exec_query_high_velocity_stars(
     )
     store_adql_result_set(python_session_id, result_set)
     hv_key = _session_cache_key("latest_high_velocity_stars", python_session_id) or "latest_high_velocity_stars"
-    store_search_results(hv_key, result_set)
+    store_session_results("latest_high_velocity_stars", python_session_id, result_set)
 
     view_rows = min(100, row_count)
     truncated = {col: (vals[:view_rows] if isinstance(vals, list) else vals) for col, vals in data.items()}
@@ -1092,7 +1089,6 @@ async def _exec_run_sdss_sql(inp: dict, python_session_id: str = "default") -> d
     """
     # Lazy package import: tests monkeypatch these names on app.services.ai_tools;
     # resolving at call time preserves pre-split behavior (module globals == package namespace).
-    from app.services.ai_tools import store_search_results
     from app.connectors.availability import build_unavailable_response, record_connector_gated
     from app.services.provenance_v2.registry_loader import dataset_from_registry, resolve_service
 
@@ -1185,10 +1181,7 @@ async def _exec_run_sdss_sql(inp: dict, python_session_id: str = "default") -> d
         )
         store_adql_result_set(python_session_id, result_set)
         # Explicit sdss alias so the AI can identify the source via `latest_sdss_sql`.
-        sdss_key = _session_cache_key("latest_sdss_sql", python_session_id) or "latest_sdss_sql"
-        store_search_results(sdss_key, cache_data)
-        if python_session_id in (None, "", "default"):
-            store_search_results("latest_sdss_sql", cache_data)
+        store_session_results("latest_sdss_sql", python_session_id, cache_data)
     except Exception as e:
         logger.debug("SDSS SQL cache write failed: %s", e)
 

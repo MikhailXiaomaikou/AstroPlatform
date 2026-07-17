@@ -59,6 +59,11 @@ services:
           name: standard-astro-redis
           type: keyvalue
           property: connectionString
+      # JsonKvStore powers deletion markers, async jobs, workflow checkpoints,
+      # and user tools. Production must never fall back to per-instance SQLite
+      # or Null because web and worker processes need one provable shared view.
+      - key: CONNECTOR_CACHE_BACKEND
+        value: redis
       - key: JWT_SECRET
         # Recovery requires the exact original value. Store it in the external
         # secret manager and seed it before the first Blueprint sync.
@@ -66,9 +71,16 @@ services:
       - key: FERNET_KEY
         # Losing this key makes stored BYOK credentials unreadable.
         sync: false
+      - key: ADMIN_SECRET
+        # Required to create/list hosted-alpha invitations. Keep it outside Git.
+        sync: false
       - key: DELETION_TOMBSTONE_KEY
-        # Stable across database restores. If omitted, FERNET_KEY is used;
-        # an independent externally escrowed value is clearer for rotation.
+        # Current ledger-signing key; escrow independently from DB backups.
+        sync: false
+      - key: DELETION_TOMBSTONE_KEY_ID
+        value: deletion-prod-v1
+      - key: DELETION_TOMBSTONE_VERIFICATION_KEYS
+        # JSON keyring of retired key-id -> secret, populated before rotation.
         sync: false
       - key: EVIDENCE_SIGNING_KEY
         # Keep this independent from JWT_SECRET and retain old verification
@@ -100,9 +112,17 @@ services:
         value: celery
       - key: CLAIM_AUDIT_REGISTERED_TIMEOUT_SECONDS
         value: "1800"
+      - key: CLAIM_AUDIT_WORKER_LEASE_SECONDS
+        value: "120"
+      - key: CLAIM_AUDIT_HEARTBEAT_SECONDS
+        value: "30"
+      - key: CLAIM_AUDIT_MAX_ACTIVE_PER_USER
+        value: "2"
+      - key: ARTIFACT_CLEANUP_GRACE_SECONDS
+        value: "86400"
       - key: PRODUCT_ANALYTICS_RETENTION_DAYS
         value: "30"
-      # Populate all three before a separately approved Claim Audit enablement.
+      # Required for every production start and published at /privacy.
       # These identify the real operator; they are not a legal-compliance flag.
       - key: PRIVACY_OPERATOR_NAME
         sync: false
@@ -192,6 +212,8 @@ services:
           name: standard-astro-redis
           type: keyvalue
           property: connectionString
+      - key: CONNECTOR_CACHE_BACKEND
+        value: redis
       - key: JWT_SECRET
         fromService:
           name: standard-astro-backend
@@ -207,6 +229,16 @@ services:
           name: standard-astro-backend
           type: web
           envVarKey: DELETION_TOMBSTONE_KEY
+      - key: DELETION_TOMBSTONE_KEY_ID
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: DELETION_TOMBSTONE_KEY_ID
+      - key: DELETION_TOMBSTONE_VERIFICATION_KEYS
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: DELETION_TOMBSTONE_VERIFICATION_KEYS
       - key: EVIDENCE_SIGNING_KEY
         fromService:
           name: standard-astro-backend
@@ -241,6 +273,21 @@ services:
           name: standard-astro-backend
           type: web
           envVarKey: CLAIM_AUDIT_REGISTERED_TIMEOUT_SECONDS
+      - key: CLAIM_AUDIT_WORKER_LEASE_SECONDS
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: CLAIM_AUDIT_WORKER_LEASE_SECONDS
+      - key: CLAIM_AUDIT_HEARTBEAT_SECONDS
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: CLAIM_AUDIT_HEARTBEAT_SECONDS
+      - key: ARTIFACT_CLEANUP_GRACE_SECONDS
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: ARTIFACT_CLEANUP_GRACE_SECONDS
       - key: PRODUCT_ANALYTICS_RETENTION_DAYS
         fromService:
           name: standard-astro-backend
@@ -337,6 +384,8 @@ services:
           name: standard-astro-redis
           type: keyvalue
           property: connectionString
+      - key: CONNECTOR_CACHE_BACKEND
+        value: redis
       - key: JWT_SECRET
         fromService:
           name: standard-astro-backend
@@ -347,6 +396,21 @@ services:
           name: standard-astro-backend
           type: web
           envVarKey: FERNET_KEY
+      - key: DELETION_TOMBSTONE_KEY
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: DELETION_TOMBSTONE_KEY
+      - key: DELETION_TOMBSTONE_KEY_ID
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: DELETION_TOMBSTONE_KEY_ID
+      - key: DELETION_TOMBSTONE_VERIFICATION_KEYS
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: DELETION_TOMBSTONE_VERIFICATION_KEYS
       - key: EVIDENCE_SIGNING_KEY
         fromService:
           name: standard-astro-backend
@@ -362,6 +426,21 @@ services:
           name: standard-astro-backend
           type: web
           envVarKey: EVIDENCE_VERIFICATION_KEYS
+      - key: PRIVACY_OPERATOR_NAME
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: PRIVACY_OPERATOR_NAME
+      - key: PRIVACY_CONTACT
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: PRIVACY_CONTACT
+      - key: PRIVACY_JURISDICTION
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: PRIVACY_JURISDICTION
       - key: PIPELINE_MODE
         value: celery
       - key: SCHEMA_WAIT_TIMEOUT_SECONDS

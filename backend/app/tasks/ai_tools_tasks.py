@@ -51,6 +51,16 @@ def run_long_tool(self, tool_name: str, tool_input: dict[str, Any], job_id: str)
         }
     if initial_job.get("status") in atr.TERMINAL_STATUSES:
         return {"status": str(initial_job["status"]), "job_id": job_id}
+    from app.services.account_deletion import (
+        account_runtime_is_active,
+        dispose_deleted_account_result,
+    )
+
+    owner_id = initial_job.get("user_id")
+    if not account_runtime_is_active(owner_id):
+        if owner_id:
+            atr.purge_owner_jobs(str(owner_id))
+        return {"status": "cancelled", "job_id": job_id}
 
     token = None
     try:
@@ -69,6 +79,12 @@ def run_long_tool(self, tool_name: str, tool_input: dict[str, Any], job_id: str)
             user_id=initial_job.get("user_id"),
             chat_session_id=initial_job.get("session_id"),
         ))
+        if not account_runtime_is_active(owner_id):
+            if owner_id:
+                dispose_deleted_account_result(user_id=owner_id, result=result)
+            if owner_id:
+                atr.purge_owner_jobs(str(owner_id))
+            return {"status": "cancelled", "job_id": job_id}
         if atr.is_cancelled(job_id):
             # Late cancellation — retain the result in the transition so an
             # operator can inspect what completed before cancellation.
@@ -87,6 +103,10 @@ def run_long_tool(self, tool_name: str, tool_input: dict[str, Any], job_id: str)
         }
     except Exception as exc:
         logger.exception("ai_tools.run_long_tool failed (job_id=%s)", job_id)
+        if not account_runtime_is_active(owner_id):
+            if owner_id:
+                atr.purge_owner_jobs(str(owner_id))
+            return {"status": "cancelled", "job_id": job_id}
         try:
             atr.write_error(job_id, exc)
         except ResearchJobPersistenceError as persist_exc:
