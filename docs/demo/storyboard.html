@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Standard Astro Claim Audit Demo Storyboard</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --paper: #f5f2e9;
+        --paper-strong: #fffdf8;
+        --ink: #1a1816;
+        --muted: #625e57;
+        --rule: #b7afa2;
+        --accent: #762b2b;
+        --green: #245e52;
+        --blue: #4b5577;
+      }
+
+      * { box-sizing: border-box; }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: var(--paper);
+      }
+
+      body {
+        font-family: Avenir, "Helvetica Neue", sans-serif;
+        color: var(--ink);
+      }
+
+      #stage {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--paper);
+        transform-origin: top left;
+      }
+
+      .screen {
+        position: absolute;
+        inset: 0;
+      }
+
+      .screen img {
+        width: 100%;
+        height: 100%;
+        display: block;
+        object-fit: cover;
+      }
+
+      .screen::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(180deg, rgba(17, 15, 13, 0.02) 45%, rgba(17, 15, 13, 0.36) 100%);
+        pointer-events: none;
+      }
+
+      .masthead {
+        position: absolute;
+        top: 54px;
+        left: 70px;
+        display: flex;
+        align-items: center;
+        gap: 22px;
+        z-index: 4;
+        color: var(--paper-strong);
+        text-shadow: 0 2px 18px rgba(0, 0, 0, 0.32);
+      }
+
+      .masthead .mark {
+        font-family: Georgia, "Songti SC", serif;
+        font-size: 28px;
+        font-style: italic;
+        letter-spacing: 0.08em;
+      }
+
+      .masthead .rule {
+        width: 72px;
+        height: 2px;
+        background: currentColor;
+        opacity: 0.6;
+      }
+
+      .masthead .label {
+        font-size: 16px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+      }
+
+      .lower-third {
+        position: absolute;
+        left: 64px;
+        right: 64px;
+        bottom: 48px;
+        z-index: 4;
+        display: grid;
+        grid-template-columns: 180px 1fr;
+        gap: 34px;
+        align-items: start;
+        padding: 30px 36px 28px;
+        background: rgba(251, 248, 239, 0.95);
+        border-top: 4px solid var(--accent);
+        box-shadow: 0 18px 60px rgba(18, 15, 12, 0.22);
+      }
+
+      .step {
+        font-family: Georgia, "Songti SC", serif;
+        font-size: 24px;
+        font-style: italic;
+        letter-spacing: 0.08em;
+        color: var(--accent);
+      }
+
+      .copy h1 {
+        margin: 0;
+        font-family: Georgia, "Songti SC", serif;
+        font-size: 40px;
+        line-height: 1.16;
+        font-weight: 600;
+        letter-spacing: -0.018em;
+      }
+
+      .copy p {
+        margin: 10px 0 0;
+        font-size: 21px;
+        line-height: 1.42;
+        color: var(--muted);
+      }
+
+      .pill-row {
+        display: flex;
+        gap: 14px;
+        margin-top: 18px;
+      }
+
+      .pill {
+        padding: 8px 14px 7px;
+        border: 1px solid var(--rule);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.55);
+        font-size: 15px;
+        letter-spacing: 0.08em;
+      }
+
+      .pill.green { color: var(--green); border-color: rgba(36, 94, 82, 0.45); }
+      .pill.blue { color: var(--blue); border-color: rgba(75, 85, 119, 0.45); }
+
+      .title-card,
+      .end-card {
+        position: absolute;
+        inset: 0;
+        z-index: 2;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding: 112px 150px;
+      }
+
+      .title-card {
+        background:
+          linear-gradient(90deg, rgba(118, 43, 43, 0.08) 1px, transparent 1px) 0 0 / 96px 96px,
+          linear-gradient(rgba(118, 43, 43, 0.08) 1px, transparent 1px) 0 0 / 96px 96px,
+          var(--paper);
+      }
+
+      .kicker {
+        margin-bottom: 38px;
+        font-size: 18px;
+        letter-spacing: 0.24em;
+        text-transform: uppercase;
+        color: var(--accent);
+      }
+
+      .display {
+        max-width: 1450px;
+        margin: 0;
+        font-family: Georgia, "Songti SC", serif;
+        font-size: 92px;
+        line-height: 1.04;
+        font-weight: 500;
+        letter-spacing: -0.035em;
+      }
+
+      .display em { color: var(--accent); font-weight: 500; }
+
+      .subtitle {
+        max-width: 1220px;
+        margin: 34px 0 0;
+        font-size: 29px;
+        line-height: 1.48;
+        color: var(--muted);
+      }
+
+      .title-meta {
+        display: flex;
+        gap: 42px;
+        margin-top: 66px;
+        padding-top: 24px;
+        border-top: 1px solid var(--rule);
+        font-size: 16px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      .end-card {
+        color: var(--paper-strong);
+        background:
+          radial-gradient(circle at 78% 20%, rgba(110, 118, 145, 0.35), transparent 34%),
+          linear-gradient(135deg, #161412 0%, #281b1b 100%);
+      }
+
+      .status-line {
+        display: flex;
+        align-items: center;
+        gap: 26px;
+        margin: 42px 0;
+      }
+
+      .status-line span {
+        padding: 14px 20px 12px;
+        border: 1px solid rgba(255, 255, 255, 0.34);
+        border-radius: 999px;
+        font-size: 19px;
+        letter-spacing: 0.12em;
+      }
+
+      .status-line .arrow {
+        padding: 0;
+        border: 0;
+        font-family: Georgia, serif;
+        font-size: 30px;
+        opacity: 0.7;
+      }
+
+      .end-card .subtitle { color: rgba(255, 253, 248, 0.72); }
+
+      .watermark {
+        position: absolute;
+        right: 34px;
+        bottom: 22px;
+        z-index: 6;
+        font: 13px/1 Avenir, sans-serif;
+        letter-spacing: 0.13em;
+        color: rgba(255, 255, 255, 0.52);
+        text-transform: uppercase;
+      }
+
+      .title-card + .watermark { color: rgba(26, 24, 22, 0.36); }
+    </style>
+  </head>
+  <body>
+    <main id="stage" aria-label="Standard Astro demo storyboard"></main>
+
+    <script>
+      const frames = {
+        input: {
+          image: "assets/01-start.png",
+          step: "01 · Input",
+          title: "输入一个可审计的宇宙学主张",
+          subtitle: "Claim：DESI DR2 + CMB + 三套超新星数据是否足以证明暗能量随时间演化？",
+          pills: ["Allowlisted official source", "desi_dr2_bao", "execute_registered"],
+        },
+        status: {
+          image: "assets/02-statuses.png",
+          step: "02 · Verdict",
+          title: "技术完成，不等于科学上得到支持",
+          subtitle: "运行状态为 COMPLETED；科学状态独立判定为 CAPABILITY_GAP。",
+          pills: ["COMPLETED", "CAPABILITY_GAP"],
+        },
+        gap: {
+          image: "assets/03-gap.png",
+          step: "03 · Fail closed",
+          title: "缺少正式证据时，系统拒绝编造结论",
+          subtitle: "注册的 DESI DR2 chain mirror 尚未安装并校验，因此返回明确、可行动的 registered_data_unavailable。",
+          pills: ["No guessed result", "Actionable next step"],
+        },
+        verified: {
+          image: "assets/04-verified.png",
+          step: "04 · Evidence Pack",
+          title: "本次运行证据不足，也能生成可验证审计记录",
+          subtitle: "Evidence Pack 已最终化，并通过签名与内容完整性验证。",
+          pills: ["Finalized", "Signature verified", "Private by default"],
+        },
+      };
+
+      const params = new URLSearchParams(window.location.search);
+      const scene = params.get("scene") || "title";
+      const stage = document.getElementById("stage");
+
+      const watermark = '<div class="watermark">Created by Huashu-Design</div>';
+
+      if (scene === "title") {
+        stage.innerHTML = `
+          <section class="title-card">
+            <div class="kicker">Standard · Astro / Real system walkthrough</div>
+            <h1 class="display">Claim Audit<br /><em>真实案例演示</em></h1>
+            <p class="subtitle">用一次 DESI DR2 宇宙学主张审计，展示系统如何把“任务完成”与“证据足够”严格分开。</p>
+            <div class="title-meta"><span>1920 × 1080</span><span>Signed Evidence Pack</span><span>2026-07-17</span></div>
+          </section>${watermark}`;
+      } else if (scene === "end") {
+        stage.innerHTML = `
+          <section class="end-card">
+            <div class="kicker">Honest by design</div>
+            <h1 class="display">完成任务，<br />不包装<em>不够的证据</em>。</h1>
+            <div class="status-line"><span>THIS RUN: COMPLETED</span><span class="arrow">≠</span><span>SUPPORTED</span><span class="arrow">→</span><span>CAPABILITY_GAP</span></div>
+            <p class="subtitle">本次真实运行：官方来源已登记；本机缺少经 checksum 验证的完整 DESI DR2 chain mirror；Evidence Pack 验签通过。</p>
+          </section>${watermark}`;
+      } else {
+        const frame = frames[scene];
+        if (!frame) throw new Error(`Unknown scene: ${scene}`);
+        const pills = frame.pills.map((pill, index) => `<span class="pill ${index === 0 ? "green" : "blue"}">${pill}</span>`).join("");
+        stage.innerHTML = `
+          <section class="screen"><img src="${frame.image}" alt="Standard Astro interface capture" /></section>
+          <section class="lower-third">
+            <div class="step">${frame.step}</div>
+            <div class="copy"><h1>${frame.title}</h1><p>${frame.subtitle}</p><div class="pill-row">${pills}</div></div>
+          </section>${watermark}`;
+      }
+
+      function fitStage() {
+        const scale = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+        stage.style.transform = `scale(${scale})`;
+      }
+
+      fitStage();
+      window.addEventListener("resize", fitStage);
+    </script>
+  </body>
+</html>

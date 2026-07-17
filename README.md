@@ -56,6 +56,18 @@ observation. P1 has not completed the required 14 consecutive Daily days or
 progress; product validation pending.** `SUPPORTED` still does not mean “peer
 reviewed.”
 
+## 真实演示 / Real demo
+
+[![Claim Audit 真实案例演示 / real-case demo](./docs/demo/poster.png)](./docs/demo/standard-astro-claim-audit-demo.mp4)
+
+这段 32 秒分镜演示由一次真实本地运行的界面截图制作：输入一个 DESI DR2 动态暗能量强主张后，
+任务状态为 `COMPLETED`，科学状态独立判定为 `CAPABILITY_GAP`。系统没有猜测
+结论，同时生成并验签了 Evidence Pack。 / This 32-second storyboard demo is
+made from UI captures of a real local run. The job completes, while the scientific verdict independently becomes
+`CAPABILITY_GAP`, no result is guessed, and the signed Evidence Pack verifies.
+
+[案例、限制与复现方法 / Case, limits, and rebuild instructions](./docs/demo/README.md)
+
 ## 本地启动 / Local start
 
 需要 Python 3.11 和 Node.js 20+。以下命令用于新克隆的仓库。<br>
