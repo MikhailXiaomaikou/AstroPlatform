@@ -1,0 +1,170 @@
+{
+  "registry_schema_version": 1,
+  "key": "rubin_edp2_object_catalog_fixture_v1",
+  "survey": "rubin",
+  "display_name": "Rubin Early Data Preview 2 object-catalog adapter fixture",
+  "maturity": "SCHEMA_FIXTURE_ONLY",
+  "release": {
+    "name": "Early Data Preview 2",
+    "version": "planned-2026-07-27",
+    "status": "planned",
+    "official_url": "https://rubinobservatory.org/events/edp2-release",
+    "checked_utc": "2026-07-17T00:00:00Z"
+  },
+  "schema": {
+    "name": "logical_object_catalog_contract",
+    "version": "fixture-v1",
+    "source_document_url": "https://dp2.lsst.io/"
+  },
+  "fields": [
+    {
+      "name": "object_id",
+      "source_name": null,
+      "data_type": "string",
+      "unit": null,
+      "required": true,
+      "description": "Logical stable object identifier; the release-specific source column is not pinned."
+    },
+    {
+      "name": "ra",
+      "source_name": null,
+      "data_type": "float64",
+      "unit": "deg",
+      "required": true,
+      "description": "Logical right ascension in the declared coordinate frame."
+    },
+    {
+      "name": "dec",
+      "source_name": null,
+      "data_type": "float64",
+      "unit": "deg",
+      "required": true,
+      "description": "Logical declination in the declared coordinate frame."
+    },
+    {
+      "name": "observation_time",
+      "source_name": null,
+      "data_type": "float64",
+      "unit": "day",
+      "required": false,
+      "description": "Logical observation time; scale and format must be pinned before ingestion."
+    },
+    {
+      "name": "photometric_redshift",
+      "source_name": null,
+      "data_type": "float64",
+      "unit": "dimensionless",
+      "required": false,
+      "description": "Reserved logical photo-z field; availability is not declared by the pinned release notice."
+    }
+  ],
+  "coordinates": {
+    "spatial_frame": "ICRS",
+    "longitude_field": "ra",
+    "latitude_field": "dec",
+    "unit": "deg",
+    "equinox": null,
+    "status": "logical_fixture_not_source_mapped"
+  },
+  "time_system": {
+    "field": "observation_time",
+    "scale": "unknown",
+    "format": "unknown",
+    "reference_position": "unknown",
+    "status": "must_be_pinned_before_ingestion"
+  },
+  "redshift": {
+    "types": [],
+    "value_fields": [
+      "photometric_redshift"
+    ],
+    "uncertainty_fields": [],
+    "uncertainty_status": "not_mapped",
+    "status": "not_declared_in_pinned_source"
+  },
+  "linked_products": {
+    "covariance": {
+      "status": "not_registered",
+      "kind": null,
+      "field": null,
+      "artifact": {
+        "source_url": null,
+        "version": null,
+        "sha256": null
+      }
+    },
+    "mask": {
+      "status": "not_registered",
+      "kind": null,
+      "field": null,
+      "artifact": {
+        "source_url": null,
+        "version": null,
+        "sha256": null
+      }
+    },
+    "selection": {
+      "status": "not_registered",
+      "kind": null,
+      "field": null,
+      "artifact": {
+        "source_url": null,
+        "version": null,
+        "sha256": null
+      }
+    }
+  },
+  "coverage": {
+    "status": "planned_release_not_pinned",
+    "sky_area_sq_deg": null,
+    "regions": [],
+    "temporal_start": null,
+    "temporal_stop": null,
+    "source_url": "https://rubinobservatory.org/events/edp2-release"
+  },
+  "integrity": {
+    "algorithm": "sha256",
+    "product_sha256": null,
+    "checksum_scope": "no_release_product_registered",
+    "required_before_source_pinned": true
+  },
+  "access": {
+    "archive_url": "https://dp2.lsst.io/",
+    "authentication": "verify_from_release_documentation_at_execution",
+    "rate_limit": "unknown",
+    "artifact_host_allowlist": [
+      "dp2.lsst.io",
+      "rubinobservatory.org"
+    ],
+    "offline_behavior": "fail_closed"
+  },
+  "license": {
+    "identifier": null,
+    "url": "https://rubinobservatory.org/for-scientists/data-products/data-policy",
+    "status": "verify_product_terms_before_use"
+  },
+  "supported_claim_scope": [
+    "schema_fixture_compatibility",
+    "declared_release_status",
+    "logical_field_presence"
+  ],
+  "official_sources": [
+    {
+      "authority": "NSF-DOE Vera C. Rubin Observatory",
+      "url": "https://rubinobservatory.org/events/edp2-release",
+      "document_version": "web-notice-checked-2026-07-17",
+      "checked_utc": "2026-07-17T00:00:00Z"
+    },
+    {
+      "authority": "NSF-DOE Vera C. Rubin Observatory",
+      "url": "https://dp2.lsst.io/",
+      "document_version": "live-documentation-unpinned",
+      "checked_utc": "2026-07-17T00:00:00Z"
+    }
+  ],
+  "limitations": [
+    "The official release notice says EDP2 is planned for 2026-07-27, after this fixture's check date.",
+    "No release-specific table names, physical columns, masks, selection function, or product checksum are registered.",
+    "This fixture cannot fetch data or support scientific measurement claims."
+  ]
+}

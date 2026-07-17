@@ -1,0 +1,180 @@
+{
+  "registry_schema_version": 1,
+  "key": "roman_prelaunch_catalog_fixture_v1",
+  "survey": "roman",
+  "display_name": "Roman pre-launch catalogue adapter fixture",
+  "maturity": "SCHEMA_FIXTURE_ONLY",
+  "release": {
+    "name": "Nancy Grace Roman Space Telescope pre-launch planning",
+    "version": "prelaunch-2026-01-29",
+    "status": "prelaunch",
+    "official_url": "https://science.nasa.gov/missions/roman-space-telescope/building-roman/",
+    "checked_utc": "2026-07-17T00:00:00Z"
+  },
+  "schema": {
+    "name": "logical_catalog_contract",
+    "version": "fixture-v1",
+    "source_document_url": "https://roman.gsfc.nasa.gov/science/roses/Roman_WFI_Processing_v6.pdf"
+  },
+  "fields": [
+    {
+      "name": "object_id",
+      "source_name": null,
+      "data_type": "string",
+      "unit": null,
+      "required": true,
+      "description": "Logical future archive object identifier; no flight catalogue column exists in this fixture."
+    },
+    {
+      "name": "ra",
+      "source_name": null,
+      "data_type": "float64",
+      "unit": "deg",
+      "required": true,
+      "description": "Logical right ascension in the declared coordinate frame."
+    },
+    {
+      "name": "dec",
+      "source_name": null,
+      "data_type": "float64",
+      "unit": "deg",
+      "required": true,
+      "description": "Logical declination in the declared coordinate frame."
+    },
+    {
+      "name": "observation_time",
+      "source_name": null,
+      "data_type": "float64",
+      "unit": "day",
+      "required": false,
+      "description": "Logical observation time; flight-data time metadata is not yet pinned."
+    },
+    {
+      "name": "photometric_redshift",
+      "source_name": null,
+      "data_type": "float64",
+      "unit": "dimensionless",
+      "required": false,
+      "description": "Reserved logical photo-z field; no flight product is registered."
+    },
+    {
+      "name": "spectroscopic_redshift",
+      "source_name": null,
+      "data_type": "float64",
+      "unit": "dimensionless",
+      "required": false,
+      "description": "Reserved logical spectroscopic-redshift field; no flight product is registered."
+    }
+  ],
+  "coordinates": {
+    "spatial_frame": "ICRS",
+    "longitude_field": "ra",
+    "latitude_field": "dec",
+    "unit": "deg",
+    "equinox": null,
+    "status": "logical_fixture_not_source_mapped"
+  },
+  "time_system": {
+    "field": "observation_time",
+    "scale": "unknown",
+    "format": "unknown",
+    "reference_position": "unknown",
+    "status": "must_be_pinned_after_flight_product_release"
+  },
+  "redshift": {
+    "types": [],
+    "value_fields": [
+      "photometric_redshift",
+      "spectroscopic_redshift"
+    ],
+    "uncertainty_fields": [],
+    "uncertainty_status": "not_mapped",
+    "status": "future_product_types_only_not_registered"
+  },
+  "linked_products": {
+    "covariance": {
+      "status": "not_registered",
+      "kind": null,
+      "field": null,
+      "artifact": {
+        "source_url": null,
+        "version": null,
+        "sha256": null
+      }
+    },
+    "mask": {
+      "status": "not_registered",
+      "kind": null,
+      "field": null,
+      "artifact": {
+        "source_url": null,
+        "version": null,
+        "sha256": null
+      }
+    },
+    "selection": {
+      "status": "not_registered",
+      "kind": null,
+      "field": null,
+      "artifact": {
+        "source_url": null,
+        "version": null,
+        "sha256": null
+      }
+    }
+  },
+  "coverage": {
+    "status": "no_flight_catalogue_registered",
+    "sky_area_sq_deg": null,
+    "regions": [],
+    "temporal_start": null,
+    "temporal_stop": null,
+    "source_url": "https://science.nasa.gov/missions/roman-space-telescope/building-roman/"
+  },
+  "integrity": {
+    "algorithm": "sha256",
+    "product_sha256": null,
+    "checksum_scope": "no_flight_product_registered",
+    "required_before_source_pinned": true
+  },
+  "access": {
+    "archive_url": "https://archive.stsci.edu/missions-and-data/roman",
+    "authentication": "not_applicable_before_flight_product_release",
+    "rate_limit": "unknown",
+    "artifact_host_allowlist": [
+      "archive.stsci.edu",
+      "science.nasa.gov",
+      "roman.gsfc.nasa.gov"
+    ],
+    "offline_behavior": "fail_closed"
+  },
+  "license": {
+    "identifier": null,
+    "url": "https://archive.stsci.edu/missions-and-data/roman",
+    "status": "public_access_statement_only_verify_product_terms_after_release"
+  },
+  "supported_claim_scope": [
+    "schema_fixture_compatibility",
+    "declared_release_status",
+    "logical_field_presence"
+  ],
+  "official_sources": [
+    {
+      "authority": "NASA",
+      "url": "https://science.nasa.gov/missions/roman-space-telescope/building-roman/",
+      "document_version": "building-status-2026-01-29",
+      "checked_utc": "2026-07-17T00:00:00Z"
+    },
+    {
+      "authority": "NASA Goddard Space Flight Center",
+      "url": "https://roman.gsfc.nasa.gov/science/roses/Roman_WFI_Processing_v6.pdf",
+      "document_version": "WFI-processing-v6-planning-document",
+      "checked_utc": "2026-07-17T00:00:00Z"
+    }
+  ],
+  "limitations": [
+    "The official status page describes Roman as assembled and pre-launch at the check date; no flight catalogue is registered.",
+    "Planning documents describe expected product families, not immutable released science products.",
+    "This fixture cannot fetch data or support scientific measurement claims."
+  ]
+}

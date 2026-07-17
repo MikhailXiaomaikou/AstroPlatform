@@ -15,6 +15,7 @@ the platform relies on are populated:
 - compressed Gaussian ``statistical_role`` (runtime-valid and explicit)
 - source-prior disclosure for posterior/proposal-only Gaussian records
 - official DESI DR2 analysis-combination hashes, roles and parameter maps
+- Rubin, Euclid, and Roman schema-fixture integrity and fail-closed maturity
 - bibcode reachability: every claim_validator citation pool source must
   resolve back to at least one DatasetCitation across the active registry
 
@@ -146,6 +147,9 @@ def main() -> int:
     # vendored file (or be an allowlisted no-released-file literature probe).
     executable_pin_issues = audit_executable_pins()
     analysis_registry_issues = audit_cosmology_analysis_registry()
+    from app.services.survey_product_registry import audit_survey_product_registry
+
+    survey_product_registry_issues = audit_survey_product_registry()
 
     payload = {
         "suite": "registry_audit",
@@ -156,6 +160,7 @@ def main() -> int:
         "issues_by_dataset": per_entry,
         "executable_pin_issues": executable_pin_issues,
         "analysis_registry_issues": analysis_registry_issues,
+        "survey_product_registry_issues": survey_product_registry_issues,
     }
     print(json.dumps(payload, indent=2, default=str))
     if args.json:
@@ -167,6 +172,7 @@ def main() -> int:
         if not per_entry
         and not executable_pin_issues
         and not analysis_registry_issues
+        and not survey_product_registry_issues
         else 1
     )
 
