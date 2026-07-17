@@ -106,8 +106,13 @@ decision. If any is missing, stop.
   window and the agreed observation period.
 - Roll back traffic if either readiness endpoint fails, commit identities
   differ, schema/storage checks fail, or scientific evidence validation
-  regresses. Prefer switching to preserved old resources or a validated PITR
-  clone; do not run an untested production downgrade.
+  regresses. Freeze writes and snapshot the target first. Record the final
+  pre-cutover consistency point plus every write/object version accepted by the
+  target after it. Keep preserved old resources or a validated PITR clone
+  read-only until those target writes have been reconciled and checksummed into
+  the rollback target. Switch API, frontend, worker, beat, database, and storage
+  together; restore writes only after database and release owners approve the
+  reconciled target. Do not run an untested production downgrade.
 - Keep old resources read-only until the observation period and restore sample
   pass. Then obtain explicit approval before deleting paid resources.
 - Record actual downtime, RPO/RTO, backup ID, commit, schema revision, smoke
