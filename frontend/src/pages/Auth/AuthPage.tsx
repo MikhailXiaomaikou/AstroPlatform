@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { useI18n } from "../../i18n";
+import { getRuntimeConfig, type RuntimeConfig } from "../../api/client";
+import { consumeInvitationFromUrl } from "../../utils/invitation";
 
-type AuthMode = "login" | "register" | "setup-key";
+type AuthMode = "login" | "register" | "invitation";
 
 // Google Identity Services type declarations
 declare global {
@@ -118,22 +120,52 @@ function GoogleSignInButton({ onSuccess, disabled }: { onSuccess: (credential: s
 
 export default function AuthPage() {
   const { t } = useI18n();
-  const [mode, setMode] = useState<AuthMode>("login");
+  // Consume the one-time secret before any effect can request /api/config;
+  // otherwise the browser may put it in Referer headers, history, and logs.
+  const [invitationFromUrl] = useState(consumeInvitationFromUrl);
+  const [mode, setMode] = useState<AuthMode>(invitationFromUrl ? "invitation" : "login");
+  const [signupMode, setSignupMode] = useState<RuntimeConfig["signup_mode"]>("invite_only");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [setupKey, setSetupKey] = useState("");
+  const [invitationKey, setInvitationKey] = useState(() => (
+    invitationFromUrl
+  ));
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const { login, register, setupKeyLogin, googleLogin } = useAuth();
+  const { login, register, redeemInvitation, googleLogin } = useAuth();
+  const location = useLocation();
   const navigate = useNavigate();
+  const [deletionReceipt] = useState(() => (
+    location.state as {
+      accountDeletionReceipt?: { receipt: string; backupExpiry: string; scheduled: boolean };
+    } | null
+  )?.accountDeletionReceipt);
+
+  useEffect(() => {
+    if (!deletionReceipt) return;
+    // Keep the one-time receipt only in this mounted component. Remove it
+    // immediately from browser history so reload/back cannot reveal it later.
+    navigate(`${location.pathname}${location.search}${location.hash}`, {
+      replace: true,
+      state: null,
+    });
+  }, [deletionReceipt, location.hash, location.pathname, location.search, navigate]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getRuntimeConfig()
+      .then((config) => { if (!cancelled) setSignupMode(config.signup_mode); })
+      .catch(() => { /* Fail closed: do not expose public registration. */ });
+    return () => { cancelled = true; };
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setLoading(true);
     try {
-      if (mode === "setup-key") {
-        await setupKeyLogin(setupKey.trim());
+      if (mode === "invitation") {
+        await redeemInvitation(invitationKey.trim(), username, password);
       } else if (mode === "login") {
         await login(username, password);
       } else {
@@ -178,21 +210,38 @@ export default function AuthPage() {
   return (
     <div className="auth-page">
       <div className="auth-card">
+        {deletionReceipt && (
+          <div className="settings-msg settings-msg-ok" role="status" style={{ marginBottom: 18 }}>
+            <strong>Account disabled and deletion accepted.</strong>
+            <p>Save this one-time receipt: <code>{deletionReceipt.receipt}</code></p>
+            <p>
+              Cleanup {deletionReceipt.scheduled ? "was queued" : "will be retried by reconciliation"}.
+              Backup exclusion remains enforced by a restore-safe tombstone; backup expiry is {new Date(deletionReceipt.backupExpiry).toLocaleString()}.
+            </p>
+          </div>
+        )}
         <h2>
           {mode === "login" && t("auth.sign_in")}
           {mode === "register" && t("auth.create_account")}
-          {mode === "setup-key" && t("auth.setup_key")}
+          {mode === "invitation" && "Redeem invitation"}
         </h2>
         <p className="auth-subtitle">
           {mode === "login" && t("auth.welcome")}
           {mode === "register" && t("auth.start")}
-          {mode === "setup-key" && t("auth.enter_setup_key")}
+          {mode === "invitation" && "Choose your username and password. The invitation works once."}
+        </p>
+        {signupMode === "invite_only" && mode === "login" && (
+          <p className="auth-subtitle">New accounts require a one-time invitation.</p>
+        )}
+        <p className="auth-subtitle">
+          By using this service, review the hosted <a href="/privacy" target="_blank" rel="noreferrer">Privacy Notice / 隐私说明</a>,
+          including the real operator and contact for this instance.
         </p>
 
         {error && <div className="error-banner">{error}</div>}
 
         {/* Google Sign-In (show on login and register modes) */}
-        {mode !== "setup-key" && (
+        {mode !== "invitation" && (
           <>
             <GoogleSignInButton onSuccess={handleGoogleSuccess} disabled={loading} />
             {GOOGLE_CLIENT_ID && (
@@ -204,20 +253,47 @@ export default function AuthPage() {
         )}
 
         <form onSubmit={handleSubmit} className="auth-form">
-          {mode === "setup-key" ? (
+          {mode === "invitation" ? (
+            <>
             <label className="auth-label">
-              {t("auth.setup_key")}
+              Invitation key
               <input
                 type="text"
-                value={setupKey}
-                onChange={(e) => setSetupKey(e.target.value.toUpperCase())}
-                placeholder="ASTRO-BETA-XXXXXX"
+                value={invitationKey}
+                onChange={(e) => setInvitationKey(e.target.value)}
+                placeholder="ASTRO-INV-..."
                 required
                 className="auth-input auth-input-key"
                 autoComplete="off"
                 spellCheck={false}
               />
             </label>
+            <label className="auth-label">
+              {t("auth.username")}
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="your-handle"
+                required
+                className="auth-input"
+                autoComplete="username"
+              />
+            </label>
+            <label className="auth-label">
+              {t("auth.password")}
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={t("auth.min_8_chars")}
+                required
+                minLength={8}
+                className="auth-input"
+                autoComplete="new-password"
+              />
+            </label>
+            </>
           ) : (
             <>
               <label className="auth-label">
@@ -252,12 +328,12 @@ export default function AuthPage() {
             {loading ? <span className="spinner" /> : null}
             {mode === "login" && t("auth.sign_in")}
             {mode === "register" && t("auth.create_account")}
-            {mode === "setup-key" && t("auth.activate")}
+            {mode === "invitation" && "Create account"}
           </button>
         </form>
 
         <div className="auth-toggles">
-          {mode !== "setup-key" && (
+          {mode !== "invitation" && signupMode === "public" && (
             <button className="auth-toggle" onClick={() => switchMode(mode === "login" ? "register" : "login")}>
               {mode === "login" ? t("auth.no_account") : t("auth.has_account")}
             </button>
@@ -265,9 +341,9 @@ export default function AuthPage() {
 
           <button
             className="auth-toggle auth-toggle-key"
-            onClick={() => switchMode(mode === "setup-key" ? "login" : "setup-key")}
+            onClick={() => switchMode(mode === "invitation" ? "login" : "invitation")}
           >
-            {mode === "setup-key" ? t("auth.use_password") : t("auth.have_setup_key")}
+            {mode === "invitation" ? t("auth.use_password") : "I have an invitation"}
           </button>
         </div>
       </div>

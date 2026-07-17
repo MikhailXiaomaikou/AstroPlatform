@@ -25,6 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.auth import require_admin_any
+from app.config import settings
 from app.models.database import get_db
 from app.models.schemas import Comment, InferenceLog, UserEvent
 
@@ -35,9 +36,11 @@ def _parse_period(period: str) -> timedelta:
     """Support 'Nd' / 'Nh' format (e.g. '24h', '7d', '30d', '90d')."""
     p = period.strip().lower()
     if p.endswith("d"):
-        return timedelta(days=int(p[:-1]))
+        delta = timedelta(days=int(p[:-1]))
+        return min(delta, timedelta(days=settings.product_analytics_retention_days))
     if p.endswith("h"):
-        return timedelta(hours=int(p[:-1]))
+        delta = timedelta(hours=int(p[:-1]))
+        return min(delta, timedelta(days=settings.product_analytics_retention_days))
     raise HTTPException(status_code=400, detail=f"unsupported period: {period}")
 
 

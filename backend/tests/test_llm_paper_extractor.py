@@ -447,14 +447,17 @@ async def test_helper_writes_passed_rows_to_session_cache(monkeypatch):
 
     stored: dict[str, Any] = {}
 
-    def fake_store(key, value):
-        stored[key] = value
+    def fake_store(key, session_id, value):
+        stored[f"{key}:{session_id}"] = value
 
     monkeypatch.setattr(
         "app.services.llm_paper_extractor.extract_with_llm_and_verify",
         lambda arxiv_id, fields, api_key: fake_records,
     )
-    monkeypatch.setattr(ai_tools, "store_search_results", fake_store)
+    monkeypatch.setattr(
+        "app.services.ai_tools.literature.store_session_results",
+        fake_store,
+    )
 
     out = await ai_tools._extract_and_cache_paper_measurements(
         "2002.00962",
@@ -527,7 +530,12 @@ async def test_helper_handles_zero_passed(monkeypatch):
         "app.services.llm_paper_extractor.extract_with_llm_and_verify",
         lambda arxiv_id, fields, api_key: fake_records,
     )
-    monkeypatch.setattr(ai_tools, "store_search_results", lambda k, v: stored.setdefault(k, v))
+    monkeypatch.setattr(
+        "app.services.ai_tools.literature.store_session_results",
+        lambda key, session_id, value: stored.setdefault(
+            f"{key}:{session_id}", value
+        ),
+    )
 
     out = await ai_tools._extract_and_cache_paper_measurements(
         "0000.0000",
@@ -608,7 +616,10 @@ async def test_fit_line_lfr_arxiv_id_zero_passed_early_exit(monkeypatch):
         "app.services.llm_paper_extractor.extract_with_llm_and_verify",
         lambda arxiv_id, fields, api_key: fake_records,
     )
-    monkeypatch.setattr(ai_tools, "store_search_results", lambda k, v: None)
+    monkeypatch.setattr(
+        "app.services.ai_tools.literature.store_session_results",
+        lambda _key, _session_id, _value: None,
+    )
 
     out = await ai_tools._exec_fit_line_lfr(
         {"arxiv_id": "2002.00962"},

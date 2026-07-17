@@ -66,6 +66,10 @@ class ResearchJob(Base):
     result: Mapped[dict | list | str | int | float | bool | None] = mapped_column(
         JSONType(), nullable=True
     )
+    # Server HMAC over the completed job identity, inputs, and persisted result.
+    # A client-authored or manually inserted ``publication_ready`` flag is not
+    # publication evidence without this binding.
+    attestation: Mapped[dict | None] = mapped_column(JSONType(), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_class: Mapped[str | None] = mapped_column(String(255), nullable=True)
     background_backend: Mapped[str] = mapped_column(

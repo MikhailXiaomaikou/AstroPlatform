@@ -5,6 +5,7 @@ data-product local-read fix.
 from __future__ import annotations
 
 import asyncio
+import pytest
 
 import app.services.cosmology_likelihoods as cl
 from app.services.cosmology_likelihoods import run_likelihood_chain
@@ -574,14 +575,13 @@ def test_desi_dr2_bao_only_recovers_omegam_as_preliminary():
 
 def test_desi_dr1_and_dr2_overlap_blocks_publication():
     # DR2 supersedes DR1 — same survey, overlapping measurements; co-adding
-    # double-counts, so publication must be blocked and the overlap warned.
-    r = run_likelihood_chain(
-        model="lcdm", dataset_keys=["desi_dr1_bao", "desi_dr2_bao"],
-        n_samples=2000, random_seed=42,
-    )
-    assert r["publication_ready"] is False
-    assert r["chain_tier"] == "blocked"
-    assert any("overlap" in w and "co-added" in w for w in r["warnings"])
+    # double-counts, so the likelihood must fail before sampling rather than
+    # returning a result that a downstream caller might accidentally reuse.
+    with pytest.raises(ValueError, match="overlapping releases"):
+        run_likelihood_chain(
+            model="lcdm", dataset_keys=["desi_dr1_bao", "desi_dr2_bao"],
+            n_samples=2000, random_seed=42,
+        )
 
 
 def test_desi_dr2_unverified_refuses_chi2(monkeypatch):
@@ -589,7 +589,6 @@ def test_desi_dr2_unverified_refuses_chi2(monkeypatch):
     # contribution), mirroring the FSBAO/Moresco hardening. Monkeypatch the loader
     # (do NOT cache_clear load_verified_bao_data — the DR1 provenance-binding test
     # relies on its import-time cached identity).
-    import pytest
     monkeypatch.setattr(
         cl, "load_verified_bao_data",
         lambda key: {"cov_fidelity": "unverified", "covariance": None, "mean_vector": None,

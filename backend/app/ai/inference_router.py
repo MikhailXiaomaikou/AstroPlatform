@@ -23,6 +23,35 @@ logger = logging.getLogger(__name__)
 
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 
+INFERENCE_ERROR_CLASSES = frozenset(
+    {
+        "provider_timeout",
+        "provider_rate_limited",
+        "provider_authentication_failed",
+        "provider_http_error",
+        "provider_unavailable",
+        "provider_error",
+        "legacy_error_redacted",
+    }
+)
+
+
+def classify_inference_error(exc: BaseException) -> str:
+    """Map provider failures to a finite, research-content-free category."""
+
+    if isinstance(exc, (asyncio.TimeoutError, httpx.TimeoutException, TimeoutError)):
+        return "provider_timeout"
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        if status == 429:
+            return "provider_rate_limited"
+        if status in {401, 403}:
+            return "provider_authentication_failed"
+        return "provider_http_error"
+    if isinstance(exc, (ConnectionError, OSError)):
+        return "provider_unavailable"
+    return "provider_error"
+
 
 def _env_flag(name: str, *, default: bool = False) -> bool:
     """Parse a boolean environment flag without treating ``"0"`` as true."""
@@ -1151,14 +1180,19 @@ class InferenceRouter:
                         {},
                         success=False,
                         latency_ms=latency_ms,
-                        error=str(exc),
+                        error_class=classify_inference_error(exc),
                         model_name=backend_profile.resolved_model_id,
                         model_profile=backend_profile.id,
                         fallback_from=fallback_from,
                     )
                 except Exception:
                     logger.debug("Failed to log inference error (non-fatal)")
-                logger.warning("Inference backend %s failed for %s: %s", backend_name, agent_name, exc)
+                logger.warning(
+                    "Inference backend %s failed for %s (%s)",
+                    backend_name,
+                    agent_name,
+                    classify_inference_error(exc),
+                )
                 continue
         if attempted_configured == 0:
             raise InferenceError(
@@ -1177,7 +1211,7 @@ class InferenceRouter:
         usage: dict,
         success: bool,
         latency_ms: int,
-        error: str | None = None,
+        error_class: str | None = None,
         *,
         model_name: str | None = None,
         model_profile: str | None = None,
@@ -1193,6 +1227,9 @@ class InferenceRouter:
         input_tokens = int(usage.get("input_tokens", 0) or 0)
         output_tokens = int(usage.get("output_tokens", 0) or 0)
         cost = input_tokens * in_price + output_tokens * out_price
+        normalized_error_class = (
+            error_class if error_class in INFERENCE_ERROR_CLASSES else "provider_error"
+        ) if not success else None
         async with async_session() as db:
             db.add(
                 InferenceLog(
@@ -1202,7 +1239,9 @@ class InferenceRouter:
                     output_tokens=output_tokens,
                     latency_ms=latency_ms,
                     success=success,
-                    error=error,
+                    # Historical column name retained for migration
+                    # compatibility; values are now allowlisted classes only.
+                    error=normalized_error_class,
                     cost_usd=cost,
                     model_name=model_name,
                     model_profile=model_profile,

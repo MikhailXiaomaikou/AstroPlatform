@@ -208,6 +208,12 @@ def _validate_dataset_selection(model: str, keys: list[str]) -> list[CosmologyDa
         raise ValueError(f"datasets not applicable to {model}: {unsupported}")
     if len({entry.key for entry in entries}) != len(entries):
         raise ValueError("dataset selection contains duplicates")
+    selected = {entry.key for entry in entries}
+    if {"desi_dr1_bao", "desi_dr2_bao"}.issubset(selected):
+        raise ValueError(
+            "DESI DR1 and DR2 BAO are overlapping releases and cannot enter "
+            "the same likelihood; run them as separate matrix cells"
+        )
     return entries
 
 

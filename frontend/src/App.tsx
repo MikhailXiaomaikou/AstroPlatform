@@ -62,6 +62,8 @@ const ObservationsPage = lazy(() => import("./pages/Observations/ObservationsPag
 const AccountPage = lazy(() => import("./pages/Account/AccountPage"));
 const PapersPage = lazy(() => import("./pages/Papers/PapersPage"));
 const BotPage = lazy(() => import("./pages/Bot/BotPage"));
+const ClaimAuditPage = lazy(() => import("./pages/ClaimAudit/ClaimAuditPage"));
+const PrivacyPage = lazy(() => import("./pages/Privacy/PrivacyPage"));
 
 function useTheme() {
   // Journal edition: default to light. We use a new key (astro_theme_v2) so
@@ -151,6 +153,7 @@ function NavBar() {
         >
           <NavLink to="/"          end onClick={() => setMenuOpen(false)}>{t("nav.home")}</NavLink>
           <NavLink to="/chat"          onClick={() => setMenuOpen(false)}>{t("nav.ai_assistant")}</NavLink>
+          <NavLink to="/claim-audit"   onClick={() => setMenuOpen(false)}>{t("nav.claim_audit")}</NavLink>
           {BOT_CONSOLE_ENABLED && (
             <NavLink to="/bot" onClick={() => setMenuOpen(false)}>{t("nav.research_bot")}</NavLink>
           )}
@@ -195,7 +198,7 @@ function NavBar() {
               <span className="journal-user-name" title={user.username || user.email}>
                 {user.display_name || user.username || user.email.split("@")[0]}
               </span>
-              <button className="journal-user-logout" onClick={logout}>
+              <button className="journal-user-logout" onClick={() => logout()}>
                 {t("nav.sign_out")}
               </button>
             </div>
@@ -285,6 +288,11 @@ function BackendBanner() {
 }
 
 function TrackingBridge() {
+  const { user } = useAuth();
+  return <TrackingSession key={user?.id || "anonymous"} />;
+}
+
+function TrackingSession() {
   const location = useLocation();
   const { track, setCurrentPage, getEventCount } = useTracking();
   const [startedAt] = useState(() => Date.now());
@@ -294,10 +302,7 @@ function TrackingBridge() {
   useEffect(() => {
     const pageName = location.pathname || "/";
     setCurrentPage(pageName);
-    track("session.started", {
-      referrer: document.referrer || "",
-      user_agent_summary: navigator.userAgent.slice(0, 120),
-    });
+    track("session.started");
 
     const handleUnload = () => {
       const totalDuration = Date.now() - startedAt;
@@ -349,7 +354,9 @@ function JournalFooter() {
             <strong>{t("footer.col.community")}</strong>
             <NavLink to="/team">{t("nav.team")}</NavLink>
             <NavLink to="/chat">{t("nav.ai_assistant")}</NavLink>
+            <NavLink to="/claim-audit">{t("nav.claim_audit")}</NavLink>
             <NavLink to="/account">{t("nav.account")}</NavLink>
+            <NavLink to="/privacy">Privacy / 隐私</NavLink>
           </div>
         </div>
       </div>
@@ -364,8 +371,8 @@ function JournalFooter() {
 function App() {
   return (
     <I18nProvider>
-    <AuthProvider>
       <BrowserRouter>
+      <AuthProvider>
         <a href="#main-content" className="skip-to-content">Skip to content</a>
         <TrackingBridge />
         <BackendBanner />
@@ -383,6 +390,7 @@ function App() {
                 <Route path="/team" element={<TeamPage />} />
                 <Route path="/help" element={<HelpPage />} />
                 <Route path="/chat" element={<ChatPage />} />
+                <Route path="/claim-audit" element={<ClaimAuditPage />} />
                 <Route path="/bot" element={<BotPage />} />
                 <Route path="/account" element={<AccountPage />} />
                 <Route path="/papers" element={<PapersPage />} />
@@ -394,6 +402,7 @@ function App() {
                 <Route path="/alerts" element={<Navigate to="/observations" replace />} />
                 <Route path="/anomalies" element={<Navigate to="/observations" replace />} />
                 <Route path="/auth" element={<AuthPage />} />
+                <Route path="/privacy" element={<PrivacyPage />} />
                 {/* Catch-all: any unknown path (deep links to deleted M3
                     pages, typos, copy-pasted broken URLs) lands on the
                     Landing page instead of rendering a blank <Routes> with
@@ -404,8 +413,8 @@ function App() {
           </ErrorBoundary>
         </main>
         <JournalFooter />
+      </AuthProvider>
       </BrowserRouter>
-    </AuthProvider>
     </I18nProvider>
   );
 }

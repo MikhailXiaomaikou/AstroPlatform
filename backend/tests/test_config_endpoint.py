@@ -84,6 +84,21 @@ def test_config_endpoint_no_auth_required(reload_chat_and_config):
     assert r.status_code == 200
 
 
+def test_config_endpoint_publishes_hosted_privacy_identity(reload_chat_and_config, monkeypatch):
+    config_mod = reload_chat_and_config("cosmology")
+    monkeypatch.setattr(config_mod.settings, "privacy_operator_name", "Example Observatory")
+    monkeypatch.setattr(config_mod.settings, "privacy_contact", "privacy@example.invalid")
+    monkeypatch.setattr(config_mod.settings, "privacy_jurisdiction", "Example jurisdiction")
+    with _client_for(config_mod) as client:
+        body = client.get("/api/config").json()
+    assert body["privacy_notice"] == {
+        "operator_name": "Example Observatory",
+        "contact": "privacy@example.invalid",
+        "jurisdiction": "Example jurisdiction",
+        "notice_url": "/privacy",
+    }
+
+
 @pytest.fixture(autouse=True)
 def _restore_modules(monkeypatch):
     """Restore chat + config modules after each test."""

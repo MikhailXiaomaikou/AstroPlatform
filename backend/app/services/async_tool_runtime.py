@@ -99,6 +99,19 @@ def _job_owner_scope(job: dict[str, Any]) -> str:
     return str(job.get("owner_scope") or job.get("user_id") or "")
 
 
+def _owner_deletion_requested(job: dict[str, Any]) -> bool:
+    owner_id = job.get("user_id")
+    if not owner_id:
+        return False
+    try:
+        owner_uuid = uuid.UUID(str(owner_id))
+    except (TypeError, ValueError, AttributeError):
+        return False
+    from app.services.account_deletion import external_deletion_tombstone_exists
+
+    return external_deletion_tombstone_exists(owner_uuid)
+
+
 # ---------------------------------------------------------------------------
 # Pluggable dispatcher (real Celery in prod, no-op in tests)
 # ---------------------------------------------------------------------------
@@ -292,6 +305,19 @@ def submit_async_job(
     inputs_hash = _hash_args(tool_name, args)
     effective_owner = _effective_owner_scope(user_id)
 
+    if user_id:
+        probe = {"user_id": str(user_id)}
+        if _owner_deletion_requested(probe):
+            return {
+                "success": False,
+                "status": "FAILED",
+                "error": "Account deletion requested; background work was not queued.",
+                "error_class": "account_deletion_requested",
+                "__tool_status__": "FAILED",
+                "publication_ready": False,
+                "__do_not_claim__": True,
+            }
+
     if dedup:
         existing = _find_running_job_by_hash(
             tool_name, inputs_hash, owner_id=effective_owner,
@@ -408,7 +434,27 @@ def cancel_async_job(job_id: str, *, owner_id: str | None = None) -> dict[str, A
 def is_cancelled(job_id: str) -> bool:
     """Probe used by the Celery task between long stages."""
     job = _JOBS_STORE.get(str(job_id))
-    return isinstance(job, dict) and job.get("status") == "cancelled"
+    return isinstance(job, dict) and (
+        job.get("status") == "cancelled" or job.get("erasing") is True
+    )
+
+
+def purge_owner_jobs(owner_id: str) -> int:
+    """Strictly cancel, mark, then remove one account's hot worker records."""
+
+    removed = 0
+    owner_key = str(owner_id)
+    for key in list(_JOBS_STORE.scan_keys_strict()):
+        job = _JOBS_STORE.get_strict(key)
+        if not isinstance(job, dict) or _job_owner_scope(job) != owner_key:
+            continue
+        job["status"] = "cancelled"
+        job["erasing"] = True
+        job["cancelled_at"] = time.time()
+        _JOBS_STORE.set_strict(key, job, ttl=int(job.get("ttl") or DEFAULT_TTL))
+        _JOBS_STORE.delete_strict(key)
+        removed += 1
+    return removed
 
 
 # ---------------------------------------------------------------------------
@@ -424,6 +470,9 @@ def update_progress(
     """Report status / progress from inside the running task."""
     job = _JOBS_STORE.get(str(job_id))
     if not isinstance(job, dict):
+        return
+    if job.get("erasing") is True or _owner_deletion_requested(job):
+        _JOBS_STORE.delete(str(job_id))
         return
     if status is not None:
         job["status"] = status
@@ -446,6 +495,9 @@ def write_result(job_id: str, result: Any) -> None:
     job = _JOBS_STORE.get(str(job_id))
     if not isinstance(job, dict):
         return
+    if job.get("erasing") is True or _owner_deletion_requested(job):
+        _JOBS_STORE.delete(str(job_id))
+        return
     job["status"] = "completed"
     job["result"] = result
     job["completed_at"] = time.time()
@@ -458,6 +510,9 @@ def write_error(job_id: str, exc: BaseException | str, error_class: str | None =
     """Store a failure and mark the job failed."""
     job = _JOBS_STORE.get(str(job_id))
     if not isinstance(job, dict):
+        return
+    if job.get("erasing") is True or _owner_deletion_requested(job):
+        _JOBS_STORE.delete(str(job_id))
         return
     job["status"] = "failed"
     if isinstance(exc, BaseException):

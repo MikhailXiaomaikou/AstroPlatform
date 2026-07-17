@@ -18,6 +18,9 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+_PIPELINE_CACHE_PREFIX = "pipeline_node"
+_PIPELINE_OWNER_INDEX_PREFIX = "pipeline_owner_cache"
+
 
 # ---------------------------------------------------------------------------
 # Sync cache helpers (used in sync execute_dag & Celery)
@@ -71,7 +74,17 @@ def _cache_set_sync(key: str, value, ttl: int | None = None):
         r = _get_sync_redis()
         if r is None:
             return
-        r.setex(key, ttl, json.dumps(value, default=str))
+        payload = json.dumps(value, default=str)
+        parts = key.split(":", 3)
+        if len(parts) == 4 and parts[0] == _PIPELINE_CACHE_PREFIX:
+            index_key = f"{_PIPELINE_OWNER_INDEX_PREFIX}:{parts[1]}"
+            with r.pipeline(transaction=True) as pipe:
+                pipe.setex(key, ttl, payload)
+                pipe.sadd(index_key, key)
+                pipe.expire(index_key, ttl)
+                pipe.execute()
+        else:
+            r.setex(key, ttl, payload)
     except (RedisError, ConnectionError, TypeError) as e:
         logger.debug("Cache set failed for key %s: %s", key, e)
 
@@ -105,10 +118,78 @@ def _build_node_cache_key(
             },
             sort_keys=True, default=str,
         )
-        return f"pipeline_node:{node_type}:{hashlib.sha256(cache_payload.encode()).hexdigest()}"
+        owner_digest = hashlib.sha256(
+            f"standard-astro:pipeline-owner:v1:{owner_scope}".encode("utf-8")
+        ).hexdigest()
+        return (
+            f"{_PIPELINE_CACHE_PREFIX}:{owner_digest}:{node_type}:"
+            f"{hashlib.sha256(cache_payload.encode()).hexdigest()}"
+        )
     except (TypeError, ValueError) as e:
         logger.debug("Could not build cache key for node %s: %s", node_type, e)
         return None
+
+
+def delete_owner_pipeline_cache_sync(
+    owner_id: str | uuid.UUID,
+    *,
+    strict: bool = True,
+) -> int:
+    """Delete every pipeline cache entry for one account.
+
+    The owner index covers all writes from this release. The exact-prefix
+    scan also removes cache entries written by older releases before that
+    index existed, so account deletion does not have to wait for their TTL.
+    """
+
+    owner_digest = hashlib.sha256(
+        f"standard-astro:pipeline-owner:v1:{owner_id}".encode("utf-8")
+    ).hexdigest()
+    index_key = f"{_PIPELINE_OWNER_INDEX_PREFIX}:{owner_digest}"
+    try:
+        redis_client = _get_sync_redis()
+        if redis_client is None:
+            if strict:
+                raise RuntimeError(
+                    "Shared Redis is unavailable during account cache erasure"
+                )
+            return 0
+        members = list(redis_client.smembers(index_key) or [])
+        indexed_keys = [
+            value.decode("utf-8") if isinstance(value, (bytes, bytearray)) else str(value)
+            for value in members
+        ]
+        legacy_keys = [
+            value.decode("utf-8") if isinstance(value, (bytes, bytearray)) else str(value)
+            for value in redis_client.scan_iter(
+                match=f"{_PIPELINE_CACHE_PREFIX}:{owner_digest}:*",
+                count=500,
+            )
+        ]
+        keys = sorted(set(indexed_keys) | set(legacy_keys))
+        with redis_client.pipeline(transaction=True) as pipe:
+            if keys:
+                pipe.delete(*keys)
+            pipe.delete(index_key)
+            results = pipe.execute()
+        if strict:
+            surviving_keys = list(
+                redis_client.scan_iter(
+                    match=f"{_PIPELINE_CACHE_PREFIX}:{owner_digest}:*",
+                    count=500,
+                )
+            )
+            surviving_index = list(redis_client.smembers(index_key) or [])
+            if surviving_keys or surviving_index:
+                raise RuntimeError(
+                    "Pipeline owner cache deletion could not be verified"
+                )
+        return int(results[0] or 0) if keys and results else 0
+    except Exception:
+        if strict:
+            raise
+        logger.exception("Could not clear pipeline cache for deleted account")
+        return 0
 
 
 def topological_sort(dag: dict) -> list[list[str]]:
@@ -445,6 +526,36 @@ def _get_sync_session():
     return engine, Session(engine)
 
 
+class PipelineOwnerInactive(RuntimeError):
+    """Pipeline persistence was revoked by account deletion."""
+
+
+def _lock_active_pipeline_owner(session, run) -> bool:
+    """Serialize a persistence boundary with the account-deletion lock."""
+
+    from sqlalchemy import select
+
+    from app.models.schemas import User
+
+    owner = session.execute(
+        select(User).where(User.id == run.user_id).with_for_update()
+    ).scalar_one_or_none()
+    if owner is None or str(owner.account_status or "").upper() != "ACTIVE":
+        return False
+    session.refresh(run)
+    return str(run.status or "").lower() in {"pending", "running"}
+
+
+def _delete_unpersisted_pipeline_output(
+    *,
+    owner_id: str | uuid.UUID,
+    result: object,
+) -> None:
+    from app.services.account_deletion import dispose_deleted_account_result
+
+    dispose_deleted_account_result(user_id=owner_id, result=result)
+
+
 def _publish_progress(run_id: str, data: dict):
     """Publish progress to Redis pub/sub for WebSocket relay."""
     try:
@@ -484,6 +595,9 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
         if run is None:
             logger.error(f"PipelineRun {run_id} not found in database")
             return {"run_id": run_id, "status": "failed", "error": "Run not found"}
+        if not _lock_active_pipeline_owner(session, run):
+            session.rollback()
+            return {"run_id": run_id, "status": "cancelled"}
 
         run.status = "running"
         cache_owner_scope = str(run.user_id)
@@ -608,6 +722,10 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
                     root_input_capability=root_input_capability,
                 )
 
+                if not _lock_active_pipeline_owner(session, run):
+                    session.rollback()
+                    raise PipelineOwnerInactive
+
                 if cache_key and not params.get("force_rerun"):
                     try:
                         cached = _cache_get_sync(cache_key)
@@ -656,6 +774,10 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
                             continue
                     except (RedisError, ConnectionError, json.JSONDecodeError) as e:
                         logger.debug("[%s] Cache lookup failed for node %s: %s", run_id, node_id, e)
+                # A cache miss must not hold the owner row throughout scientific
+                # computation. The post-node guard below re-acquires it before
+                # any cache, object reference, or result row can be persisted.
+                session.rollback()
                 # -- End cache lookup -----------------------------------------------
 
                 # Notify node start
@@ -696,6 +818,14 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
                 result["_execution_time_ms"] = execution_time_ms
                 node_results[node_id] = result
                 completed_count += 1
+
+                if not _lock_active_pipeline_owner(session, run):
+                    session.rollback()
+                    _delete_unpersisted_pipeline_output(
+                        owner_id=run.user_id,
+                        result=result,
+                    )
+                    raise PipelineOwnerInactive
 
                 # Record provenance for this node execution
                 try:
@@ -751,6 +881,9 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
         final_status = "completed" if not has_errors else "failed"
         api_results = _trim_for_api(node_results)
 
+        if not _lock_active_pipeline_owner(session, run):
+            session.rollback()
+            raise PipelineOwnerInactive
         run.status = final_status
         run.results = node_results
         run.completed_at = datetime.now(timezone.utc)
@@ -766,16 +899,23 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
         logger.info(f"[{run_id}] Pipeline {final_status}")
         return {"run_id": run_id, "status": final_status, "results": api_results}
 
+    except PipelineOwnerInactive:
+        session.rollback()
+        logger.info("[%s] Pipeline stopped because its owner is no longer active", run_id)
+        return {"run_id": run_id, "status": "cancelled"}
     except Exception as exc:
         logger.exception(f"[{run_id}] Pipeline execution failed with exception")
 
         # Update DB status to failed
         try:
+            session.rollback()
             run = session.get(PipelineRun, uuid.UUID(run_id))
-            if run:
+            if run and _lock_active_pipeline_owner(session, run):
                 run.status = "failed"
                 run.completed_at = datetime.now(timezone.utc)
                 session.commit()
+            else:
+                session.rollback()
         except Exception as db_err:
             logger.exception(f"[{run_id}] Failed to update run status after error: {db_err}")
 

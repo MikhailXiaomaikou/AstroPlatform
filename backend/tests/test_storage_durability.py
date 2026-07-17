@@ -143,3 +143,60 @@ def test_s3_read_refuses_corrupt_payload(monkeypatch, tmp_path):
 
     with pytest.raises(storage.StorageIntegrityError):
         storage.download_fits(key)
+
+
+class _FakeVersionPaginator:
+    def __init__(self, client):
+        self.client = client
+
+    def paginate(self, *, Bucket, Prefix):
+        versions = [
+            {"Key": key, "VersionId": version_id}
+            for key, version_id in sorted(self.client.versions)
+            if key.startswith(Prefix)
+        ]
+        markers = [
+            {"Key": key, "VersionId": version_id}
+            for key, version_id in sorted(self.client.markers)
+            if key.startswith(Prefix)
+        ]
+        return [{"Versions": versions, "DeleteMarkers": markers}]
+
+
+class _FakeVersionedS3:
+    def __init__(self):
+        self.versions: set[tuple[str, str]] = set()
+        self.markers: set[tuple[str, str]] = set()
+
+    def get_bucket_versioning(self, *, Bucket):
+        assert Bucket == "science"
+        return {"Status": "Enabled"}
+
+    def get_paginator(self, name):
+        assert name == "list_object_versions"
+        return _FakeVersionPaginator(self)
+
+    def delete_objects(self, *, Bucket, Delete):
+        assert Bucket == "science"
+        for item in Delete["Objects"]:
+            pair = (item["Key"], item["VersionId"])
+            self.versions.discard(pair)
+            self.markers.discard(pair)
+        return {"Deleted": list(Delete["Objects"])}
+
+
+def test_account_erasure_removes_every_s3_object_version(monkeypatch, tmp_path):
+    storage = _local(monkeypatch, tmp_path)
+    fake = _FakeVersionedS3()
+    key = "jobs/user-1/result.json.gz"
+    fake.versions.update({(key, "v1"), (key, "v2"), (key + ".bak", "other")})
+    fake.markers.add((key, "marker-1"))
+    monkeypatch.setattr(storage.settings, "storage_backend", "s3")
+    monkeypatch.setattr(storage.settings, "s3_bucket", "science")
+    monkeypatch.setattr(storage, "_s3_client", lambda: fake)
+
+    storage.delete_fits_all_versions(key)
+
+    assert not {item for item in fake.versions if item[0] == key}
+    assert not {item for item in fake.markers if item[0] == key}
+    assert (key + ".bak", "other") in fake.versions

@@ -19,7 +19,7 @@ import asyncio
 import numpy as np
 
 import app.services.ai_tools as ai_tools
-from app.services.ai_tools import store_search_results
+from app.services.ai_tools import store_session_results
 
 
 def _detection(i: int, fwhm: float, logl: float) -> dict:
@@ -55,7 +55,7 @@ def _limit_row(name: str, raw_lum: str, **overrides) -> dict:
 
 
 def _seed_cache(rows: list[dict], key: str) -> str:
-    store_search_results(key, {
+    store_session_results(key, "censoring-test", {
         "schema_version": 2,
         "kind": "literature_tables",
         "cache_key": key,

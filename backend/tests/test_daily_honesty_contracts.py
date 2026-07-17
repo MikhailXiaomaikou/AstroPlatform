@@ -238,6 +238,36 @@ def test_f2_nonpublication_posterior_stays_out_of_reply(monkeypatch) -> None:
     )
 
 
+def test_f2_desi_dr2_matrix_intervals_are_withheld() -> None:
+    """The DR2 matrix uses parameter_intervals, not the legacy parameters key."""
+
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    escaped = nonpublication_posterior_values(
+        "The exploratory matrix gives w0 = -0.838, wa = -0.73, and center shift 0.127.",
+        [{
+            "tool": "run_dark_energy_evidence_matrix",
+            "result": {
+                "success": True,
+                "publication_ready": False,
+                "__do_not_claim__": True,
+                "parameter_intervals": {
+                    "w0": {"mean": -0.838, "q16": -0.91, "q84": -0.77},
+                    "wa": {"mean": -0.73, "q16": -1.02, "q84": -0.44},
+                },
+                "two_dimensional_contours": {
+                    "w0_wa": {"levels": [0.68, 0.95]},
+                },
+                "tension_lab": {
+                    "comparisons": [{"center_shift": 0.127, "tension_sigma": None}],
+                },
+            },
+        }],
+    )
+
+    assert escaped == [-0.838, -0.73, 0.127]
+
+
 def test_c2_registry_returns_structured_outside_coverage_status() -> None:
     result = list_cosmology_datasets(
         dataset_keys=["pantheon_plus"],

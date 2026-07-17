@@ -12,6 +12,7 @@ hide non-cosmology nav items when ASTRO_RESEARCH_FOCUS=cosmology.
 from fastapi import APIRouter
 
 from app.api.chat import _ASTRO_RESEARCH_FOCUS
+from app.config import settings
 
 router = APIRouter(tags=["config"])
 
@@ -27,4 +28,15 @@ async def get_config() -> dict:
     """
     return {
         "focus": _ASTRO_RESEARCH_FOCUS,
+        "signup_mode": settings.signup_mode,
+        "claim_audit_enabled": settings.claim_audit_enabled,
+        "analytics_requires_consent": True,
+        # These values are deliberately public: they identify who operates
+        # the hosted service and where users can exercise privacy rights.
+        "privacy_notice": {
+            "operator_name": settings.privacy_operator_name,
+            "contact": settings.privacy_contact,
+            "jurisdiction": settings.privacy_jurisdiction,
+            "notice_url": "/privacy",
+        },
     }

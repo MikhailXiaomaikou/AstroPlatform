@@ -41,8 +41,10 @@
 - 默认不同意；匿名用户和未同意的登录用户不会写入产品分析事件；
 - 用户可以在隐私设置中同意或拒绝；
 - 拒绝后，当前账号已有的产品分析事件会从在线数据库删除，尚未写入的缓冲事件也会丢弃；
-- P1 生产目标为保留不超过 **30 天**。Celery Beat 每日清理过期事件；如果调度服务未运行，这个期限不会自动得到保证，因此运营监控必须检查清理任务；
+- P1 生产目标为保留不超过 **30 天**。查询和导出会在服务端排除超过 30 天的事件，Celery Beat 每小时物理清理并自动重试；调度或存储故障仍可能延迟物理删除，因此运营监控必须检查 Beat 和清理任务；
 - `PRODUCT_ANALYTICS_RETENTION_DAYS` 的真实生产值必须与线上说明一致。
+
+**必要的粗粒度推理运行指标与可选产品分析分开。** 为了执行、计费核对和排查模型故障，系统会记录模型/Provider、输入输出 token 数、延迟、估算成本、成功状态和白名单错误类别；拒绝产品分析不会停止这些记录。它们不得包含 prompt、claim、工具参数、错误原文或科研数值，并使用同一个最多 30 天的生产保留目标和每小时重试清理。调度或数据库故障仍可能延迟物理删除，运营方必须监控清理任务。
 
 下列内容**不得进入产品分析**：
 
@@ -68,18 +70,18 @@
 
 1. 系统先在数据库恢复边界之外写入带签名的删除 tombstone；写入失败时拒绝受理，而不是冒险继续；
 2. 账号立即进入 `DELETION_PENDING`，登录凭据和保存的 API Key 被撤销，排队中或运行中的 Research Job 记录被标记为取消；已经发出的外部请求不一定能瞬间停止；
-3. 后台任务异步删除与账号关联的在线数据库记录和对象存储文件；失败会标为可重试并由定时任务继续处理；
+3. 后台任务异步删除与账号关联的在线数据库记录，并枚举、永久删除对象存储中的全部对象版本和 delete marker；无法证明版本已全部删除时会 fail closed，标为可重试并由定时任务继续处理；
 4. 用户会得到一次性删除回执。回执应保存到清理完成。
 
-删除不是“所有副本瞬间消失”。P1 的备份保留目标是 **30 天**，删除回执也给出相应的 `backup_expiry`；但是数据库快照、对象版本和平台日志的真实到期必须由运营方在云平台配置并验证，本仓库不能替云服务删除备份。
+删除不是“所有副本瞬间消失”。服务会主动清除其凭据能控制的账号对象全部版本，但 P1 的数据库备份保留目标仍是 **30 天**，删除回执也给出相应的 `backup_expiry`。云平台快照、平台日志、凭据不可见的复制品，以及普通对象版本生命周期必须由运营方配置并验证；本仓库不能只靠一段声明删除云服务备份。
 
-外部 tombstone 只保存经过 HMAC 处理的用户指纹、回执哈希、请求时间和签名，不保存用户名、邮箱或研究内容。它用于阻止旧备份恢复已删除账号。代码不会自动删除外部 tombstone；运营方应至少保留到所有可能恢复该账号的备份都已过期，并公开更长保留的理由和期限。
+外部 tombstone 只保存由随机用户 UUID 计算的稳定 SHA-256 指纹、回执哈希、请求时间、签名 key id 和 HMAC 签名，不保存用户名、邮箱或研究内容。稳定对象路径使密钥轮换后仍能发现 tombstone；旧验证密钥必须按运维规则保留。它用于阻止旧备份恢复已删除账号。代码不会自动删除外部 tombstone；运营方应至少保留到所有可能恢复该账号的备份都已过期，并公开更长保留的理由和期限。
 
 账号删除只覆盖本部署控制的数据库和对象存储。已经发送给外部 Provider 的数据，需要按照该 Provider 的流程处理。
 
 ### 6. 浏览器和安全
 
-浏览器会保存登录和界面状态。本地聊天草稿、聊天历史和操作日志可能包含研究文字；退出登录只移除认证状态，不保证清除这些记录。共享设备交接前应清除站点数据。
+浏览器会保存登录和界面状态。本地聊天草稿、聊天历史和操作日志可能包含研究文字；普通退出登录会移除认证与账号分析状态、跳转到登录页并卸载受保护页面，但不会保证清除下载文件、浏览器缓存或所有非敏感界面偏好。成功提交账号删除时，本页面会清除此浏览器当前站点的 Web Storage；其他浏览器、下载文件、浏览器缓存或扩展副本仍需用户分别清理。共享设备交接前应检查并清除站点数据。
 
 密码以哈希保存，BYOK 使用稳定的 Fernet Key 加密，证据使用独立签名密钥。没有系统能保证绝对安全。生产环境必须使用 TLS、受控密钥管理、访问受限且经过恢复演练的备份，以及独立的证据密钥轮换记录。
 
@@ -134,11 +136,22 @@ Product analytics require **explicit opt-in consent**:
 - users can opt in or out in Privacy Settings;
 - opting out deletes that account's existing online analytics events and
   discards buffered events;
-- the P1 production target is a maximum **30-day** retention period. Celery
-  Beat schedules a daily purge. Operators must monitor that job because the
-  repository cannot guarantee the deadline while the scheduler is down;
+- the P1 production target is a maximum **30-day** retention period. Server
+  queries and exports exclude older events, while Celery Beat physically
+  purges them hourly with retries. A scheduler or storage outage can still
+  delay physical deletion, so operators must monitor Beat and the purge job;
 - the deployed `PRODUCT_ANALYTICS_RETENTION_DAYS` value must match the notice
   shown to users.
+
+**Required coarse inference-operation metrics are separate from optional
+product analytics.** To execute requests, reconcile usage, and diagnose model
+failures, the service records model/provider, input/output token counts,
+latency, estimated cost, success status, and an allowlisted error class.
+Opting out of analytics does not stop these records. They must not contain
+prompts, claims, tool arguments, raw errors, or scientific values, and use the
+same maximum 30-day production target with hourly retrying cleanup. Scheduler
+or database outages may delay physical deletion, so operators must monitor the
+purge job.
 
 Product analytics must never contain:
 
@@ -180,20 +193,26 @@ request is safely accepted:
 2. the account immediately becomes `DELETION_PENDING`, reusable credentials
    and saved API keys are revoked, and queued/running Research Job records are
    marked cancelled. An already-issued external request may not stop instantly;
-3. a background task erases connected online database rows and object-storage
-   files. Failures are retryable and periodic reconciliation schedules them
-   again;
+3. a background task erases connected online database rows and enumerates and
+   permanently deletes every object version and delete marker. If complete
+   version deletion cannot be proved, it fails closed, remains retryable, and
+   periodic reconciliation schedules it again;
 4. the user receives a one-time deletion receipt and should retain it until
    cleanup completes.
 
-Deletion does not mean every copy disappears instantly. P1 targets a **30-day**
-backup-retention window and returns a corresponding `backup_expiry`, but the
-operator must configure and verify expiry of database snapshots, object
-versions, and platform logs. This repository cannot delete a cloud provider's
-backup by declaration alone.
+Deletion does not mean every copy disappears instantly. The service actively
+removes every account-object version its credential can control. P1 still
+targets a **30-day** database-backup window and returns a corresponding
+`backup_expiry`; the operator must configure and verify cloud snapshots,
+platform logs, replicas invisible to that credential, and ordinary object
+version lifecycles. This repository cannot delete a provider backup by
+declaration alone.
 
-The external tombstone contains only an HMAC-derived user fingerprint, receipt
-hash, request time, and signature—not username, email, or research content. It
+The external tombstone contains only a stable SHA-256 fingerprint derived from
+the random user UUID, receipt hash, request time, signing-key id, and HMAC
+signature—not username, email, or research content. Its key-independent object
+path remains discoverable during key rotation, while retired verification keys
+must be retained under the operations policy. It
 prevents an older backup from reactivating a deleted account. The code does not
 automatically purge external tombstones; an operator must retain each one at
 least until every backup capable of restoring that account has expired and
@@ -205,10 +224,15 @@ provider's deletion process.
 
 ### 6. Browser data and security
 
-The browser stores authentication and interface state. Local chat drafts,
-chat history, and the operation log may contain research text. Signing out
-removes authentication state but does not guarantee that those records are
-cleared; clear site data before handing a shared device to another person.
+The browser stores login and interface state, and local drafts, chat history,
+or operation logs may contain research text. Normal logout removes
+authentication and account-scoped analytics state, redirects to sign-in, and
+unloads protected pages, but does not guarantee deletion of downloads, browser
+caches, or every non-sensitive interface preference. After a successful
+account-deletion request, the page clears this origin's Web Storage in the
+current browser. Other browsers, downloads, browser caches, and extension
+copies must be cleared separately. Clear site data before handing a shared
+device to another person.
 
 Passwords are hashed, BYOK secrets use a stable Fernet key, and evidence uses
 an independent signing key. No service can promise absolute security.
@@ -226,7 +250,8 @@ GitHub issue.
   backup/versioning schedule.
 - Keep `CLAIM_AUDIT_ENABLED=false` until privacy, deletion, evidence, and Daily
   release gates have passed.
-- Verify the daily analytics purge and the account-deletion reconciliation job.
+- Verify the hourly analytics/inference-metrics purge, the five-minute
+  orphan-artifact cleanup, and the account-deletion reconciliation job.
 - Test deletion against a restored backup and confirm the external tombstone
   prevents account resurrection.
 - Update this notice whenever implementation or deployment behavior changes.

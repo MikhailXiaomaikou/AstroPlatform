@@ -151,15 +151,23 @@ def test_render_workers_wait_for_exact_schema_head():
     backend_env = {item["key"]: item for item in backend["envVars"]}
     frontend_env = {item["key"]: item for item in frontend["envVars"]}
     for key in (
+        "ADMIN_SECRET",
         "JWT_SECRET",
         "FERNET_KEY",
+        "DELETION_TOMBSTONE_KEY",
+        "DELETION_TOMBSTONE_VERIFICATION_KEYS",
         "EVIDENCE_SIGNING_KEY",
         "EVIDENCE_SIGNING_KEY_ID",
     ):
         assert backend_env[key] == {"key": key, "sync": False}
         assert "generateValue" not in backend_env[key]
     assert backend_env["RATE_LIMIT_ENABLED"]["value"] == "true"
+    assert backend_env["CONNECTOR_CACHE_BACKEND"]["value"] == "redis"
     assert backend_env["SHARED_DEEPSEEK_API_KEY_ENABLED"]["value"] == "false"
+    assert backend_env["SIGNUP_MODE"]["value"] == "invite_only"
+    assert backend_env["CLAIM_AUDIT_ENABLED"]["value"] == "false"
+    assert backend_env["PRODUCT_ANALYTICS_RETENTION_DAYS"]["value"] == "30"
+    assert backend_env["DELETION_TOMBSTONE_KEY_ID"]["value"] == "deletion-prod-v1"
     assert backend_env["TRUSTED_PROXY_MODE"]["value"] == "none"
     assert backend_env["ASTRO_RESEARCH_FOCUS"]["value"] == "cosmology"
     assert backend_env["CORS_ORIGINS"]["fromService"] == {
@@ -182,6 +190,16 @@ def test_render_workers_wait_for_exact_schema_head():
     for name in ("standard-astro-celery-worker", "standard-astro-celery-beat"):
         service_env = {item["key"]: item for item in services[name]["envVars"]}
         assert "TOOL_VERSION" not in service_env
+        assert service_env["CONNECTOR_CACHE_BACKEND"]["value"] == "redis"
+        for key in (
+            "DELETION_TOMBSTONE_KEY",
+            "DELETION_TOMBSTONE_KEY_ID",
+            "DELETION_TOMBSTONE_VERIFICATION_KEYS",
+            "PRIVACY_OPERATOR_NAME",
+            "PRIVACY_CONTACT",
+            "PRIVACY_JURISDICTION",
+        ):
+            assert service_env[key]["fromService"]["name"] == "standard-astro-backend"
 
     cache_headers = {
         item["path"]: item["value"]

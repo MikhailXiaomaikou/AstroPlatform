@@ -21,13 +21,15 @@ from app.models.schemas import (
     SharedPipeline,
     User,
 )
-from app.services.ai_tools import augment_adql_payload, build_adql_result_set, store_adql_result_set
+from app.services.ai_tools import augment_adql_payload
 from app.storage import (
+    StorageOwnerInactive,
     StorageOwnerRequired,
     StorageOwnershipError,
-    delete_fits,
+    delete_fits_all_versions,
     download_fits,
     get_storage_metadata,
+    lock_active_storage_owner,
     resolve_owned_storage_key,
     upload_fits,
 )
@@ -326,34 +328,41 @@ async def upload_votable(
     safe_name = file.filename.replace("/", "_").replace("\\", "_")
     safe_name = "".join(char if char.isprintable() else "_" for char in safe_name)
     path = f"votable_imports/{str(user.id)[:8]}/{uuid.uuid4().hex}.fits"
-    upload_fits(path, fits_payload)
-    storage_meta = get_storage_metadata(path)
-
-    data_file = DataFile(
-        user_id=user.id,
-        source="votable_upload",
-        object_id=safe_name,
-        fits_path=path,
-        metadata_={
-            "original_filename": safe_name,
-            "input_size_bytes": len(content),
-            "size_bytes": len(fits_payload),
-            "content_type": "application/fits",
-            "source_content_type": file.content_type or "application/x-votable+xml",
-            "rows": len(table),
-            "columns": list(table.colnames),
-            "sha256": storage_meta.get("sha256"),
-            "storage_backend": storage_meta.get("backend"),
-            "storage_version_id": storage_meta.get("version_id"),
-        },
-    )
     try:
+        await lock_active_storage_owner(db, user.id)
+    except StorageOwnerInactive as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    uploaded = False
+    try:
+        upload_fits(path, fits_payload)
+        uploaded = True
+        storage_meta = get_storage_metadata(path)
+        data_file = DataFile(
+            user_id=user.id,
+            source="votable_upload",
+            object_id=safe_name,
+            fits_path=path,
+            metadata_={
+                "original_filename": safe_name,
+                "input_size_bytes": len(content),
+                "size_bytes": len(fits_payload),
+                "content_type": "application/fits",
+                "source_content_type": file.content_type or "application/x-votable+xml",
+                "rows": len(table),
+                "columns": list(table.colnames),
+                "sha256": storage_meta.get("sha256"),
+                "storage_backend": storage_meta.get("backend"),
+                "storage_version_id": storage_meta.get("version_id"),
+            },
+        )
         db.add(data_file)
         await db.commit()
         await db.refresh(data_file)
     except Exception:
         await db.rollback()
-        delete_fits(path)
+        if uploaded:
+            delete_fits_all_versions(path)
         logger.exception("VOTable upload ownership record could not be saved")
         raise HTTPException(status_code=500, detail="Could not save VOTable upload")
 
@@ -1008,15 +1017,6 @@ async def execute_adql_query(
             len(table),
             limit=len(table),
         )
-        result_set = build_adql_result_set(
-            service=req.service,
-            query=req.query,
-            columns=augmented_columns,
-            data=augmented_data,
-            row_count=len(table),
-        )
-        store_adql_result_set(None, result_set)
-
         return {
             "columns": augmented_columns,
             "data": augmented_data,

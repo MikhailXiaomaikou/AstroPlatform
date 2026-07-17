@@ -62,15 +62,24 @@ _OFFICIAL_CMB_FOLDER = "_".join(_OFFICIAL_CMB_COMPONENTS)
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _RMINUS1_LIMIT = 0.01
 _MIN_KISH_WEIGHT_ESS = 1000.0
+_REFERENCE_CENTER_MAX_SIGMA = 0.1
+_REFERENCE_WIDTH_MAX_FRACTION = 0.05
 _CONTOUR_PAIRS = (("w0", "wa"), ("omegam", "H0"))
 _CONTOUR_GRID_BINS = 32
+_NUMBER_PATTERN = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
+_MARGESTATS_68_RE = re.compile(
+    rf"^\s*(?P<parameter>\S+)\s+"
+    rf"(?P<center>{_NUMBER_PATTERN})"
+    rf"(?:\\pm\s*(?P<symmetric>{_NUMBER_PATTERN})"
+    rf"|\^\{{\+(?P<upper>{_NUMBER_PATTERN})\}}_\{{-(?P<lower>{_NUMBER_PATTERN})\}})"
+)
 
 
 @dataclass(frozen=True)
 class OfficialChainArtifact:
     """One byte-pinned file from an official analysis directory."""
 
-    role: Literal["chain", "config", "checkpoint"]
+    role: Literal["chain", "config", "checkpoint", "reference_summary"]
     relative_path: str
     sha256: str
 
@@ -132,6 +141,7 @@ _ARTIFACT_HASHES: dict[tuple[str, str], dict[str, str]] = {
         "chain.2.txt": "442390266f6a3bfe88e9c7cd8e29d1e7cff47fc8582f3a3af80a6b40b9f83939",
         "chain.3.txt": "1c92edf523df34784633f6852f7564f3d953203ae939d5d2e8cd4c3fd6f580ae",
         "chain.4.txt": "b17dc02689c3a30dd34a96d91ac35180006f17d10b82331396ef55ce999594af",
+        "chain.margestats": "03b712b18991c4b125851d3d924936fca03f6047ac4b68fb888067e9ef05f3c1",
     },
     ("w0wa_cdm", "union3"): {
         "chain.updated.yaml": "2fc4c5ccca64f718992409b28e54f367603056073b9ca3d2781ed0e18a9ec3cd",
@@ -140,6 +150,7 @@ _ARTIFACT_HASHES: dict[tuple[str, str], dict[str, str]] = {
         "chain.2.txt": "23aac58326257d207b8ee3699d21ed908e46238e42041d8c2ccf12fd85c8b839",
         "chain.3.txt": "9e0998c5685e7552b94fd45e985dd137604f34692bebbc6fb922a1588669ab6a",
         "chain.4.txt": "7710ababc2ab0c7fb5f3f67c8b790409703bce18707a2f99a1cd3fea531b4c20",
+        "chain.margestats": "60f7a661abb62b4b3033c6ec70efec8b2a36e94ed4bbf2ce262c7e6af168b888",
     },
     ("w0wa_cdm", "des_sn5yr"): {
         "chain.updated.yaml": "b6af043a9557c66ac94a984f322984d7720e6e0707702435ecc471d6ca28fef8",
@@ -148,6 +159,7 @@ _ARTIFACT_HASHES: dict[tuple[str, str], dict[str, str]] = {
         "chain.2.txt": "cd4f2ff3a66aa92aceecd47c8452520c2de09d887f231fc0df033cd68597a886",
         "chain.3.txt": "f7f8dbf28ff23d371e0b987b938d321adb920f1a09e97f746b3c0bb2d6247a01",
         "chain.4.txt": "4a3607867d34890832f431c4d61947e5572a72ff1a407141f4b8cb8d3d7ec769",
+        "chain.margestats": "3fc6e841b7fd9cb21bac340636f1ba23bb96c75fa8b3b292fa5fbb4426bc8d8a",
     },
 }
 
@@ -170,9 +182,13 @@ def _artifacts_for(model: str, sn_selection: str) -> tuple[OfficialChainArtifact
     artifacts: list[OfficialChainArtifact] = []
     for filename, digest in hashes.items():
         if filename.endswith(".txt"):
-            role: Literal["chain", "config", "checkpoint"] = "chain"
+            role: Literal[
+                "chain", "config", "checkpoint", "reference_summary"
+            ] = "chain"
         elif filename.endswith(".yaml"):
             role = "config"
+        elif filename.endswith(".margestats"):
+            role = "reference_summary"
         else:
             role = "checkpoint"
         artifacts.append(
@@ -407,6 +423,101 @@ def _weighted_quantile(
     return float(np.interp(quantile, positions, ordered_values))
 
 
+def _read_reference_margestats(path: Path) -> dict[str, dict[str, float]]:
+    """Parse the byte-pinned GetDist 68% summary shipped by DESI."""
+
+    parsed: dict[str, dict[str, float]] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise OfficialChainValidationError(
+            "official_reference_summary_unreadable"
+        ) from exc
+    for line in lines:
+        match = _MARGESTATS_68_RE.match(line)
+        if match is None:
+            continue
+        center = float(match.group("center"))
+        symmetric = match.group("symmetric")
+        if symmetric is not None:
+            lower_error = upper_error = abs(float(symmetric))
+        else:
+            lower_error = abs(float(match.group("lower")))
+            upper_error = abs(float(match.group("upper")))
+        width = lower_error + upper_error
+        if not all(
+            math.isfinite(value) and value > 0
+            for value in (lower_error, upper_error, width)
+        ) or not math.isfinite(center):
+            raise OfficialChainValidationError(
+                f"official_reference_summary_invalid:{match.group('parameter')}"
+            )
+        parsed[match.group("parameter")] = {
+            "center": center,
+            "lower_error": lower_error,
+            "upper_error": upper_error,
+            "interval_width": width,
+        }
+    if not parsed:
+        raise OfficialChainValidationError("official_reference_summary_empty")
+    return parsed
+
+
+def _validate_reference_acceptance(
+    summaries: dict[str, dict[str, float]],
+    *,
+    entry: CosmologyAnalysisEntry,
+    reference_path: Path,
+) -> dict[str, Any]:
+    """Require recomputed intervals to reproduce DESI's pinned GetDist output."""
+
+    official = _read_reference_margestats(reference_path)
+    checks: dict[str, dict[str, Any]] = {}
+    for platform_name, official_name in entry.parameter_map:
+        if official_name not in official or platform_name not in summaries:
+            raise OfficialChainValidationError(
+                f"official_reference_parameter_missing:{platform_name}"
+            )
+        reference = official[official_name]
+        computed = summaries[platform_name]
+        computed_width = float(computed["q84"]) - float(computed["q16"])
+        reference_width = float(reference["interval_width"])
+        reference_sigma = reference_width / 2.0
+        center_delta_sigma = (
+            abs(float(computed["mean"]) - float(reference["center"]))
+            / reference_sigma
+        )
+        width_delta_fraction = abs(computed_width - reference_width) / reference_width
+        center_pass = center_delta_sigma <= _REFERENCE_CENTER_MAX_SIGMA + 1e-12
+        width_pass = width_delta_fraction <= _REFERENCE_WIDTH_MAX_FRACTION + 1e-12
+        checks[platform_name] = {
+            "official_parameter": official_name,
+            "computed_center": float(computed["mean"]),
+            "reference_center": float(reference["center"]),
+            "center_delta_sigma": center_delta_sigma,
+            "computed_interval_width": computed_width,
+            "reference_interval_width": reference_width,
+            "width_delta_fraction": width_delta_fraction,
+            "center_pass": center_pass,
+            "width_pass": width_pass,
+        }
+        if not center_pass:
+            raise OfficialChainValidationError(
+                f"official_reference_center_mismatch:{platform_name}"
+            )
+        if not width_pass:
+            raise OfficialChainValidationError(
+                f"official_reference_width_mismatch:{platform_name}"
+            )
+    return {
+        "status": "PASSED",
+        "reference_artifact": str(reference_path.name),
+        "center_max_sigma": _REFERENCE_CENTER_MAX_SIGMA,
+        "interval_width_max_fraction": _REFERENCE_WIDTH_MAX_FRACTION,
+        "checks": checks,
+    }
+
+
 def _weighted_2d_contour_grid(
     x_values: np.ndarray,
     y_values: np.ndarray,
@@ -591,6 +702,16 @@ def summarize_official_analysis(
             [verified[artifact.relative_path] for artifact in chain_artifacts],
             entry,
         )
+        reference_artifact = next(
+            artifact
+            for artifact in entry.artifacts
+            if artifact.role == "reference_summary"
+        )
+        reference_acceptance = _validate_reference_acceptance(
+            summaries,
+            entry=entry,
+            reference_path=verified[reference_artifact.relative_path],
+        )
     except (OfficialChainValidationError, OSError, StopIteration) as exc:
         reason = str(exc) or exc.__class__.__name__
         return {
@@ -607,7 +728,11 @@ def summarize_official_analysis(
         "status": "READY",
         "parameter_intervals": summaries,
         "two_dimensional_contours": contours,
-        "diagnostics": {**diagnostics, "checkpoint": checkpoint},
+        "diagnostics": {
+            **diagnostics,
+            "checkpoint": checkpoint,
+            "official_reference_acceptance": reference_acceptance,
+        },
         "withheld_reasons": [],
     }
 
@@ -635,20 +760,30 @@ def audit_cosmology_analysis_registry() -> list[str]:
         if entry.paper_doi != "10.1103/tr6y-kpc6":
             issues.append(f"{key}: unexpected DR2 results DOI")
         param_map = dict(entry.parameter_map)
-        expected = {"w", "H0", "omegam"}
+        expected = {"w": "w", "H0": "H0", "omegam": "omegam"}
         if entry.model == "w0wa_cdm":
-            expected = {"w0", "wa", "H0", "omegam"}
-        if set(param_map) != expected:
+            expected = {
+                "w0": "w",
+                "wa": "wa",
+                "H0": "H0",
+                "omegam": "omegam",
+            }
+        if param_map != expected:
             issues.append(f"{key}: invalid parameter map")
         chain_artifacts = [a for a in entry.artifacts if a.role == "chain"]
         config_artifacts = [a for a in entry.artifacts if a.role == "config"]
         checkpoint_artifacts = [a for a in entry.artifacts if a.role == "checkpoint"]
+        reference_artifacts = [
+            a for a in entry.artifacts if a.role == "reference_summary"
+        ]
         if len(chain_artifacts) != 4:
             issues.append(f"{key}: expected four chain artifacts")
         if len(config_artifacts) != 1:
             issues.append(f"{key}: expected one config artifact")
         if len(checkpoint_artifacts) != 1:
             issues.append(f"{key}: expected one checkpoint artifact")
+        if len(reference_artifacts) != 1:
+            issues.append(f"{key}: expected one reference summary artifact")
         paths = [artifact.relative_path for artifact in entry.artifacts]
         if len(paths) != len(set(paths)):
             issues.append(f"{key}: duplicate artifact path")

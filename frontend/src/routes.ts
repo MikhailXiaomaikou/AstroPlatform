@@ -49,6 +49,14 @@ export const NAV_ROUTES: readonly NavRoute[] = [
     keywords: "ask question chat assistant",
     tourSelector: 'a[href="/chat"]',
   },
+  {
+    id: "nav-claim-audit",
+    path: "/claim-audit",
+    labelKey: "cmd.claim_audit",
+    categoryKey: "cmd.cat_nav",
+    category: "primary",
+    keywords: "claim audit evidence provenance verify pack",
+  },
   ...(BOT_CONSOLE_ENABLED ? [{
     id: "nav-bot",
     path: "/bot",

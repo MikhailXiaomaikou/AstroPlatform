@@ -104,18 +104,32 @@ def test_production_requires_independent_evidence_signing_key(monkeypatch):
         config.Settings(
             jwt_secret="jwt-secret",
             fernet_key="fernet-secret",
+            deletion_tombstone_key="deletion-tombstone-key-at-least-32-bytes",
+            deletion_tombstone_key_id="deletion-v1",
+            signup_mode="closed",
+            claim_audit_execution_mode="celery",
             evidence_signing_key="",
             evidence_signing_key_id="",
             sandbox_backend="disabled",
+            privacy_operator_name="Test Operator",
+            privacy_contact="privacy@example.invalid",
+            privacy_jurisdiction="Test Jurisdiction",
         )
 
     with pytest.raises(ValueError, match="independent from JWT_SECRET"):
         config.Settings(
             jwt_secret="shared-secret",
             fernet_key="fernet-secret",
+            deletion_tombstone_key="deletion-tombstone-key-at-least-32-bytes",
+            deletion_tombstone_key_id="deletion-v1",
+            signup_mode="closed",
+            claim_audit_execution_mode="celery",
             evidence_signing_key="shared-secret",
             evidence_signing_key_id="evidence-v1",
             sandbox_backend="disabled",
+            privacy_operator_name="Test Operator",
+            privacy_contact="privacy@example.invalid",
+            privacy_jurisdiction="Test Jurisdiction",
         )
 
 
@@ -127,10 +141,17 @@ def test_malformed_verification_keyring_fails_closed(monkeypatch):
         config.Settings(
             jwt_secret="jwt-secret",
             fernet_key="fernet-secret",
+            deletion_tombstone_key="deletion-tombstone-key-at-least-32-bytes",
+            deletion_tombstone_key_id="deletion-v1",
+            signup_mode="closed",
+            claim_audit_execution_mode="celery",
             evidence_signing_key="evidence-secret",
             evidence_signing_key_id="evidence-v1",
             evidence_verification_keys="not-json",
             sandbox_backend="disabled",
+            privacy_operator_name="Test Operator",
+            privacy_contact="privacy@example.invalid",
+            privacy_jurisdiction="Test Jurisdiction",
         )
 
 
@@ -142,7 +163,14 @@ def test_production_rejects_weak_evidence_signing_key(monkeypatch):
         config.Settings(
             jwt_secret="independent-jwt-secret",
             fernet_key="fernet-secret",
+            deletion_tombstone_key="deletion-tombstone-key-at-least-32-bytes",
+            deletion_tombstone_key_id="deletion-v1",
+            signup_mode="closed",
+            claim_audit_execution_mode="celery",
             evidence_signing_key="too-short",
             evidence_signing_key_id="evidence-v1",
             sandbox_backend="disabled",
+            privacy_operator_name="Test Operator",
+            privacy_contact="privacy@example.invalid",
+            privacy_jurisdiction="Test Jurisdiction",
         )

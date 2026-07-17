@@ -29,12 +29,23 @@ import pytest
 
 from app.services import cosmology_likelihoods as cl
 from app.services.cosmology_likelihoods import run_likelihood_chain
-from app.services.cosmology_likelihoods.config_builder import _combination_warnings
+from app.services.cosmology_likelihoods.config_builder import (
+    _combination_warnings,
+    build_likelihood_config,
+)
 
 
 def _warns(*keys: str) -> bool:
     entries = [cl.get_cosmology_dataset(key) for key in keys]
     return bool(_combination_warnings(entries))
+
+
+def test_desi_dr1_and_dr2_cannot_enter_one_likelihood_config():
+    with pytest.raises(ValueError, match="overlapping releases"):
+        build_likelihood_config(
+            model="lcdm",
+            dataset_keys=["desi_dr1_bao", "desi_dr2_bao"],
+        )
 
 
 # ── (a) Planck 2018 compressed vs the full clik-free Planck 2018 stack ──────

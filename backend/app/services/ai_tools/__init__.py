@@ -4,8 +4,11 @@ Each tool is a function Claude can call. The agent loop in chat.py
 handles the tool_use → result → next message cycle automatically.
 """
 
+import asyncio
+import hashlib
 import logging
 import math
+import threading
 import time
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
@@ -25,33 +28,189 @@ logger = logging.getLogger(__name__)
 # In-memory cache for search/query results per runtime session (keyed by a simple token).
 # Stores tuples of (value, timestamp) for TTL-based expiry.
 _search_result_cache: dict[str, tuple[Any, float]] = {}
+# Physical cache keys are deliberately kept for compatibility with the Python
+# sandbox, but ownership is tracked separately.  A suffix alone is not a safe
+# ownership boundary (session ids are user-controlled strings and one id can be
+# a suffix of another), so readers must consult this map instead of scanning or
+# falling back to a bare ``latest`` key.
+_search_result_cache_owners: dict[str, str | None] = {}
+_search_result_cache_lock = threading.RLock()
 MAX_ADQL_RESULT_HISTORY = 8
 _CACHE_TTL_SECONDS = 1800  # 30 minutes
 
 
+def _store_cache_value(key: str, results: Any, owner: str | None) -> None:
+    with _search_result_cache_lock:
+        _search_result_cache[key] = (results, time.time())
+        _search_result_cache_owners[key] = owner
+        # Evict expired entries first
+        now = time.time()
+        expired = [
+            k
+            for k, (_, ts) in _search_result_cache.items()
+            if now - ts > _CACHE_TTL_SECONDS
+        ]
+        for k in expired:
+            del _search_result_cache[k]
+            _search_result_cache_owners.pop(k, None)
+        # Keep only the latest entries; multiple keys are used per session.
+        if len(_search_result_cache) > 200:
+            oldest = next(iter(_search_result_cache))
+            del _search_result_cache[oldest]
+            _search_result_cache_owners.pop(oldest, None)
+
+
 def store_search_results(key: str, results: Any) -> None:
-    """Cache search results so AI can access full data later."""
-    _search_result_cache[key] = (results, time.time())
-    # Evict expired entries first
-    now = time.time()
-    expired = [k for k, (_, ts) in _search_result_cache.items() if now - ts > _CACHE_TTL_SECONDS]
-    for k in expired:
-        del _search_result_cache[k]
-    # Keep only the latest cache entries; multiple keys are used per runtime session.
-    if len(_search_result_cache) > 200:
-        oldest = list(_search_result_cache.keys())[0]
-        del _search_result_cache[oldest]
+    """Cache a value in the legacy/default namespace.
+
+    Runtime tool code must use :func:`store_session_results`.  This primitive
+    remains public for old single-user integrations and tests that intentionally
+    seed the isolated ``default`` namespace.
+    """
+    _store_cache_value(key, results, None)
 
 
 def get_cached_results(key: str) -> Any | None:
-    entry = _search_result_cache.get(key)
-    if entry is None:
+    with _search_result_cache_lock:
+        entry = _search_result_cache.get(key)
+        if entry is None:
+            return None
+        value, timestamp = entry
+        if time.time() - timestamp > _CACHE_TTL_SECONDS:
+            del _search_result_cache[key]
+            _search_result_cache_owners.pop(key, None)
+            return None
+        return value
+
+
+def _normalized_session_id(session_id: str | None) -> str | None:
+    sid = str(session_id or "").strip()
+    return sid if sid and sid != "default" else None
+
+
+def build_trusted_python_session_id(
+    *,
+    user_id: str | None,
+    chat_session_id: str | None,
+    requested_session_id: str | None,
+    anonymous_scope: str | None = None,
+) -> str:
+    """Derive an opaque runtime namespace from server-trusted ownership.
+
+    ``requested_session_id`` originates in the browser and is never an
+    authority by itself.  Authenticated calls are separated by user and (when
+    present) the already ownership-validated chat id. Anonymous chat requests
+    must supply their server-generated request scope, intentionally giving up
+    cross-request cache persistence rather than sharing another visitor's data.
+
+    Identity-less internal callers retain the legacy default/named namespace;
+    HTTP entry points must always provide either ``user_id`` or
+    ``anonymous_scope``.
+    """
+    principal = str(user_id or anonymous_scope or "").strip()
+    if not principal:
+        return str(requested_session_id or "default").strip() or "default"
+    raw = str(requested_session_id or "default").strip() or "default"
+    chat = str(chat_session_id or "").strip()
+    digest = hashlib.sha256(
+        b"standard-astro-python-session-v2\0"
+        + principal.encode("utf-8")
+        + b"\0"
+        + chat.encode("utf-8")
+        + b"\0"
+        + raw.encode("utf-8")
+    ).hexdigest()
+    prefix = "trusted-v2" if user_id else "anonymous-v2"
+    return f"{prefix}-{digest}"
+
+
+def _session_cache_key(prefix: str, session_id: str | None) -> str | None:
+    """Return the physical key for a non-default session.
+
+    The idempotent case supports tool results that return their physical cache
+    key and are then passed back to a later tool in the same session.
+    """
+    sid = _normalized_session_id(session_id)
+    if sid is None:
         return None
-    value, timestamp = entry
-    if time.time() - timestamp > _CACHE_TTL_SECONDS:
-        del _search_result_cache[key]
-        return None
-    return value
+    suffix = f":{sid}"
+    return prefix if prefix.endswith(suffix) else f"{prefix}{suffix}"
+
+
+def _resolved_session_cache_key(key: str, session_id: str | None) -> str:
+    return _session_cache_key(key, session_id) or key
+
+
+def store_session_results(key: str, session_id: str | None, results: Any) -> str:
+    """Store ``results`` in exactly one session namespace and return its key."""
+    physical_key = _resolved_session_cache_key(key, session_id)
+    owner = _normalized_session_id(session_id)
+    if owner and owner.startswith("trusted-v2-"):
+        from app.services.code_executor import is_session_deleted
+
+        if is_session_deleted(owner):
+            clear_session_cached_results(owner)
+            return physical_key
+    _store_cache_value(physical_key, results, owner)
+    return physical_key
+
+
+def get_session_cached_results(key: str, session_id: str | None) -> Any | None:
+    """Read only data owned by ``session_id``; never fall back globally."""
+    physical_key = _resolved_session_cache_key(key, session_id)
+    expected_owner = _normalized_session_id(session_id)
+    if expected_owner and expected_owner.startswith("trusted-v2-"):
+        from app.services.code_executor import is_session_deleted
+
+        if is_session_deleted(expected_owner):
+            clear_session_cached_results(expected_owner)
+            return None
+    with _search_result_cache_lock:
+        if _search_result_cache_owners.get(physical_key) != expected_owner:
+            return None
+        return get_cached_results(physical_key)
+
+
+def session_cache_items(session_id: str | None) -> dict[str, Any]:
+    """Return a safe snapshot of cache entries visible to one session.
+
+    Non-default sessions see only entries carrying their exact owner marker.
+    The legacy default namespace sees only owner-less entries, never a named
+    session's values.  Logical aliases are added by ``code_executor``.
+    """
+    expected_owner = _normalized_session_id(session_id)
+    visible: dict[str, Any] = {}
+    if expected_owner and expected_owner.startswith("trusted-v2-"):
+        from app.services.code_executor import is_session_deleted
+
+        if is_session_deleted(expected_owner):
+            clear_session_cached_results(expected_owner)
+            return visible
+    with _search_result_cache_lock:
+        for key in list(_search_result_cache):
+            if _search_result_cache_owners.get(key) != expected_owner:
+                continue
+            value = get_cached_results(key)
+            if value is not None:
+                visible[key] = value
+    return visible
+
+
+def clear_session_cached_results(session_id: str | None) -> int:
+    """Erase every cache entry owned by a named session."""
+    owner = _normalized_session_id(session_id)
+    if owner is None:
+        return 0
+    with _search_result_cache_lock:
+        keys = [
+            key
+            for key, value in _search_result_cache_owners.items()
+            if value == owner
+        ]
+        for key in keys:
+            _search_result_cache.pop(key, None)
+            _search_result_cache_owners.pop(key, None)
+    return len(keys)
 
 
 def _coerce_float(value: Any) -> float | None:
@@ -146,36 +305,19 @@ def build_adql_result_set(
     }
 
 
-def _session_cache_key(prefix: str, session_id: str | None) -> str | None:
-    sid = str(session_id or "").strip()
-    if not sid or sid == "default":
-        return None
-    return f"{prefix}:{sid}"
-
-
 def replace_adql_result_sets(session_id: str | None, result_sets: list[dict[str, Any]]) -> None:
     normalized = [dict(item) for item in result_sets[-MAX_ADQL_RESULT_HISTORY:] if isinstance(item, dict)]
     latest = normalized[-1] if normalized else None
     latest_rows = list(latest.get("rows", [])) if latest else []
 
-    session_sets_key = _session_cache_key("latest_adql_sets", session_id)
-    session_set_key = _session_cache_key("latest_adql_set", session_id)
-    session_rows_key = _session_cache_key("latest_adql", session_id)
-    if not session_sets_key:
-        store_search_results("latest_adql_sets", normalized)
-        if latest is not None:
-            store_search_results("latest_adql_set", latest)
-            store_search_results("latest_adql", latest_rows)
-
-    if session_sets_key:
-        store_search_results(session_sets_key, normalized)
-    if latest is not None and session_set_key and session_rows_key:
-        store_search_results(session_set_key, latest)
-        store_search_results(session_rows_key, latest_rows)
+    store_session_results("latest_adql_sets", session_id, normalized)
+    if latest is not None:
+        store_session_results("latest_adql_set", session_id, latest)
+        store_session_results("latest_adql", session_id, latest_rows)
 
 
 def store_adql_result_set(session_id: str | None, result_set: dict[str, Any]) -> None:
-    existing = get_cached_results(_session_cache_key("latest_adql_sets", session_id) or "latest_adql_sets")
+    existing = get_session_cached_results("latest_adql_sets", session_id)
     history = list(existing) if isinstance(existing, list) else []
     history.append(dict(result_set))
     replace_adql_result_sets(session_id, history)
@@ -651,8 +793,64 @@ async def execute_tool(
     user_id: str | None = None,
     chat_session_id: str | None = None,
     progress_callback: Callable[[dict], Awaitable[None]] | None = None,
+    _python_session_scope_is_trusted: bool = False,
 ) -> dict:
     """Execute a tool call and return the result as a dict."""
+    runtime_python_session_id = (
+        python_session_id
+        if _python_session_scope_is_trusted
+        else build_trusted_python_session_id(
+            user_id=user_id,
+            chat_session_id=chat_session_id,
+            requested_session_id=python_session_id,
+        )
+    )
+
+    async def _erase_runtime_session() -> None:
+        from app.services.code_executor import (
+            delete_user_session_registration_strict,
+            mark_session_deleted,
+        )
+
+        await asyncio.to_thread(mark_session_deleted, runtime_python_session_id)
+        if user_id:
+            await asyncio.to_thread(
+                delete_user_session_registration_strict,
+                user_id,
+                runtime_python_session_id,
+            )
+
+    if user_id:
+        from app.services.account_deletion import account_runtime_is_active
+
+        if not await asyncio.to_thread(account_runtime_is_active, user_id):
+            await _erase_runtime_session()
+            return {
+                "success": False,
+                "error": "Account deletion requested; tool execution was cancelled.",
+                "error_class": "account_deletion_requested",
+                "__tool_status__": "FAILED",
+                "publication_ready": False,
+                "__do_not_claim__": True,
+            }
+        from app.services.code_executor import register_user_session
+
+        await asyncio.to_thread(
+            register_user_session, user_id, runtime_python_session_id
+        )
+        # Registration closes the delete-vs-first-tool discovery race. If the
+        # deletion tombstone appeared after the first check, either the purge
+        # now sees this index entry or this second check erases it ourselves.
+        if not await asyncio.to_thread(account_runtime_is_active, user_id):
+            await _erase_runtime_session()
+            return {
+                "success": False,
+                "error": "Account deletion requested; tool execution was cancelled.",
+                "error_class": "account_deletion_requested",
+                "__tool_status__": "FAILED",
+                "publication_ready": False,
+                "__do_not_claim__": True,
+            }
     # Action 3 (telemetry, 2026-05-08): count every tool invocation so
     # we have real-world usage data for the cosmology-focus surgery
     # decisions (which tools to drop from allowlist after 7 days of
@@ -675,21 +873,20 @@ async def execute_tool(
     )
     result = await _execute_tool_inner(
         tool_name, execution_input, api_key, provider_api_keys,
-        python_session_id, user_id, chat_session_id, progress_callback,
+        runtime_python_session_id, user_id, chat_session_id, progress_callback,
     )
 
     # 2026-05-20: write ai.tool_called to user_events so the telemetry/tool_usage
     # endpoint has data. The consumer (admin_stats.py) was already implemented
-    # but the producer was missing. Only records input field keys (not values)
-    # to prevent BYOK api_key or large payloads from being stored in the DB.
+    # but the producer was missing. Keep this event deliberately coarse: tool
+    # parameters and even their field names are research metadata and must not
+    # enter product analytics.
     try:
         from app.services.event_collector import event_collector
-        input_keys = sorted(execution_input.keys())
         await event_collector.track(
             event_type="ai.tool_called",
             event_data={
                 "tool_name": tool_name,
-                "input_keys": input_keys,
                 "success": not (isinstance(result, dict) and result.get("success") is False),
             },
             user_id=user_id,
@@ -706,7 +903,65 @@ async def execute_tool(
     if execution_seed is not None:
         normalize_kwargs["random_seed"] = execution_seed
         normalize_kwargs["random_seed_source"] = seed_source
-    return normalize_tool_result(tool_name, result, **normalize_kwargs)
+    normalized_result = normalize_tool_result(tool_name, result, **normalize_kwargs)
+    if user_id:
+        from app.services.account_deletion import (
+            AccountArtifactOwnerInactive,
+            account_runtime_is_active,
+            dispose_deleted_account_result,
+            register_result_artifacts,
+            stage_result_artifacts_for_registration,
+        )
+
+        try:
+            await asyncio.to_thread(
+                stage_result_artifacts_for_registration,
+                user_id=user_id,
+                result=normalized_result,
+            )
+            await asyncio.to_thread(
+                register_result_artifacts,
+                user_id=user_id,
+                result=normalized_result,
+            )
+        except AccountArtifactOwnerInactive:
+            await asyncio.to_thread(
+                dispose_deleted_account_result,
+                user_id=user_id,
+                result=normalized_result,
+            )
+            await _erase_runtime_session()
+            return {
+                "success": False,
+                "error": "Account deletion requested; late tool output was erased.",
+                "error_class": "account_deletion_requested",
+                "__tool_status__": "FAILED",
+                "publication_ready": False,
+                "__do_not_claim__": True,
+            }
+        except Exception:
+            # A result without a durable owner ledger must never be returned.
+            # Do not eagerly delete here: database commit may have succeeded
+            # even if its acknowledgement was lost.  A true failure leaves the
+            # separately committed cleanup row; an acknowledged commit removes
+            # it atomically with the trusted DataFile ledger.
+            raise
+        if not await asyncio.to_thread(account_runtime_is_active, user_id):
+            await asyncio.to_thread(
+                dispose_deleted_account_result,
+                user_id=user_id,
+                result=normalized_result,
+            )
+            await _erase_runtime_session()
+            return {
+                "success": False,
+                "error": "Account deletion requested; late tool output was erased.",
+                "error_class": "account_deletion_requested",
+                "__tool_status__": "FAILED",
+                "publication_ready": False,
+                "__do_not_claim__": True,
+            }
+    return normalized_result
 
 
 async def _execute_tool_inner(
@@ -812,7 +1067,7 @@ async def _execute_tool_inner(
         elif tool_name == "estimate_photo_z":
             return await _exec_estimate_photo_z(tool_input)
         elif tool_name == "fit_isochrone":
-            return await _exec_fit_isochrone(tool_input)
+            return await _exec_fit_isochrone(tool_input, python_session_id)
         elif tool_name == "get_async_job_status":
             return _exec_get_async_job_status(tool_input, user_id=user_id)
         # ── H1 split (2026-05-26): cosmology centralized dispatch ──

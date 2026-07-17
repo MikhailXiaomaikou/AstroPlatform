@@ -47,32 +47,33 @@ AI 可以把写代码和测试的时间压缩到约 24 天，但不能压缩下�
 | Daily C2 数据覆盖范围 | ✅ 🧪 | registry 返回结构化 `coverage_status`，回答会说明超出测量范围 | 真实模型连续运行和生产 Daily 记录 |
 | A1 与 compressed chain 规则 | ✅ 🧪 | A1 已与 F2 的 `WITHHELD` 规则对齐，不再要求同一条探索链输出可发表 H0 | 真实 Daily 重新建立绿色基线 |
 | Daily 失败分类 | ✅ 🧪 | 输出 `verdicts.json`，区分产品缺陷、评估器误报、模型漂移、外部依赖和 CI 基础设施 | 接入长期 Daily 台账和告警 |
-| Daily 本地验证 | 🧪 | 最终聚焦回归为 220 passed；完整后端为 3276 passed、7 skipped、59 deselected | 完整套件另有 1 项因 worktree 缺少未入 Git 的 Pantheon+ 文件而失败，不能写成全绿 |
+| 本地工程验证 | ✅ 🧪 | 完整后端为 3398 passed、7 skipped、59 deselected，覆盖率 67.80%；前端 203/203、lint、production build 和迁移往返均通过 | 仍需 GitHub CI 保存正式 artifact；本地通过不等于生产通过 |
 | Daily 真实模型验证 | ⏳ | 本地 CLI 失败被正确分类为 `external_dependency` | 当前沙箱不允许把仓库提示词发送到外部模型；需 CI 密钥或用户明确批准 |
 | Render 目标拓扑 | ✅ 🧪 | [`render.yaml`](../../render.yaml)、readiness/deep health、Worker/Beat commit 检查和相关测试已存在 | 未证明目标 Blueprint 已用真实资源同步并稳定运行 |
 | 备份和恢复代码 | ✅ 🧪 | [`backup.sh`](../../backend/scripts/ops/backup.sh)、[`restore.sh`](../../backend/scripts/ops/restore.sh) 和 CI smoke test 已存在 | 旧生产数据的真实完整备份、隔离恢复和恢复验收未完成 |
 | 生产切换 | ⏳ | 已有英文[切换清单](../PRODUCTION_CUTOVER_CHECKLIST.md)和本计划配套 Runbook | 付费资源、密钥、维护窗口、最终同步和流量切换均未执行 |
 | 72 小时观察 | ⏳ | 已定义检查项和记录模板 | 尚未开始，不能提前算作完成 |
 | 严格 DESI v1 收尾 | ⏳ | 有冻结协议、分析和分级代码基础 | 仍需在绑定的原路径和 exact 环境完成正式运行、独立复算和 Evidence Pack；最终必须保持 `WITHHELD` |
-| Apache-2.0 与 DCO | ⛔ | 目前有 `CONTRIBUTING.md`，但它明确写着尚未选择 LICENSE/DCO | 需要单独审查并加入根目录许可证、DCO 和数据许可清单 |
-| Claim Audit / P1 Evidence Pack | ⛔ | 当前基线未发现专用顶层模型或公共接口 | 需要按本计划实现、迁移和测试 |
-| 注册邀请码 / invite-only signup、分析同意、整户删除 | ⛔ | `PRIVACY.md` 已诚实记录当前没有整户自助删除；已有团队成员邀请不等于注册邀请码 | 需要实现注册邀请哈希、隐私偏好、内容过滤、删除和 tombstone |
-| DESI DR2 官方 posterior chains | ⛔ | 已有 `desi_dr2_bao` 高斯 BAO 数据产品和 DR1/DR2 防混用规则 | 尚未等同于官方 chain registry、三组 SN 组合和 Tension Lab |
-| Rubin/Euclid/Roman adapter | ⛔ | 当前基线未发现 `SurveyProductAdapter` | P1 只要求 Schema Fixture，不要求在线执行 |
+| Apache-2.0 与 DCO | ✅ 🧪 | 根目录已有 Apache-2.0 [`LICENSE`](../../LICENSE)，并补充 [`DCO.md`](../DCO.md)、[`DATA_LICENSES.md`](../DATA_LICENSES.md) 和贡献说明 | 合并后由 GitHub/发布页展示，外部数据仍按各自许可证 |
+| Claim Audit / P1 Evidence Pack | ✅ 🧪 | 已有顶层模型、独立运行/科学状态、owner-scoped API、Celery lease、4 文件 Evidence Pack、验签/篡改/密钥轮换和专用前端 | 完整 CI、生产暗发布及 14 天 Daily 门；`SUPPORTED` 仍不等于同行评议 |
+| 注册邀请码 / invite-only signup、分析同意、整户删除 | ✅ 🧪 | 已实现 keyed-hash 一次性邀请、fragment 安全链接、显式 analytics 同意、30 天访问边界、账号立即停用、外部 tombstone、全部对象版本 fail-closed 删除，以及带 24 小时宽限/五分钟清理的持久孤儿产物队列 | 仍需 PostgreSQL 并发演练、真实 S3/R2 多版本与 delete-marker 删除权限、无逾期清理队列和生产恢复验证 |
+| DESI DR2 官方 posterior chains | ✅ 🧪 | 官方镜像 registry 固定三组 SN 组合、下载地址/SHA/参数/权重/诊断；中心与区间回归通过，Tension Lab 对共享数据拒绝简单 sigma | 严格 v1 是另一条待完成门；DR2 汇总保持非 publication-ready |
+| Rubin/Euclid/Roman adapter | ✅ 🧪 | 三套 checksum-bound `SurveyProductAdapter` fixture 和 drift/fail-closed 测试已实现 | 均保持 `SCHEMA_FIXTURE_ONLY`；没有版本固定正式数据前不得升级为可执行 |
 | 14 天 Daily / 28 天用户验证 | ⏳ | 门槛已定义 | 都尚未完成；机器人、AI 自测和 GitHub clone 不能计为用户 |
 
-本地 Daily 修复在编写本文时位于前一提交 `e18ddf8`；如果之后被 cherry-pick 或 squash，哈希会变化，应在发布记录中写入最终合并后的完整 Git SHA。
+本次工程实现和下面的本地收据会以本交付的 Git 提交保存；如果之后被 cherry-pick 或 squash，发布记录必须改用最终合并后的完整 Git SHA。
 
 ### 2.2 本地验证收据
 
 下面是一次本地运行记录，不是 CI artifact，也不是生产验收。日志仅存在于本次代理终端，因此合并后仍需由 CI 重跑并保存 artifact。
 
-| 日期 | 完整 SHA | 命令 | 结果 | 限制 |
+| 日期 | 代码基线 | 命令 | 结果 | 限制 |
 |---|---|---|---|---|
-| 2026-07-17 | `e18ddf8a2e01cf507b7756c4547ee1513497edea` | `ruff check app tests scripts/blind_test_cosmology_m0` | passed | 本地 supported venv |
-| 2026-07-17 | 同上 | `pytest tests/test_daily_honesty_contracts.py tests/test_blind_runner_eval.py tests/test_cosmology_likelihood_registry.py tests/test_cosmology_likelihood_routing.py tests/test_system_prompt_loader.py tests/test_system_prompt_helpers.py tests/test_result_provenance.py -q --no-cov` | 220 passed | 聚焦回归，不代替完整套件 |
-| 2026-07-17 | 同上 | `pytest tests -q` | 3276 passed、7 skipped、59 deselected、1 failed；coverage 66.60% | 唯一失败是独立 worktree 缺少未入 Git 的 `backend/packages/data/sn_data/PantheonPlus/Pantheon+SH0ES.dat`；因此不能写成全绿 |
-| 2026-07-17 | 同上 | Daily local CLI：A1/B4/B5/C2/F2 | 5 个 `ERROR`，均分类为 `external_dependency` | 沙箱阻止 CLI；没有产生可计入验收的科学运行 |
+| 2026-07-17 | 本次交付实现提交（见 Git history） | `ruff check app tests alembic celery_worker.py` | passed | 本地 supported venv；仓库全量 `ruff check .` 仍有既有 spike 脚本 E402，不属于运行代码范围 |
+| 2026-07-17 | 同上 | `pytest tests -q` | 3398 passed、7 skipped、59 deselected；coverage 67.80% | 为精确管线测试，从原项目严格运行区复制了被 Git 忽略的 Pantheon+ 表和官方 STATONLY 协方差；两者未加入提交，也不代表严格 DESI v1 已完成 |
+| 2026-07-17 | 同上 | `npm test -- --run`、`npm run lint`、production build | 203/203 passed；lint/build passed | build 保留既有 Plotly 大 chunk 警告，不是构建失败 |
+| 2026-07-17 | 同上 | Alembic fresh upgrade → downgrade `6a718293b4c5` → upgrade head；legacy 缺列 bridge upgrade | passed | SQLite 隔离演练；真实 PostgreSQL 克隆和生产恢复仍是发布门 |
+| 2026-07-17 | 历史 Daily-only baseline `e18ddf8a2e01cf507b7756c4547ee1513497edea` | Daily local CLI：A1/B4/B5/C2/F2 | 5 个 `ERROR`，均分类为 `external_dependency` | 沙箱阻止 CLI；没有产生可计入验收的科学运行 |
 
 重跑时使用项目支持的 backend venv；机器绝对路径不是发布合同。CI artifact 应至少保存命令、完整 SHA、依赖环境、stdout/stderr、JUnit/coverage 和 Daily `verdicts.json`。
 
@@ -226,7 +227,7 @@ artifact_hashes.json
 - 盘点 Render 服务、PostgreSQL、Redis、Worker、Beat、密钥、磁盘和对象存储。
 - 准备迁移、恢复、切换和回滚记录。
 
-注意：当前仓库仍没有根 LICENSE/DCO，这一项不能标绿。
+当前实施分支已加入 Apache-2.0、DCO 与外部数据许可清单；是否进入 GitHub `main` 仍以最终合并提交为准。
 
 ### Day 4–7：隔离恢复和新生产环境
 
@@ -394,7 +395,7 @@ Manifest 至少包含：audit/owner/time、release/commit、输入和结果哈�
 
 ### P1.4 DESI DR2 Matrix：Day 13–19
 
-当前已有 `desi_dr2_bao` 数据产品，不等于完成本项。本项要基于执行时重新核查的 [DESI DR2 官方 chains 发布页](https://www.desi.lbl.gov/2025/10/06/desi-dr2-cosmology-chains-and-data-products-released/)新增 posterior-chain 组合 registry：
+当前实施分支已基于 [DESI DR2 官方 chains 发布页](https://www.desi.lbl.gov/2025/10/06/desi-dr2-cosmology-chains-and-data-products-released/)实现 posterior-chain 组合 registry；以下内容保留为发布验收合同：
 
 - 官方下载地址和固定版本；
 - 论文、数据组合和模型；
@@ -473,7 +474,7 @@ SCHEMA_FIXTURE_ONLY
 - P0 已完成；
 - Daily 连续 14 天通过；
 - readiness/deep 稳定；
-- 隐私、删除和 Evidence Pack 已验证；
+- 隐私、Evidence Pack 和删除已验证，其中真实版本化对象存储的多版本/delete-marker 删除测试通过，且没有逾期 `artifact_cleanup_queue`；
 - 固定回归任务全部通过。
 
 ### Week 4–5：3–5 位设计伙伴

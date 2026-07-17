@@ -24,6 +24,12 @@ class TestJsonKvStore:
         store.set("k1", {"a": 1, "b": [2, 3]}, ttl=60)
         assert store.get("k1") == {"a": 1, "b": [2, 3]}
 
+    def test_strict_set_get_delete_roundtrip(self, store):
+        store.set_strict("k1", {"a": 1}, ttl=60)
+        assert store.get_strict("k1") == {"a": 1}
+        store.delete_strict("k1")
+        assert store.get_strict("k1") is None
+
     def test_missing_key_returns_default(self, store):
         assert store.get("ghost") is None
         assert store.get("ghost", default={"x": 1}) == {"x": 1}
@@ -87,6 +93,29 @@ class TestJsonKvStore:
         backend = _kv_store._get_backend()
         backend.set(f"{store.namespace}:bad", "{not valid json", ttl=60)
         assert store.get("bad", default="fallback") == "fallback"
+        with pytest.raises(_kv_store.KvStoreIntegrityError):
+            store.get_strict("bad")
+
+    def test_strict_delete_verifies_absence(self, store, monkeypatch):
+        store.set("k", {"private": True}, ttl=60)
+        backend = _kv_store._get_backend()
+        monkeypatch.setattr(backend, "delete_strict", lambda _key: None)
+
+        with pytest.raises(_kv_store.KvStoreIntegrityError):
+            store.delete_strict("k")
+
+    def test_null_backend_strict_operations_fail_closed(self, monkeypatch):
+        monkeypatch.setattr(_kv_store, "_backend", _kv_store._NullBackend())
+        store = _kv_store.JsonKvStore("strict")
+
+        with pytest.raises(_kv_store.KvStoreUnavailableError):
+            store.scan_keys_strict()
+        with pytest.raises(_kv_store.KvStoreUnavailableError):
+            store.get_strict("missing")
+        with pytest.raises(_kv_store.KvStoreUnavailableError):
+            store.set_strict("key", True, ttl=60)
+        with pytest.raises(_kv_store.KvStoreUnavailableError):
+            store.delete_strict("key")
 
 
 class TestBackendSelection:

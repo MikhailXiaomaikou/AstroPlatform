@@ -2,9 +2,8 @@
 
 Standard Astro is a cosmology-only research alpha, so proposed changes must
 preserve the distinction between model suggestions and backend-verified
-evidence. Until the repository selects a LICENSE and a DCO or CLA policy, this
-file is a maintainer/pre-contribution guide: maintainers should not merge
-third-party contributions with unresolved contribution rights.
+evidence. Source code is licensed under Apache-2.0. Contributions use the
+Developer Certificate of Origin described in `docs/DCO.md`.
 
 ## Before starting
 
@@ -12,8 +11,10 @@ third-party contributions with unresolved contribution rights.
 - Search existing issues and pull requests before beginning a large change.
 - For security vulnerabilities, follow `SECURITY.md` instead of opening a
   detailed public issue.
-- Do not assume a redistribution license: project licensing has not yet been
-  finalized. Only submit material you have the right to contribute.
+- Sign every commit with `git commit -s`. Only submit material you have the
+  right to contribute.
+- Treat scientific data separately from source code. Follow
+  `docs/DATA_LICENSES.md` and the upstream provider's terms.
 
 ## Local setup
 

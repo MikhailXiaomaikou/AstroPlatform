@@ -665,6 +665,147 @@ def test_real_scientific_result_still_builds_a_support_path() -> None:
     ][-1] == "dataset:desi_dr1_bao"
 
 
+def test_contradictory_publication_ready_results_never_support_claims() -> None:
+    """Authenticity cannot override a result envelope's failure state.
+
+    Claim Audit verifies the server HMAC before handing a job result to these
+    helpers.  This regression pins the next boundary: even an authentic result
+    marked ``publication_ready=true`` must fail closed when its own state says
+    that the run failed, was empty/unavailable, or was synthetic.
+    """
+    from app.services.research_program import (
+        _is_claimable_result,
+        build_evidence_graph,
+        verify_research_facts,
+    )
+
+    contradictions = [
+        {"success": False},
+        {"error": "provider failed after producing a partial payload"},
+        {"__tool_status__": "FAILED_FINAL"},
+        {"analysis_status": "EMPTY"},
+        {"status": "DATA_UNAVAILABLE"},
+        {"analysis_status": "SYNTHETIC_READY"},
+    ]
+    for contradiction in contradictions:
+        result = {
+            "success": True,
+            "publication_ready": True,
+            "analysis_status": "CHAIN_READY",
+            "parameters": {"H0": {"median": 68.1}},
+            "datasets_used": [
+                {"key": "desi_dr1_bao", "display_name": "DESI DR1 BAO"},
+            ],
+            **contradiction,
+        }
+        tool_results = [{"id": "signed-job-1", "tool": "controlled_runner", "result": result}]
+
+        assert _is_claimable_result(result) is False, contradiction
+
+        graph = build_evidence_graph(tool_results=tool_results)
+        assert graph["publication_ready"] is False, contradiction
+        assert graph["claimable_parameters"] == [], contradiction
+        assert graph["evidence_graph"]["supported_claims"] == [], contradiction
+        tool_node = next(
+            node
+            for node in graph["evidence_graph"]["nodes"]
+            if node["type"] == "tool_run"
+        )
+        assert tool_node["publication_ready"] is False, contradiction
+
+        report = verify_research_facts(
+            tool_results=tool_results,
+            final_reply=(
+                "The compressed-likelihood preliminary DESI DR1 BAO result "
+                "gives H0 = 68.1."
+            ),
+        )
+        assert report["status"] == "blocked", contradiction
+        assert any(
+            claim["kind"] == "numeric" and claim["status"] == "unsupported"
+            for claim in report["claims"]
+        ), contradiction
+        assert not any(
+            claim["kind"] == "dataset" and claim["status"] == "verified"
+            for claim in report["claims"]
+        ), contradiction
+
+
+def test_conflicting_ready_point_estimates_fail_closed_even_on_any_match() -> None:
+    from app.services.research_program import build_evidence_graph, verify_research_facts
+
+    tool_results = [
+        {
+            "id": f"signed-job-{index}",
+            "tool": "controlled_runner",
+            "result": {
+                "success": True,
+                "__tool_status__": "COMPLETED",
+                "publication_ready": True,
+                "parameters": {"H0": {"median": value}},
+                "datasets_used": [{"key": f"dataset_{index}"}],
+            },
+        }
+        for index, value in enumerate((70.0, 75.0), start=1)
+    ]
+
+    graph = build_evidence_graph(
+        tool_results=tool_results,
+        final_reply="The controlled result gives H0 = 70.0 km/s/Mpc.",
+    )
+    assert graph["publication_ready"] is False
+    assert graph["unsupported_claim_count"] == 1
+    conflict = graph["evidence_graph"]["unsupported_claims"][0]
+    assert conflict["status"] == "contradicted"
+    assert conflict["evidence_ids"] == ["signed-job-1", "signed-job-2"]
+    assert "disagree" in conflict["reason"]
+
+    report = verify_research_facts(
+        tool_results=tool_results,
+        final_reply="The controlled result gives H0 = 70.0 km/s/Mpc.",
+    )
+    assert report["status"] == "blocked"
+    numeric = next(claim for claim in report["claims"] if claim["kind"] == "numeric")
+    assert numeric["status"] == "contradicted"
+    assert numeric["evidence_ids"] == ["signed-job-1", "signed-job-2"]
+    assert "disagree" in numeric["safe_rewrite"]
+
+
+def test_duplicate_ready_point_estimates_remain_claimable() -> None:
+    from app.services.research_program import build_evidence_graph, verify_research_facts
+
+    tool_results = [
+        {
+            "id": f"signed-job-{index}",
+            "tool": "controlled_runner",
+            "result": {
+                "success": True,
+                "__tool_status__": "COMPLETED",
+                "publication_ready": True,
+                "parameters": {"H0": {"median": 70.0}},
+                "datasets_used": [{"key": f"dataset_{index}"}],
+            },
+        }
+        for index in (1, 2)
+    ]
+
+    graph = build_evidence_graph(
+        tool_results=tool_results,
+        final_reply="The controlled result gives H0 = 70.0 km/s/Mpc.",
+    )
+    assert graph["publication_ready"] is True
+    assert graph["unsupported_claim_count"] == 0
+
+    report = verify_research_facts(
+        tool_results=tool_results,
+        final_reply="The controlled result gives H0 = 70.0 km/s/Mpc.",
+    )
+    assert report["status"] == "passed"
+    numeric = next(claim for claim in report["claims"] if claim["kind"] == "numeric")
+    assert numeric["status"] == "verified"
+    assert numeric["evidence_ids"] == ["signed-job-1", "signed-job-2"]
+
+
 def test_fact_verifier_flags_unsupported_posterior_claims() -> None:
     from app.services.research_program import verify_research_facts
 

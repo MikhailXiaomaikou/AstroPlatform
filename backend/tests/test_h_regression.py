@@ -902,7 +902,7 @@ def test_subprocess_cache_context_filters_foreign_adql_cache():
 
     ai_tools._search_result_cache.clear()
     ai_tools.store_search_results("latest_adql", [{"z": 0.12, "kind": "global_sdss"}])
-    ai_tools.store_search_results("latest_adql:chat-mw", [{"source": 123}])
+    ai_tools.store_session_results("latest_adql", "chat-mw", [{"source": 123}])
 
     foreign = _collect_subprocess_cache_context("chat-sdss")
     assert "latest_adql" not in foreign
@@ -917,7 +917,7 @@ def test_latest_sdss_sql_cache_is_session_scoped_and_aliased():
     from app.services.code_executor import _collect_subprocess_cache_context, _make_data_accessor
 
     ai_tools._search_result_cache.clear()
-    ai_tools.store_search_results("latest_sdss_sql:chat-sdss", {
+    ai_tools.store_session_results("latest_sdss_sql", "chat-sdss", {
         "petroMag_r": [17.2],
         "petromag_r": [17.2],
         "zErr": [0.001],
@@ -940,12 +940,14 @@ def test_get_cached_results_defaults_to_session_literature_table_cache():
     from app.services.code_executor import _make_data_accessor
 
     ai_tools._search_result_cache.clear()
-    ai_tools.store_search_results(
-        "latest_literature_tables:chat-lfr",
+    ai_tools.store_session_results(
+        "latest_literature_tables",
+        "chat-lfr",
         {"line_measurements": [{"source_name": "ALPINE_1"}]},
     )
-    ai_tools.store_search_results(
-        "latest_literature_tables:other-chat",
+    ai_tools.store_session_results(
+        "latest_literature_tables",
+        "other-chat",
         {"line_measurements": [{"source_name": "OTHER"}]},
     )
 

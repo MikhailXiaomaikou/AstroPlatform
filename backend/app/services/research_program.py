@@ -65,6 +65,18 @@ _EXECUTABLE_COMPRESSED_ROLES: frozenset[str] = frozenset(
     {"external_prior", "likelihood_approximation"}
 )
 
+_NON_CLAIMABLE_STATUS_TOKENS: frozenset[str] = frozenset(
+    {
+        "EMPTY",
+        "ERROR",
+        "FAILED",
+        "FAILURE",
+        "SIMULATED",
+        "SYNTHETIC",
+        "UNAVAILABLE",
+    }
+)
+
 
 def _tool_name_from_entry(item: dict[str, Any]) -> str:
     return str(item.get("tool") or item.get("name") or "")
@@ -72,6 +84,43 @@ def _tool_name_from_entry(item: dict[str, Any]) -> str:
 
 def _is_scientific_evidence_meta_tool(item: dict[str, Any]) -> bool:
     return _tool_name_from_entry(item) in _SCIENTIFIC_EVIDENCE_META_TOOLS
+
+
+def _result_has_claim_safe_state(result: dict[str, Any]) -> bool:
+    """Reject result envelopes whose own state contradicts scientific use.
+
+    A server signature can prove who produced an envelope and that its bytes
+    were not changed.  It cannot turn a failed, empty, unavailable, or
+    synthetic run into scientific evidence.  Keep this predicate independent
+    of the signature layer so every evidence consumer applies the same
+    fail-closed interpretation after authenticity has been checked.
+    """
+
+    if (
+        result.get("__do_not_claim__") is True
+        or result.get("success") is not True
+        or bool(result.get("error"))
+    ):
+        return False
+
+    for field in ("__tool_status__", "analysis_status", "status"):
+        raw_status = result.get(field)
+        if raw_status is None:
+            continue
+        status_tokens = {
+            token
+            for token in re.split(r"[^A-Z0-9]+", str(raw_status).strip().upper())
+            if token
+        }
+        if status_tokens & _NON_CLAIMABLE_STATUS_TOKENS:
+            return False
+    return True
+
+
+def _is_claimable_result(result: dict[str, Any]) -> bool:
+    """Return whether a result may support publication-ready claims."""
+
+    return result.get("publication_ready") is True and _result_has_claim_safe_state(result)
 
 
 def plan_research_program(
@@ -768,16 +817,17 @@ def build_evidence_graph(
         tool = str(item.get("tool") or item.get("name") or f"tool_{idx}")
         result = item.get("result") if isinstance(item.get("result"), dict) else item
         is_meta_tool = _is_scientific_evidence_meta_tool(item)
+        claimable_result = (
+            isinstance(result, dict)
+            and not is_meta_tool
+            and _is_claimable_result(result)
+        )
         tool_id = f"tool_run:{idx}:{tool}"
         nodes.append({
             "id": tool_id,
             "type": "tool_run",
             "tool": tool,
-            "publication_ready": (
-                bool(result.get("publication_ready"))
-                if isinstance(result, dict) and not is_meta_tool
-                else False
-            ),
+            "publication_ready": claimable_result,
             "scientific_evidence": not is_meta_tool,
             "analysis_status": result.get("analysis_status") if isinstance(result, dict) else None,
             "input_hash": _stable_hash(item.get("input") or item.get("tool_input") or {}),
@@ -786,7 +836,7 @@ def build_evidence_graph(
             continue
         if isinstance(result, dict):
             result_id = f"result:{idx}:{tool}"
-            if result.get("publication_ready") is True:
+            if claimable_result:
                 nodes.append({
                     "id": result_id,
                     "type": "result",
@@ -819,7 +869,7 @@ def build_evidence_graph(
                 for dataset in _supporting_datasets_from_result(result)
                 if dataset.get("key") or dataset.get("display_name")
             ))
-            if result.get("publication_ready") is True and supporting_dataset_ids:
+            if claimable_result and supporting_dataset_ids:
                 for param in _claimable_parameters_from_result(result):
                     claim_id = f"claim:{param}:{len(supported_claims)}"
                     claimable_params.add(param)
@@ -840,9 +890,33 @@ def build_evidence_graph(
                     edges.append({"from": claim_id, "to": result_id, "kind": "supported_by"})
 
     if final_reply:
+        numeric_support = _numeric_support_from_tool_results(tool_results)
         for param in _numeric_claim_tokens(final_reply):
-            if param not in claimable_params:
-                unsupported_claims.append({"parameter": param, "reason": "no publication-ready current-turn support"})
+            token = param.lower()
+            if param not in claimable_params and not _token_supported_by_alias(
+                token,
+                {item.lower() for item in claimable_params},
+            ):
+                unsupported_claims.append({
+                    "parameter": param,
+                    "status": "unsupported",
+                    "reason": "no publication-ready current-turn support",
+                    "evidence_ids": [],
+                })
+                continue
+            status, reason, evidence_ids = _verify_claimed_numeric_value(
+                token,
+                _numeric_value_for_token(final_reply, token),
+                numeric_support,
+                [],
+            )
+            if status != "verified":
+                unsupported_claims.append({
+                    "parameter": param,
+                    "status": status,
+                    "reason": reason,
+                    "evidence_ids": evidence_ids,
+                })
 
     graph = {
         "nodes": nodes,
@@ -2463,6 +2537,9 @@ def _supporting_datasets_from_result(
 ) -> list[dict[str, Any]]:
     """Return only datasets that participated in a claimable computation."""
 
+    if not _is_claimable_result(result):
+        return []
+
     datasets: list[dict[str, Any]] = []
     for key in ("datasets_used", "datasets"):
         value = result.get(key)
@@ -2475,12 +2552,16 @@ def _supporting_datasets_from_result(
                 isinstance(cell, dict)
                 and cell.get("publication_ready") is True
                 and isinstance(cell.get("result"), dict)
+                and _is_claimable_result(cell["result"])
             ):
                 datasets.extend(_supporting_datasets_from_result(cell["result"]))
     return datasets
 
 
 def _claimable_parameters_from_result(result: dict[str, Any]) -> list[str]:
+    if not _is_claimable_result(result):
+        return []
+
     params: list[str] = []
     for source_key in ("parameters", "posterior_summary", "derived_params"):
         source = result.get(source_key)
@@ -2496,6 +2577,7 @@ def _claimable_parameters_from_result(result: dict[str, Any]) -> list[str]:
                 isinstance(cell, dict)
                 and cell.get("publication_ready") is True
                 and isinstance(cell.get("result"), dict)
+                and _is_claimable_result(cell["result"])
             ):
                 params.extend(_claimable_parameters_from_result(cell["result"]))
     return list(dict.fromkeys(params))
@@ -2753,7 +2835,7 @@ def _numeric_support_from_tool_results(tool_results: list[dict[str, Any]]) -> di
         result = item.get("result") if isinstance(item.get("result"), dict) else item
         if not isinstance(result, dict):
             continue
-        if result.get("publication_ready") is not True or result.get("__do_not_claim__") is True:
+        if not _is_claimable_result(result):
             continue
         tool_id = str(item.get("id") or f"tool_run:{idx}:{item.get('tool') or item.get('name') or 'tool'}")
         _collect_numeric_support_from_result(result, tool_id, support)
@@ -2765,6 +2847,9 @@ def _collect_numeric_support_from_result(
     tool_id: str,
     support: dict[str, list[dict[str, Any]]],
 ) -> None:
+    if not _is_claimable_result(result):
+        return
+
     for source_name in ("parameters", "posterior_summary", "derived_params"):
         source = result.get(source_name)
         if not isinstance(source, dict):
@@ -2816,6 +2901,7 @@ def _collect_numeric_support_from_result(
                 isinstance(cell, dict)
                 and cell.get("publication_ready") is True
                 and isinstance(cell.get("result"), dict)
+                and _is_claimable_result(cell["result"])
             ):
                 _collect_numeric_support_from_result(
                     cell["result"],
@@ -2903,12 +2989,26 @@ def _verify_claimed_numeric_value(
             fallback_evidence_ids,
         )
     evidence_ids = sorted({str(item.get("evidence_id")) for item in supported if item.get("evidence_id")})
+    distinct = _distinct_point_estimate_records(supported)
+    if len(distinct) > 1:
+        values = ", ".join(
+            _format_report_number(item.get("median"))
+            for item in distinct[:5]
+        )
+        return (
+            "contradicted",
+            (
+                f"Do not quote {token}: publication-ready current-turn tools "
+                f"disagree on its point estimate ({values}). Resolve the evidence "
+                "conflict or select one explicitly justified evidence path first."
+            ),
+            evidence_ids or fallback_evidence_ids,
+        )
     if claimed_value is None:
         return "verified", "", evidence_ids or fallback_evidence_ids
-    for item in supported:
-        if _numeric_value_matches_summary(claimed_value, item):
-            return "verified", "", evidence_ids or fallback_evidence_ids
-    median = supported[0].get("median")
+    if distinct and _numeric_value_matches_summary(claimed_value, distinct[0]):
+        return "verified", "", evidence_ids or fallback_evidence_ids
+    median = distinct[0].get("median") if distinct else supported[0].get("median")
     return (
         "contradicted",
         f"Replace the quoted {token} value with the current-turn tool value near {median}, or omit the number.",
@@ -2916,19 +3016,40 @@ def _verify_claimed_numeric_value(
     )
 
 
+def _distinct_point_estimate_records(
+    records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Deduplicate equivalent point estimates while preserving evidence order."""
+
+    distinct: list[dict[str, Any]] = []
+    for record in records:
+        median = _coerce_float(record.get("median"))
+        if median is None:
+            continue
+        if any(
+            _point_estimates_match(median, _coerce_float(existing.get("median")))
+            for existing in distinct
+        ):
+            continue
+        distinct.append(record)
+    return distinct
+
+
+def _point_estimates_match(left: float | None, right: float | None) -> bool:
+    if left is None or right is None:
+        return False
+    tolerance = max(abs(left), abs(right), 1.0) * 1e-6
+    return abs(left - right) <= tolerance
+
+
 def _numeric_value_matches_summary(value: float, summary: dict[str, Any]) -> bool:
-    hdi = summary.get("hdi_94")
-    if isinstance(hdi, list | tuple) and len(hdi) >= 2:
-        low = _coerce_float(hdi[0])
-        high = _coerce_float(hdi[1])
-        if low is not None and high is not None:
-            width = max(abs(high - low), 1e-12)
-            return (low - 0.05 * width) <= value <= (high + 0.05 * width)
+    # Equality claims must match the reported point estimate. Merely falling
+    # inside an HDI does not make "parameter = value" true; interval claims
+    # need a separate grammar that verifies both endpoints.
     median = _coerce_float(summary.get("median"))
     if median is None:
         return False
-    tolerance = max(abs(median) * 0.02, 0.02)
-    return abs(value - median) <= tolerance
+    return _point_estimates_match(value, median)
 
 
 def _coerce_float(value: Any) -> float | None:
@@ -2967,16 +3088,7 @@ def _tool_payload_text(tool_results: list[dict[str, Any]]) -> str:
         result = item.get("result") if isinstance(item.get("result"), dict) else None
         if result is None:
             result = {k: v for k, v in item.items() if k != "input"}
-        if (
-            result.get("__do_not_claim__") is True
-            or result.get("success") is False
-            or bool(result.get("error"))
-        ):
-            continue
-        status = str(
-            result.get("__tool_status__") or result.get("analysis_status") or ""
-        ).strip().upper()
-        if status in {"FAILED", "EMPTY", "UNAVAILABLE", "SYNTHETIC", "SIMULATED_DEMO"}:
+        if not _result_has_claim_safe_state(result):
             continue
         safe.append(result)
     try:
@@ -2995,6 +3107,8 @@ def _dataset_index_from_tool_results(tool_results: list[dict[str, Any]]) -> dict
         result = item.get("result") if isinstance(item.get("result"), dict) else item
         if not isinstance(result, dict):
             continue
+        if not _result_has_claim_safe_state(result):
+            continue
         for dataset in _datasets_from_result(result):
             key = str(dataset.get("key") or dataset.get("service_key") or dataset.get("display_name") or "")
             if key:
@@ -3010,7 +3124,7 @@ def _publication_ready_tool_ids(tool_results: list[dict[str, Any]]) -> set[str]:
         if _is_scientific_evidence_meta_tool(item):
             continue
         result = item.get("result") if isinstance(item.get("result"), dict) else item
-        if isinstance(result, dict) and result.get("publication_ready") is True and result.get("__do_not_claim__") is not True:
+        if isinstance(result, dict) and _is_claimable_result(result):
             ids.add(str(item.get("id") or f"tool_run:{idx}:{item.get('tool') or item.get('name') or 'tool'}"))
     return ids
 

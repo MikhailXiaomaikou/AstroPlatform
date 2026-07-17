@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models.schemas import DataFile, ScheduledRun
+from app.models.schemas import DataFile, ScheduledRun, User
 from app.pipeline.storage_auth import collect_pipeline_storage_paths
 from app.storage import normalize_storage_key
 
@@ -90,9 +90,11 @@ def check_and_dispatch_due_schedules():
             # Find all enabled schedules whose next_run_at is in the past
             stmt = (
                 select(ScheduledRun)
+                .join(User, User.id == ScheduledRun.user_id)
                 .where(
                     ScheduledRun.enabled.is_(True),
                     ScheduledRun.next_run_at <= now,
+                    User.account_status == "ACTIVE",
                 )
             )
             result = session.execute(stmt)
@@ -112,6 +114,15 @@ def check_and_dispatch_due_schedules():
                 )
 
                 try:
+                    owner = session.execute(
+                        select(User)
+                        .where(User.id == schedule.user_id)
+                        .with_for_update()
+                    ).scalar_one_or_none()
+                    if owner is None or str(owner.account_status or "").upper() != "ACTIVE":
+                        schedule.enabled = False
+                        schedule.next_run_at = None
+                        continue
                     if not _scheduled_inputs_are_owned(session, schedule):
                         # A deleted ownership row revokes future scheduled
                         # access. Disable the schedule instead of repeatedly

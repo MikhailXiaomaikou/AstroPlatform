@@ -29,6 +29,14 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+class KvStoreUnavailableError(RuntimeError):
+    """A strict KV operation could not reach a usable shared backend."""
+
+
+class KvStoreIntegrityError(RuntimeError):
+    """A strict KV operation could not prove the requested state transition."""
+
+
 # ---------------------------------------------------------------------------
 # Backends
 # ---------------------------------------------------------------------------
@@ -48,6 +56,18 @@ class _NullBackend:
 
     def scan_keys(self, prefix: str) -> list[str]:
         return []
+
+    def get_strict(self, key: str) -> str | None:
+        raise KvStoreUnavailableError("KV backend is disabled")
+
+    def set_strict(self, key: str, value: str, ttl: int) -> None:
+        raise KvStoreUnavailableError("KV backend is disabled")
+
+    def delete_strict(self, key: str) -> None:
+        raise KvStoreUnavailableError("KV backend is disabled")
+
+    def scan_keys_strict(self, prefix: str) -> list[str]:
+        raise KvStoreUnavailableError("KV backend is disabled")
 
 
 class _InMemoryBackend:
@@ -81,6 +101,13 @@ class _InMemoryBackend:
             if k.startswith(prefix) and expires_at >= now
         ]
 
+    # The in-memory backend does not swallow failures, so its normal methods
+    # already provide the strict contract used by tests.
+    get_strict = get
+    set_strict = set
+    delete_strict = delete
+    scan_keys_strict = scan_keys
+
 
 class _SqliteBackend:
     name = "sqlite"
@@ -99,56 +126,69 @@ class _SqliteBackend:
 
     def get(self, key: str) -> str | None:
         try:
-            with sqlite3.connect(str(self.path)) as db:
-                row = db.execute(
-                    "SELECT value, expires_at FROM kv_store WHERE key = ?",
-                    (key,),
-                ).fetchone()
-            if not row:
-                return None
-            value, expires_at = row
-            if expires_at < time.time():
-                return None
-            return value
+            return self.get_strict(key)
         except sqlite3.Error as e:
             logger.debug("kv_store sqlite get failed: %s", e)
             return None
 
+    def get_strict(self, key: str) -> str | None:
+        with sqlite3.connect(str(self.path)) as db:
+            row = db.execute(
+                "SELECT value, expires_at FROM kv_store WHERE key = ?",
+                (key,),
+            ).fetchone()
+        if not row:
+            return None
+        value, expires_at = row
+        if expires_at < time.time():
+            return None
+        return value
+
     def set(self, key: str, value: str, ttl: int) -> None:
         try:
-            with sqlite3.connect(str(self.path)) as db:
-                db.execute(
-                    "INSERT OR REPLACE INTO kv_store (key, value, expires_at) "
-                    "VALUES (?, ?, ?)",
-                    (key, value, time.time() + ttl),
-                )
-                # Opportunistic eviction of a handful of expired rows
-                db.execute(
-                    "DELETE FROM kv_store WHERE expires_at < ? "
-                    "AND rowid IN (SELECT rowid FROM kv_store "
-                    "WHERE expires_at < ? LIMIT 100)",
-                    (time.time(), time.time()),
-                )
+            self.set_strict(key, value, ttl)
         except sqlite3.Error as e:
             logger.debug("kv_store sqlite set failed: %s", e)
 
+    def set_strict(self, key: str, value: str, ttl: int) -> None:
+        with sqlite3.connect(str(self.path)) as db:
+            db.execute(
+                "INSERT OR REPLACE INTO kv_store (key, value, expires_at) "
+                "VALUES (?, ?, ?)",
+                (key, value, time.time() + ttl),
+            )
+            # Opportunistic eviction of a handful of expired rows
+            db.execute(
+                "DELETE FROM kv_store WHERE expires_at < ? "
+                "AND rowid IN (SELECT rowid FROM kv_store "
+                "WHERE expires_at < ? LIMIT 100)",
+                (time.time(), time.time()),
+            )
+
     def delete(self, key: str) -> None:
         try:
-            with sqlite3.connect(str(self.path)) as db:
-                db.execute("DELETE FROM kv_store WHERE key = ?", (key,))
+            self.delete_strict(key)
         except sqlite3.Error as e:
             logger.debug("kv_store sqlite delete failed: %s", e)
 
+    def delete_strict(self, key: str) -> None:
+        with sqlite3.connect(str(self.path)) as db:
+            db.execute("DELETE FROM kv_store WHERE key = ?", (key,))
+
     def scan_keys(self, prefix: str) -> list[str]:
         try:
-            with sqlite3.connect(str(self.path)) as db:
-                rows = db.execute(
-                    "SELECT key FROM kv_store WHERE key LIKE ? AND expires_at >= ?",
-                    (prefix + "%", time.time()),
-                ).fetchall()
-            return [r[0] for r in rows]
-        except sqlite3.Error:
+            return self.scan_keys_strict(prefix)
+        except sqlite3.Error as e:
+            logger.debug("kv_store sqlite scan failed: %s", e)
             return []
+
+    def scan_keys_strict(self, prefix: str) -> list[str]:
+        with sqlite3.connect(str(self.path)) as db:
+            rows = db.execute(
+                "SELECT key FROM kv_store WHERE key LIKE ? AND expires_at >= ?",
+                (prefix + "%", time.time()),
+            ).fetchall()
+        return [r[0] for r in rows]
 
 
 class _RedisBackend:
@@ -165,34 +205,47 @@ class _RedisBackend:
 
     def get(self, key: str) -> str | None:
         try:
-            raw = self._client.get(key)
-            if raw is None:
-                return None
-            return raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+            return self.get_strict(key)
         except Exception as e:
             logger.debug("kv_store redis get failed: %s", e)
             return None
 
+    def get_strict(self, key: str) -> str | None:
+        raw = self._client.get(key)
+        if raw is None:
+            return None
+        return raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+
     def set(self, key: str, value: str, ttl: int) -> None:
         try:
-            self._client.setex(key, ttl, value)
+            self.set_strict(key, value, ttl)
         except Exception as e:
             logger.debug("kv_store redis set failed: %s", e)
 
+    def set_strict(self, key: str, value: str, ttl: int) -> None:
+        self._client.setex(key, ttl, value)
+
     def delete(self, key: str) -> None:
         try:
-            self._client.delete(key)
+            self.delete_strict(key)
         except Exception as e:
             logger.debug("kv_store redis delete failed: %s", e)
 
+    def delete_strict(self, key: str) -> None:
+        self._client.delete(key)
+
     def scan_keys(self, prefix: str) -> list[str]:
         try:
-            return [
-                k.decode("utf-8") if isinstance(k, (bytes, bytearray)) else k
-                for k in self._client.scan_iter(match=prefix + "*")
-            ]
-        except Exception:
+            return self.scan_keys_strict(prefix)
+        except Exception as e:
+            logger.debug("kv_store redis scan failed: %s", e)
             return []
+
+    def scan_keys_strict(self, prefix: str) -> list[str]:
+        return [
+            k.decode("utf-8") if isinstance(k, (bytes, bytearray)) else k
+            for k in self._client.scan_iter(match=prefix + "*")
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +369,19 @@ class JsonKvStore:
             logger.debug("kv_store: JSON decode failed for %s: %s", key, e)
             return default
 
+    def get_strict(self, key: str, default: Any = None) -> Any:
+        """Read without converting backend or JSON failures into a cache miss."""
+
+        raw = _get_backend().get_strict(self._full_key(key))
+        if raw is None:
+            return default
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise KvStoreIntegrityError(
+                f"Invalid JSON in KV record {self._full_key(key)!r}"
+            ) from exc
+
     def set(self, key: str, value: Any, ttl: int) -> bool:
         try:
             payload = json.dumps(value, default=_jsonable_fallback)
@@ -327,12 +393,47 @@ class JsonKvStore:
         _get_backend().set(self._full_key(key), payload, ttl)
         return True
 
+    def set_strict(self, key: str, value: Any, ttl: int) -> None:
+        """Write and read back the exact payload, raising if it is not durable."""
+
+        try:
+            payload = json.dumps(value, default=_jsonable_fallback)
+        except (TypeError, ValueError) as exc:
+            raise KvStoreIntegrityError(
+                f"Value for KV record {self._full_key(key)!r} is not JSON serialisable"
+            ) from exc
+        backend = _get_backend()
+        full_key = self._full_key(key)
+        backend.set_strict(full_key, payload, ttl)
+        if backend.get_strict(full_key) != payload:
+            raise KvStoreIntegrityError(
+                f"KV write verification failed for {full_key!r}"
+            )
+
     def delete(self, key: str) -> None:
         _get_backend().delete(self._full_key(key))
+
+    def delete_strict(self, key: str) -> None:
+        """Delete and prove absence, raising instead of hiding backend errors."""
+
+        backend = _get_backend()
+        full_key = self._full_key(key)
+        backend.delete_strict(full_key)
+        if backend.get_strict(full_key) is not None:
+            raise KvStoreIntegrityError(
+                f"KV delete verification failed for {full_key!r}"
+            )
 
     def scan_keys(self) -> list[str]:
         prefix = f"{self.namespace}:"
         keys = _get_backend().scan_keys(prefix)
+        return [k[len(prefix):] for k in keys if k.startswith(prefix)]
+
+    def scan_keys_strict(self) -> list[str]:
+        """List namespace keys without treating a backend outage as empty."""
+
+        prefix = f"{self.namespace}:"
+        keys = _get_backend().scan_keys_strict(prefix)
         return [k[len(prefix):] for k in keys if k.startswith(prefix)]
 
     def clear_namespace(self) -> None:

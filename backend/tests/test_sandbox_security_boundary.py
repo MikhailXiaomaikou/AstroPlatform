@@ -45,6 +45,10 @@ def test_production_configuration_rejects_legacy_executors(monkeypatch):
             config.Settings(
                 jwt_secret="test-jwt",
                 fernet_key="test-fernet",
+                deletion_tombstone_key="deletion-tombstone-key-at-least-32-bytes",
+                deletion_tombstone_key_id="deletion-v1",
+                signup_mode="closed",
+                claim_audit_execution_mode="celery",
                 evidence_signing_key="test-evidence-signing-key-32-bytes",
                 evidence_signing_key_id="test-v1",
                 sandbox_backend=backend,
@@ -62,9 +66,16 @@ def test_production_configuration_accepts_disabled(monkeypatch):
     configured = config.Settings(
         jwt_secret="test-jwt",
         fernet_key="test-fernet",
+        deletion_tombstone_key="deletion-tombstone-key-at-least-32-bytes",
+        deletion_tombstone_key_id="deletion-v1",
+        signup_mode="closed",
+        claim_audit_execution_mode="celery",
         evidence_signing_key="test-evidence-signing-key-32-bytes",
         evidence_signing_key_id="test-v1",
         sandbox_backend="disabled",
+        privacy_operator_name="Test Operator",
+        privacy_contact="privacy@example.invalid",
+        privacy_jurisdiction="Test Jurisdiction",
     )
     assert configured.sandbox_backend == "disabled"
 
@@ -78,6 +89,10 @@ def test_production_configuration_rejects_subscription_cli_children(monkeypatch)
             config.Settings(
                 jwt_secret="test-jwt",
                 fernet_key="test-fernet",
+                deletion_tombstone_key="deletion-tombstone-key-at-least-32-bytes",
+                deletion_tombstone_key_id="deletion-v1",
+                signup_mode="closed",
+                claim_audit_execution_mode="celery",
                 evidence_signing_key="test-evidence-signing-key-32-bytes",
                 evidence_signing_key_id="test-v1",
                 sandbox_backend="disabled",

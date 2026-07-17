@@ -25,9 +25,12 @@ from app.search.query_parser import (
     suggest_sources,
 )
 from app.storage import (
+    StorageOwnerInactive,
     StorageOwnerRequired,
     StorageOwnershipError,
+    delete_fits_all_versions,
     download_fits,
+    lock_active_storage_owner,
     resolve_owned_storage_key,
     upload_fits,
 )
@@ -1398,9 +1401,10 @@ async def upload_fits_file(
     file_uuid = uuid.uuid4().hex
     safe_name = file.filename.replace("/", "_").replace("\\", "_")
     fits_path = f"uploads/{str(user.id)[:8]}/{file_uuid}_{safe_name}"
-    upload_fits(fits_path, contents)
-    from app.storage import get_storage_metadata
-    storage_meta = get_storage_metadata(fits_path)
+    try:
+        await lock_active_storage_owner(db, user.id)
+    except StorageOwnerInactive as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     # Sanitize header for JSON storage
     meta: dict = {}
@@ -1413,25 +1417,39 @@ async def upload_fits_file(
             except (TypeError, ValueError):
                 meta[k] = str(v)
 
-    data_file = DataFile(
-        user_id=user.id,
-        source="upload",
-        object_id=object_id or safe_name,
-        fits_path=fits_path,
-        metadata_={
-            "n_hdus": n_hdus,
-            "size_bytes": len(contents),
-            "original_filename": safe_name,
-            "sha256": storage_meta.get("sha256"),
-            "storage_backend": storage_meta.get("backend"),
-            "storage_version_id": storage_meta.get("version_id"),
-            **fits_type_info,
-            **meta,
-        },
-    )
-    db.add(data_file)
-    await db.commit()
-    await db.refresh(data_file)
+    uploaded = False
+    try:
+        upload_fits(fits_path, contents)
+        uploaded = True
+        from app.storage import get_storage_metadata
+        storage_meta = get_storage_metadata(fits_path)
+        data_file = DataFile(
+            user_id=user.id,
+            source="upload",
+            object_id=object_id or safe_name,
+            fits_path=fits_path,
+            metadata_={
+                "n_hdus": n_hdus,
+                "size_bytes": len(contents),
+                "original_filename": safe_name,
+                "sha256": storage_meta.get("sha256"),
+                "storage_backend": storage_meta.get("backend"),
+                "storage_version_id": storage_meta.get("version_id"),
+                **fits_type_info,
+                **meta,
+            },
+        )
+        db.add(data_file)
+        await db.commit()
+        await db.refresh(data_file)
+    except Exception as exc:
+        await db.rollback()
+        if uploaded:
+            try:
+                await asyncio.to_thread(delete_fits_all_versions, fits_path)
+            except Exception:
+                logger.exception("Could not clean failed FITS upload %s", fits_path)
+        raise HTTPException(status_code=500, detail="Could not save FITS upload") from exc
 
     return FITSFileInfo(
         id=str(data_file.id),
@@ -1635,27 +1653,42 @@ async def upload_general_file(
     safe_name = file.filename.replace("/", "_").replace("\\", "_").replace('"', "_").replace("'", "_")
     safe_name = "".join(ch if ch.isprintable() else "_" for ch in safe_name)
     storage_path = f"uploads/{str(user.id)[:8]}/{file_uuid}_{safe_name}"
-    upload_fits(storage_path, contents)  # reuse storage function (works for any file)
-    from app.storage import get_storage_metadata
-    storage_meta = get_storage_metadata(storage_path)
+    try:
+        await lock_active_storage_owner(db, user.id)
+    except StorageOwnerInactive as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    uploaded = False
+    try:
+        upload_fits(storage_path, contents)  # works for every research file
+        uploaded = True
+        from app.storage import get_storage_metadata
+        storage_meta = get_storage_metadata(storage_path)
 
-    data_file = DataFile(
-        user_id=user.id,
-        source="upload",
-        object_id=safe_name,
-        fits_path=storage_path,
-        metadata_={
-            "original_filename": safe_name,
-            "size_bytes": len(contents),
-            "content_type": file.content_type or "application/octet-stream",
-            "sha256": storage_meta.get("sha256"),
-            "storage_backend": storage_meta.get("backend"),
-            "storage_version_id": storage_meta.get("version_id"),
-        },
-    )
-    db.add(data_file)
-    await db.commit()
-    await db.refresh(data_file)
+        data_file = DataFile(
+            user_id=user.id,
+            source="upload",
+            object_id=safe_name,
+            fits_path=storage_path,
+            metadata_={
+                "original_filename": safe_name,
+                "size_bytes": len(contents),
+                "content_type": file.content_type or "application/octet-stream",
+                "sha256": storage_meta.get("sha256"),
+                "storage_backend": storage_meta.get("backend"),
+                "storage_version_id": storage_meta.get("version_id"),
+            },
+        )
+        db.add(data_file)
+        await db.commit()
+        await db.refresh(data_file)
+    except Exception as exc:
+        await db.rollback()
+        if uploaded:
+            try:
+                await asyncio.to_thread(delete_fits_all_versions, storage_path)
+            except Exception:
+                logger.exception("Could not clean failed research upload %s", storage_path)
+        raise HTTPException(status_code=500, detail="Could not save research upload") from exc
 
     return {
         "id": str(data_file.id),
@@ -1725,9 +1758,17 @@ async def delete_fits_file(
 
     # Delete through the configured backend (local volume or S3-compatible
     # object store) so database and object lifecycle stay aligned.
-    from app.storage import delete_fits
+    from app.storage import delete_fits_all_versions
     if data_file.fits_path:
-        delete_fits(data_file.fits_path)
+        try:
+            await asyncio.to_thread(delete_fits_all_versions, data_file.fits_path)
+        except Exception as exc:
+            await db.rollback()
+            logger.exception("Could not permanently delete owned research file")
+            raise HTTPException(
+                status_code=503,
+                detail="Research file storage cleanup failed; retry deletion",
+            ) from exc
 
     await db.delete(data_file)
     await db.commit()
@@ -1923,11 +1964,25 @@ async def fetch_object(
         logger.exception("Fetch from %s failed for %s", source, object_id)
         raise HTTPException(status_code=502, detail=f"Failed to fetch from {source}: {type(e).__name__}: {e}")
 
+    if user is None:
+        # Anonymous callers may inspect archive metadata, but there is no owner
+        # ledger under which a durable object can be retained or later erased.
+        return FetchResult(
+            source=source,
+            object_id=object_id,
+            fits_path="",
+            filename=fits_file.filename,
+            file_id=None,
+        )
+
     fits_path = f"{source}/{object_id.replace('/', '_')}/{uuid.uuid4().hex}.fits"
     try:
+        await lock_active_storage_owner(db, user.id)
         upload_fits(fits_path, fits_file.data)
         from app.storage import get_storage_metadata
         storage_meta = get_storage_metadata(fits_path)
+    except StorageOwnerInactive as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as e:
         logger.warning("Failed to store FITS locally (%s): %s", fits_path, e)
         # Still return success — the data was fetched even if storage failed
@@ -1939,9 +1994,8 @@ async def fetch_object(
             file_id=None,
         )
 
-    # Save to database if user is authenticated
     file_id = None
-    if user:
+    try:
         data_file = DataFile(
             user_id=user.id,
             source=source,
@@ -1959,6 +2013,13 @@ async def fetch_object(
         await db.commit()
         await db.refresh(data_file)
         file_id = str(data_file.id)
+    except Exception as exc:
+        await db.rollback()
+        try:
+            await asyncio.to_thread(delete_fits_all_versions, fits_path)
+        except Exception:
+            logger.exception("Could not clean failed archive object %s", fits_path)
+        raise HTTPException(status_code=500, detail="Could not save fetched object") from exc
 
     return FetchResult(
         source=source,

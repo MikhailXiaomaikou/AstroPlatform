@@ -28,6 +28,10 @@ class StorageIntegrityError(IOError):
     """Raised when stored bytes do not match their recorded SHA-256."""
 
 
+class StorageDeletionError(IOError):
+    """Raised when durable deletion cannot be proved."""
+
+
 class StorageOwnershipError(FileNotFoundError):
     """Raised when an object key is not registered to the requested owner.
 
@@ -38,6 +42,10 @@ class StorageOwnershipError(FileNotFoundError):
 
 class StorageOwnerRequired(PermissionError):
     """Raised when a user-file operation has no authenticated owner context."""
+
+
+class StorageOwnerInactive(PermissionError):
+    """Raised when account deletion revoked new object persistence."""
 
 
 def normalize_storage_key(path: str) -> str:
@@ -111,6 +119,36 @@ async def resolve_owned_storage_key(
 
     async with async_session() as session:
         return await _resolve(session)
+
+
+async def lock_active_storage_owner(db: Any, owner_id: str | uuid.UUID) -> uuid.UUID:
+    """Lock and verify an upload owner in the caller's SQL transaction.
+
+    Holding this lock from immediately before object upload through DataFile
+    commit serializes uploads with account deletion: whichever transaction
+    wins first leaves a ledger that the deletion scan can see.
+    """
+
+    try:
+        owner_uuid = owner_id if isinstance(owner_id, uuid.UUID) else uuid.UUID(str(owner_id))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise StorageOwnerInactive("Storage owner is invalid") from exc
+
+    from sqlalchemy import select
+
+    from app.models.schemas import User
+
+    owner = (
+        await db.execute(
+            select(User)
+            .where(User.id == owner_uuid)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if owner is None or str(owner.account_status or "").upper() != "ACTIVE":
+        raise StorageOwnerInactive("Account deletion revoked new object storage")
+    return owner_uuid
 
 
 def _storage_root() -> Path:
@@ -289,6 +327,64 @@ def delete_fits(path: str) -> None:
     full = _validate_path(key)
     full.unlink(missing_ok=True)
     _sidecar_path(full).unlink(missing_ok=True)
+
+
+def delete_fits_all_versions(path: str) -> None:
+    """Permanently delete one object, including version-store history.
+
+    Normal scientific replacement and cleanup use :func:`delete_fits`. Account
+    erasure uses this stronger operation so a versioned S3/R2 bucket cannot
+    retain recoverable user data behind a delete marker. Failure to enumerate,
+    delete, or verify versions is surfaced to the caller and must be retried.
+    """
+
+    key = normalize_storage_key(path)
+    if _backend() != "s3":
+        delete_fits(key)
+        return
+
+    client = _s3_client()
+    versioning = client.get_bucket_versioning(Bucket=settings.s3_bucket)
+    status = str((versioning or {}).get("Status") or "")
+    if status not in {"Enabled", "Suspended"}:
+        client.delete_object(Bucket=settings.s3_bucket, Key=key)
+        return
+
+    def _exact_versions() -> list[dict[str, str]]:
+        found: list[dict[str, str]] = []
+        paginator = client.get_paginator("list_object_versions")
+        for page in paginator.paginate(Bucket=settings.s3_bucket, Prefix=key):
+            for item in [
+                *(page.get("Versions") or []),
+                *(page.get("DeleteMarkers") or []),
+            ]:
+                if str(item.get("Key") or "") != key:
+                    continue
+                version_id = item.get("VersionId")
+                if version_id is None:
+                    raise StorageDeletionError(
+                        f"Object version has no VersionId: {key}"
+                    )
+                found.append({"Key": key, "VersionId": str(version_id)})
+        return found
+
+    versions = _exact_versions()
+    for offset in range(0, len(versions), 1000):
+        response = client.delete_objects(
+            Bucket=settings.s3_bucket,
+            Delete={"Objects": versions[offset : offset + 1000], "Quiet": True},
+        )
+        errors = list((response or {}).get("Errors") or [])
+        if errors:
+            error_codes = sorted({str(item.get("Code") or "unknown") for item in errors})
+            raise StorageDeletionError(
+                f"Object version deletion failed for {key}: {','.join(error_codes)}"
+            )
+
+    if _exact_versions():
+        raise StorageDeletionError(
+            f"Object versions remain after permanent deletion: {key}"
+        )
 
 
 def get_storage_metadata(path: str) -> dict[str, Any]:

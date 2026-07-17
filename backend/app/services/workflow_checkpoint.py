@@ -23,7 +23,7 @@ from dataclasses import asdict, dataclass, field
 from threading import RLock
 from typing import Any
 
-from app.services._kv_store import JsonKvStore
+from app.services._kv_store import JsonKvStore, KvStoreIntegrityError
 
 TTL_SECONDS = 2 * 3600
 MAX_STEPS_PER_SESSION = 32
@@ -50,6 +50,8 @@ class WorkflowCheckpoint:
 
 
 _store = JsonKvStore("wf_ckpt")
+_deleted_store = JsonKvStore("wf_ckpt_deleted")
+_DELETION_MARKER_TTL_SECONDS = 30 * 24 * 3600
 # Process-local lock guards the read-modify-write window within a single
 # worker. Cross-worker concurrency on the same session is accepted to drop
 # at most a step or two; chat sessions are pinned to one worker in practice
@@ -91,6 +93,17 @@ def record_step(
 ) -> CheckpointStep:
     """Append a step to the session's checkpoint chain."""
     with _lock:
+        if _deleted_store.get(session_id) is True:
+            return CheckpointStep(
+                step_idx=0,
+                tool_name=tool_name,
+                inputs_hash=inputs_hash,
+                status="cancelled",
+                cache_refs=[],
+                error="Account deletion requested",
+                tool_call_id=tool_call_id,
+                summary="Checkpoint suppressed after account deletion",
+            )
         cp = _deserialize(_store.get(session_id))
         if cp is None:
             cp = WorkflowCheckpoint(session_id=session_id)
@@ -115,7 +128,25 @@ def record_step(
 
 
 def get_checkpoint(session_id: str) -> WorkflowCheckpoint | None:
+    if _deleted_store.get(session_id) is True:
+        return None
     return _deserialize(_store.get(session_id))
+
+
+def get_checkpoint_strict(session_id: str) -> WorkflowCheckpoint | None:
+    """Deletion-only read that never mistakes a KV outage for no checkpoint."""
+
+    if _deleted_store.get_strict(session_id) is True:
+        return None
+    raw = _store.get_strict(session_id)
+    if raw is None:
+        return None
+    checkpoint = _deserialize(raw)
+    if checkpoint is None:
+        raise KvStoreIntegrityError(
+            f"Invalid workflow checkpoint for session {session_id!r}"
+        )
+    return checkpoint
 
 
 def get_last_successful_step(session_id: str) -> CheckpointStep | None:
@@ -164,7 +195,16 @@ def clear_session(session_id: str) -> None:
         _store.delete(session_id)
 
 
+def mark_session_deleted(session_id: str) -> None:
+    """Strictly erase state and prevent late workers from recreating it."""
+
+    with _lock:
+        _deleted_store.set_strict(session_id, True, _DELETION_MARKER_TTL_SECONDS)
+        _store.delete_strict(session_id)
+
+
 def reset() -> None:
     """Test helper — clears every checkpoint in the ``wf_ckpt`` namespace."""
     with _lock:
         _store.clear_namespace()
+        _deleted_store.clear_namespace()

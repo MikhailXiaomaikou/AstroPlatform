@@ -11,10 +11,13 @@ app.services.ai_tools.
 import asyncio
 import math
 import re
-import time
 from typing import Any
 
-from app.services.ai_tools import _CACHE_TTL_SECONDS, get_cached_results, logger
+from app.services.ai_tools import (
+    get_session_cached_results,
+    logger,
+    session_cache_items,
+)
 
 TOOL_SCHEMAS = [
     {
@@ -253,7 +256,6 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
     """Execute Python code in sandboxed environment."""
     # Lazy package import: tests monkeypatch these names on app.services.ai_tools;
     # resolving at call time preserves pre-split behavior (module globals == package namespace).
-    from app.services.ai_tools import _search_result_cache
     from app.services.code_executor import execute_python
 
     code = inp.get("code", "")
@@ -336,12 +338,16 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
     # fabrication. Validate the key resolves to live cached data first.
     if data_source.startswith("cached:"):
         cache_key = data_source[len("cached:"):].strip()
-        if not cache_key or get_cached_results(cache_key) is None:
-            now = time.time()
-            available = sorted(
-                k for k, (_, ts) in _search_result_cache.items()
-                if now - ts <= _CACHE_TTL_SECONDS
-            )
+        if not cache_key or get_session_cached_results(
+            cache_key, python_session_id
+        ) is None:
+            available = sorted(session_cache_items(python_session_id))
+            if python_session_id and python_session_id != "default":
+                suffix = f":{python_session_id}"
+                available = [
+                    key[: -len(suffix)] if key.endswith(suffix) else key
+                    for key in available
+                ]
             return {
                 "success": False,
                 "error": (

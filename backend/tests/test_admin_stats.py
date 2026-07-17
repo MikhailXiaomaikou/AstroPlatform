@@ -59,6 +59,32 @@ async def test_admin_stats_kpi_with_admin_secret(app_client, monkeypatch):
         assert key in body
 
 
+async def test_deleted_admin_jwt_is_rejected(app_client, db_session, monkeypatch):
+    from app.auth import create_access_token, hash_password
+    from app.config import settings
+    from app.models.schemas import User
+
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("ADMIN_USERNAMES", "deleted-admin")
+    monkeypatch.setattr(settings, "admin_secret", "")
+    admin = User(
+        id=uuid.uuid4(),
+        username="deleted-admin",
+        email="deleted-admin@example.invalid",
+        password_hash=hash_password("securepassword123"),
+        subscription_tier="admin",
+        account_status="DELETION_PENDING",
+    )
+    db_session.add(admin)
+    await db_session.commit()
+
+    response = await app_client.get(
+        "/api/admin/stats/kpi",
+        headers={"Authorization": f"Bearer {create_access_token(admin.id)}"},
+    )
+    assert response.status_code == 403
+
+
 async def test_admin_stats_dev_bypass(app_client, monkeypatch):
     """ENV=dev + empty admin_secret → bypass allowed (developer experience)"""
     monkeypatch.setenv("ENV", "dev")
@@ -256,7 +282,7 @@ async def test_existing_events_stats_accepts_admin_secret(app_client, monkeypatc
     assert "event_counts" in r.json()
 
 
-async def test_events_track_endpoint_accepts_anonymous_payload(app_client, monkeypatch):
+async def test_events_track_endpoint_rejects_anonymous_analytics(app_client, monkeypatch):
     from app.api import events
 
     captured = []
@@ -277,10 +303,8 @@ async def test_events_track_endpoint_accepts_anonymous_payload(app_client, monke
     )
 
     assert r.status_code == 200, r.text
-    assert r.json() == {"tracked": True}
-    assert captured[0]["event_type"] == "session.started"
-    assert captured[0]["session_id"] == "11111111-1111-4111-8111-111111111111"
-    assert captured[0]["page"] == "/"
+    assert r.json() == {"tracked": False, "reason": "consent_required"}
+    assert captured == []
 
 
 async def test_events_track_endpoint_rejects_unsupported_type(app_client, monkeypatch):
@@ -310,10 +334,26 @@ async def test_events_track_endpoint_allows_html_export_event(app_client, monkey
 
     monkeypatch.setattr(events.event_collector, "track", fake_track)
 
+    registration = await app_client.post(
+        "/api/auth/register",
+        json={"username": "analytics-user", "password": "password123"},
+    )
+    token = registration.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    consent = await app_client.put(
+        "/api/privacy/preferences",
+        json={"analytics_enabled": True},
+        headers=headers,
+    )
+    assert consent.status_code == 200
+
     r = await app_client.post(
         "/api/events/track",
         json={"event_type": "export.html", "event_data": {"message_count": 2}},
+        headers=headers,
     )
 
     assert r.status_code == 200, r.text
+    assert r.json() == {"tracked": True}
     assert captured[0]["event_type"] == "export.html"
+    assert captured[0]["consent_verified"] is True

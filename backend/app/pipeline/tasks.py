@@ -104,6 +104,7 @@ def _trim_for_api(node_results: dict) -> dict:
 def _store_results_sync(run_id: str, results: dict):
     """Store pipeline results in PostgreSQL (synchronous, for Celery)."""
     import sqlalchemy
+    from sqlalchemy import select
     from sqlalchemy.orm import Session
     from app.config import settings
 
@@ -111,21 +112,51 @@ def _store_results_sync(run_id: str, results: dict):
     engine = sqlalchemy.create_engine(sync_url)
 
     try:
+        from app.models.schemas import PipelineRun
+        from app.services.account_deletion import collect_result_output_paths
+        from app.services.artifact_cleanup import stage_artifact_cleanup_sync
+
+        parsed_run_id = uuid.UUID(run_id)
+        with Session(engine) as lookup:
+            owner_id = lookup.scalar(
+                select(PipelineRun.user_id).where(PipelineRun.id == parsed_run_id)
+            )
+        artifact_refs = collect_result_output_paths(results)
+        for artifact_ref in artifact_refs:
+            stage_artifact_cleanup_sync(
+                artifact_ref,
+                user_id=owner_id,
+                reason_class="uncommitted_pipeline_result",
+            )
+
         with Session(engine) as session:
-            from app.models.schemas import PipelineRun
-            from sqlalchemy import update
+            from app.models.claim_audit_records import ArtifactCleanupQueue
+            from app.models.schemas import User
+            from sqlalchemy import delete, update
             from datetime import datetime, timezone
 
             stmt = (
                 update(PipelineRun)
-                .where(PipelineRun.id == uuid.UUID(run_id))
+                .where(
+                    PipelineRun.id == parsed_run_id,
+                    PipelineRun.status.in_(["pending", "running"]),
+                    PipelineRun.user_id.in_(
+                        select(User.id).where(User.account_status == "ACTIVE")
+                    ),
+                )
                 .values(
                     status="completed",
                     results=results,
                     completed_at=datetime.now(timezone.utc),
                 )
             )
-            session.execute(stmt)
+            stored = session.execute(stmt)
+            if stored.rowcount == 1 and artifact_refs:
+                session.execute(
+                    delete(ArtifactCleanupQueue).where(
+                        ArtifactCleanupQueue.artifact_ref.in_(artifact_refs)
+                    )
+                )
             session.commit()
     finally:
         engine.dispose()

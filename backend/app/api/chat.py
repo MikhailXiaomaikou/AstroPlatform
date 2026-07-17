@@ -932,7 +932,18 @@ async def chat_message_stream(
             return
         agent_names = list(runtime.get("agent_names") or ["orchestrator"])
 
-        python_session_id = (req.context or {}).get("python_session_id", "default")
+        from app.services.ai_tools import build_trusted_python_session_id
+
+        python_session_id = build_trusted_python_session_id(
+            user_id=owner_id,
+            chat_session_id=chat_session_id,
+            requested_session_id=(req.context or {}).get(
+                "python_session_id", "default"
+            ),
+            anonymous_scope=anonymous_job_scope,
+        )
+        if owner_id:
+            await _register_active_python_session(owner_id, python_session_id, db)
         _prime_adql_context_cache(req.context, python_session_id)
 
         # U1 (PART U): session-history replay can take 30-60 s in long sessions
@@ -1295,6 +1306,35 @@ async def simulate_stream_failure(request: Request):
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
         },
+    )
+
+
+async def _register_active_python_session(
+    user_id: str, python_session_id: str, db: AsyncSession
+) -> None:
+    """Index a session before priming, then close the deletion race."""
+    from sqlalchemy import select
+    from app.services.code_executor import (
+        delete_user_session_registration_strict,
+        mark_session_deleted,
+        register_user_session,
+    )
+
+    await asyncio.to_thread(register_user_session, user_id, python_session_id)
+    account_status = (
+        await db.execute(
+            select(User.account_status).where(User.id == uuid.UUID(user_id))
+        )
+    ).scalar_one_or_none()
+    if str(account_status or "").upper() == "ACTIVE":
+        return
+    await asyncio.to_thread(mark_session_deleted, python_session_id)
+    await asyncio.to_thread(
+        delete_user_session_registration_strict, user_id, python_session_id
+    )
+    raise HTTPException(
+        status_code=403,
+        detail="Account deletion requested; chat execution was cancelled.",
     )
 
 
@@ -2383,7 +2423,16 @@ async def chat_message(
     claude_messages: list[dict] = _normalize_messages(req.messages)
     chat_session_id = await _validated_current_session_id(req.context, user, db)
     runtime = await _build_runtime(req, user, db)
-    python_session_id = (req.context or {}).get("python_session_id", "default")
+    from app.services.ai_tools import build_trusted_python_session_id
+
+    python_session_id = build_trusted_python_session_id(
+        user_id=str(user.id),
+        chat_session_id=chat_session_id,
+        requested_session_id=(req.context or {}).get(
+            "python_session_id", "default"
+        ),
+    )
+    await _register_active_python_session(str(user.id), python_session_id, db)
     _prime_adql_context_cache(req.context, python_session_id)
     await _prime_python_session_from_history(req.messages, python_session_id)
 

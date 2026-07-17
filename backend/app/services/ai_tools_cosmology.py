@@ -666,8 +666,7 @@ async def _cosmology_rows_from_input(
     inp: dict, python_session_id: str | None
 ) -> tuple[list[dict[str, Any]], str, str | None, dict[str, Any] | None]:
     from app.services.ai_tools import (
-        get_cached_results,
-        _session_cache_key,
+        get_session_cached_results,
         _validate_manual_attestation,
     )
 
@@ -702,12 +701,7 @@ async def _cosmology_rows_from_input(
     cache_key = str(inp.get("cache_key") or "").strip()
     if not cache_key:
         raise ValueError("fit_cosmology_mcmc requires rows or cache_key")
-    session_key = _session_cache_key(cache_key, python_session_id)
-    # Read ONLY the session-scoped key when a session exists. The bare global key
-    # (e.g. "latest" / "latest_adql") is written by every user's search in the
-    # shared single-worker result cache; falling back to it would silently feed
-    # one user's session another user's cached rows and stamp them cached_real.
-    payload = get_cached_results(session_key or cache_key)
+    payload = get_session_cached_results(cache_key, python_session_id)
     if payload is None:
         raise ValueError(f"No cached rows found for cache_key={cache_key!r}")
     if isinstance(payload, list):

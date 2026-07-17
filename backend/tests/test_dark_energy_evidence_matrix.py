@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from app.services.agent_runtime.prompt_routing import (
@@ -47,11 +48,53 @@ def _valid_chain_text(*, rows: int = 300, header: str | None = None) -> str:
     return columns + "\n" + "\n".join(body) + "\n"
 
 
+def _reference_summary_for_fixture(chains: list[str]) -> str:
+    values = {name: [] for name in ("w", "wa", "H0", "omegam")}
+    weights: list[float] = []
+    try:
+        for payload in chains:
+            lines = payload.splitlines()
+            columns = lines[0].lstrip("#").split()
+            indices = {name: columns.index(name) for name in ("weight", *values)}
+            for raw in lines[1:]:
+                fields = raw.split()
+                if not fields:
+                    continue
+                weights.append(float(fields[indices["weight"]]))
+                for name in values:
+                    values[name].append(float(fields[indices[name]]))
+    except (IndexError, ValueError):
+        # Malformed-chain tests must fail in the production parser before the
+        # reference gate. A valid fallback keeps fixture construction separate.
+        return _reference_summary_for_fixture([_valid_chain_text() for _ in range(4)])
+
+    weight_array = np.asarray(weights, dtype=float)
+    positions_order: dict[str, tuple[float, float, float]] = {}
+    for name, raw_values in values.items():
+        value_array = np.asarray(raw_values, dtype=float)
+        order = np.argsort(value_array, kind="mergesort")
+        ordered_values = value_array[order]
+        ordered_weights = weight_array[order]
+        positions = np.cumsum(ordered_weights) - 0.5 * ordered_weights
+        positions /= float(np.sum(ordered_weights))
+        mean = float(np.average(value_array, weights=weight_array))
+        q16 = float(np.interp(0.16, positions, ordered_values))
+        q84 = float(np.interp(0.84, positions, ordered_values))
+        positions_order[name] = (mean, q16, q84)
+    lines = ["parameter 68.0% 95.0%"]
+    for name, (mean, q16, q84) in positions_order.items():
+        lines.append(
+            f"{name} {mean:.12g}^{{+{q84 - mean:.12g}}}_{{-{mean - q16:.12g}}} --"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def _fixture_entry(
     root: Path,
     *,
     chain_payloads: list[str] | None = None,
     checkpoint: str | None = None,
+    reference_summary: str | None = None,
 ) -> CosmologyAnalysisEntry:
     prefix = "cobaya/base_w_wa/test-analysis"
     chains = chain_payloads or [_valid_chain_text() for _ in range(4)]
@@ -66,6 +109,8 @@ def _fixture_entry(
             "    burn_in: 0\n"
             "    mpi_size: 4\n"
         ),
+        "chain.margestats": reference_summary
+        or _reference_summary_for_fixture(chains),
         **{f"chain.{index}.txt": value for index, value in enumerate(chains, 1)},
     }
     artifacts = []
@@ -79,6 +124,8 @@ def _fixture_entry(
             if filename.endswith(".txt")
             else "config"
             if filename.endswith(".yaml")
+            else "reference_summary"
+            if filename.endswith(".margestats")
             else "checkpoint"
         )
         artifacts.append(
@@ -134,12 +181,37 @@ def test_official_analysis_registry_is_frozen_and_auditable() -> None:
         assert len([item for item in entry.artifacts if item.role == "chain"]) == 4
         assert len([item for item in entry.artifacts if item.role == "config"]) == 1
         assert len([item for item in entry.artifacts if item.role == "checkpoint"]) == 1
+        assert len([item for item in entry.artifacts if item.role == "reference_summary"]) == 1
         assert all(len(item.sha256) == 64 for item in entry.artifacts)
     pantheon = next(
         entry for entry in entries if entry.supernova_selection == "pantheon_plus"
     )
     assert "uncalibrated" in pantheon.notes
     assert "SH0ES-calibrated" in pantheon.notes
+
+
+def test_registry_audit_rejects_swapped_official_parameter_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = list_cosmology_analyses()[0]
+    swapped = CosmologyAnalysisEntry(
+        **{
+            **entry.__dict__,
+            "parameter_map": (
+                ("w0", "wa"),
+                ("wa", "w"),
+                ("H0", "H0"),
+                ("omegam", "omegam"),
+            ),
+        }
+    )
+    from app.services.cosmology_likelihoods import analysis_registry
+
+    monkeypatch.setitem(analysis_registry._ANALYSIS_REGISTRY, entry.key, swapped)  # noqa: SLF001
+    assert any(
+        "invalid parameter map" in issue
+        for issue in audit_cosmology_analysis_registry()
+    )
 
 
 def test_missing_official_mirror_withholds_all_numbers(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -160,6 +232,10 @@ def test_verified_local_mirror_produces_weighted_intervals(tmp_path: Path) -> No
     assert result["diagnostics"]["rows_total"] == 1200
     assert result["diagnostics"]["kish_weight_ess"] == pytest.approx(1200.0)
     assert result["diagnostics"]["checkpoint"]["rminus1_last"] == 0.008
+    acceptance = result["diagnostics"]["official_reference_acceptance"]
+    assert acceptance["status"] == "PASSED"
+    assert acceptance["center_max_sigma"] == 0.1
+    assert acceptance["interval_width_max_fraction"] == 0.05
     assert result["diagnostics"]["column_order"] == [
         "weight",
         "minuslogpost",
@@ -173,6 +249,26 @@ def test_verified_local_mirror_produces_weighted_intervals(tmp_path: Path) -> No
     assert contours["w0__wa"]["grid_bins_per_axis"] == 32
     assert contours["w0__wa"]["captured_weight_fraction"] > 0.95
     assert len(contours["w0__wa"]["probability_grid"]) == 32
+
+
+def test_reference_center_or_width_mismatch_fails_closed(tmp_path: Path) -> None:
+    wrong = "\n".join(
+        [
+            "parameter 68.0% 95.0%",
+            "w -0.1\\pm 0.01 --",
+            "wa -0.6\\pm 0.02 --",
+            "H0 68.0\\pm 0.02 --",
+            "omegam 0.3\\pm 0.0002 --",
+            "",
+        ]
+    )
+    entry = _fixture_entry(tmp_path, reference_summary=wrong)
+    result = summarize_official_analysis(entry, cache_root=tmp_path)
+    assert result["status"] == "WITHHELD"
+    assert result["parameter_intervals"] == {}
+    assert result["withheld_reasons"][0].startswith(
+        "official_reference_center_mismatch:"
+    )
 
 
 def test_modified_official_chain_fails_closed(tmp_path: Path) -> None:

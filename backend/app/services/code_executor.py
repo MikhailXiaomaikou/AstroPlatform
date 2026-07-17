@@ -22,7 +22,7 @@ import uuid
 from contextlib import contextmanager
 from types import ModuleType
 
-from app.services._kv_store import JsonKvStore
+from app.services._kv_store import JsonKvStore, KvStoreIntegrityError
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,57 @@ _WORKER_ID = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
 # longer remembers.
 _SESSION_OWNER_STORE = JsonKvStore("py_session_owner")
 _SESSION_OWNER_TTL = 2 * 60 * 60  # 2 hours, matches MAX_SESSION_IDLE_SECONDS
+_DELETED_SESSION_STORE = JsonKvStore("py_session_deleted")
+_DELETED_SESSION_TTL = 30 * 24 * 60 * 60
+_USER_SESSION_STORE = JsonKvStore("py_user_sessions")
+# The index must never expire before any local cache/session copy it is needed
+# to erase. It is refreshed at chat prime and every tool call, explicitly
+# removed by account deletion, and otherwise outlives the 2-hour local state by
+# a wide margin.
+_USER_SESSION_TTL = 24 * 60 * 60
+
+
+def _trusted_session(session_id: str | None) -> bool:
+    return bool(session_id and str(session_id).startswith("trusted-v2-"))
+
+
+def _user_session_prefix(user_id: str) -> str:
+    owner_hash = hashlib.sha256(str(user_id).encode("utf-8")).hexdigest()
+    return f"{owner_hash}:"
+
+
+def register_user_session(user_id: str, session_id: str) -> None:
+    """Durably index a trusted runtime session before it can hold user data."""
+    if not user_id or not _trusted_session(session_id):
+        raise ValueError("A user session registration requires a trusted runtime id")
+    key = f"{_user_session_prefix(user_id)}{session_id}"
+    _USER_SESSION_STORE.set_strict(
+        key,
+        {"session_id": session_id},
+        ttl=_USER_SESSION_TTL,
+    )
+
+
+def list_user_sessions_strict(user_id: str) -> set[str]:
+    """List exact sessions registered to ``user_id`` or fail closed."""
+    prefix = _user_session_prefix(user_id)
+    sessions: set[str] = set()
+    for key in _USER_SESSION_STORE.scan_keys_strict():
+        if not key.startswith(prefix):
+            continue
+        record = _USER_SESSION_STORE.get_strict(key)
+        session_id = str((record or {}).get("session_id") or "").strip()
+        if not session_id or key != f"{prefix}{session_id}":
+            raise KvStoreIntegrityError(
+                f"Invalid owner/session index record {key!r}"
+            )
+        sessions.add(session_id)
+    return sessions
+
+
+def delete_user_session_registration_strict(user_id: str, session_id: str) -> None:
+    key = f"{_user_session_prefix(user_id)}{session_id}"
+    _USER_SESSION_STORE.delete_strict(key)
 
 
 def worker_id() -> str:
@@ -54,6 +105,8 @@ def claim_session_for_worker(session_id: str) -> None:
     Failures are swallowed — the routing table is advisory and the local
     sandbox path keeps working regardless.
     """
+    if is_session_deleted(session_id):
+        return
     try:
         _SESSION_OWNER_STORE.set(session_id, _WORKER_ID, ttl=_SESSION_OWNER_TTL)
     except Exception as exc:  # pragma: no cover — best-effort path
@@ -79,6 +132,38 @@ def release_session_owner(session_id: str) -> None:
         _SESSION_OWNER_STORE.delete(session_id)
     except Exception:  # pragma: no cover — best-effort path
         pass
+
+
+def is_session_deleted(session_id: str) -> bool:
+    if not session_id:
+        return False
+    if _trusted_session(session_id):
+        # Trusted user data fails closed when the shared marker backend is
+        # unavailable; otherwise another process could expose stale local RAM.
+        return _DELETED_SESSION_STORE.get_strict(session_id) is True
+    return _DELETED_SESSION_STORE.get(session_id) is True
+
+
+def mark_session_deleted(session_id: str) -> None:
+    """Strictly erase routing state and suppress writes from a late worker."""
+
+    if not session_id or session_id == "default":
+        return
+    try:
+        _DELETED_SESSION_STORE.set_strict(
+            session_id,
+            True,
+            ttl=_DELETED_SESSION_TTL,
+        )
+        _SESSION_OWNER_STORE.delete_strict(session_id)
+    finally:
+        # Local erasure is unconditional even when the durable deletion marker
+        # fails.  The exception still propagates so account deletion remains
+        # fail-closed, while secrets do not linger in this worker's memory.
+        clear_session_vars(session_id)
+        from app.services.ai_tools import clear_session_cached_results
+
+        clear_session_cached_results(session_id)
 
 # Maximum execution time in seconds
 MAX_EXEC_TIME = 75
@@ -124,6 +209,8 @@ MAX_TRACKED_SESSIONS: int = 512
 
 def _touch_session(session_id: str) -> None:
     """Update the last-access timestamp for eviction bookkeeping."""
+    if is_session_deleted(session_id):
+        return
     _session_last_access[session_id] = _session_time.monotonic()
     # Refresh the cross-process routing entry so the latest worker wins.
     claim_session_for_worker(session_id)
@@ -172,6 +259,9 @@ def _sweep_idle_sessions() -> int:
 
 def get_session_vars(session_id: str = "default") -> dict:
     """Get or create a session variable store."""
+    if is_session_deleted(session_id):
+        clear_session_vars(session_id)
+        return {}
     if session_id not in _session_vars:
         _session_vars[session_id] = {}
         # Sweep on new-session creation so the registry can't grow forever
@@ -200,7 +290,7 @@ MAX_SESSION_CODE_PREFIX_BYTES: int = 200_000  # 200 KB cap — subprocess pipe h
 
 def append_session_code_block(session_id: str, code: str) -> None:
     """Record a code block after successful execution. The next subprocess fork will replay it."""
-    if not session_id or session_id == "default":
+    if not session_id or session_id == "default" or is_session_deleted(session_id):
         return
     if not isinstance(code, str) or not code.strip():
         return
@@ -763,27 +853,24 @@ def _make_data_accessor(session_id: str):
 
     def get_search_results():
         """Get the most recent search results as a list of dicts."""
-        from app.services.ai_tools import get_cached_results
-        return get_cached_results(f"latest:{session_id}") or get_cached_results("latest") or []
+        from app.services.ai_tools import get_session_cached_results
+        return get_session_cached_results("latest", session_id) or []
 
     def get_adql_results():
         """Get the latest ADQL query results as a row-wise list of dicts."""
-        from app.services.ai_tools import get_cached_results
-        scoped_key = f"latest_adql:{session_id}" if session_id and session_id != "default" else None
-        payload = (get_cached_results(scoped_key) if scoped_key else get_cached_results("latest_adql")) or []
+        from app.services.ai_tools import get_session_cached_results
+        payload = get_session_cached_results("latest_adql", session_id) or []
         return _normalize_adql_rows(payload)
 
     def get_latest_adql_result():
         """Get the latest ADQL result set with service/query metadata and rows."""
-        from app.services.ai_tools import get_cached_results
-        scoped_key = f"latest_adql_set:{session_id}" if session_id and session_id != "default" else None
-        return (get_cached_results(scoped_key) if scoped_key else get_cached_results("latest_adql_set")) or {}
+        from app.services.ai_tools import get_session_cached_results
+        return get_session_cached_results("latest_adql_set", session_id) or {}
 
     def get_adql_result_sets():
         """Get recent ADQL result sets for multi-query workflows."""
-        from app.services.ai_tools import get_cached_results
-        scoped_key = f"latest_adql_sets:{session_id}" if session_id and session_id != "default" else None
-        return (get_cached_results(scoped_key) if scoped_key else get_cached_results("latest_adql_sets")) or []
+        from app.services.ai_tools import get_session_cached_results
+        return get_session_cached_results("latest_adql_sets", session_id) or []
 
     def get_cached_results_for_session(key: str | None = None):
         """Get cached platform data, preferring this chat/session scope.
@@ -794,17 +881,9 @@ def _make_data_accessor(session_id: str):
         ``get_cached_results()`` first, and that should return the current
         measurement cache instead of failing before the user gets a result.
         """
-        from app.services.ai_tools import get_cached_results
+        from app.services.ai_tools import get_session_cached_results
         key = (key or "latest_literature_tables").strip() or "latest_literature_tables"
-        scoped_key = f"{key}:{session_id}" if session_id and session_id != "default" else None
-        adql_keys = {
-            "latest_adql", "latest_adql_set", "latest_adql_sets",
-            "latest_sdss_sql", "latest_high_velocity_stars",
-        }
-        if scoped_key and key in adql_keys:
-            payload = get_cached_results(scoped_key)
-        else:
-            payload = (get_cached_results(scoped_key) if scoped_key else None) or get_cached_results(key)
+        payload = get_session_cached_results(key, session_id)
         if key == "latest_adql":
             return _normalize_adql_rows(payload)
         return payload
@@ -926,20 +1005,7 @@ def _collect_subprocess_cache_context(session_id: str) -> dict:
 
     visible: dict = {}
     session_suffix = f":{session_id}" if session_id and session_id != "default" else ""
-    adql_prefixes = (
-        "latest_adql", "latest_adql_set", "latest_adql_sets",
-        "latest_sdss_sql", "latest_high_velocity_stars",
-    )
-
-    def _is_adql_cache_key(key: str) -> bool:
-        return any(key == prefix or key.startswith(prefix + ":") for prefix in adql_prefixes)
-
-    for key in list(getattr(ai_tools, "_search_result_cache", {}).keys()):
-        if session_suffix and _is_adql_cache_key(key) and not key.endswith(session_suffix):
-            continue
-        value = ai_tools.get_cached_results(key)
-        if value is None:
-            continue
+    for key, value in ai_tools.session_cache_items(session_id).items():
         try:
             pickled = pickle.dumps(value)
             # T1: RestrictedUnpickler roundtrip — non-whitelisted classes raise and are skipped
@@ -1408,7 +1474,7 @@ def execute_python(
     # all land in _session_vars['default'], so persisting there bleeds one
     # client's variables into another. Every other path (replay, code-history
     # recording, ADQL cache scoping) already treats 'default' as ephemeral.
-    if session_id != "default":
+    if session_id != "default" and not is_session_deleted(session_id):
         for name, val in exec_globals.items():
             if name.startswith("_") or name in pre_existing_keys:
                 continue
@@ -1417,6 +1483,8 @@ def execute_python(
                     session_vars[name] = val
             except Exception:
                 pass
+    elif is_session_deleted(session_id):
+        clear_session_vars(session_id)
 
     # Extract key result variables (allow larger representations)
     for name, val in exec_globals.items():

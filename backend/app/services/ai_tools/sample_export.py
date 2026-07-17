@@ -11,7 +11,6 @@ app.services.ai_tools.
 import math
 from typing import Any
 
-from app.services.ai_tools import _session_cache_key
 from app.services.ai_tools.literature_tables import _literature_table_cache_payload
 from app.services.ai_tools.spectral_measurements import _finite_float
 
@@ -143,7 +142,7 @@ def _exec_demagnify_sample(inp: dict, python_session_id: str = "default") -> dic
     """
     # Lazy package import: tests monkeypatch these names on app.services.ai_tools;
     # resolving at call time preserves pre-split behavior (module globals == package namespace).
-    from app.services.ai_tools import _resolve_literature_measurement_cache, store_search_results
+    from app.services.ai_tools import _resolve_literature_measurement_cache, store_session_results
     cache_key = str(
         inp.get("cache_key") or "latest_literature_tables"
     ).strip() or "latest_literature_tables"
@@ -238,10 +237,7 @@ def _exec_demagnify_sample(inp: dict, python_session_id: str = "default") -> dic
         "n_demagnified": len(applied),
         "n_skipped": len(skipped),
     }
-    store_search_results(out_cache_key, payload)
-    session_key = _session_cache_key(out_cache_key, python_session_id)
-    if session_key:
-        store_search_results(session_key, payload)
+    store_session_results(out_cache_key, python_session_id, payload)
 
     return {
         "success": True,
