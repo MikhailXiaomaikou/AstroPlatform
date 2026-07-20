@@ -121,9 +121,25 @@ async def test_redeemed_setup_key_cannot_login_and_can_migrate_once(
     )
     assert blocked.status_code == 410
 
+    listed = await app_client.get(
+        "/api/auth/setup-keys",
+        headers={"X-Admin-Secret": "migration-admin"},
+    )
+    assert listed.status_code == 200, listed.text
+    listed_setup_key = next(
+        row for row in listed.json() if row["key"] == setup_key.key
+    )
+    assert listed_setup_key == {
+        "id": str(setup_key.id),
+        "key": setup_key.key,
+        "label": "legacy",
+        "used": True,
+        "used_by_email": legacy_user.email,
+    }
+
     migration = await app_client.post(
         "/api/auth/migration-invitations",
-        json={"setup_key_id": str(setup_key.id), "expires_in_days": 7},
+        json={"setup_key_id": listed_setup_key["id"], "expires_in_days": 7},
         headers={"X-Admin-Secret": "migration-admin"},
     )
     assert migration.status_code == 201, migration.text

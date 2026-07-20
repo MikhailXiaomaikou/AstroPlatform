@@ -15,8 +15,10 @@ from app.api import worker_control
 from app.api.worker_control import (
     ArtifactRequest,
     ArtifactUrlsRequest,
+    CompleteAttemptRequest,
     _verify_completed_artifacts,
     artifact_urls,
+    complete,
 )
 from app.config import settings
 from app.models.research_records import ResearchJob
@@ -25,6 +27,8 @@ from app.models.worker_records import (
     WorkerArtifactIssuance,
     WorkerNode,
 )
+from app.services import worker_protocol as worker_protocol_service
+from app.services.worker_protocol import canonical_result_hash
 from app import storage
 from app.storage import (
     StorageIntegrityError,
@@ -341,6 +345,127 @@ async def test_completion_rejects_unissued_artifact_reference(
         )
     assert error.value.status_code == 422
     assert error.value.detail == "artifact_manifest_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_completion_keeps_pre_promotion_lease_validation(
+    db_session,
+    test_user,
+    monkeypatch,
+):
+    user, _token = test_user
+    node, attempt = await _active_attempt(db_session, user.id)
+    validated_at = datetime(2026, 7, 20, 17, 0, tzinfo=timezone.utc)
+    lease_expires_at = validated_at + timedelta(seconds=1)
+
+    payload = b"slow authoritative profile"
+    digest = hashlib.sha256(payload).hexdigest()
+    monkeypatch.setattr(
+        worker_control,
+        "create_presigned_upload_url",
+        lambda path, **_kwargs: {
+            "method": "PUT",
+            "url": f"https://objects.example.test/{path}",
+            "artifact_ref": path,
+            "expires_in": 900,
+            "headers": {},
+        },
+    )
+    upload_batch = await artifact_urls(
+        attempt.id,
+        ArtifactUrlsRequest(
+            lease_id=attempt.lease_id,
+            artifacts=[
+                ArtifactRequest(
+                    name="profile.json",
+                    sha256=digest,
+                    size_bytes=len(payload),
+                    content_type="application/json",
+                )
+            ],
+        ),
+        node=node,
+        db=db_session,
+    )
+    artifact_ref = upload_batch["uploads"][0]["artifact_ref"]
+    attempt.lease_expires_at = lease_expires_at
+    await db_session.commit()
+
+    clock = {"now": validated_at}
+
+    class _ClockedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            observed = clock["now"]
+            return observed if tz is None else observed.astimezone(tz)
+
+    monkeypatch.setattr(worker_control, "datetime", _ClockedDateTime)
+    monkeypatch.setattr(
+        worker_protocol_service,
+        "_utcnow",
+        lambda: clock["now"],
+    )
+    monkeypatch.setattr(
+        worker_control,
+        "verify_storage_object",
+        lambda path, **_kwargs: {
+            "key": path,
+            "verification_method": "streamed_sha256",
+            "version_id": "slow-source-version",
+            "etag": '"slow-source-etag"',
+        },
+    )
+
+    def _promote_after_lease_deadline(source, destination, **_kwargs):
+        clock["now"] = validated_at + timedelta(seconds=2)
+        return {
+            "key": destination,
+            "source_key": source,
+            "verification_method": "s3_checksum_sha256",
+            "version_id": "slow-authoritative-version",
+        }
+
+    monkeypatch.setattr(
+        worker_control,
+        "promote_verified_storage_object",
+        _promote_after_lease_deadline,
+    )
+    from app.tasks import union3_research_tasks
+
+    monkeypatch.setattr(
+        union3_research_tasks,
+        "enqueue_union3_verification",
+        lambda _attempt_id: None,
+    )
+    result = {
+        "workflow_key": "union3_flat_lcdm_sn_only_v1",
+        "best_fit": "0.35592440",
+    }
+
+    response = await complete(
+        attempt.id,
+        CompleteAttemptRequest(
+            lease_id=attempt.lease_id,
+            result=result,
+            result_hash=canonical_result_hash(result),
+            artifacts=[{"artifact_ref": artifact_ref}],
+        ),
+        node=node,
+        db=db_session,
+    )
+
+    await db_session.refresh(attempt)
+    assert response["status"] == "SUCCEEDED"
+    assert response["idempotent_replay"] is False
+    assert attempt.result_hash == canonical_result_hash(result)
+    assert attempt.completed_at is not None
+    completed_at = attempt.completed_at.replace(tzinfo=timezone.utc)
+    assert completed_at > lease_expires_at
+    assert any(
+        item["status"] == "VERIFIED"
+        and item["version_id"] == "slow-authoritative-version"
+        for item in attempt.artifact_manifest
+    )
 
 
 @pytest.mark.asyncio

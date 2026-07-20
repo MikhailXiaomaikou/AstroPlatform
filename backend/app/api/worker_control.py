@@ -731,7 +731,7 @@ async def complete(
 ):
     try:
         await lock_active_storage_owner(db, node.user_id)
-        current, _job, _audit, _result_hash = await prepare_attempt_completion(
+        prepared = await prepare_attempt_completion(
             db,
             node=node,
             attempt_id=attempt_id,
@@ -743,7 +743,9 @@ async def complete(
         _raise_protocol(exc)
     except PermissionError as exc:
         raise HTTPException(status_code=409, detail="artifact_owner_inactive") from exc
-    verified_artifacts = await _verify_completed_artifacts(db, current, req.artifacts)
+    verified_artifacts = await _verify_completed_artifacts(
+        db, prepared.attempt, req.artifacts
+    )
     try:
         attempt, replayed = await complete_attempt(
             db,
@@ -754,6 +756,7 @@ async def complete(
             claimed_result_hash=req.result_hash,
             diagnostics=req.diagnostics,
             artifact_manifest=verified_artifacts,
+            prepared=prepared,
         )
     except WorkerProtocolError as exc:
         _raise_protocol(exc)

@@ -81,6 +81,7 @@ class GenerateKeysRequest(BaseModel):
 
 
 class SetupKeyInfo(BaseModel):
+    id: str
     key: str
     label: str
     used: bool
@@ -616,6 +617,7 @@ async def list_setup_keys(request: Request, db: AsyncSession = Depends(get_db)):
     rows = result.all()
     return [
         SetupKeyInfo(
+            id=str(sk.id),
             key=sk.key,
             label=sk.label,
             used=sk.used_by is not None,
