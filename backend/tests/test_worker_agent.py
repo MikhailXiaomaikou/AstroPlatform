@@ -6,7 +6,9 @@ import base64
 import json
 import stat
 import uuid
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -22,8 +24,10 @@ from app.worker_agent import cli as worker_cli
 from app.worker_agent.client import (
     WorkerClientError,
     WorkerConfig,
+    enroll,
     load_config,
     save_config,
+    signed_request,
     verify_task_envelope,
 )
 
@@ -74,6 +78,202 @@ def test_worker_config_is_private_and_contains_no_platform_credentials(tmp_path)
     path.chmod(0o644)
     with pytest.raises(WorkerClientError, match="0600"):
         load_config(home=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("control_plane_url", "expected_base_url", "expected_trust_env"),
+    [
+        ("https://control.example.test/", "https://control.example.test", True),
+        (
+            "HTTPS://Control.Example.Test:443/",
+            "https://control.example.test:443",
+            True,
+        ),
+        ("http://127.0.0.1:8000", "http://127.0.0.1:8000", False),
+        ("http://127.42.7.9", "http://127.42.7.9", False),
+        ("http://[::1]:8000/", "http://[::1]:8000", False),
+    ],
+)
+def test_enrollment_accepts_https_or_exact_loopback_origin(
+    monkeypatch,
+    tmp_path,
+    control_plane_url: str,
+    expected_base_url: str,
+    expected_trust_env: bool,
+):
+    control_key = Ed25519PrivateKey.generate()
+    node_id = uuid.uuid4()
+    requested_urls: list[str] = []
+
+    def fake_post(url, **kwargs):
+        requested_urls.append(url)
+        assert kwargs["follow_redirects"] is False
+        assert kwargs["trust_env"] is expected_trust_env
+        return SimpleNamespace(
+            status_code=201,
+            text="",
+            json=lambda: {
+                "node_id": str(node_id),
+                "task_signing_key": {
+                    "algorithm": "ed25519",
+                    "key_id": "control-current",
+                    "public_key": _public_text(control_key),
+                },
+            },
+        )
+
+    monkeypatch.setattr("app.worker_agent.client.httpx.post", fake_post)
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:8080")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:8080")
+
+    config = enroll(
+        control_plane_url=control_plane_url,
+        enrollment_code="ASTRO-WORKER-test-code",
+        worker_name="URL validation node",
+        home=tmp_path,
+    )
+
+    assert config.control_plane_url == expected_base_url
+    assert requested_urls == [expected_base_url + "/api/compute/v1/nodes/enroll"]
+
+
+@pytest.mark.parametrize(
+    "control_plane_url",
+    [
+        "http://127.0.0.1.evil.example",
+        "http://127.0.0.1@evil.example",
+        "https://user:password@control.example.test",
+        "http://attacker@127.0.0.1",
+        "http://localhost",
+        "http://localhost.evil.example",
+        "http://192.168.1.1",
+        "http://127.1",
+        "http://2130706433",
+        "http://0177.0.0.1",
+        "http://0x7f000001",
+        "http://127.0.0.1.",
+        "http://[::2]",
+        "http://[::1%25lo0]",
+        "http://[::ffff:127.0.0.1]",
+        "https://control.example.test/base-path",
+        "https://control.example.test?next=https://evil.example",
+        "https://control.example.test#fragment",
+        "https://control.example.test:0",
+        "https://control.example.test:",
+        "https://control.example.test:invalid",
+        "ftp://control.example.test",
+    ],
+)
+def test_enrollment_rejects_ambiguous_or_non_loopback_http_origin(
+    monkeypatch,
+    tmp_path,
+    control_plane_url: str,
+):
+    def unexpected_post(*_args, **_kwargs):
+        raise AssertionError("an invalid control-plane URL must not reach the network")
+
+    monkeypatch.setattr("app.worker_agent.client.httpx.post", unexpected_post)
+
+    with pytest.raises(WorkerClientError):
+        enroll(
+            control_plane_url=control_plane_url,
+            enrollment_code="ASTRO-WORKER-test-code",
+            worker_name="Rejected URL node",
+            home=tmp_path,
+        )
+
+
+def test_enrollment_redirect_does_not_persist_worker_credentials(
+    monkeypatch,
+    tmp_path,
+):
+    def redirect(_url, **kwargs):
+        assert kwargs["follow_redirects"] is False
+        assert kwargs["trust_env"] is False
+        return SimpleNamespace(
+            status_code=302,
+            text="redirect denied",
+            json=lambda: (_ for _ in ()).throw(
+                AssertionError("redirect response JSON must not be trusted")
+            ),
+        )
+
+    monkeypatch.setattr("app.worker_agent.client.httpx.post", redirect)
+
+    with pytest.raises(WorkerClientError, match=r"Enrollment failed \(302\)"):
+        enroll(
+            control_plane_url="http://127.0.0.1:8000",
+            enrollment_code="ASTRO-WORKER-test-code",
+            worker_name="Redirected node",
+            home=tmp_path,
+        )
+
+    assert not (tmp_path / "node.json").exists()
+    assert not (tmp_path / "status.json").exists()
+
+
+def test_saved_and_loaded_configs_revalidate_control_plane_origin(tmp_path):
+    safe = _config(Ed25519PrivateKey.generate())
+    unsafe = replace(
+        safe,
+        control_plane_url="http://127.0.0.1.evil.example",
+    )
+    with pytest.raises(WorkerClientError):
+        save_config(unsafe, home=tmp_path)
+    assert not (tmp_path / "node.json").exists()
+
+    path = tmp_path / "node.json"
+    path.write_text(
+        json.dumps(
+            {
+                **safe.__dict__,
+                "control_plane_url": "http://attacker@127.0.0.1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    path.chmod(0o600)
+    with pytest.raises(WorkerClientError):
+        load_config(home=tmp_path)
+
+
+def test_signed_request_revalidates_legacy_config_and_disables_loopback_proxy(
+    monkeypatch,
+):
+    safe = _config(Ed25519PrivateKey.generate())
+    loopback = replace(safe, control_plane_url="http://127.0.0.1:8000")
+    observed: dict[str, object] = {}
+
+    def request(method, url, **kwargs):
+        observed.update(method=method, url=url, **kwargs)
+        return SimpleNamespace(status_code=204)
+
+    monkeypatch.setattr("app.worker_agent.client.httpx.request", request)
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:8080")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:8080")
+
+    signed_request(
+        loopback,
+        method="POST",
+        path="/api/compute/v1/tasks/claim",
+    )
+
+    assert observed["url"] == "http://127.0.0.1:8000/api/compute/v1/tasks/claim"
+    assert observed["trust_env"] is False
+    assert observed["follow_redirects"] is False
+
+    unsafe = replace(
+        safe,
+        control_plane_url="http://127.0.0.1.evil.example",
+    )
+    observed.clear()
+    with pytest.raises(WorkerClientError):
+        signed_request(
+            unsafe,
+            method="POST",
+            path="/api/compute/v1/tasks/claim",
+        )
+    assert observed == {}
 
 
 def test_worker_accepts_only_signed_registered_task_envelope():
