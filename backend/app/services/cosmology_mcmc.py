@@ -515,7 +515,8 @@ def submit_emcee_job(
     Backward compat: the returned banner keeps the historical fields the
     agent loop and prior tests rely on (``sampler``, ``model``,
     ``status``, and the cosmology-flavoured warning text). The
-    ``background_backend`` string now correctly reports ``"celery"``.
+    ``background_backend`` reports the configured executor. Hosted HTTPS mode
+    rejects this unregistered generic workflow before any task is queued.
     """
     from app.services.async_tool_runtime import submit_async_job
 
@@ -529,12 +530,19 @@ def submit_emcee_job(
     # agent's prompt expects to see.
     banner["sampler"] = "emcee"
     banner["model"] = kwargs.get("model", "flat_lcdm")
-    banner.setdefault("warning", (
-        "Background cosmology jobs are dispatched to the shared Celery worker. "
-        "Status is stored in the cross-process KV so polling works after web "
-        "process restarts; the actual run survives as long as the Celery "
-        "worker stays up. Use only for short follow-up polling."
-    ))
+    if banner.get("__tool_status__") == "PARTIAL":
+        banner.setdefault("warning", (
+            "Background cosmology jobs are dispatched to the shared Celery worker. "
+            "Status is stored in the cross-process KV so polling works after web "
+            "process restarts; the actual run survives as long as the Celery "
+            "worker stays up. Use only for short follow-up polling."
+        ))
+    else:
+        banner.setdefault(
+            "warning",
+            "No cosmology chain was queued; this workflow is not registered for "
+            "the configured science executor.",
+        )
     return banner
 
 

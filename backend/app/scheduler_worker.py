@@ -24,6 +24,26 @@ logger = logging.getLogger(__name__)
 POLL_INTERVAL_SECONDS = 60
 
 
+def _disable_schedules_without_science_executor() -> int:
+    """Disable persisted schedules that this deployment cannot execute."""
+
+    engine = _create_sync_engine()
+    try:
+        with Session(engine) as session:
+            schedules = list(
+                session.execute(
+                    select(ScheduledRun).where(ScheduledRun.enabled.is_(True))
+                ).scalars().all()
+            )
+            for schedule in schedules:
+                schedule.enabled = False
+                schedule.next_run_at = None
+            session.commit()
+            return len(schedules)
+    finally:
+        engine.dispose()
+
+
 def _scheduled_storage_keys(schedule: ScheduledRun) -> set[str]:
     """Return every storage key a scheduled DAG can open directly."""
     paths = collect_pipeline_storage_paths(
@@ -80,6 +100,35 @@ def check_and_dispatch_due_schedules():
     This function uses synchronous SQLAlchemy and can be called from
     either the standalone loop or from a Celery Beat task.
     """
+    if (
+        settings.pipeline_mode != "celery"
+        or settings.science_execution_backend != "celery"
+    ):
+        try:
+            disabled = _disable_schedules_without_science_executor()
+        except Exception:
+            logger.exception(
+                "Could not disable scheduled pipelines without a science executor"
+            )
+            return {
+                "status": "failed",
+                "error_class": "schedule_disable_failed",
+                "dispatched": 0,
+            }
+        logger.warning(
+            "Scheduled pipeline dispatch is disabled; disabled_schedules=%d, "
+            "pipeline_mode=%s, science_execution_backend=%s",
+            disabled,
+            settings.pipeline_mode,
+            settings.science_execution_backend,
+        )
+        return {
+            "status": "disabled",
+            "error_class": "science_executor_unavailable",
+            "dispatched": 0,
+            "disabled_schedules": disabled,
+        }
+
     from app.pipeline.engine import execute_pipeline_task
 
     engine = _create_sync_engine()

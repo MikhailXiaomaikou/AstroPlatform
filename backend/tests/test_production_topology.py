@@ -175,7 +175,7 @@ def test_render_workers_wait_for_exact_schema_head():
     assert beat_env["APP_ROLE"]["value"] == "beat"
     assert backend_env["SCIENCE_EXECUTION_BACKEND"]["value"] == "https_worker"
     assert worker_env["SCIENCE_EXECUTION_BACKEND"]["value"] == "https_worker"
-    assert beat_env["SCIENCE_EXECUTION_BACKEND"]["value"] == "celery"
+    assert beat_env["SCIENCE_EXECUTION_BACKEND"]["value"] == "https_worker"
     for key in (
         "ADMIN_SECRET",
         "JWT_SECRET",
@@ -345,6 +345,13 @@ def test_compose_declares_role_scoped_secrets_and_one_release_identity():
     assert "worker-$${TOOL_VERSION}@%h" in worker["command"]
     for key in ("JWT_SECRET", "FERNET_KEY", "ADMIN_SECRET", "PRIVACY_OPERATOR_NAME"):
         assert key not in worker["environment"]
+    assert services["backend"]["environment"]["SCIENCE_EXECUTION_BACKEND"] == (
+        "https_worker"
+    )
+    assert worker["environment"]["SCIENCE_EXECUTION_BACKEND"] == "https_worker"
+    assert services["celery-beat"]["environment"][
+        "SCIENCE_EXECUTION_BACKEND"
+    ] == "https_worker"
     assert set(services["celery-beat"]["environment"]) == {
         "ENV",
         "APP_ROLE",
@@ -393,8 +400,9 @@ def test_local_worker_requires_digest_pin_cosign_and_hardened_container():
     assert build["sbom"] is True
 
 
-def test_celery_delivery_semantics_are_fail_safe():
+def test_celery_delivery_semantics_are_fail_safe(monkeypatch):
     import celery_worker
+    from app.config import settings
     from celery.utils.imports import symbol_by_name
 
     celery_app = celery_worker.celery_app
@@ -403,14 +411,39 @@ def test_celery_delivery_semantics_are_fail_safe():
     assert celery_app.conf.task_reject_on_worker_lost is True
     assert celery_app.conf.worker_prefetch_multiplier == 1
     assert celery_app.conf.task_default_queue == "science.short"
-    assert celery_app.conf.task_routes["scheduler.check_due_schedules"] == {
+    guard, task_routes = celery_app.conf.task_routes
+    assert isinstance(guard, celery_worker.ControlPlaneTaskRouter)
+    assert task_routes["scheduler.check_due_schedules"] == {
         "queue": "control"
     }
-    assert celery_app.conf.task_routes["privacy.*"] == {"queue": "maintenance"}
-    assert celery_app.conf.task_routes["research_source.*"] == {"queue": "control"}
-    assert celery_app.conf.task_routes["claim_audit.process"] == {
+    assert task_routes["privacy.*"] == {"queue": "maintenance"}
+    assert task_routes["research_source.*"] == {"queue": "control"}
+    assert task_routes["claim_audit.process"] == {
         "queue": "science.heavy"
     }
+    monkeypatch.setattr(settings, "science_execution_backend", "https_worker")
+    router = celery_app.amqp.Router()
+    assert router.route({}, "maintenance.cleanup")["queue"].name == "maintenance"
+    assert router.route({}, "union3.verify")["queue"].name == "verification"
+    for task_name in (
+        "ai_tools.run_long_tool",
+        "claim_audit.process",
+        "isochrone.prefetch_grid",
+        "pipeline.execute_pipeline",
+        "unknown.unrouted_task",
+    ):
+        with pytest.raises(celery_worker.ScienceTaskPublishRejected):
+            router.route({}, task_name)
+    with pytest.raises(celery_worker.ScienceTaskPublishRejected):
+        router.route({"queue": "science.heavy"}, "maintenance.cleanup")
+
+    monkeypatch.setattr(settings, "science_execution_backend", "celery")
+    assert router.route({}, "pipeline.execute_pipeline")["queue"].name == (
+        "science.heavy"
+    )
+    assert router.route({}, "unknown.unrouted_task")["queue"].name == (
+        "science.short"
+    )
     assert celery_app.conf.task_soft_time_limit > 0
     assert celery_app.conf.task_time_limit > celery_app.conf.task_soft_time_limit
     assert (

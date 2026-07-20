@@ -9,6 +9,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user
+from app.config import settings
 from app.models.database import get_db
 from app.models.schemas import ScheduledRun, User
 
@@ -42,6 +43,20 @@ CRON_PRESETS = {
 }
 
 
+def _require_scheduled_pipeline_executor() -> None:
+    if (
+        settings.pipeline_mode != "celery"
+        or settings.science_execution_backend != "celery"
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Scheduled arbitrary pipelines are unavailable in this "
+                "deployment; use a registered science workflow."
+            ),
+        )
+
+
 def _compute_next_run(cron_expr: str) -> datetime | None:
     """Simple next-run computation. For production, use croniter."""
     try:
@@ -61,6 +76,8 @@ async def create_schedule(
     user: User = Depends(get_current_user),
 ):
     """Create a new scheduled pipeline run."""
+    _require_scheduled_pipeline_executor()
+
     from app.api.pipeline import _bind_owned_pipeline_inputs
     from app.pipeline.engine import topological_sort
     from app.pipeline.nodes import registry
@@ -159,6 +176,8 @@ async def toggle_schedule(
     if not schedule:
         raise HTTPException(status_code=404, detail="Schedule not found")
 
+    if not schedule.enabled:
+        _require_scheduled_pipeline_executor()
     schedule.enabled = not schedule.enabled
     if schedule.enabled:
         schedule.next_run_at = _compute_next_run(schedule.cron_expr)
