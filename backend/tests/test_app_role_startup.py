@@ -226,6 +226,43 @@ def test_control_worker_needs_deletion_and_evidence_but_not_api_secrets(tmp_path
     assert imported.stdout.strip() == "science.short"
 
 
+def test_https_control_worker_requires_public_task_trust_root(tmp_path):
+    env = _base_env(tmp_path, "control_worker")
+    env.update(
+        {
+            "DELETION_TOMBSTONE_KEY": "deletion-key-that-is-at-least-32-bytes",
+            "DELETION_TOMBSTONE_KEY_ID": "deletion-v1",
+            "EVIDENCE_SIGNING_KEY": "evidence-key-that-is-at-least-32-bytes",
+            "EVIDENCE_SIGNING_KEY_ID": "evidence-v1",
+            "SANDBOX_BACKEND": "disabled",
+            "SCIENCE_EXECUTION_BACKEND": "https_worker",
+        }
+    )
+
+    missing = _boot(env)
+    assert missing.returncode != 0
+    assert "WORKER_TASK_SIGNING_KEY_ID" in missing.stderr
+
+    env.update(
+        {
+            "WORKER_TASK_SIGNING_KEY_ID": "tasks-v1",
+            "WORKER_TASK_SIGNING_PUBLIC_KEY": PUBLIC_KEY,
+        }
+    )
+    configured = _assert_boots(env)
+    assert configured["role"] == "control_worker"
+    assert configured["public_key"] == PUBLIC_KEY
+    assert configured["jwt"] is False
+    assert configured["admin"] is False
+
+    env["WORKER_TASK_SIGNING_PRIVATE_KEY"] = base64.b64encode(b"s" * 32).decode(
+        "ascii"
+    )
+    rejected = _boot(env)
+    assert rejected.returncode != 0
+    assert "must not receive WORKER_TASK_SIGNING_PRIVATE_KEY" in rejected.stderr
+
+
 def test_api_still_fails_closed_without_invitation_admin_secret(tmp_path):
     env = _api_env(tmp_path)
     del env["ADMIN_SECRET"]

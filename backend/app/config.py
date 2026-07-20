@@ -656,6 +656,57 @@ class Settings(BaseSettings):
                 "WORKER_TASK_SIGNING_PRIVATE_KEY"
             )
 
+        control_worker_verification_required = (
+            self.app_role == "control_worker"
+            and _ENV == "production"
+            and self.science_execution_backend == "https_worker"
+        )
+        control_worker_verification_configured = (
+            self.app_role == "control_worker"
+            and any(
+                str(value or "").strip()
+                for value in (
+                    self.worker_task_signing_key_id,
+                    self.worker_task_signing_public_key,
+                    self.worker_task_verification_keys,
+                )
+            )
+        )
+        if control_worker_verification_required or control_worker_verification_configured:
+            self.worker_task_signing_key_id = str(
+                self.worker_task_signing_key_id or ""
+            ).strip()
+            if not self.worker_task_signing_key_id or any(
+                ch.isspace() for ch in self.worker_task_signing_key_id
+            ):
+                raise ValueError(
+                    "APP_ROLE=control_worker requires a whitespace-free "
+                    "WORKER_TASK_SIGNING_KEY_ID"
+                )
+            verification_keys = self.worker_task_verification_keyring
+            current_public_key = str(
+                self.worker_task_signing_public_key
+                or verification_keys.get(self.worker_task_signing_key_id, "")
+            ).strip()
+            if not current_public_key:
+                raise ValueError(
+                    "APP_ROLE=control_worker requires "
+                    "WORKER_TASK_SIGNING_PUBLIC_KEY or a current entry in "
+                    "WORKER_TASK_VERIFICATION_KEYS"
+                )
+            _decode_ed25519_key(
+                "WORKER_TASK_SIGNING_PUBLIC_KEY", current_public_key
+            )
+            keyring_current = verification_keys.get(
+                self.worker_task_signing_key_id
+            )
+            if keyring_current and keyring_current != current_public_key:
+                raise ValueError(
+                    "WORKER_TASK_VERIFICATION_KEYS contains the current key id "
+                    "with a different public key"
+                )
+            self.worker_task_signing_public_key = current_public_key
+
         task_signing_configured = any(
             str(value or "").strip()
             for value in (

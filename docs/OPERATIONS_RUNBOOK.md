@@ -27,7 +27,13 @@ to shared external storage and the disk can be removed.
 
 Before syncing an existing Blueprint, seed stable `JWT_SECRET`, `FERNET_KEY`,
 independent `EVIDENCE_SIGNING_KEY`, and the matching stable
-`EVIDENCE_SIGNING_KEY_ID` values from an external secret manager. Also set
+`EVIDENCE_SIGNING_KEY_ID` values from an external secret manager. Seed the
+independent Worker task-signing private key only on the backend, and set its
+matching `WORKER_TASK_SIGNING_KEY_ID`, `WORKER_TASK_SIGNING_PUBLIC_KEY`, and
+retained public `WORKER_TASK_VERIFICATION_KEYS` keyring. The control worker
+receives only those public trust roots so its independent verifier can validate
+the exact task envelope; it must never receive `WORKER_TASK_SIGNING_PRIVATE_KEY`.
+Also set
 `S3_BUCKET`, `S3_ACCESS_KEY_ID`, and `S3_SECRET_ACCESS_KEY` on the
 backend, plus `S3_ENDPOINT_URL` for R2/MinIO, and pre-seed
 `EVIDENCE_VERIFICATION_KEYS` as `{}` when first introducing the evidence-key

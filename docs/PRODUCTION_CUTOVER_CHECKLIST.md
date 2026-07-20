@@ -40,6 +40,10 @@ decision. If any is missing, stop.
 - Put stable `JWT_SECRET`, `FERNET_KEY`, independent `EVIDENCE_SIGNING_KEY`,
   and its stable `EVIDENCE_SIGNING_KEY_ID` in an external secret manager;
   retain the evidence verification keyring and any legacy evidence JWT key.
+- Keep `WORKER_TASK_SIGNING_PRIVATE_KEY` on the backend only. Distribute the
+  matching Worker task key ID, current public key, and retained public keyring
+  to the control worker, then prove the verifier accepts a backend-signed task
+  envelope and rejects an unknown or retired-without-key task ID.
 - Seed every `sync: false` Blueprint variable before sync. Never replace an
   existing Fernet key merely because the Blueprint asks for one.
 - Create a checksummed portable backup and provider-native database recovery

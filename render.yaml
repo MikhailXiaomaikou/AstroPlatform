@@ -303,6 +303,24 @@ services:
           name: standard-astro-backend
           type: web
           envVarKey: EVIDENCE_VERIFICATION_KEYS
+      # The verifier/finalizer validates the exact task envelope issued by the
+      # API.  It receives only public trust roots; the private task-signing key
+      # must remain confined to standard-astro-backend.
+      - key: WORKER_TASK_SIGNING_KEY_ID
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: WORKER_TASK_SIGNING_KEY_ID
+      - key: WORKER_TASK_SIGNING_PUBLIC_KEY
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: WORKER_TASK_SIGNING_PUBLIC_KEY
+      - key: WORKER_TASK_VERIFICATION_KEYS
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: WORKER_TASK_VERIFICATION_KEYS
       - key: PIPELINE_MODE
         # This control worker never consumes science queues. Producer-side
         # SCIENCE_EXECUTION_BACKEND guards keep them empty in this topology.
