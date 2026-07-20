@@ -13,6 +13,7 @@ import hashlib
 import secrets
 import uuid
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -23,6 +24,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import SessionTransaction
 
 from app.cache import get_redis
 from app.models.claim_audit_records import ClaimAudit
@@ -65,6 +67,23 @@ class WorkerProtocolError(ValueError):
         super().__init__(code)
         self.code = code
         self.status_code = status_code
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedAttemptCompletion:
+    """Lease/result validation held by one open database transaction."""
+
+    attempt: ScienceExecutionAttempt
+    job: ResearchJob | None
+    audit: ClaimAudit | None
+    result_hash: str
+    node_id: uuid.UUID
+    user_id: uuid.UUID
+    attempt_id: uuid.UUID
+    lease_id: str
+    lease_expires_at: datetime
+    validated_at: datetime
+    transaction: SessionTransaction
 
 
 def _utcnow() -> datetime:
@@ -641,7 +660,7 @@ async def prepare_attempt_completion(
     result: Mapping[str, Any],
     claimed_result_hash: str | None,
     now: datetime | None = None,
-) -> tuple[ScienceExecutionAttempt, ResearchJob | None, ClaimAudit | None, str]:
+) -> PreparedAttemptCompletion:
     """Lock and validate every state row before artifact promotion.
 
     The API holds these locks while server-side object promotion runs. This
@@ -674,7 +693,24 @@ async def prepare_attempt_completion(
         if attempt.result_hash and secrets.compare_digest(
             attempt.result_hash, result_hash
         ):
-            return attempt, job, audit, result_hash
+            transaction = db.sync_session.get_transaction()
+            if transaction is None:  # pragma: no cover - SQLAlchemy invariant
+                raise WorkerProtocolError(
+                    "completion_transaction_unavailable", status_code=409
+                )
+            return PreparedAttemptCompletion(
+                attempt=attempt,
+                job=job,
+                audit=audit,
+                result_hash=result_hash,
+                node_id=node.id,
+                user_id=node.user_id,
+                attempt_id=attempt_id,
+                lease_id=lease_id,
+                lease_expires_at=_as_utc(attempt.lease_expires_at),
+                validated_at=checked_at,
+                transaction=transaction,
+            )
         raise WorkerProtocolError("conflicting_worker_result", status_code=409)
     require_live_lease(attempt, lease_id=lease_id, now=checked_at)
     if job is None:
@@ -685,6 +721,100 @@ async def prepare_attempt_completion(
         raise WorkerProtocolError("stale_worker_lease", status_code=409)
     if attempt.audit_id is not None:
         if audit is None or audit.user_id != node.user_id:
+            raise WorkerProtocolError("invalid_audit_binding", status_code=409)
+        if audit.lifecycle_status == "CANCELLED":
+            raise WorkerProtocolError("claim_audit_cancelled", status_code=409)
+        if audit.lifecycle_status != "RUNNING":
+            raise WorkerProtocolError("audit_not_completable", status_code=409)
+    transaction = db.sync_session.get_transaction()
+    if transaction is None:  # pragma: no cover - SQLAlchemy invariant
+        raise WorkerProtocolError("completion_transaction_unavailable", status_code=409)
+    return PreparedAttemptCompletion(
+        attempt=attempt,
+        job=job,
+        audit=audit,
+        result_hash=result_hash,
+        node_id=node.id,
+        user_id=node.user_id,
+        attempt_id=attempt_id,
+        lease_id=lease_id,
+        lease_expires_at=_as_utc(attempt.lease_expires_at),
+        validated_at=checked_at,
+        transaction=transaction,
+    )
+
+
+def _validate_prepared_attempt_completion(
+    db: AsyncSession,
+    *,
+    prepared: PreparedAttemptCompletion,
+    node: WorkerNode,
+    attempt_id: uuid.UUID,
+    lease_id: str,
+    result: Mapping[str, Any],
+    claimed_result_hash: str | None,
+) -> tuple[ScienceExecutionAttempt, ResearchJob | None, ClaimAudit | None, str]:
+    """Revalidate a prepared completion without advancing the lease clock.
+
+    Artifact verification runs while the Audit, job, and attempt rows remain
+    locked.  It may legitimately outlive the lease deadline because a blocked
+    heartbeat cannot renew those rows.  The token is therefore accepted only
+    in the exact transaction that performed the live-lease validation, while
+    every owner, lease, row binding, and result-hash invariant is checked
+    again.
+    """
+
+    transaction = db.sync_session.get_transaction()
+    if transaction is None or transaction is not prepared.transaction:
+        raise WorkerProtocolError("completion_transaction_lost", status_code=409)
+    if (
+        node.id != prepared.node_id
+        or node.user_id != prepared.user_id
+        or attempt_id != prepared.attempt_id
+    ):
+        raise WorkerProtocolError("completion_owner_binding_mismatch", status_code=409)
+
+    result_hash = _validated_worker_result_hash(result, claimed_result_hash)
+    if not secrets.compare_digest(result_hash, prepared.result_hash):
+        raise WorkerProtocolError("completion_result_changed", status_code=409)
+
+    attempt = prepared.attempt
+    job = prepared.job
+    audit = prepared.audit
+    if (
+        attempt.id != attempt_id
+        or attempt.worker_node_id != node.id
+        or attempt.user_id != node.user_id
+    ):
+        raise WorkerProtocolError("completion_owner_binding_mismatch", status_code=409)
+    if attempt.status == "SUCCEEDED":
+        if attempt.result_hash and secrets.compare_digest(
+            attempt.result_hash, result_hash
+        ):
+            return attempt, job, audit, result_hash
+        raise WorkerProtocolError("conflicting_worker_result", status_code=409)
+    if not secrets.compare_digest(
+        str(prepared.lease_id), str(lease_id)
+    ) or not secrets.compare_digest(str(attempt.lease_id), str(lease_id)):
+        raise WorkerProtocolError("stale_worker_lease", status_code=409)
+    if attempt.status not in {"LEASED", "RUNNING"}:
+        raise WorkerProtocolError("science_attempt_not_active", status_code=409)
+    if prepared.lease_expires_at <= prepared.validated_at:
+        raise WorkerProtocolError("worker_lease_expired", status_code=409)
+    if _as_utc(attempt.lease_expires_at) != prepared.lease_expires_at:
+        raise WorkerProtocolError("stale_worker_lease", status_code=409)
+    if job is None or job.job_id != attempt.job_id:
+        raise WorkerProtocolError("science_job_not_found", status_code=409)
+    if job.status == "CANCELLED":
+        raise WorkerProtocolError("science_job_cancelled", status_code=409)
+    if job.status != "RUNNING" or job.current_attempt_id != attempt.id:
+        raise WorkerProtocolError("stale_worker_lease", status_code=409)
+    if attempt.audit_id is not None:
+        if (
+            audit is None
+            or audit.id != attempt.audit_id
+            or audit.user_id != node.user_id
+        ):
             raise WorkerProtocolError("invalid_audit_binding", status_code=409)
         if audit.lifecycle_status == "CANCELLED":
             raise WorkerProtocolError("claim_audit_cancelled", status_code=409)
@@ -760,18 +890,29 @@ async def complete_attempt(
     diagnostics: Mapping[str, Any] | None,
     artifact_manifest: list[dict[str, Any]] | None,
     now: datetime | None = None,
+    prepared: PreparedAttemptCompletion | None = None,
 ) -> tuple[ScienceExecutionAttempt, bool]:
     """Record an untrusted result; return ``(attempt, idempotent_replay)``."""
 
     completed_at = now or _utcnow()
-    attempt, job, audit, result_hash = await prepare_attempt_completion(
+    if prepared is None:
+        prepared = await prepare_attempt_completion(
+            db,
+            node=node,
+            attempt_id=attempt_id,
+            lease_id=lease_id,
+            result=result,
+            claimed_result_hash=claimed_result_hash,
+            now=completed_at,
+        )
+    attempt, job, audit, result_hash = _validate_prepared_attempt_completion(
         db,
+        prepared=prepared,
         node=node,
         attempt_id=attempt_id,
         lease_id=lease_id,
         result=result,
         claimed_result_hash=claimed_result_hash,
-        now=completed_at,
     )
     if attempt.status == "SUCCEEDED":
         return attempt, True
