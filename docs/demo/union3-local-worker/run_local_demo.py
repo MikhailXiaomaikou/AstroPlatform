@@ -174,7 +174,13 @@ def _demo_environment(
             "EVIDENCE_V2_SIGNING_KEY_ID": "demo-evidence-v2",
             "EVIDENCE_V2_SIGNING_PUBLIC_KEY": evidence_public,
             "EVIDENCE_V2_VERIFICATION_KEYS": json.dumps(
-                {"demo-evidence-v2": evidence_public}, separators=(",", ":")
+                {
+                    "demo-evidence-v2": {
+                        "public_key": evidence_public,
+                        "status": "active",
+                    }
+                },
+                separators=(",", ":"),
             ),
             "STORAGE_BACKEND": "local",
             "LOCAL_STORAGE_DIR": str(state / "objects"),
