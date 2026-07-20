@@ -133,6 +133,20 @@ async def _completed_primary_attempt(db_session, monkeypatch):
         candidate_id=candidate["candidate_id"],
         workflow_key="union3_flat_lcdm_sn_only_v1",
     )
+    from app.api.research_workspaces import _serialize_review_queue_item
+
+    review_packet = _serialize_review_queue_item(audit, source, extraction)
+    assert audit.atomic_claim != candidate
+    assert audit.normalized_claims == [candidate]
+    assert review_packet["review_binding"] == {
+        "source_document_id": str(source.id),
+        "source_extraction_id": str(extraction.id),
+        "candidate_id": candidate["candidate_id"],
+        "claim_hash": candidate["claim_hash"],
+        "source_hash": source.source_document_hash,
+        "anchor_ids": candidate["source_anchor_ids"],
+    }
+    assert review_packet["review_evidence"]["anchors"]
     worker_key = Ed25519PrivateKey.generate()
     node = WorkerNode(
         id=uuid.uuid4(),
