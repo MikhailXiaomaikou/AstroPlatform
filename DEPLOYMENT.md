@@ -82,6 +82,13 @@ EVIDENCE_SIGNING_KEY=<independent-random-secret-at-least-32-bytes>
 EVIDENCE_SIGNING_KEY_ID=evidence-prod-v1
 # JSON map of retired key ids to secrets; normally empty until a rotation:
 EVIDENCE_VERIFICATION_KEYS={}
+# Ed25519 task-envelope signing. The private seed stays on the API. The
+# control worker receives only the key id, current public key, and retained
+# public verification keyring.
+WORKER_TASK_SIGNING_PRIVATE_KEY=<base64-ed25519-private-seed>
+WORKER_TASK_SIGNING_KEY_ID=worker-tasks-prod-v1
+WORKER_TASK_SIGNING_PUBLIC_KEY=<matching-base64-ed25519-public-key>
+WORKER_TASK_VERIFICATION_KEYS={}
 CORS_ORIGINS=https://<target-frontend>
 RATE_LIMIT_ENABLED=true
 SHARED_DEEPSEEK_API_KEY_ENABLED=false # public chat is BYOK-only
@@ -118,6 +125,13 @@ workflows. Before enabling Union3, create the usernames listed in
 `SCIENTIFIC_REVIEWER_USERNAMES` and verify that at least one reviewer is a
 different account from the Audit owner; an empty allowlist intentionally makes
 every review request fail with 403.
+
+The Render and Compose control workers must receive
+`WORKER_TASK_SIGNING_KEY_ID`, `WORKER_TASK_SIGNING_PUBLIC_KEY`, and
+`WORKER_TASK_VERIFICATION_KEYS`. They must not receive
+`WORKER_TASK_SIGNING_PRIVATE_KEY`. In `https_worker` mode the control-worker
+startup contract rejects a missing or malformed public trust root before it
+can consume verification work.
 
 The S3/R2 credential is also part of the account-deletion boundary. In
 addition to ordinary read/write access, it must be able to inspect bucket

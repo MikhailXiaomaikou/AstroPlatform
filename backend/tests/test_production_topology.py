@@ -321,6 +321,9 @@ def test_render_workers_wait_for_exact_schema_head():
         "EVIDENCE_SIGNING_KEY",
         "EVIDENCE_SIGNING_KEY_ID",
         "EVIDENCE_VERIFICATION_KEYS",
+        "WORKER_TASK_SIGNING_KEY_ID",
+        "WORKER_TASK_SIGNING_PUBLIC_KEY",
+        "WORKER_TASK_VERIFICATION_KEYS",
     ):
         assert worker_env[key]["fromService"]["name"] == "standard-astro-backend"
 
@@ -419,6 +422,18 @@ def test_compose_declares_role_scoped_secrets_and_one_release_identity():
         "https_worker"
     )
     assert worker["environment"]["SCIENCE_EXECUTION_BACKEND"] == "https_worker"
+    assert worker["environment"]["WORKER_TASK_SIGNING_KEY_ID"] == (
+        "${WORKER_TASK_SIGNING_KEY_ID:?WORKER_TASK_SIGNING_KEY_ID must be set "
+        "explicitly}"
+    )
+    assert worker["environment"]["WORKER_TASK_SIGNING_PUBLIC_KEY"] == (
+        "${WORKER_TASK_SIGNING_PUBLIC_KEY:?WORKER_TASK_SIGNING_PUBLIC_KEY must be "
+        "set explicitly}"
+    )
+    assert worker["environment"]["WORKER_TASK_VERIFICATION_KEYS"] == (
+        "${WORKER_TASK_VERIFICATION_KEYS:-}"
+    )
+    assert "WORKER_TASK_SIGNING_PRIVATE_KEY" not in worker["environment"]
     release_identity = (
         "${STANDARD_ASTRO_RELEASE:?STANDARD_ASTRO_RELEASE must identify this release}"
     )
