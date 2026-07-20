@@ -107,6 +107,24 @@ describe("ClaimAuditPage", () => {
     expect(api.listClaimAudits).not.toHaveBeenCalled();
   });
 
+  it("redirects hosted registered workflows to Research Workspace", async () => {
+    window.history.pushState({}, "", "/claim-audit");
+    api.getRuntimeConfig.mockResolvedValueOnce({
+      focus: "cosmology",
+      claim_audit_enabled: true,
+      claim_audit_execution_mode: "https_worker",
+      research_workspace_enabled: true,
+      signup_mode: "invite_only",
+      analytics_requires_consent: true,
+    });
+
+    renderPage();
+
+    await waitFor(() => expect(window.location.pathname).toBe("/research"));
+    expect(api.listClaimAudits).not.toHaveBeenCalled();
+    expect(api.createClaimAudit).not.toHaveBeenCalled();
+  });
+
   it("shows lifecycle and scientific verdict separately and verifies a private pack", async () => {
     renderPage();
 

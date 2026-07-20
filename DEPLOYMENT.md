@@ -18,7 +18,7 @@ The target production Blueprint defines **5 services + 1 database**
 | `standard-astro-frontend` | Static site | Vite SPA with rewrite-to-index routing |
 | `standard-astro-db` | PostgreSQL | Primary database |
 | `standard-astro-redis` | Render Key Value | Persistent Celery broker and shared cache |
-| `standard-astro-celery-worker` | Background worker | Heavy pipeline/task execution |
+| `standard-astro-celery-worker` | Background worker | Control, maintenance, and independent verification only |
 | `standard-astro-celery-beat` | Background worker | Scheduled-task dispatch |
 
 Backend and worker share an S3-compatible object store for uploaded FITS and
@@ -50,8 +50,9 @@ therefore requires explicit operator approval. Follow
 do not treat a green CI run as authorization to provision paid resources.
 
 Target-topology pushes to `main` deploy only after linked CI checks pass. Before
-the backend starts, Render runs `alembic upgrade head`; migration failure blocks
-the deploy.
+the backend starts, Render runs `alembic upgrade head` and `alembic check` with
+`APP_ROLE=migration`; migration failure blocks the deploy without loading the
+API role's login, privacy, or administrator-secret requirements.
 Render deploys workers independently, so worker and beat run the read-only
 `scripts/wait_for_schema_head.py` gate before Celery starts. They poll until the
 database exactly matches the Alembic head shipped in their image and exit after
@@ -68,6 +69,9 @@ Set these on `standard-astro-backend`:
 
 ```bash
 ENV=production
+APP_ROLE=api
+SCIENCE_EXECUTION_BACKEND=https_worker # registered science runs on user workers
+STANDARD_ASTRO_RELEASE=v0.5.0-alpha.1  # exact release/tag recorded in Evidence Packs
 DATABASE_URL=postgresql://...          # Render internal DB URL; backend converts to asyncpg
 JWT_SECRET=<random-hex-32>
 FERNET_KEY=<random-secret-stored-outside-the-database>
@@ -83,11 +87,12 @@ RATE_LIMIT_ENABLED=true
 SHARED_DEEPSEEK_API_KEY_ENABLED=false # public chat is BYOK-only
 SIGNUP_MODE=invite_only               # hosted alpha; local dev may use public
 CLAIM_AUDIT_ENABLED=false             # dark until P0/P1 release gates pass
-CLAIM_AUDIT_EXECUTION_MODE=celery
+CLAIM_AUDIT_EXECUTION_MODE=https_worker
 CLAIM_AUDIT_REGISTERED_TIMEOUT_SECONDS=1800
 CLAIM_AUDIT_WORKER_LEASE_SECONDS=120  # redelivery takeover window
 CLAIM_AUDIT_HEARTBEAT_SECONDS=30      # must stay below half the lease
 CLAIM_AUDIT_MAX_ACTIVE_PER_USER=2    # durable per-account queued/running cap
+SCIENTIFIC_REVIEWER_USERNAMES=reviewer-account # comma-separated; not an Audit owner
 ARTIFACT_CLEANUP_GRACE_SECONDS=86400 # commit-ACK/orphan safety window
 PRODUCT_ANALYTICS_RETENTION_DAYS=30
 PRIVACY_OPERATOR_NAME=<real-operator-name>
@@ -104,6 +109,15 @@ S3_SECRET_ACCESS_KEY=...
 STORAGE_REQUIRE_INTEGRITY=true          # fail closed if SHA-256 metadata is missing
 PORT=8000
 ```
+
+`PIPELINE_MODE=celery` keeps the Render control, maintenance, and verification
+queues active. It does not authorize arbitrary science Celery jobs:
+`SCIENCE_EXECUTION_BACKEND=https_worker` makes those producers fail closed, and
+the only executable science payloads are server-registered HTTPS Worker
+workflows. Before enabling Union3, create the usernames listed in
+`SCIENTIFIC_REVIEWER_USERNAMES` and verify that at least one reviewer is a
+different account from the Audit owner; an empty allowlist intentionally makes
+every review request fail with 403.
 
 The S3/R2 credential is also part of the account-deletion boundary. In
 addition to ordinary read/write access, it must be able to inspect bucket

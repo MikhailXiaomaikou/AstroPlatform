@@ -73,6 +73,7 @@ services:
       ENV: production
       APP_ROLE: api
       SCIENCE_EXECUTION_BACKEND: https_worker
+      STANDARD_ASTRO_RELEASE: ${STANDARD_ASTRO_RELEASE:?STANDARD_ASTRO_RELEASE must identify this release}
       DATABASE_URL: postgresql+asyncpg://astro:astro@postgres:5432/astro
       REDIS_URL: redis://redis:6379/0
       # 生产密钥必须显式提供, 不给弱默认值 (render.yaml 用 generateValue, 这里同理 fail-fast)
@@ -93,6 +94,7 @@ services:
       EVIDENCE_PACK_V2_ENABLED: "false"
       LOCAL_SCIENCE_WORKER_ENABLED: "false"
       CLAIM_AUDIT_EXECUTION_MODE: https_worker
+      SCIENTIFIC_REVIEWER_USERNAMES: ${SCIENTIFIC_REVIEWER_USERNAMES:?SCIENTIFIC_REVIEWER_USERNAMES must list an independent reviewer}
       SHARED_DEEPSEEK_API_KEY_ENABLED: "false"
       PRIVACY_OPERATOR_NAME: ${PRIVACY_OPERATOR_NAME:?PRIVACY_OPERATOR_NAME must identify the operator}
       PRIVACY_CONTACT: ${PRIVACY_CONTACT:?PRIVACY_CONTACT must be set}
@@ -144,6 +146,7 @@ services:
       ENV: production
       APP_ROLE: control_worker
       SCIENCE_EXECUTION_BACKEND: https_worker
+      STANDARD_ASTRO_RELEASE: ${STANDARD_ASTRO_RELEASE:?STANDARD_ASTRO_RELEASE must identify this release}
       DATABASE_URL: postgresql+asyncpg://astro:astro@postgres:5432/astro
       REDIS_URL: redis://redis:6379/0
       DELETION_TOMBSTONE_KEY: ${DELETION_TOMBSTONE_KEY:?DELETION_TOMBSTONE_KEY must be set explicitly}

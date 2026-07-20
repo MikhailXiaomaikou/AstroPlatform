@@ -16,6 +16,7 @@ from pathlib import Path
 import httpx
 
 from app.services.worker_contract import canonical_result_hash
+from app.services.union3_profile_plot import render_union3_profile_svg
 from app.worker_agent.client import (
     WorkerClientError,
     config_path,
@@ -299,8 +300,6 @@ def _finish_control_action(
 
 
 def _science_artifacts(result: dict, envelope: dict) -> dict[str, tuple[bytes, str]]:
-    from app.services.union3_research_loop import _union3_profile_svg
-
     primary_json = (
         json.dumps(
             result,
@@ -330,7 +329,7 @@ def _science_artifacts(result: dict, envelope: dict) -> dict[str, tuple[bytes, s
         )
         + "\n"
     ).encode("utf-8")
-    chart = _union3_profile_svg(result).encode("utf-8")
+    chart = render_union3_profile_svg(result).encode("utf-8")
     return {
         "primary_analysis.json": (primary_json, "application/json"),
         "chi2_profile.svg": (chart, "image/svg+xml"),

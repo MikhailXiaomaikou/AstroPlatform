@@ -16,10 +16,12 @@ services:
       - astro-worker-state:/worker-state
       - astro-worker-cache:/cache
     environment:
+      ENV: production
+      APP_ROLE: science_worker
+      SCIENCE_EXECUTION_BACKEND: https_worker
       ASTRO_WORKER_HOME: /worker-state
       ASTRO_WORKER_CACHE_DIR: /cache
       WORKER_IMAGE_DIGEST: ${WORKER_IMAGE_DIGEST:?set the pinned image digest}
-      GIT_COMMIT: ${GIT_COMMIT:?set the full release commit}
     deploy:
       resources:
         limits:

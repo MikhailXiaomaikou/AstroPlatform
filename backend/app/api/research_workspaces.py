@@ -577,6 +577,31 @@ async def retry_source_document(
 
 
 @router.post(
+    "/sources/{source_document_id}/retry",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def retry_source_document_by_id(
+    source_document_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Retry an owned source through the public source-level contract."""
+
+    _require_reader_enabled()
+    document, _ = await _owned_source_by_id(
+        db,
+        user_id=user.id,
+        source_document_id=source_document_id,
+    )
+    return await retry_source_document(
+        workspace_id=document.workspace_id,
+        source_document_id=source_document_id,
+        db=db,
+        user=user,
+    )
+
+
+@router.post(
     "/workspaces/{workspace_id}/claim-audits",
     status_code=status.HTTP_201_CREATED,
 )
