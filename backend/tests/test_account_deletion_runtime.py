@@ -26,7 +26,13 @@ from app.models.schemas import (
     ScheduledRun,
     User,
 )
+from app.models.worker_records import (
+    ScienceExecutionAttempt,
+    WorkerArtifactIssuance,
+    WorkerNode,
+)
 from app.services.account_deletion import (
+    AccountArtifactUploadActive,
     claim_account_deletion_lease,
     deletion_user_fingerprint,
     erase_account_data,
@@ -63,6 +69,47 @@ async def test_delete_request_cancels_every_runtime_and_disables_schedule(
 
     user, token = test_user
     audit = _audit(user.id)
+    job_id = f"union3-primary-{uuid.uuid4().hex}"
+    attempt_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+    node = WorkerNode(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        name="deletion-race-worker",
+        public_key="test-only",
+        public_key_fingerprint="sha256:" + "a" * 64,
+        protocol_version="1",
+        status="ACTIVE",
+        capabilities={},
+        release_manifest={},
+    )
+    job = ResearchJob(
+        job_id=job_id,
+        user_id=user.id,
+        tool_name="union3_flat_lcdm_sn_only_v1",
+        inputs_hash="b" * 64,
+        args={"workflow_key": "union3_flat_lcdm_sn_only_v1"},
+        status="RUNNING",
+        background_backend="https_worker",
+        current_attempt_id=attempt_id,
+        created_at=now,
+        started_at=now,
+    )
+    attempt = ScienceExecutionAttempt(
+        id=attempt_id,
+        job_id=job_id,
+        audit_id=audit.id,
+        user_id=user.id,
+        worker_node_id=node.id,
+        attempt_number=1,
+        status="RUNNING",
+        lease_id="c" * 64,
+        lease_expires_at=now + timedelta(minutes=2),
+        input_hash=job.inputs_hash,
+        task_envelope={},
+        artifact_manifest=[],
+    )
+    audit.child_job_ids = [job_id]
     pipeline = PipelineRun(user_id=user.id, dag={"nodes": [], "edges": []}, status="running")
     schedule = ScheduledRun(
         user_id=user.id,
@@ -73,7 +120,7 @@ async def test_delete_request_cancels_every_runtime_and_disables_schedule(
         enabled=True,
         next_run_at=datetime.now(timezone.utc),
     )
-    db_session.add_all([audit, pipeline, schedule])
+    db_session.add_all([audit, node, job, attempt, pipeline, schedule])
     await db_session.commit()
 
     monkeypatch.setattr(privacy, "write_external_deletion_tombstone", lambda **_: "ok")
@@ -94,11 +141,17 @@ async def test_delete_request_cancels_every_runtime_and_disables_schedule(
     await db_session.refresh(audit)
     await db_session.refresh(pipeline)
     await db_session.refresh(schedule)
+    await db_session.refresh(node)
+    await db_session.refresh(job)
+    await db_session.refresh(attempt)
     assert audit.lifecycle_status == "CANCELLED"
     assert audit.worker_lease_id is None
     assert pipeline.status == "cancelled"
     assert schedule.enabled is False
     assert schedule.next_run_at is None
+    assert node.status == "REVOKED"
+    assert job.status == "CANCELLED"
+    assert attempt.status == "CANCELLED"
 
 
 async def test_delete_request_remains_durable_when_initial_runtime_purge_fails(
@@ -380,30 +433,92 @@ async def test_erasure_discovers_pipeline_run_result_object(
     monkeypatch.setattr(settings, "local_storage_dir", str(tmp_path / "objects"))
     output_path = f"pipeline/{user.id}/result.fits"
     research_output_path = f"processed/{user.id}/chat-image.fits"
+    worker_output_path = f"science-attempts/{user.id}/profile.svg"
+    worker_staging_path = (
+        f"science-attempts/{user.id}/artifact-attempt/uploads/profile.json"
+    )
+    worker_authoritative_path = (
+        f"science-attempts/{user.id}/artifact-attempt/verified/profile.json"
+    )
+    restored_orphan_path = (
+        f"science-attempts/{user.id}/restored-ledger-gap/orphan.bin"
+    )
     pending_output_path = f"processed/{user.id}/late-image.fits"
     upload_fits(output_path, b"owned pipeline output")
     upload_fits(research_output_path, b"owned chat-tool output")
+    upload_fits(worker_output_path, b"owned worker profile")
+    upload_fits(worker_staging_path, b"staging worker artifact")
+    upload_fits(worker_authoritative_path, b"verified worker artifact")
+    upload_fits(restored_orphan_path, b"restored database orphan")
     upload_fits(pending_output_path, b"late worker output")
     run = PipelineRun(user_id=user.id, dag={"nodes": [], "edges": []}, status="cancelled")
     db_session.add(run)
     await db_session.flush()
     db_session.add(RunResult(run_id=run.id, node_id="node", output_path=output_path))
     now = datetime.now(timezone.utc)
-    db_session.add(
-        ResearchJob(
-            job_id=f"owned-{uuid.uuid4().hex}",
-            user_id=user.id,
-            tool_name="process_image",
-            inputs_hash="a" * 64,
-            args={},
-            args_replayable=True,
-            status="completed",
-            result={"product": {"output_path": research_output_path}},
-            background_backend="celery",
-            created_at=now,
-            completed_at=now,
-        )
+    attempt_id = uuid.uuid4()
+    research_job = ResearchJob(
+        job_id=f"owned-{uuid.uuid4().hex}",
+        user_id=user.id,
+        tool_name="union3_flat_lcdm_sn_only_v1",
+        inputs_hash="a" * 64,
+        args={},
+        args_replayable=True,
+        status="COMPLETED",
+        result={"product": {"output_path": research_output_path}},
+        background_backend="https_worker",
+        current_attempt_id=attempt_id,
+        created_at=now,
+        completed_at=now,
     )
+    node = WorkerNode(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        name="erasure test node",
+        public_key="test-only",
+        public_key_fingerprint="sha256:" + "b" * 64,
+        protocol_version="1",
+        status="ACTIVE",
+        capabilities={},
+        release_manifest={},
+    )
+    attempt = ScienceExecutionAttempt(
+        id=attempt_id,
+        job_id=research_job.job_id,
+        user_id=user.id,
+        worker_node_id=node.id,
+        attempt_number=1,
+        status="SUCCEEDED",
+        lease_id="c" * 64,
+        lease_expires_at=now,
+        input_hash=research_job.inputs_hash,
+        task_envelope={},
+        artifact_manifest=[
+            {
+                "artifact_ref": worker_output_path,
+                "sha256": "d" * 64,
+                "size_bytes": 20,
+                "content_type": "image/svg+xml",
+                "status": "VERIFIED",
+            }
+        ],
+        completed_at=now,
+    )
+    issuance = WorkerArtifactIssuance(
+        id=uuid.uuid4(),
+        batch_id=uuid.uuid4(),
+        attempt_id=attempt_id,
+        user_id=user.id,
+        worker_node_id=node.id,
+        artifact_name="profile.json",
+        artifact_ref=worker_staging_path,
+        authoritative_ref=worker_authoritative_path,
+        sha256="e" * 64,
+        size_bytes=23,
+        content_type="application/json",
+        expires_at=now - timedelta(hours=2),
+    )
+    db_session.add_all([research_job, node, attempt, issuance])
     tombstone = AccountDeletionTombstone(
         id=uuid.uuid4(),
         user_fingerprint=deletion_user_fingerprint(user.id),
@@ -426,8 +541,16 @@ async def test_erasure_discovers_pipeline_run_result_object(
         tombstone_id=tombstone.id,
         db=db_session,
     )
-    assert result["objects_deleted"] == 3
-    for erased_path in (output_path, research_output_path, pending_output_path):
+    assert result["objects_deleted"] == 7
+    for erased_path in (
+        output_path,
+        research_output_path,
+        worker_output_path,
+        worker_staging_path,
+        worker_authoritative_path,
+        restored_orphan_path,
+        pending_output_path,
+    ):
         try:
             download_fits(erased_path)
         except FileNotFoundError:
@@ -438,6 +561,98 @@ async def test_erasure_discovers_pipeline_run_result_object(
     assert tombstone.status == "COMPLETED"
     assert tombstone.pending_user_id is None
     assert tombstone.pending_artifact_refs == []
+
+
+async def test_erasure_waits_until_direct_upload_capability_is_quiescent(
+    db_session,
+    test_user,
+):
+    user, _token = test_user
+    now = datetime.now(timezone.utc)
+    attempt_id = uuid.uuid4()
+    job = ResearchJob(
+        job_id=f"active-upload-{uuid.uuid4().hex}",
+        user_id=user.id,
+        tool_name="union3_flat_lcdm_sn_only_v1",
+        inputs_hash="f" * 64,
+        args={},
+        args_replayable=True,
+        status="CANCELLED",
+        background_backend="https_worker",
+        current_attempt_id=attempt_id,
+        created_at=now,
+        completed_at=now,
+    )
+    node = WorkerNode(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        name="active upload node",
+        public_key="test-only",
+        public_key_fingerprint="sha256:" + "9" * 64,
+        protocol_version="1",
+        status="REVOKED",
+        capabilities={},
+        release_manifest={},
+    )
+    attempt = ScienceExecutionAttempt(
+        id=attempt_id,
+        job_id=job.job_id,
+        user_id=user.id,
+        worker_node_id=node.id,
+        attempt_number=1,
+        status="CANCELLED",
+        lease_id="8" * 64,
+        lease_expires_at=now,
+        input_hash=job.inputs_hash,
+        task_envelope={},
+        artifact_manifest=[],
+        completed_at=now,
+    )
+    issuance = WorkerArtifactIssuance(
+        id=uuid.uuid4(),
+        batch_id=uuid.uuid4(),
+        attempt_id=attempt.id,
+        user_id=user.id,
+        worker_node_id=node.id,
+        artifact_name="late.bin",
+        artifact_ref=(
+            f"science-attempts/{user.id}/{attempt.id}/uploads/late.bin"
+        ),
+        authoritative_ref=(
+            f"science-attempts/{user.id}/{attempt.id}/verified/late.bin"
+        ),
+        sha256="7" * 64,
+        size_bytes=1,
+        content_type="application/octet-stream",
+        expires_at=now + timedelta(minutes=15),
+    )
+    tombstone = AccountDeletionTombstone(
+        id=uuid.uuid4(),
+        user_fingerprint=deletion_user_fingerprint(user.id),
+        status="PENDING",
+        receipt_hash=uuid.uuid4().hex + uuid.uuid4().hex,
+        pending_user_id=user.id,
+        pending_artifact_refs=[],
+        requested_at=now,
+        backup_expires_at=now + timedelta(days=30),
+    )
+    db_session.add_all([job, node, attempt, issuance, tombstone])
+    await db_session.commit()
+    user_id = user.id
+    issuance_id = issuance.id
+
+    with pytest.raises(AccountArtifactUploadActive):
+        await erase_account_data(
+            user_id=user_id,
+            tombstone_id=tombstone.id,
+            db=db_session,
+        )
+
+    await db_session.refresh(tombstone)
+    assert tombstone.status == "RETRYABLE"
+    assert tombstone.last_error_class == "AccountArtifactUploadActive"
+    assert await db_session.get(User, user_id) is not None
+    assert await db_session.get(WorkerArtifactIssuance, issuance_id) is not None
 
 
 def test_late_worker_cleanup_failure_is_queued_durably(tmp_path, monkeypatch):

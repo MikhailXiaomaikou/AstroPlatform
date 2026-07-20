@@ -30,6 +30,9 @@ from app.api.health import router as health_router
 from app.api.integration import router as integration_router
 from app.api.jobs import router as jobs_router
 from app.api.claim_audits import router as claim_audits_router
+from app.api.public_evidence import router as public_evidence_router
+from app.api.research_workspaces import router as research_workspaces_router
+from app.api.worker_control import router as worker_control_router
 from app.api.isochrones import router as isochrones_router
 from app.api.inference import router as inference_router
 from app.api.arxiv import router as arxiv_router
@@ -55,6 +58,7 @@ from app.api.workspace import router as workspace_router
 from app.api.ws import router as ws_router, redis_subscriber
 from app.api.provenance import router as provenance_router
 from app.cors import get_cors_origins
+from app.config import settings
 from app.logging_config import CorrelationIdMiddleware
 from app.models.database import engine, Base
 from app.rate_limit import limiter
@@ -314,6 +318,17 @@ def _enforce_provenance_registry_freshness(*, warn_days: int = 180) -> None:
 async def lifespan(app: FastAPI):
     _enforce_provenance_registry_freshness()
 
+    # The Reader accepts no client-supplied PDF text.  Install the sole
+    # production loader only inside the application lifespan so importing
+    # Alembic metadata and test modules never performs network/storage setup.
+    if settings.arxiv_reader_enabled:
+        from app.services.union3_reader import set_union3_snapshot_loader
+        from app.services.union3_snapshot_loader import (
+            fetch_registered_union3_snapshot,
+        )
+
+        set_union3_snapshot_loader(fetch_registered_union3_snapshot)
+
     # M8: gate create_all on non-production environments.  In production the
     # schema is managed via Alembic; re-running create_all on every startup
     # takes DDL locks (noticeable stalls on PostgreSQL with a large schema)
@@ -382,6 +397,10 @@ async def lifespan(app: FastAPI):
     except (asyncio.CancelledError, Exception):
         # Best-effort cleanup — preload failure must never block shutdown.
         pass
+    if settings.arxiv_reader_enabled:
+        from app.services.union3_reader import set_union3_snapshot_loader
+
+        set_union3_snapshot_loader(None)
 
 
 async def _warmup_cii_caches() -> None:
@@ -521,6 +540,7 @@ _LARGE_BODY_PREFIXES = (
     "/api/workspace/batch-upload",  # workspace bulk upload
     "/api/paper/",             # AI-drafted paper assembly with figures
     "/api/research/",          # full research report bundles
+    "/api/public/evidence-packs/verify",  # streams with its own 25 MB hard cap
 )
 
 
@@ -648,6 +668,9 @@ app.include_router(inference_router)
 app.include_router(integration_router)
 app.include_router(jobs_router)
 app.include_router(claim_audits_router)
+app.include_router(public_evidence_router)
+app.include_router(research_workspaces_router)
+app.include_router(worker_control_router)
 app.include_router(isochrones_router)
 app.include_router(pipeline_router)
 app.include_router(paper_router)

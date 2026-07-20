@@ -1,0 +1,14 @@
+Fixture source: arXiv:2311.12098v4 authoritative PDF text projection
+Registered PDF SHA-256: 6a8fccccecfc083d24c07f508d15ba273ebec1333fe4702d226520ffbaa603c9
+Printed PDF pages: 57-58
+
+Table 9 summarizes our cosmological constraints. We first solve for the best fit when varying each of the parameters specified in the rows. Then, we move each parameter in turn away from its best fit, find the best fit with that parameter fixed, and find the two points for that parameter (in the positive and negative direction) where χ2 increases by 1. This gives us the quoted plus and minus confidence intervals.
+
+We compute frequentist contours (∆χ2 compared to the best fit of 2.296, 6.180, and 11.829 for 68.3%, 95.4%, and 99.7% confidence) by fixing the two parameters shown in the plane and fitting for the others.
+
+Probes             χ2 (DoF)        h            Ωm            Ωk           w or w0         wa        DETF FoM
+Flat ΛCDM
+SNe                          24.0 (20)       ···       0.356+0.028
+                                                        −0.026      ···            ···           ···         ···
+
+Table 9. Constraints on cosmological parameters. The SN χ2 values are based on spline-interpolated distances (with 22 nodes, so SN DoF = 22 − Nfit), so they are much smaller than the number of SNe (2087).

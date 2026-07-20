@@ -193,7 +193,7 @@ Operational targets:
 
 | Asset | Primary protection | Target RPO | Target RTO |
 |---|---|---:|---:|
-| PostgreSQL | Render PITR plus weekly portable export | 1 hour | 2 hours |
+| PostgreSQL | Render PITR plus daily encrypted portable export | 1 hour | 2 hours |
 | S3 research objects | bucket versioning plus provider replication/lifecycle policy | 24 hours | 4 hours |
 | `/app/data` events/cache | Render daily disk snapshot plus weekly portable export | 24 hours | 4 hours |
 | JWT/Fernet/evidence-signing secrets | external secret manager, versioned key IDs | manual change only | 1 hour |
@@ -209,6 +209,74 @@ delete does not satisfy the account-erasure gate.
 
 RPO/RTO are targets, not claims of successful recovery. Run a recovery exercise
 at least quarterly and record actual data loss and elapsed time.
+
+### Automated encrypted PostgreSQL backup
+
+The control worker can create one portable PostgreSQL backup every day at
+03:15 UTC, encrypt it with streaming AES-256-GCM, upload it to the versioned
+S3/R2 bucket, and permanently remove managed backup versions older than 30
+days. The feature is intentionally dark in both Render and Docker Compose:
+`POSTGRES_BACKUP_ENABLED=false` means Beat does not enqueue the task, and a
+manually submitted task returns `disabled` without reading the database.
+
+Before enabling it:
+
+1. Enable bucket versioning and grant the control worker `GetBucketVersioning`,
+   object read/write/head, `ListBucketVersions`, `DeleteObjectVersion`, and
+   multipart-upload permissions on the dedicated `backups/postgresql/` prefix.
+2. Generate a new 32-byte random key. Store its canonical base64 value as
+   `POSTGRES_BACKUP_ENCRYPTION_KEY` in the external secret manager and give it
+   a non-secret identifier such as `postgres-backup-prod-v1` through
+   `POSTGRES_BACKUP_ENCRYPTION_KEY_ID`. Never reuse JWT, Fernet, deletion,
+   worker-signing, or evidence-signing material.
+3. Set `FERNET_KEY_ID` and `EVIDENCE_SIGNING_KEY_ID` to identifiers for the
+   independently escrowed recovery keys. These identifiers enter the portable
+   manifest; the secret values do not.
+4. Leave `POSTGRES_BACKUP_RETENTION_DAYS=30` and set the same
+   `POSTGRES_BACKUP_ENABLED=true` value on the control worker and Beat. Beat
+   holds no backup encryption key or S3 credential; it only schedules the
+   maintenance task.
+
+Each run fails closed in this order:
+
+1. require S3 bucket versioning to report exactly `Enabled`;
+2. run the existing schema-bound `backup.sh` in a private temporary directory;
+3. encrypt the bundle with a fresh 96-bit nonce and an authenticated canonical
+   header containing only the algorithm, key ID, creation time, sizes, and
+   hashes;
+4. upload a unique object, read the exact returned S3 version back in full, and
+   verify its byte count and SHA-256;
+5. only after that verification succeeds, permanently delete this tool's
+   object versions and delete markers older than the retention cutoff.
+
+This order means a failed dump, encryption, upload, or readback never triggers
+retention deletion. The S3 object is already encrypted; server-side bucket
+encryption is still recommended as a separate defense. Alert on any failed
+`maintenance.postgres_backup` task. Do not treat a successful upload as a
+restore drill.
+
+To restore, download one exact object version to a trusted machine, obtain the
+matching externally escrowed key, and authenticate/decrypt it before invoking
+the ordinary restore script:
+
+```bash
+cd backend
+export POSTGRES_BACKUP_ENCRYPTION_KEY='<base64 key from secret manager>'
+export POSTGRES_BACKUP_ENCRYPTION_KEY_ID='postgres-backup-prod-v1'
+./venv/bin/python scripts/ops/encrypted_postgres_backup.py decrypt \
+  /secure/input/standard-astro-backup.aesgcm \
+  /secure/output/standard-astro-backup.tar.gz
+
+DATABASE_URL='postgresql://isolated-restore-target/astro' \
+RESTORE_CONFIRM='restore:<backup-id>' \
+scripts/ops/restore.sh /secure/output/standard-astro-backup.tar.gz
+```
+
+Decryption is atomic and refuses an existing output, a wrong key ID, a changed
+header, a changed ciphertext, an invalid GCM tag, or a plaintext SHA-256/size
+mismatch. Keep every retired backup encryption key available until all objects
+encrypted with it have passed the 30-day retention window and at least one
+restore drill; rotating the key does not rewrite old backups.
 
 ### Portable backup
 

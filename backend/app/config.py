@@ -18,6 +18,7 @@ if _ENV == "prod":
 _APP_ROLES = {"api", "migration", "control_worker", "beat", "science_worker"}
 _SCIENCE_EXECUTION_BACKENDS = {"celery", "https_worker"}
 _FULL_GIT_SHA = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
+_IMAGE_DIGEST = re.compile(r"sha256:[0-9a-f]{64}", re.IGNORECASE)
 
 # ---------------------------------------------------------------------------
 # Ensure astropy / astroquery have a writable cache & config directory.
@@ -536,13 +537,14 @@ class Settings(BaseSettings):
         self.claim_audit_execution_mode = str(
             self.claim_audit_execution_mode or ""
         ).strip().lower()
-        if self.claim_audit_execution_mode not in {"celery", "inline"}:
+        if self.claim_audit_execution_mode not in {"celery", "inline", "https_worker"}:
             raise ValueError(
-                "CLAIM_AUDIT_EXECUTION_MODE must be 'celery' or 'inline'"
+                "CLAIM_AUDIT_EXECUTION_MODE must be 'celery', 'inline', or "
+                "'https_worker'"
             )
-        if _ENV == "production" and self.claim_audit_execution_mode != "celery":
+        if _ENV == "production" and self.claim_audit_execution_mode == "inline":
             raise ValueError(
-                "Production Claim Audit must use the Celery worker lifecycle"
+                "Production Claim Audit cannot use the inline worker lifecycle"
             )
         if not 30 <= int(self.claim_audit_registered_timeout_seconds) <= 12 * 60 * 60:
             raise ValueError(
@@ -673,6 +675,16 @@ class Settings(BaseSettings):
                 "LOCAL_SCIENCE_WORKER_ENABLED requires "
                 "SCIENCE_EXECUTION_BACKEND=https_worker"
             )
+        if (
+            self.app_role == "api"
+            and _ENV == "production"
+            and self.local_science_worker_enabled
+            and _IMAGE_DIGEST.fullmatch(str(self.docker_image_digest or "")) is None
+        ):
+            raise ValueError(
+                "LOCAL_SCIENCE_WORKER_ENABLED requires DOCKER_IMAGE_DIGEST to "
+                "pin the signed multi-architecture worker image"
+            )
         task_signing_required = (
             self.app_role == "api"
             and _ENV == "production"
@@ -747,7 +759,10 @@ class Settings(BaseSettings):
                     "with a different public key"
                 )
 
-        if self.app_role == "api" and self.evidence_pack_v2_enabled:
+        # API verifies/publishes trust roots; the control worker owns the
+        # deterministic finalizer and therefore also needs the v2 signing
+        # material. Beat and migration remain free of Evidence secrets.
+        if self.app_role in {"api", "control_worker"} and self.evidence_pack_v2_enabled:
             evidence_v2_seed = _decode_ed25519_key(
                 "EVIDENCE_V2_SIGNING_PRIVATE_KEY",
                 self.evidence_v2_signing_private_key,
@@ -806,8 +821,11 @@ class Settings(BaseSettings):
                     )
             self.evidence_v2_signing_public_key = derived_evidence_v2_public_key
             verification_keys = self.evidence_v2_verification_keyring
-            current_public_key = verification_keys.get(
-                self.evidence_v2_signing_key_id
+            current_record = verification_keys.get(self.evidence_v2_signing_key_id)
+            current_public_key = (
+                str(current_record.get("public_key") or "")
+                if current_record is not None
+                else ""
             )
             if (
                 current_public_key
@@ -816,6 +834,11 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "EVIDENCE_V2_VERIFICATION_KEYS contains the current key id "
                     "with a different public key"
+                )
+            if current_record is not None and current_record.get("status") != "active":
+                raise ValueError(
+                    "EVIDENCE_V2_VERIFICATION_KEYS cannot mark the current signing "
+                    "key as retired or revoked"
                 )
 
     @property
@@ -915,8 +938,8 @@ class Settings(BaseSettings):
         return normalized
 
     @property
-    def evidence_v2_verification_keyring(self) -> dict[str, str]:
-        """Parse retired Evidence v2 Ed25519 public keys."""
+    def evidence_v2_verification_keyring(self) -> dict[str, dict[str, object]]:
+        """Parse Evidence v2 trust records, including rotation windows."""
 
         raw = str(self.evidence_v2_verification_keys or "").strip()
         if not raw:
@@ -926,26 +949,50 @@ class Settings(BaseSettings):
         except json.JSONDecodeError as exc:
             raise ValueError(
                 "EVIDENCE_V2_VERIFICATION_KEYS must be a JSON object mapping key "
-                "ids to base64 public keys"
+                "ids to public-key trust records"
             ) from exc
         if not isinstance(parsed, dict):
             raise ValueError(
                 "EVIDENCE_V2_VERIFICATION_KEYS must be a JSON object mapping key "
-                "ids to base64 public keys"
+                "ids to public-key trust records"
             )
-        normalized: dict[str, str] = {}
-        for raw_key_id, raw_public_key in parsed.items():
+        normalized: dict[str, dict[str, object]] = {}
+        for raw_key_id, raw_record in parsed.items():
             key_id = str(raw_key_id or "").strip()
-            public_key = str(raw_public_key or "").strip()
             if not key_id or any(ch.isspace() for ch in key_id):
                 raise ValueError(
                     "EVIDENCE_V2_VERIFICATION_KEYS requires non-empty, "
                     "whitespace-free key ids"
                 )
+            if not isinstance(raw_record, dict):
+                raise ValueError(
+                    f"EVIDENCE_V2_VERIFICATION_KEYS[{key_id}] must include "
+                    "public_key, status, and any historical signing window"
+                )
+            public_key = str(raw_record.get("public_key") or "").strip()
             _decode_ed25519_key(
                 f"EVIDENCE_V2_VERIFICATION_KEYS[{key_id}]", public_key
             )
-            normalized[key_id] = public_key
+            status = str(raw_record.get("status") or "").strip().lower()
+            if status not in {"active", "retired", "revoked"}:
+                raise ValueError(
+                    f"EVIDENCE_V2_VERIFICATION_KEYS[{key_id}] has an invalid status"
+                )
+            not_before = raw_record.get("not_before")
+            not_after = raw_record.get("not_after")
+            if status == "retired" and (not not_before or not not_after):
+                raise ValueError(
+                    f"EVIDENCE_V2_VERIFICATION_KEYS[{key_id}] retired keys require "
+                    "not_before and not_after"
+                )
+            normalized[key_id] = {
+                "key_id": key_id,
+                "algorithm": "ed25519",
+                "public_key": public_key,
+                "status": status,
+                "not_before": not_before,
+                "not_after": not_after,
+            }
         return normalized
 
     @property

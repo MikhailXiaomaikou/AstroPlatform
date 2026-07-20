@@ -53,7 +53,7 @@ services:
       - key: APP_ROLE
         value: api
       - key: SCIENCE_EXECUTION_BACKEND
-        value: celery
+        value: https_worker
       - key: DATABASE_URL
         fromDatabase:
           name: standard-astro-db
@@ -97,9 +97,9 @@ services:
       # current key; legacy JWT evidence can retain its old JWT secret here.
       - key: EVIDENCE_VERIFICATION_KEYS
         sync: false
-      # Dedicated Ed25519 task-signing material for the future HTTPS science
-      # worker. It is unused while SCIENCE_EXECUTION_BACKEND=celery and must
-      # never be copied to control/Beat/science-worker processes.
+      # Dedicated Ed25519 task-signing material for the HTTPS science worker.
+      # Only the API control plane holds the private key; never copy it to the
+      # control worker, Beat, or a user-operated science worker.
       - key: WORKER_TASK_SIGNING_PRIVATE_KEY
         sync: false
       - key: WORKER_TASK_SIGNING_KEY_ID
@@ -107,6 +107,9 @@ services:
       - key: WORKER_TASK_SIGNING_PUBLIC_KEY
         sync: false
       - key: WORKER_TASK_VERIFICATION_KEYS
+        sync: false
+      - key: DOCKER_IMAGE_DIGEST
+        # Digest of the separately signed local-science Worker image.
         sync: false
       - key: EVIDENCE_V2_SIGNING_PRIVATE_KEY
         sync: false
@@ -142,7 +145,7 @@ services:
       - key: LOCAL_SCIENCE_WORKER_ENABLED
         value: "false"
       - key: CLAIM_AUDIT_EXECUTION_MODE
-        value: celery
+        value: https_worker
       - key: CLAIM_AUDIT_REGISTERED_TIMEOUT_SECONDS
         value: "1800"
       - key: CLAIM_AUDIT_WORKER_LEASE_SECONDS
@@ -239,7 +242,7 @@ services:
       - key: APP_ROLE
         value: control_worker
       - key: SCIENCE_EXECUTION_BACKEND
-        value: celery
+        value: https_worker
       - key: DATABASE_URL
         fromDatabase:
           name: standard-astro-db
@@ -288,8 +291,53 @@ services:
           name: standard-astro-backend
           type: web
           envVarKey: CLAIM_AUDIT_ENABLED
+      - key: RESEARCH_WORKSPACE_ENABLED
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: RESEARCH_WORKSPACE_ENABLED
+      - key: ARXIV_READER_ENABLED
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: ARXIV_READER_ENABLED
+      - key: LOCAL_SCIENCE_WORKER_ENABLED
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: LOCAL_SCIENCE_WORKER_ENABLED
       - key: CLAIM_AUDIT_EXECUTION_MODE
-        value: celery
+        value: https_worker
+      - key: UNION3_REPRODUCTION_ENABLED
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: UNION3_REPRODUCTION_ENABLED
+      - key: EVIDENCE_PACK_V2_ENABLED
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: EVIDENCE_PACK_V2_ENABLED
+      - key: EVIDENCE_V2_SIGNING_PRIVATE_KEY
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: EVIDENCE_V2_SIGNING_PRIVATE_KEY
+      - key: EVIDENCE_V2_SIGNING_KEY_ID
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: EVIDENCE_V2_SIGNING_KEY_ID
+      - key: EVIDENCE_V2_SIGNING_PUBLIC_KEY
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: EVIDENCE_V2_SIGNING_PUBLIC_KEY
+      - key: EVIDENCE_V2_VERIFICATION_KEYS
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: EVIDENCE_V2_VERIFICATION_KEYS
       - key: CLAIM_AUDIT_REGISTERED_TIMEOUT_SECONDS
         fromService:
           name: standard-astro-backend
@@ -357,6 +405,23 @@ services:
           name: standard-astro-backend
           type: web
           envVarKey: S3_ADDRESSING_STYLE
+      # Daily pg_dump automation is dark by default. Enable this flag on both
+      # worker and Beat only after the dedicated encryption key is escrowed and
+      # bucket versioning + restore access have been verified.
+      - key: POSTGRES_BACKUP_ENABLED
+        value: "false"
+      - key: POSTGRES_BACKUP_ENCRYPTION_KEY
+        sync: false
+      - key: POSTGRES_BACKUP_ENCRYPTION_KEY_ID
+        value: postgres-backup-prod-v1
+      - key: POSTGRES_BACKUP_RETENTION_DAYS
+        value: "30"
+      - key: POSTGRES_BACKUP_S3_PREFIX
+        value: backups/postgresql
+      # Identifiers are recovery metadata, not secret values. They must match
+      # the independently escrowed keys used by the API release.
+      - key: FERNET_KEY_ID
+        value: fernet-prod-v1
       - key: SANDBOX_BACKEND
         value: disabled
       - key: ASTRO_RESEARCH_FOCUS
@@ -398,6 +463,8 @@ services:
       - key: SCHEMA_WAIT_TIMEOUT_SECONDS
         value: "900"
       - key: ENABLE_TRANSIENT_ALERT_INGEST
+        value: "false"
+      - key: POSTGRES_BACKUP_ENABLED
         value: "false"
 
   # ── Frontend ──

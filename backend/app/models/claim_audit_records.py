@@ -5,7 +5,18 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.database import Base
@@ -24,6 +35,18 @@ class ClaimAudit(Base):
     session_id: Mapped[uuid.UUID | None] = mapped_column(
         UUIDType(), ForeignKey("chat_sessions.id"), nullable=True, index=True
     )
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUIDType(), ForeignKey("research_workspaces.id"), nullable=True, index=True
+    )
+    source_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUIDType(), ForeignKey("source_documents.id"), nullable=True, index=True
+    )
+    source_extraction_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUIDType(), ForeignKey("source_extractions.id"), nullable=True, index=True
+    )
+    supersedes_audit_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUIDType(), ForeignKey("claim_audits.id"), nullable=True, index=True
+    )
     request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     lifecycle_status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="QUEUED", index=True
@@ -33,6 +56,29 @@ class ClaimAudit(Base):
     )
     mode: Mapped[str] = mapped_column(String(32), nullable=False)
     claim_text: Mapped[str] = mapped_column(Text, nullable=False)
+    claim_schema_version: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    atomic_claim: Mapped[dict | None] = mapped_column(JSONType(), nullable=True)
+    claim_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    risk_level: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    review_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="NOT_SUBMITTED", index=True
+    )
+    machine_support_eligible: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    reproduction_ready: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    publication_ready: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    progress: Mapped[float | None] = mapped_column(Float, nullable=True)
+    progress_stage: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    independent_verification_job_id: Mapped[str | None] = mapped_column(
+        String(255), ForeignKey("research_jobs.job_id"), nullable=True, index=True
+    )
     source_kind: Mapped[str] = mapped_column(String(32), nullable=False)
     source_value: Mapped[str] = mapped_column(Text, nullable=False)
     evidence_input_refs: Mapped[list] = mapped_column(JSONType(), nullable=False, default=list)
@@ -74,7 +120,7 @@ class EvidencePack(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType(), primary_key=True, default=uuid.uuid4)
     audit_id: Mapped[uuid.UUID] = mapped_column(
-        UUIDType(), ForeignKey("claim_audits.id"), nullable=False, unique=True, index=True
+        UUIDType(), ForeignKey("claim_audits.id"), nullable=False
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUIDType(), ForeignKey("users.id"), nullable=False, index=True
@@ -84,8 +130,15 @@ class EvidencePack(Base):
     artifact_ref: Mapped[str] = mapped_column(Text, nullable=False)
     manifest: Mapped[dict] = mapped_column(JSONType(), nullable=False)
     manifest_hash: Mapped[str] = mapped_column(String(71), nullable=False)
+    pack_hash: Mapped[str | None] = mapped_column(String(71), nullable=True)
     signature: Mapped[str] = mapped_column(String(96), nullable=False)
     key_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    signature_algorithm: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="hmac-sha256"
+    )
+    public_key_fingerprint: Mapped[str | None] = mapped_column(
+        String(71), nullable=True
+    )
     upload_lease_id: Mapped[str] = mapped_column(String(64), nullable=False)
     upload_started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -95,6 +148,11 @@ class EvidencePack(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("audit_id", name="uq_evidence_pack_audit"),
+        Index("ix_evidence_packs_audit_id", "audit_id", unique=True),
     )
 
 

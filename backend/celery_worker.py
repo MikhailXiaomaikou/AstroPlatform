@@ -7,6 +7,7 @@ import uuid
 
 from celery import Celery
 from celery.beat import PersistentScheduler
+from celery.schedules import crontab
 from celery.signals import worker_ready
 
 from app.config import settings
@@ -28,7 +29,10 @@ _CONTROL_TASK_ROUTES = {
     "alerts.ingest": {"queue": "control"},
     "ai_tools.reconcile_stale_jobs": {"queue": "maintenance"},
     "claim_audit.reconcile_stale": {"queue": "maintenance"},
+    "research_source.*": {"queue": "control"},
+    "union3.*": {"queue": "verification"},
     "privacy.*": {"queue": "maintenance"},
+    "maintenance.*": {"queue": "maintenance"},
 }
 _SCIENCE_TASK_ROUTES = {
     "ai_tools.run_long_tool": {"queue": "science.short"},
@@ -54,6 +58,18 @@ def _boolean_env(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _strict_boolean_env(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean")
 
 
 def _runtime_commit() -> str:
@@ -156,6 +172,9 @@ celery_app.conf.include = [
     "app.tasks.ai_tools_tasks",
     "app.tasks.claim_audit_tasks",
     "app.tasks.privacy_tasks",
+    "app.tasks.postgres_backup_tasks",
+    "app.tasks.union3_source_tasks",
+    "app.tasks.union3_research_tasks",
 ]
 
 
@@ -179,6 +198,15 @@ def _build_beat_schedule() -> dict[str, dict[str, object]]:
             "task": "claim_audit.reconcile_stale",
             "schedule": 300.0,
         },
+        "reconcile-union3-research-loop": {
+            "task": "union3.reconcile",
+            "schedule": 300.0,
+        },
+        "reconcile-queued-union3-sources": {
+            "task": "research_source.union3.reconcile",
+            "schedule": 300.0,
+            "options": {"queue": "control"},
+        },
         "purge-expired-product-events": {
             "task": "privacy.purge_expired_product_events",
             "schedule": 3600.0,
@@ -187,11 +215,22 @@ def _build_beat_schedule() -> dict[str, dict[str, object]]:
             "task": "privacy.purge_artifact_cleanup_queue",
             "schedule": 300.0,
         },
+        "cleanup-expired-worker-artifacts": {
+            "task": "maintenance.cleanup_worker_artifacts",
+            "schedule": 900.0,
+            "options": {"queue": "maintenance"},
+        },
     }
     if _boolean_env("ENABLE_TRANSIENT_ALERT_INGEST"):
         schedule["ingest-ztf-alerts"] = {
             "task": "alerts.ingest",
             "schedule": 900.0,  # every 15 minutes
+        }
+    if _strict_boolean_env("POSTGRES_BACKUP_ENABLED"):
+        schedule["daily-encrypted-postgresql-backup"] = {
+            "task": "maintenance.postgres_backup",
+            "schedule": crontab(hour=3, minute=15),
+            "options": {"queue": "maintenance"},
         }
     return schedule
 

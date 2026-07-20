@@ -338,6 +338,9 @@ class ChatSession(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType(), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(UUIDType(), ForeignKey("users.id"), nullable=False)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUIDType(), ForeignKey("research_workspaces.id"), nullable=True, index=True
+    )
     title: Mapped[str] = mapped_column(String(255), default="New Chat")
     messages: Mapped[list] = mapped_column(JSONType(), default=list)  # [{role, content, actions}]
     # R7: audit log of thinking-stream events (agent_text / tool_call /

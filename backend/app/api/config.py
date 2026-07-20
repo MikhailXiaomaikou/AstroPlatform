@@ -30,6 +30,11 @@ async def get_config() -> dict:
         "focus": _ASTRO_RESEARCH_FOCUS,
         "signup_mode": settings.signup_mode,
         "claim_audit_enabled": settings.claim_audit_enabled,
+        "research_workspace_enabled": settings.research_workspace_enabled,
+        "arxiv_reader_enabled": settings.arxiv_reader_enabled,
+        "union3_reproduction_enabled": settings.union3_reproduction_enabled,
+        "evidence_pack_v2_enabled": settings.evidence_pack_v2_enabled,
+        "local_science_worker_enabled": settings.local_science_worker_enabled,
         "analytics_requires_consent": True,
         # These values are deliberately public: they identify who operates
         # the hosted service and where users can exercise privacy rights.

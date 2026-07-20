@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import io
 import uuid
+import zipfile
 from datetime import datetime, timezone
 from typing import Literal
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +23,8 @@ from app.models.claim_audit_records import ClaimAudit, EvidencePack
 from app.models.database import get_db
 from app.models.research_records import ResearchJob
 from app.models.schemas import ChatSession, User
+from app.models.worker_records import ScienceExecutionAttempt, WorkerArtifactIssuance
+from app.models.workspace_records import ClaimAuditReview
 from app.services.claim_audit_service import (
     AUDIT_MODES,
     ClaimAuditInputError,
@@ -32,6 +37,10 @@ from app.services.claim_audit_service import (
 )
 from app.services.server_evidence import verify_research_job_attestation
 from app.services.event_collector import event_collector
+from app.services.evidence_pack_v2 import (
+    jcs_canonicalize,
+    verify_evidence_pack_v2,
+)
 from app.rate_limit import limiter
 
 
@@ -207,6 +216,14 @@ async def create_claim_audit(
     user: User = Depends(get_current_user),
 ):
     _require_enabled()
+    if settings.claim_audit_execution_mode == "https_worker":
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Hosted execution accepts only a server-registered Workspace "
+                "candidate through /api/research/workspaces/{id}/claim-audits"
+            ),
+        )
     try:
         source_kind, source_value = validate_source(
             payload.source.kind,
@@ -217,8 +234,18 @@ async def create_claim_audit(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if payload.mode not in AUDIT_MODES:
         raise HTTPException(status_code=422, detail="Unsupported audit mode")
-    evidence_refs = list(dict.fromkeys(str(item).strip() for item in payload.evidence_input_refs if str(item).strip()))
-    dataset_hints = list(dict.fromkeys(str(item).strip() for item in payload.dataset_hints if str(item).strip()))
+    evidence_refs = list(
+        dict.fromkeys(
+            str(item).strip()
+            for item in payload.evidence_input_refs
+            if str(item).strip()
+        )
+    )
+    dataset_hints = list(
+        dict.fromkeys(
+            str(item).strip() for item in payload.dataset_hints if str(item).strip()
+        )
+    )
     if evidence_refs:
         evidence_rows = list(
             (
@@ -228,7 +255,9 @@ async def create_claim_audit(
                         ResearchJob.job_id.in_(evidence_refs),
                     )
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
         by_job_id = {row.job_id: row for row in evidence_rows}
         if any(job_id not in by_job_id for job_id in evidence_refs):
@@ -237,9 +266,7 @@ async def create_claim_audit(
                 detail="Every evidence_input_ref must be owned by this account",
             )
         pending = [
-            row.job_id
-            for row in evidence_rows
-            if row.status in {"queued", "running"}
+            row.job_id for row in evidence_rows if row.status in {"queued", "running"}
         ]
         if pending:
             raise HTTPException(
@@ -372,21 +399,35 @@ async def list_claim_audits(
     filters = [ClaimAudit.user_id == user.id]
     if lifecycle_status:
         filters.append(ClaimAudit.lifecycle_status == lifecycle_status)
-    total = await db.scalar(select(func.count()).select_from(ClaimAudit).where(*filters))
+    total = await db.scalar(
+        select(func.count()).select_from(ClaimAudit).where(*filters)
+    )
     rows = (
-        await db.execute(
-            select(ClaimAudit)
-            .where(*filters)
-            .order_by(ClaimAudit.created_at.desc())
-            .offset(offset)
-            .limit(limit)
+        (
+            await db.execute(
+                select(ClaimAudit)
+                .where(*filters)
+                .order_by(ClaimAudit.created_at.desc())
+                .offset(offset)
+                .limit(limit)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     packs = (
-        await db.execute(
-            select(EvidencePack).where(EvidencePack.audit_id.in_([row.id for row in rows]))
+        (
+            await db.execute(
+                select(EvidencePack).where(
+                    EvidencePack.audit_id.in_([row.id for row in rows])
+                )
+            )
         )
-    ).scalars().all() if rows else []
+        .scalars()
+        .all()
+        if rows
+        else []
+    )
     packs_by_audit = {pack.audit_id: pack for pack in packs}
     return {
         "items": [_serialize(row, packs_by_audit.get(row.id)) for row in rows],
@@ -413,39 +454,64 @@ async def cancel_claim_audit(
 ):
     _require_enabled()
     audit = await _owned_audit(db, user, audit_id)
-    cancelled = await db.execute(
-        update(ClaimAudit)
-        .where(
-            ClaimAudit.id == audit.id,
-            ClaimAudit.user_id == user.id,
-            ClaimAudit.lifecycle_status.in_({"QUEUED", "RUNNING"}),
-        )
-        .values(
-            lifecycle_status="CANCELLED",
-            worker_lease_id=None,
-            lease_expires_at=None,
-        )
+    from app.storage import lock_active_storage_owner
+
+    try:
+        await lock_active_storage_owner(db, user.id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail="Account is not active") from exc
+    audit = await db.scalar(
+        select(ClaimAudit)
+        .where(ClaimAudit.id == audit.id, ClaimAudit.user_id == user.id)
+        .with_for_update()
     )
-    if cancelled.rowcount != 1:
-        await db.rollback()
-        raise HTTPException(status_code=409, detail="Claim Audit is no longer cancellable")
+    if audit is None or audit.lifecycle_status not in {"QUEUED", "RUNNING"}:
+        raise HTTPException(
+            status_code=409, detail="Claim Audit is no longer cancellable"
+        )
+    cancelled_at = datetime.now(timezone.utc)
+    child_rows: list[ResearchJob] = []
     if audit.child_job_ids:
-        await db.execute(
-            update(ResearchJob)
-            .where(
-                ResearchJob.user_id == user.id,
-                ResearchJob.job_id.in_(audit.child_job_ids),
-                ResearchJob.status.in_({"queued", "running"}),
+        child_rows = list(
+            (
+                await db.execute(
+                    select(ResearchJob)
+                    .where(
+                        ResearchJob.user_id == user.id,
+                        ResearchJob.job_id.in_(audit.child_job_ids),
+                    )
+                    .with_for_update()
+                )
             )
-            .values(
-                status="cancelled",
-                progress_message="Parent Claim Audit was cancelled",
-                error=None,
-                error_class=None,
-                completed_at=datetime.now(timezone.utc),
-                attestation=None,
+            .scalars()
+            .all()
+        )
+    _locked_attempts = list(
+        (
+            await db.execute(
+                select(ScienceExecutionAttempt)
+                .where(
+                    ScienceExecutionAttempt.user_id == user.id,
+                    ScienceExecutionAttempt.audit_id == audit.id,
+                )
+                .with_for_update()
             )
         )
+        .scalars()
+        .all()
+    )
+    audit.lifecycle_status = "CANCELLED"
+    audit.worker_lease_id = None
+    audit.lease_expires_at = None
+    audit.completed_at = cancelled_at
+    for child in child_rows:
+        if child.status in {"queued", "running", "QUEUED", "RUNNING"}:
+            child.status = "CANCELLED" if child.status.isupper() else "cancelled"
+            child.progress_message = "Parent Claim Audit was cancelled"
+            child.error = None
+            child.error_class = None
+            child.completed_at = cancelled_at
+            child.attestation = None
     await db.commit()
     await db.refresh(audit)
     return _serialize(audit)
@@ -477,6 +543,36 @@ async def retry_claim_audit(
             status_code=409,
             detail="Only retryable failed audits can be retried",
         )
+    if (
+        audit.claim_schema_version == "union3_parameter_interval_reproduction_v1"
+        and audit.mode == "execute_registered"
+    ):
+        from app.services.union3_research_loop import (
+            Union3ResearchLoopError,
+            retry_union3_reproduction_audit,
+        )
+
+        try:
+            audit = await retry_union3_reproduction_audit(
+                db,
+                audit_id=audit.id,
+                user_id=user.id,
+            )
+        except Union3ResearchLoopError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"error_class": exc.code, "message": str(exc)},
+            ) from exc
+        await _track_started_audit(audit)
+        return _serialize(audit, await _pack_for_audit(db, audit.id))
+    if settings.claim_audit_execution_mode == "https_worker":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Pre-upgrade Claim Audits cannot be retried in registered-only "
+                "HTTPS Worker mode; create a registered Workspace revision"
+            ),
+        )
     audit.retry_count += 1
     audit.lifecycle_status = "QUEUED"
     audit.error = None
@@ -497,12 +593,38 @@ async def delete_claim_audit(
 ):
     _require_enabled()
     audit = await _owned_audit(db, user, audit_id)
+    from app.storage import lock_active_storage_owner
+
+    try:
+        await lock_active_storage_owner(db, user.id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail="Account is not active") from exc
+    audit = await db.scalar(
+        select(ClaimAudit)
+        .where(ClaimAudit.id == audit.id, ClaimAudit.user_id == user.id)
+        .with_for_update()
+    )
+    if audit is None:
+        raise HTTPException(status_code=404, detail="Claim Audit not found")
     if audit.lifecycle_status in {"QUEUED", "RUNNING"}:
         raise HTTPException(
             status_code=409,
             detail="Cancel the running Claim Audit before deleting it",
         )
-    pack = await _pack_for_audit(db, audit.id)
+    successor_id = await db.scalar(
+        select(ClaimAudit.id).where(ClaimAudit.supersedes_audit_id == audit.id).limit(1)
+    )
+    if successor_id is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Delete newer revisions first; immutable Audit lineage cannot be "
+                "silently detached"
+            ),
+        )
+    pack = await db.scalar(
+        select(EvidencePack).where(EvidencePack.audit_id == audit.id).with_for_update()
+    )
     if pack is not None and pack.status != "FINALIZED":
         raise HTTPException(
             status_code=409,
@@ -510,20 +632,99 @@ async def delete_claim_audit(
         )
     child_rows = []
     if audit.child_job_ids:
-        child_rows = list((await db.execute(
-            select(ResearchJob).where(
-                ResearchJob.user_id == user.id,
-                ResearchJob.job_id.in_(audit.child_job_ids),
+        child_rows = list(
+            (
+                await db.execute(
+                    select(ResearchJob)
+                    .where(
+                        ResearchJob.user_id == user.id,
+                        ResearchJob.job_id.in_(audit.child_job_ids),
+                    )
+                    .with_for_update()
+                )
             )
-        )).scalars().all())
-        if any(row.status in {"queued", "running"} for row in child_rows):
+            .scalars()
+            .all()
+        )
+        if any(
+            row.status in {"queued", "running", "QUEUED", "RUNNING"}
+            for row in child_rows
+        ):
             raise HTTPException(
                 status_code=409,
                 detail="Registered child workflow cleanup is still in progress",
             )
-    if pack is not None:
-        from app.storage import delete_fits_all_versions
+    attempts = list(
+        (
+            await db.execute(
+                select(ScienceExecutionAttempt)
+                .where(
+                    ScienceExecutionAttempt.user_id == user.id,
+                    ScienceExecutionAttempt.audit_id == audit.id,
+                )
+                .with_for_update()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if any(attempt.status in {"LEASED", "RUNNING"} for attempt in attempts):
+        raise HTTPException(
+            status_code=409,
+            detail="Waiting for the local Worker to acknowledge cancellation",
+        )
+    attempt_ids = [attempt.id for attempt in attempts]
+    from app.services.account_deletion import (
+        AccountArtifactUploadActive,
+        require_attempt_uploads_settled,
+    )
 
+    try:
+        await require_attempt_uploads_settled(db, attempt_ids=attempt_ids)
+    except AccountArtifactUploadActive as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Worker upload cleanup is waiting for issued URLs to expire",
+        ) from exc
+
+    issuance_rows = []
+    if attempt_ids:
+        issuance_rows = list(
+            (
+                await db.execute(
+                    select(WorkerArtifactIssuance).where(
+                        WorkerArtifactIssuance.attempt_id.in_(attempt_ids)
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    attempt_artifact_refs = {
+        str(value)
+        for attempt in attempts
+        for item in list(attempt.artifact_manifest or [])
+        if isinstance(item, dict)
+        for value in (
+            item.get("artifact_ref"),
+            item.get("staging_artifact_ref"),
+            item.get("authoritative_artifact_ref"),
+        )
+        if value
+    }
+    for issuance in issuance_rows:
+        attempt_artifact_refs.add(str(issuance.artifact_ref))
+        attempt_artifact_refs.add(str(issuance.authoritative_ref))
+    from app.storage import delete_fits_all_versions, list_storage_keys
+
+    for attempt in attempts:
+        attempt_artifact_refs.update(
+            await asyncio.to_thread(
+                list_storage_keys,
+                f"science-attempts/{user.id}/{attempt.id}",
+            )
+        )
+    if pack is not None:
         try:
             await asyncio.to_thread(delete_fits_all_versions, pack.artifact_ref)
         except Exception as exc:
@@ -534,6 +735,36 @@ async def delete_claim_audit(
                 detail="Evidence Pack storage cleanup failed; retry deletion",
             ) from exc
         await db.delete(pack)
+    for artifact_ref in sorted(attempt_artifact_refs):
+        try:
+            await asyncio.to_thread(delete_fits_all_versions, artifact_ref)
+        except Exception as exc:
+            await db.rollback()
+            logger.exception("Could not permanently delete Worker attempt artifact")
+            raise HTTPException(
+                status_code=503,
+                detail="Worker artifact cleanup failed; retry deletion",
+            ) from exc
+    for attempt in attempts:
+        await db.delete(attempt)
+
+    reviews = list(
+        (
+            await db.execute(
+                select(ClaimAuditReview).where(ClaimAuditReview.audit_id == audit.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for review in reviews:
+        await db.delete(review)
+
+    # PostgreSQL enforces this non-deferrable FK.  Clear and flush it before
+    # deleting the verifier ResearchJob; relying on ORM delete ordering can
+    # otherwise turn a valid user deletion into an IntegrityError/500.
+    audit.independent_verification_job_id = None
+    await db.flush()
     for child in child_rows:
         if isinstance(child.result, dict) and child.result.get("_artifact_ref"):
             from app.storage import delete_fits_all_versions
@@ -578,6 +809,62 @@ async def _owned_pack(
     return pack
 
 
+def _evidence_v2_trusted_keyring() -> list[dict]:
+    keys = dict(settings.evidence_v2_verification_keyring)
+    current_id = str(settings.evidence_v2_signing_key_id or "").strip()
+    current_key = str(settings.evidence_v2_signing_public_key or "").strip()
+    if current_id and current_key:
+        keys.setdefault(
+            current_id,
+            {
+                "key_id": current_id,
+                "algorithm": "ed25519",
+                "public_key": current_key,
+                "status": "active",
+            },
+        )
+    return [dict(record) for record in keys.values()]
+
+
+def _verify_v2_payload(payload: bytes) -> dict:
+    result = verify_evidence_pack_v2(
+        payload,
+        trusted_keyring=_evidence_v2_trusted_keyring(),
+    )
+    manifest = result.manifest or {}
+    return {
+        "valid": result.valid,
+        "reason": None if result.valid else result.code,
+        "code": result.code,
+        "audit_id": manifest.get("audit_id"),
+        "manifest_hash": (
+            "sha256:" + hashlib.sha256(jcs_canonicalize(manifest)).hexdigest()
+            if result.valid
+            else None
+        ),
+        "pack_hash": "sha256:" + hashlib.sha256(payload).hexdigest(),
+        "key_id": result.key_id,
+        "key_status": result.key_status,
+        "manifest": result.manifest,
+        "schema_version": 2,
+    }
+
+
+def _has_evidence_v2_marker(payload: bytes) -> bool:
+    """Select v2 without downgrading a malformed archive after selection.
+
+    A detached ``manifest.sig`` is mandatory and unique to v2. Once present,
+    the strict v2 verifier owns every error; archives without it retain the
+    legacy HMAC verifier required for existing packs.
+    """
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload), mode="r") as archive:
+            return any(info.filename == "manifest.sig" for info in archive.infolist())
+    except (OSError, ValueError, zipfile.BadZipFile):
+        return False
+
+
 @router.get("/evidence-packs/{pack_id}/download")
 async def download_evidence_pack(
     pack_id: str,
@@ -593,16 +880,30 @@ async def download_evidence_pack(
     try:
         payload = download_fits(pack.artifact_ref)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=410, detail="Evidence Pack artifact is missing") from exc
-    verification = verify_pack_bytes(payload)
+        raise HTTPException(
+            status_code=410, detail="Evidence Pack artifact is missing"
+        ) from exc
+    verification = (
+        _verify_v2_payload(payload)
+        if pack.schema_version == 2
+        else verify_pack_bytes(payload)
+    )
     if not verification.get("valid"):
-        raise HTTPException(status_code=409, detail="Evidence Pack integrity check failed")
+        raise HTTPException(
+            status_code=409, detail="Evidence Pack integrity check failed"
+        )
     if (
         str(verification.get("audit_id") or "") != str(pack.audit_id)
         or str(verification.get("manifest_hash") or "") != pack.manifest_hash
         or str(verification.get("key_id") or "") != pack.key_id
+        or (
+            pack.schema_version == 2
+            and str(verification.get("pack_hash") or "") != str(pack.pack_hash or "")
+        )
     ):
-        raise HTTPException(status_code=409, detail="Evidence Pack binding check failed")
+        raise HTTPException(
+            status_code=409, detail="Evidence Pack binding check failed"
+        )
     try:
         audit = await db.get(ClaimAudit, pack.audit_id)
         await event_collector.track(
@@ -639,9 +940,13 @@ async def verify_evidence_pack(
     if content_length:
         try:
             if int(content_length) > max_upload_bytes:
-                raise HTTPException(status_code=413, detail="Evidence Pack is too large")
+                raise HTTPException(
+                    status_code=413, detail="Evidence Pack is too large"
+                )
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid Content-Length") from None
+            raise HTTPException(
+                status_code=400, detail="Invalid Content-Length"
+            ) from None
 
     pack_id: str | None = None
     supplied_payload: bytes | None = None
@@ -651,13 +956,17 @@ async def verify_evidence_pack(
             body = await request.json()
             pack_id = str(body.get("pack_id") or "").strip()
         except Exception as exc:
-            raise HTTPException(status_code=400, detail="Invalid verification request") from exc
+            raise HTTPException(
+                status_code=400, detail="Invalid verification request"
+            ) from exc
     elif content_type.startswith("multipart/form-data"):
         form = await request.form()
         pack_id = str(form.get("pack_id") or "").strip() or None
         uploaded = form.get("file")
         if uploaded is None or not hasattr(uploaded, "read"):
-            raise HTTPException(status_code=422, detail="Evidence Pack file is required")
+            raise HTTPException(
+                status_code=422, detail="Evidence Pack file is required"
+            )
         supplied_payload = await uploaded.read(max_upload_bytes + 1)
         if len(supplied_payload) > max_upload_bytes:
             raise HTTPException(status_code=413, detail="Evidence Pack is too large")
@@ -677,7 +986,15 @@ async def verify_evidence_pack(
             supplied_payload = download_fits(pack.artifact_ref)
         except FileNotFoundError:
             return {"valid": False, "reason": "artifact_missing"}
-    result = verify_pack_bytes(supplied_payload)
+    verify_as_v2 = bool(
+        (pack is not None and pack.schema_version == 2)
+        or (pack is None and _has_evidence_v2_marker(supplied_payload))
+    )
+    result = (
+        _verify_v2_payload(supplied_payload)
+        if verify_as_v2
+        else verify_pack_bytes(supplied_payload)
+    )
     if not result.get("valid"):
         return result
     try:

@@ -75,6 +75,16 @@ class ResearchJob(Base):
     background_backend: Mapped[str] = mapped_column(
         String(32), nullable=False, default="celery"
     )
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUIDType(), ForeignKey("research_workspaces.id"), nullable=True, index=True
+    )
+    workflow_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    capability_requirements: Mapped[dict] = mapped_column(
+        JSONType(), nullable=False, default=dict
+    )
+    current_attempt_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUIDType(), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

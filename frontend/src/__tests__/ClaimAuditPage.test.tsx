@@ -140,7 +140,7 @@ describe("ClaimAuditPage", () => {
     expect(screen.getByText(/residual wording was not evaluated/)).toBeInTheDocument();
   });
 
-  it("submits only the explicit mode, source, registry hints, and signed job ids", async () => {
+  it("does not expose technical evidence identifiers to ordinary users", async () => {
     renderPage();
     await screen.findByText("Research history");
 
@@ -153,21 +153,14 @@ describe("ClaimAuditPage", () => {
     fireEvent.change(screen.getByLabelText("Mode"), {
       target: { value: "execute_registered" },
     });
-    fireEvent.click(screen.getByText("Registered evidence inputs"));
-    fireEvent.change(screen.getByLabelText(/Research job IDs/), {
-      target: { value: "job-1\njob-1" },
-    });
-    fireEvent.change(screen.getByLabelText(/Dataset registry keys/), {
-      target: { value: "desi_dr2_bao" },
-    });
+    expect(screen.queryByLabelText(/Research job IDs/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Dataset registry keys/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Start Claim Audit" }));
 
     await waitFor(() => {
       expect(api.createClaimAudit).toHaveBeenCalledWith({
         claim_text: "DESI DR2 proves evolving dark energy.",
         source: { kind: "doi", value: "10.1103/tr6y-kpc6" },
-        evidence_input_refs: ["job-1"],
-        dataset_hints: ["desi_dr2_bao"],
         mode: "execute_registered",
       });
     });

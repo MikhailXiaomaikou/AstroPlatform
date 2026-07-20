@@ -22,7 +22,9 @@ from app.models.claim_audit_records import (
 from app.models.database import get_db
 from app.models.research_records import ResearchJob
 from app.models.schemas import PipelineRun, ScheduledRun, User, UserEvent
+from app.models.worker_records import ScienceExecutionAttempt, WorkerNode
 from app.services.account_deletion import (
+    anonymize_reviewer_identity,
     deletion_receipt_hash,
     deletion_user_fingerprint,
     purge_user_runtime_state,
@@ -218,6 +220,7 @@ async def delete_account(
     # Destroy the reusable password credential before returning. The account
     # can no longer authenticate even in a service missing the status check.
     user.password_hash = hash_password(secrets.token_urlsafe(48))
+    await anonymize_reviewer_identity(db, reviewer_user_id=user.id)
     await db.execute(delete(UserEvent).where(UserEvent.user_id == user.id))
     await db.execute(
         update(ResearchJob)
@@ -230,6 +233,46 @@ async def delete_account(
             error_class="account_deletion_requested",
             error="Account deletion requested",
             completed_at=requested_at,
+            updated_at=requested_at,
+        )
+    )
+    await db.execute(
+        update(ResearchJob)
+        .where(
+            ResearchJob.user_id == user.id,
+            ResearchJob.status.in_(["QUEUED", "RUNNING"]),
+        )
+        .values(
+            status="CANCELLED",
+            error_class="account_deletion_requested",
+            error="Account deletion requested",
+            completed_at=requested_at,
+            updated_at=requested_at,
+        )
+    )
+    await db.execute(
+        update(ScienceExecutionAttempt)
+        .where(
+            ScienceExecutionAttempt.user_id == user.id,
+            ScienceExecutionAttempt.status.in_(["LEASED", "RUNNING"]),
+        )
+        .values(
+            status="CANCELLED",
+            error_class="account_deletion_requested",
+            error="Account deletion requested",
+            completed_at=requested_at,
+            updated_at=requested_at,
+        )
+    )
+    await db.execute(
+        update(WorkerNode)
+        .where(
+            WorkerNode.user_id == user.id,
+            WorkerNode.status != "REVOKED",
+        )
+        .values(
+            status="REVOKED",
+            revoked_at=requested_at,
             updated_at=requested_at,
         )
     )
