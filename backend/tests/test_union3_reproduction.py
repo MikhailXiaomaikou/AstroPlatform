@@ -64,9 +64,10 @@ def test_registered_workflow_is_fixed_and_defensively_copied():
         "7f805c9cc4e7643f0392faad03a275094501f8a2"
     )
     workflow["method"]["grid_step"] = "changed"
-    assert get_registered_workflow(UNION3_REPRODUCTION_WORKFLOW_ID)["method"][
-        "grid_step"
-    ] == "0.0005"
+    assert (
+        get_registered_workflow(UNION3_REPRODUCTION_WORKFLOW_ID)["method"]["grid_step"]
+        == "0.0005"
+    )
 
 
 def test_primary_result_cannot_write_a_scientific_verdict(result: dict[str, Any]):
@@ -99,13 +100,9 @@ def test_half_step_and_independent_checks_are_separate(
     assert len(verification["independent_analysis"]["normalized_profile"]) == 41
     assert Decimal(
         verification["verification_gates"]["independent_profile"]["measured"]
-    ) <= Decimal(
-        "0.0001"
-    )
+    ) <= Decimal("0.0001")
     assert Decimal(
-        verification["verification_gates"]["independent_best_and_endpoints"][
-            "measured"
-        ]
+        verification["verification_gates"]["independent_best_and_endpoints"]["measured"]
     ) <= Decimal("0.0002")
     assert verification["verification_ready"] is True
     assert verification["machine_support_eligible"] is True
@@ -115,7 +112,57 @@ def test_half_step_and_independent_checks_are_separate(
     assert verification["publication_ready"] is False
 
 
-def test_public_output_has_no_binary_floats_or_overclaim_language(result: dict[str, Any]):
+def test_half_step_gate_is_derived_from_signed_endpoint_strings(
+    result: dict[str, Any],
+):
+    statistics = result["statistics"]
+    half_step = result["half_step_statistics"]
+    expected = max(
+        abs(Decimal(statistics[field]) - Decimal(half_step[field]))
+        for field in ("omega_m_best", "omega_m_lower", "omega_m_upper")
+    )
+    gate = result["primary_gates"]["half_step_stability"]
+
+    assert Decimal(gate["measured"]) == expected
+    assert gate["passed"] is (expected <= Decimal(gate["threshold"]))
+
+
+@pytest.mark.parametrize(
+    ("primary_raw", "half_step_raw", "raw_measurement", "canonical_measurement"),
+    [
+        (0.3559244049, 0.3559243951, "0.00000001", "0.00000000"),
+        (0.3559244051, 0.3559244049, "0.00000000", "0.00000001"),
+    ],
+)
+def test_half_step_gate_uses_canonical_domain_across_rounding_boundaries(
+    primary_raw: float,
+    half_step_raw: float,
+    raw_measurement: str,
+    canonical_measurement: str,
+):
+    primary = {
+        field: reproduction._decimal_string(primary_raw)
+        for field in ("omega_m_best", "omega_m_lower", "omega_m_upper")
+    }
+    half_step = {
+        field: reproduction._decimal_string(half_step_raw)
+        for field in ("omega_m_best", "omega_m_lower", "omega_m_upper")
+    }
+
+    assert reproduction._decimal_string(abs(primary_raw - half_step_raw)) == (
+        raw_measurement
+    )
+    assert (
+        reproduction._decimal_string(
+            reproduction._canonical_half_step_difference(primary, half_step)
+        )
+        == canonical_measurement
+    )
+
+
+def test_public_output_has_no_binary_floats_or_overclaim_language(
+    result: dict[str, Any],
+):
     _assert_decimal_strings(result)
     serialized = json.dumps(result, sort_keys=True).lower()
     for forbidden in ("posterior", "h0", "discovery"):
