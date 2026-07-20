@@ -28,6 +28,10 @@ from app.models.worker_records import (
     WorkerArtifactIssuance,
     WorkerNode,
 )
+from app.services.worker_contract import (
+    DEVELOPMENT_RELEASE_COMMIT,
+    UNRESOLVED_RELEASE_COMMITS,
+)
 from app.services.worker_protocol import (
     WORKER_PROTOCOL_VERSION,
     WorkerProtocolError,
@@ -114,6 +118,10 @@ def _raise_protocol(exc: WorkerProtocolError) -> None:
     raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
 
 
+def _is_production() -> bool:
+    return os.getenv("ENV", "dev").strip().lower() in {"prod", "production"}
+
+
 def _serialize_node(node: WorkerNode) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     last_seen = node.last_seen_at
@@ -182,9 +190,11 @@ def _release_commit() -> str:
         .strip()
         .lower()
     )
-    if not _FULL_GIT_SHA.fullmatch(value):
+    if _FULL_GIT_SHA.fullmatch(value):
+        return value
+    if _is_production():
         raise HTTPException(status_code=503, detail="release_commit_unavailable")
-    return value
+    return DEVELOPMENT_RELEASE_COMMIT
 
 
 @router.post("/enrollments", status_code=status.HTTP_201_CREATED)
@@ -222,7 +232,7 @@ async def enroll_node(req: EnrollNodeRequest, db: AsyncSession = Depends(get_db)
     observed_commit = str(req.release_manifest.get("git_commit") or "").strip().lower()
     if required_digest and observed_digest != required_digest:
         raise HTTPException(status_code=422, detail="worker_image_digest_mismatch")
-    if os.getenv("ENV", "dev").lower() == "production":
+    if _is_production():
         if not _FULL_GIT_SHA.fullmatch(observed_commit):
             raise HTTPException(status_code=422, detail="worker_release_commit_invalid")
         if observed_commit != _release_commit():
@@ -316,10 +326,7 @@ async def claim_task(
     node: WorkerNode = Depends(_signed_worker),
     db: AsyncSession = Depends(get_db),
 ):
-    required_manifest = {
-        "git_commit": _release_commit(),
-        "image_digest": str(settings.docker_image_digest or "").strip().lower(),
-    }
+    control_release_commit = _release_commit()
     observed_manifest = {
         "git_commit": str(node.release_manifest.get("git_commit") or "")
         .strip()
@@ -328,11 +335,34 @@ async def claim_task(
         .strip()
         .lower(),
     }
+    pinned_control_commit = (
+        control_release_commit
+        if _FULL_GIT_SHA.fullmatch(control_release_commit)
+        else ""
+    )
+    required_manifest = {
+        # Development enrollment permits an absent or descriptive commit. Do
+        # not turn that accepted node into an unclaimable one. A real control-
+        # plane SHA remains an exact stale-worker gate in every environment.
+        "git_commit": pinned_control_commit,
+        "image_digest": str(settings.docker_image_digest or "").strip().lower(),
+    }
     if any(
         required_manifest[key] and observed_manifest[key] != required_manifest[key]
         for key in required_manifest
     ):
         raise HTTPException(status_code=409, detail="worker_release_manifest_stale")
+    release_commit = control_release_commit
+    if (
+        not pinned_control_commit
+        and observed_manifest["git_commit"] not in UNRESOLVED_RELEASE_COMMITS
+    ):
+        # The control plane has no pinned development revision, but this node
+        # has an enrolled identity. Preserve it in the signed task so the
+        # Worker can verify the durable lease it is about to receive. This is
+        # an execution binding only; the evidence gate still requires a full
+        # Git SHA before a result can support a scientific verdict.
+        release_commit = observed_manifest["git_commit"]
     deadline = asyncio.get_running_loop().time() + wait_seconds
     while True:
         try:
@@ -341,7 +371,7 @@ async def claim_task(
                 node=node,
                 private_key=settings.worker_task_signing_private_key,
                 key_id=settings.worker_task_signing_key_id,
-                release_commit=_release_commit(),
+                release_commit=release_commit,
                 image_digest=settings.docker_image_digest,
             )
         except WorkerProtocolError as exc:

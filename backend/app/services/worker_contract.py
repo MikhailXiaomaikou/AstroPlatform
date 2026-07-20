@@ -7,6 +7,27 @@ import json
 from typing import Any
 
 WORKER_PROTOCOL_VERSION = "1"
+DEVELOPMENT_RELEASE_COMMIT = "development"
+UNRESOLVED_RELEASE_COMMITS = frozenset(
+    {"", "dev", DEVELOPMENT_RELEASE_COMMIT, "none", "unknown", "unset"}
+)
+
+
+def normalize_release_commit(value: Any) -> str:
+    """Normalize a release identity before comparing signed envelopes."""
+
+    return str(value or "").strip().lower()
+
+
+def release_commits_compatible(required: Any, local: Any) -> bool:
+    """Treat development sentinels alike while preserving pinned mismatches."""
+
+    required_value = normalize_release_commit(required)
+    local_value = normalize_release_commit(local)
+    return required_value == local_value or (
+        required_value in UNRESOLVED_RELEASE_COMMITS
+        and local_value in UNRESOLVED_RELEASE_COMMITS
+    )
 
 
 def canonical_json(value: Any) -> bytes:

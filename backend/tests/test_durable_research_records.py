@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -10,6 +11,37 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.models.database import Base
+
+
+def _fits_table_bytes() -> bytes:
+    from astropy.table import Table
+
+    buffer = io.BytesIO()
+    Table({"redshift": [0.1, 0.2], "flux": [1.5, 2.5]}).write(
+        buffer, format="fits", overwrite=True
+    )
+    return buffer.getvalue()
+
+
+async def _upload_fits_direct(data_api, *, db, user, filename: str):
+    from fastapi import UploadFile
+
+    payload = _fits_table_bytes()
+    upload = UploadFile(
+        file=io.BytesIO(payload),
+        size=len(payload),
+        filename=filename,
+    )
+    try:
+        return await data_api.upload_fits_file.__wrapped__(
+            request=None,
+            file=upload,
+            object_id="",
+            db=db,
+            user=user,
+        )
+    finally:
+        await upload.close()
 
 
 def _create_active_user(durable, owner: str) -> None:
@@ -263,6 +295,323 @@ async def test_cleanup_queue_reconciles_committed_reference_without_deleting_byt
     assert storage.download_fits(artifact_ref)
     with Session(durable._engine()) as db:
         assert db.scalar(select(ArtifactCleanupQueue.id)) is None
+
+
+@pytest.mark.asyncio
+async def test_fits_upload_commit_ack_loss_reconciles_without_deleting_bytes(
+    durable_database,
+    monkeypatch,
+    tmp_path,
+):
+    from fastapi import HTTPException
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from app import storage
+    from app.api import data as data_api
+    from app.config import settings
+    from app.models.claim_audit_records import ArtifactCleanupQueue
+    from app.models.schemas import DataFile, User
+    from app.services.artifact_cleanup import purge_artifact_cleanup_queue
+
+    durable = durable_database
+    owner_id = uuid.uuid4()
+    _create_active_user(durable, str(owner_id))
+    monkeypatch.setattr(storage.settings, "storage_backend", "local")
+    monkeypatch.setattr(
+        storage.settings, "local_storage_dir", str(tmp_path / "objects")
+    )
+
+    engine = create_async_engine(settings.database_url)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with factory() as db:
+            user = await db.get(User, owner_id)
+            original_commit = db.commit
+
+            async def commit_then_lose_ack():
+                await original_commit()
+                raise OSError("database commit acknowledgement lost")
+
+            monkeypatch.setattr(db, "commit", commit_then_lose_ack)
+            with pytest.raises(HTTPException) as rejected:
+                await _upload_fits_direct(
+                    data_api,
+                    db=db,
+                    user=user,
+                    filename="commit-ack-lost.fits",
+                )
+            assert rejected.value.status_code == 500
+
+        with Session(durable._engine()) as db:
+            data_file = db.scalar(
+                select(DataFile).where(
+                    DataFile.user_id == owner_id,
+                    DataFile.object_id == "commit-ack-lost.fits",
+                )
+            )
+            assert data_file is not None
+            artifact_ref = data_file.fits_path
+            queued = db.scalar(
+                select(ArtifactCleanupQueue).where(
+                    ArtifactCleanupQueue.artifact_ref == artifact_ref
+                )
+            )
+            assert queued is not None
+            queued.not_before = datetime.now(timezone.utc) - timedelta(seconds=1)
+            db.commit()
+
+        expected = storage.download_fits(artifact_ref)
+        async with factory() as db:
+            result = await purge_artifact_cleanup_queue(db=db)
+        assert result == {
+            "objects_deleted": 0,
+            "objects_failed": 0,
+            "references_reconciled": 1,
+        }
+        assert storage.download_fits(artifact_ref) == expected
+        with Session(durable._engine()) as db:
+            assert db.scalar(select(ArtifactCleanupQueue.id)) is None
+            assert db.scalar(
+                select(DataFile.id).where(DataFile.fits_path == artifact_ref)
+            ) is not None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_fits_upload_precommit_failure_keeps_durable_cleanup_discovery(
+    durable_database,
+    monkeypatch,
+    tmp_path,
+):
+    from fastapi import HTTPException
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from app import storage
+    from app.api import data as data_api
+    from app.config import settings
+    from app.models.claim_audit_records import ArtifactCleanupQueue
+    from app.models.schemas import DataFile, User
+
+    durable = durable_database
+    owner_id = uuid.uuid4()
+    _create_active_user(durable, str(owner_id))
+    monkeypatch.setattr(storage.settings, "storage_backend", "local")
+    monkeypatch.setattr(
+        storage.settings, "local_storage_dir", str(tmp_path / "objects")
+    )
+    monkeypatch.setattr(
+        data_api,
+        "delete_fits_all_versions",
+        lambda _path: pytest.fail("ambiguous upload must not be deleted immediately"),
+    )
+
+    engine = create_async_engine(settings.database_url)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with factory() as db:
+            user = await db.get(User, owner_id)
+
+            async def fail_commit():
+                raise OSError("definite database commit failure")
+
+            monkeypatch.setattr(db, "commit", fail_commit)
+            with pytest.raises(HTTPException) as rejected:
+                await _upload_fits_direct(
+                    data_api,
+                    db=db,
+                    user=user,
+                    filename="precommit-failure.fits",
+                )
+            assert rejected.value.status_code == 500
+
+        with Session(durable._engine()) as db:
+            assert db.scalar(
+                select(DataFile.id).where(
+                    DataFile.user_id == owner_id,
+                    DataFile.object_id == "precommit-failure.fits",
+                )
+            ) is None
+            queued = db.scalar(select(ArtifactCleanupQueue))
+            assert queued is not None
+            assert queued.reason_class == "uncommitted_data_file_upload"
+            deadline = queued.not_before
+            if deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=timezone.utc)
+            assert deadline > datetime.now(timezone.utc) + timedelta(hours=23)
+            artifact_ref = queued.artifact_ref
+        assert storage.download_fits(artifact_ref)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_fits_upload_inactive_owner_creates_no_storage_or_cleanup_rows(
+    durable_database,
+    monkeypatch,
+):
+    from fastapi import HTTPException
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from app.api import data as data_api
+    from app.config import settings
+    from app.models.claim_audit_records import ArtifactCleanupQueue
+    from app.models.schemas import DataFile, User
+
+    durable = durable_database
+    owner_id = uuid.uuid4()
+    _create_active_user(durable, str(owner_id))
+    with Session(durable._engine()) as db:
+        owner = db.get(User, owner_id)
+        owner.account_status = "DELETION_PENDING"
+        db.commit()
+
+    uploads: list[str] = []
+    monkeypatch.setattr(
+        data_api,
+        "upload_fits",
+        lambda path, _payload: uploads.append(path),
+    )
+
+    engine = create_async_engine(settings.database_url)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with factory() as db:
+            user = await db.get(User, owner_id)
+            with pytest.raises(HTTPException) as rejected:
+                await _upload_fits_direct(
+                    data_api,
+                    db=db,
+                    user=user,
+                    filename="inactive-owner.fits",
+                )
+            assert rejected.value.status_code == 409
+
+        assert uploads == []
+        with Session(durable._engine()) as db:
+            assert db.scalar(
+                select(DataFile.id).where(DataFile.user_id == owner_id)
+            ) is None
+            assert db.scalar(select(ArtifactCleanupQueue.id)) is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_fits_upload_storage_failure_keeps_durable_cleanup_discovery(
+    durable_database,
+    monkeypatch,
+):
+    from fastapi import HTTPException
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from app.api import data as data_api
+    from app.config import settings
+    from app.models.claim_audit_records import ArtifactCleanupQueue
+    from app.models.schemas import DataFile, User
+
+    durable = durable_database
+    owner_id = uuid.uuid4()
+    _create_active_user(durable, str(owner_id))
+
+    def fail_upload(_path: str, _payload: bytes) -> str:
+        raise OSError("object storage upload failed")
+
+    monkeypatch.setattr(data_api, "upload_fits", fail_upload)
+    monkeypatch.setattr(
+        data_api,
+        "delete_fits_all_versions",
+        lambda _path: pytest.fail("failed upload must remain cleanup-discoverable"),
+    )
+
+    engine = create_async_engine(settings.database_url)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with factory() as db:
+            user = await db.get(User, owner_id)
+            with pytest.raises(HTTPException) as rejected:
+                await _upload_fits_direct(
+                    data_api,
+                    db=db,
+                    user=user,
+                    filename="storage-failure.fits",
+                )
+            assert rejected.value.status_code == 500
+
+        with Session(durable._engine()) as db:
+            assert db.scalar(
+                select(DataFile.id).where(DataFile.user_id == owner_id)
+            ) is None
+            queued = db.scalar(select(ArtifactCleanupQueue))
+            assert queued is not None
+            assert queued.reason_class == "uncommitted_data_file_upload"
+            assert queued.artifact_ref.endswith("_storage-failure.fits")
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_fits_upload_refresh_failure_preserves_committed_object(
+    durable_database,
+    monkeypatch,
+    tmp_path,
+):
+    from fastapi import HTTPException
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from app import storage
+    from app.api import data as data_api
+    from app.config import settings
+    from app.models.claim_audit_records import ArtifactCleanupQueue
+    from app.models.schemas import DataFile, User
+
+    durable = durable_database
+    owner_id = uuid.uuid4()
+    _create_active_user(durable, str(owner_id))
+    monkeypatch.setattr(storage.settings, "storage_backend", "local")
+    monkeypatch.setattr(
+        storage.settings, "local_storage_dir", str(tmp_path / "objects")
+    )
+
+    engine = create_async_engine(settings.database_url)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with factory() as db:
+            user = await db.get(User, owner_id)
+            original_refresh = db.refresh
+
+            async def fail_data_file_refresh(instance, *args, **kwargs):
+                if isinstance(instance, DataFile):
+                    raise OSError("database refresh failed")
+                return await original_refresh(instance, *args, **kwargs)
+
+            monkeypatch.setattr(db, "refresh", fail_data_file_refresh)
+            with pytest.raises(HTTPException) as rejected:
+                await _upload_fits_direct(
+                    data_api,
+                    db=db,
+                    user=user,
+                    filename="refresh-failure.fits",
+                )
+            assert rejected.value.status_code == 500
+
+        with Session(durable._engine()) as db:
+            data_file = db.scalar(
+                select(DataFile).where(
+                    DataFile.user_id == owner_id,
+                    DataFile.object_id == "refresh-failure.fits",
+                )
+            )
+            assert data_file is not None
+            artifact_ref = data_file.fits_path
+            assert db.scalar(
+                select(ArtifactCleanupQueue.id).where(
+                    ArtifactCleanupQueue.artifact_ref == artifact_ref
+                )
+            ) is None
+        assert storage.download_fits(artifact_ref)
+    finally:
+        await engine.dispose()
 
 
 def test_tombstoned_owner_is_rejected_before_large_result_upload(

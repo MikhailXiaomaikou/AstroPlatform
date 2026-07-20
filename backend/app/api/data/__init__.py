@@ -1406,6 +1406,21 @@ async def upload_fits_file(
     except StorageOwnerInactive as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    from app.services.artifact_cleanup import stage_artifact_cleanup_sync
+
+    try:
+        await asyncio.to_thread(
+            stage_artifact_cleanup_sync,
+            fits_path,
+            user_id=user.id,
+            reason_class="uncommitted_data_file_upload",
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Could not prepare durable FITS upload cleanup",
+        ) from exc
+
     # Sanitize header for JSON storage
     meta: dict = {}
     for k, v in primary_header.items():
@@ -1417,10 +1432,14 @@ async def upload_fits_file(
             except (TypeError, ValueError):
                 meta[k] = str(v)
 
-    uploaded = False
     try:
         upload_fits(fits_path, contents)
-        uploaded = True
+        from app.services.artifact_cleanup import (
+            clear_artifact_cleanup_sync,
+            renew_artifact_cleanup_grace_sync,
+        )
+
+        await asyncio.to_thread(renew_artifact_cleanup_grace_sync, fits_path)
         from app.storage import get_storage_metadata
         storage_meta = get_storage_metadata(fits_path)
         data_file = DataFile(
@@ -1441,14 +1460,10 @@ async def upload_fits_file(
         )
         db.add(data_file)
         await db.commit()
+        await asyncio.to_thread(clear_artifact_cleanup_sync, fits_path)
         await db.refresh(data_file)
     except Exception as exc:
         await db.rollback()
-        if uploaded:
-            try:
-                await asyncio.to_thread(delete_fits_all_versions, fits_path)
-            except Exception:
-                logger.exception("Could not clean failed FITS upload %s", fits_path)
         raise HTTPException(status_code=500, detail="Could not save FITS upload") from exc
 
     return FITSFileInfo(
