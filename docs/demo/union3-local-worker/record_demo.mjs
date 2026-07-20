@@ -185,8 +185,10 @@ let primaryAnalysisPath;
 try {
   await showTitleCard(page);
   step("opening the real Research Workspace UI");
-  await page.goto(`${uiBase}/research`, { waitUntil: "networkidle" });
-  await page.locator(".research-create-panel input").fill("Union3 论文区间复现");
+  await page.goto(`${uiBase}/research`, { waitUntil: "domcontentloaded" });
+  const workspaceTitleInput = page.locator(".research-create-panel input");
+  await workspaceTitleInput.waitFor({ state: "visible", timeout: 30_000 });
+  await workspaceTitleInput.fill("Union3 论文区间复现");
   await page.locator(".research-create-panel textarea").fill(
     "真实论文读取和本地 profile-χ² 主计算；缺少签名 OCI 运行绑定时必须保持 WITHHELD。",
   );
