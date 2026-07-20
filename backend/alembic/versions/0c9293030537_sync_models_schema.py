@@ -63,6 +63,50 @@ def _create_table_if_missing(table_name: str) -> None:
     Base.metadata.tables[table_name].create(op.get_bind(), checkfirst=True)
 
 
+def _create_chat_sessions_at_revision() -> None:
+    """Create the 0c929 chat table without columns introduced later.
+
+    This historical migration predates ``research_workspaces``. Building the
+    table from today's mutable ORM metadata would include ``workspace_id`` and
+    make a fresh PostgreSQL install reference a table that revision 8c93 has
+    not created yet. Keep this one table as an explicit revision snapshot;
+    revision 8c93 adds the workspace foreign key in dependency order.
+    """
+
+    if _table_exists("chat_sessions"):
+        return
+    op.create_table(
+        "chat_sessions",
+        sa.Column("id", UUIDType(), nullable=False),
+        sa.Column("user_id", UUIDType(), nullable=False),
+        sa.Column("title", sa.String(length=255), nullable=False),
+        sa.Column("messages", JSONType(), nullable=False),
+        sa.Column("audit_log", JSONType(), nullable=True),
+        sa.Column("agent_status", sa.String(length=32), nullable=True),
+        sa.Column("current_run_id", sa.String(length=64), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"]),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index("idx_chatsession_user", "chat_sessions", ["user_id"])
+    op.create_index(
+        "idx_chatsession_user_created",
+        "chat_sessions",
+        ["user_id", "created_at"],
+    )
+
+
 def _drop_table_if_exists(table_name: str) -> None:
     if _table_exists(table_name):
         op.drop_table(table_name)
@@ -70,7 +114,10 @@ def _drop_table_if_exists(table_name: str) -> None:
 
 def upgrade() -> None:
     for table_name in NEW_TABLES_IN_DEPENDENCY_ORDER:
-        _create_table_if_missing(table_name)
+        if table_name == "chat_sessions":
+            _create_chat_sessions_at_revision()
+        else:
+            _create_table_if_missing(table_name)
 
     if _table_exists("pipeline_comments") and not _column_exists("pipeline_comments", "parent_comment_id"):
         with op.batch_alter_table("pipeline_comments", schema=None) as batch_op:
