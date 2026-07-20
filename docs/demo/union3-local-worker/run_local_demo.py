@@ -134,12 +134,19 @@ def _demo_environment(
     state: Path,
     commit: str,
     *,
+    artifact_port: int,
     frontend_port: int,
     redis_port: int,
 ) -> tuple[dict[str, str], dict[str, str]]:
     worker_private, worker_public = _raw_keys()
     evidence_private, evidence_public = _raw_keys()
     common = os.environ.copy()
+    existing_pythonpath = common.get("PYTHONPATH", "").strip()
+    common["PYTHONPATH"] = os.pathsep.join(
+        value
+        for value in (str(HERE), str(BACKEND), existing_pythonpath)
+        if value
+    )
     common.update(
         {
             "ENV": "dev",
@@ -182,6 +189,10 @@ def _demo_environment(
                 },
                 separators=(",", ":"),
             ),
+            "DEMO_ARTIFACT_UPLOAD_BASE_URL": (
+                f"http://127.0.0.1:{artifact_port}"
+            ),
+            "DEMO_ARTIFACT_UPLOAD_SECRET": secrets.token_urlsafe(48),
             "STORAGE_BACKEND": "local",
             "LOCAL_STORAGE_DIR": str(state / "objects"),
             "PERSISTENT_STORAGE_MOUNT": str(state),
@@ -357,6 +368,7 @@ def main() -> int:
     parser.add_argument("--backend-port", type=int, default=8010)
     parser.add_argument("--frontend-port", type=int, default=5180)
     parser.add_argument("--redis-port", type=int, default=6399)
+    parser.add_argument("--artifact-port", type=int, default=6400)
     parser.add_argument("--allow-dirty", action="store_true")
     parser.add_argument("--keep-state", action="store_true")
     args = parser.parse_args()
@@ -377,12 +389,18 @@ def main() -> int:
         raise RuntimeError("The registered Reader needs pdftotext")
     if shutil.which("ffmpeg") is None:
         raise RuntimeError("MP4 conversion needs ffmpeg")
-    requested_ports = (args.backend_port, args.frontend_port, args.redis_port)
+    requested_ports = (
+        args.backend_port,
+        args.frontend_port,
+        args.redis_port,
+        args.artifact_port,
+    )
     if len(set(requested_ports)) != len(requested_ports) or any(
         not _port_is_available(port) for port in requested_ports
     ):
         raise RuntimeError(
-            "Backend, frontend, and nonce-Redis ports must be distinct and free: "
+            "Backend, frontend, nonce-Redis, and artifact ports must be distinct "
+            "and free: "
             f"{requested_ports}"
         )
 
@@ -406,6 +424,7 @@ def main() -> int:
     api_env, control_env = _demo_environment(
         state,
         commit,
+        artifact_port=args.artifact_port,
         frontend_port=args.frontend_port,
         redis_port=args.redis_port,
     )
@@ -435,6 +454,31 @@ def main() -> int:
             raise RuntimeError("The local nonce-Redis fixture did not start")
         processes.assert_alive()
 
+        artifact_fixture_env = _client_environment() | {
+            "DEMO_ARTIFACT_UPLOAD_SECRET": api_env[
+                "DEMO_ARTIFACT_UPLOAD_SECRET"
+            ],
+        }
+        processes.start(
+            "artifact-store",
+            [
+                str(backend_python),
+                str(HERE / "artifact_store.py"),
+                "--port",
+                str(args.artifact_port),
+                "--root",
+                str(state / "objects"),
+            ],
+            cwd=BACKEND,
+            env=artifact_fixture_env,
+            log_path=state / "artifact-store.log",
+        )
+        _wait_for_url(
+            f"http://127.0.0.1:{args.artifact_port}/health",
+            timeout=10,
+        )
+        processes.assert_alive()
+
         migration_env = api_env | {"APP_ROLE": "migration"}
         subprocess.run(
             [str(backend_python), "-m", "alembic", "upgrade", "head"],
@@ -448,7 +492,7 @@ def main() -> int:
                 str(backend_python),
                 "-m",
                 "uvicorn",
-                "app.main:app",
+                "demo_backend:app",
                 "--host",
                 "127.0.0.1",
                 "--port",

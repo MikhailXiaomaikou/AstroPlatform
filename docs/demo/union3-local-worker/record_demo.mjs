@@ -416,6 +416,8 @@ try {
     next_required_gate: "github_actions_build_and_cosign_worker_image",
     render_deployment_claimed: false,
     production_worker_container_claimed: false,
+    production_s3_integration_claimed: false,
+    artifact_upload_fixture: "localhost_hmac_capability_put",
     source_cache_preloaded: process.env.DEMO_SOURCE_CACHE_PRELOADED === "true",
   };
   await fs.writeFile(
