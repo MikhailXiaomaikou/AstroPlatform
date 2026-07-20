@@ -43,6 +43,7 @@ from app.services.union3_research_loop import (
 from app.services.worker_protocol import (
     complete_attempt,
     lease_next_task,
+    sign_task_envelope,
 )
 from tests.union3_source_test_support import registered_union3_snapshot
 
@@ -243,6 +244,7 @@ async def _completed_primary_attempt(db_session, monkeypatch):
         "audit": audit,
         "primary_job": primary_job,
         "attempt": attempt,
+        "task_key": task_key,
         "artifact_objects": artifact_objects,
         "artifact_rows": artifact_rows,
         "environment": environment,
@@ -380,6 +382,33 @@ async def test_verification_requires_all_authoritative_worker_artifacts(
     with pytest.raises(Union3ResearchLoopError) as rejected:
         await verify_union3_attempt(db_session, attempt_id=context["attempt"].id)
     assert rejected.value.code == "worker_artifact_unavailable"
+    await db_session.refresh(context["audit"])
+    assert context["audit"].scientific_verdict is None
+    assert context["audit"].machine_support_eligible is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("release_commit", ["development", "abc123"])
+async def test_unpinned_worker_commit_cannot_cross_evidence_binding_gate(
+    db_session,
+    monkeypatch,
+    release_commit: str,
+):
+    context = await _completed_primary_attempt(db_session, monkeypatch)
+    unsigned = dict(context["attempt"].task_envelope)
+    unsigned.pop("server_signature")
+    unsigned["git_commit"] = release_commit
+    context["attempt"].task_envelope = sign_task_envelope(
+        unsigned,
+        private_key=_raw_private_key(context["task_key"]),
+        key_id="worker-task-v1",
+    )
+    await db_session.commit()
+
+    with pytest.raises(Union3ResearchLoopError) as rejected:
+        await verify_union3_attempt(db_session, attempt_id=context["attempt"].id)
+
+    assert rejected.value.code == "worker_task_binding_mismatch"
     await db_session.refresh(context["audit"])
     assert context["audit"].scientific_verdict is None
     assert context["audit"].machine_support_eligible is False

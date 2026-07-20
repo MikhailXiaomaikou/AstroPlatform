@@ -25,6 +25,8 @@ from app.services.worker_contract import (
     WORKER_PROTOCOL_VERSION,
     canonical_json,
     canonical_worker_request,
+    normalize_release_commit,
+    release_commits_compatible,
 )
 from app.services.registered_workflows import (
     UNION3_REPRODUCTION_WORKFLOW_ID,
@@ -314,8 +316,10 @@ def verify_task_envelope(
         raise WorkerClientError("Task requested unregistered resource limits")
     required_digest = str(envelope.get("image_digest") or "")
     local_digest = str(os.getenv("WORKER_IMAGE_DIGEST") or "")
-    required_commit = str(envelope.get("git_commit") or "")
-    local_commit = str(os.getenv("GIT_COMMIT") or os.getenv("TOOL_VERSION") or "")
+    required_commit = normalize_release_commit(envelope.get("git_commit"))
+    local_commit = normalize_release_commit(
+        os.getenv("GIT_COMMIT") or os.getenv("TOOL_VERSION")
+    )
     if local_digest and not required_digest:
         raise WorkerClientError("Task omitted the pinned signed worker image digest")
     if required_digest and not local_digest:
@@ -324,5 +328,5 @@ def verify_task_envelope(
         raise WorkerClientError("Task requires a different signed worker image digest")
     if local_digest and not local_commit:
         raise WorkerClientError("Worker release commit is unavailable locally")
-    if local_commit and required_commit != local_commit:
+    if local_commit and not release_commits_compatible(required_commit, local_commit):
         raise WorkerClientError("Task requires a different worker release commit")
