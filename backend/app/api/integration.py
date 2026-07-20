@@ -1,5 +1,6 @@
 """Astro ecosystem integration — SAMP, VOTable, Jupyter export, ADQL query."""
 
+import asyncio
 import io
 import json
 import logging
@@ -26,7 +27,6 @@ from app.storage import (
     StorageOwnerInactive,
     StorageOwnerRequired,
     StorageOwnershipError,
-    delete_fits_all_versions,
     download_fits,
     get_storage_metadata,
     lock_active_storage_owner,
@@ -333,10 +333,30 @@ async def upload_votable(
     except StorageOwnerInactive as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    uploaded = False
+    from app.services.artifact_cleanup import stage_artifact_cleanup_sync
+
+    try:
+        await asyncio.to_thread(
+            stage_artifact_cleanup_sync,
+            path,
+            user_id=user.id,
+            reason_class="uncommitted_votable_upload",
+        )
+    except Exception as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="Could not prepare durable VOTable upload cleanup",
+        ) from exc
+
     try:
         upload_fits(path, fits_payload)
-        uploaded = True
+        from app.services.artifact_cleanup import (
+            clear_artifact_cleanup_sync,
+            renew_artifact_cleanup_grace_sync,
+        )
+
+        await asyncio.to_thread(renew_artifact_cleanup_grace_sync, path)
         storage_meta = get_storage_metadata(path)
         data_file = DataFile(
             user_id=user.id,
@@ -358,13 +378,15 @@ async def upload_votable(
         )
         db.add(data_file)
         await db.commit()
+        await asyncio.to_thread(clear_artifact_cleanup_sync, path)
         await db.refresh(data_file)
-    except Exception:
+    except Exception as exc:
         await db.rollback()
-        if uploaded:
-            delete_fits_all_versions(path)
         logger.exception("VOTable upload ownership record could not be saved")
-        raise HTTPException(status_code=500, detail="Could not save VOTable upload")
+        raise HTTPException(
+            status_code=500,
+            detail="Could not save VOTable upload",
+        ) from exc
 
     return {
         "id": str(data_file.id),

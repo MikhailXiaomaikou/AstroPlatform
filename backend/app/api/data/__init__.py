@@ -1672,10 +1672,31 @@ async def upload_general_file(
         await lock_active_storage_owner(db, user.id)
     except StorageOwnerInactive as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    uploaded = False
+
+    from app.services.artifact_cleanup import stage_artifact_cleanup_sync
+
+    try:
+        await asyncio.to_thread(
+            stage_artifact_cleanup_sync,
+            storage_path,
+            user_id=user.id,
+            reason_class="uncommitted_data_file_upload",
+        )
+    except Exception as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="Could not prepare durable research upload cleanup",
+        ) from exc
+
     try:
         upload_fits(storage_path, contents)  # works for every research file
-        uploaded = True
+        from app.services.artifact_cleanup import (
+            clear_artifact_cleanup_sync,
+            renew_artifact_cleanup_grace_sync,
+        )
+
+        await asyncio.to_thread(renew_artifact_cleanup_grace_sync, storage_path)
         from app.storage import get_storage_metadata
         storage_meta = get_storage_metadata(storage_path)
 
@@ -1695,14 +1716,10 @@ async def upload_general_file(
         )
         db.add(data_file)
         await db.commit()
+        await asyncio.to_thread(clear_artifact_cleanup_sync, storage_path)
         await db.refresh(data_file)
     except Exception as exc:
         await db.rollback()
-        if uploaded:
-            try:
-                await asyncio.to_thread(delete_fits_all_versions, storage_path)
-            except Exception:
-                logger.exception("Could not clean failed research upload %s", storage_path)
         raise HTTPException(status_code=500, detail="Could not save research upload") from exc
 
     return {
@@ -1773,7 +1790,6 @@ async def delete_fits_file(
 
     # Delete through the configured backend (local volume or S3-compatible
     # object store) so database and object lifecycle stay aligned.
-    from app.storage import delete_fits_all_versions
     if data_file.fits_path:
         try:
             await asyncio.to_thread(delete_fits_all_versions, data_file.fits_path)
@@ -1993,14 +2009,49 @@ async def fetch_object(
     fits_path = f"{source}/{object_id.replace('/', '_')}/{uuid.uuid4().hex}.fits"
     try:
         await lock_active_storage_owner(db, user.id)
-        upload_fits(fits_path, fits_file.data)
-        from app.storage import get_storage_metadata
-        storage_meta = get_storage_metadata(fits_path)
     except StorageOwnerInactive as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    from app.services.artifact_cleanup import stage_artifact_cleanup_sync
+
+    try:
+        await asyncio.to_thread(
+            stage_artifact_cleanup_sync,
+            fits_path,
+            user_id=user.id,
+            reason_class="uncommitted_data_file_upload",
+        )
     except Exception as e:
-        logger.warning("Failed to store FITS locally (%s): %s", fits_path, e)
+        await db.rollback()
+        logger.warning(
+            "Failed to prepare durable archive upload cleanup (%s): %s",
+            fits_path,
+            e,
+        )
         # Still return success — the data was fetched even if storage failed
+        return FetchResult(
+            source=source,
+            object_id=object_id,
+            fits_path="",
+            filename=fits_file.filename,
+            file_id=None,
+        )
+
+    try:
+        upload_fits(fits_path, fits_file.data)
+        from app.services.artifact_cleanup import (
+            clear_artifact_cleanup_sync,
+            renew_artifact_cleanup_grace_sync,
+        )
+
+        await asyncio.to_thread(renew_artifact_cleanup_grace_sync, fits_path)
+        from app.storage import get_storage_metadata
+        storage_meta = get_storage_metadata(fits_path)
+    except Exception as e:
+        await db.rollback()
+        logger.warning("Failed to store FITS locally (%s): %s", fits_path, e)
+        # The durable cleanup row was committed before the object write.  It
+        # safely covers partial writes and metadata-read failures.
         return FetchResult(
             source=source,
             object_id=object_id,
@@ -2026,14 +2077,11 @@ async def fetch_object(
         )
         db.add(data_file)
         await db.commit()
+        await asyncio.to_thread(clear_artifact_cleanup_sync, fits_path)
         await db.refresh(data_file)
         file_id = str(data_file.id)
     except Exception as exc:
         await db.rollback()
-        try:
-            await asyncio.to_thread(delete_fits_all_versions, fits_path)
-        except Exception:
-            logger.exception("Could not clean failed archive object %s", fits_path)
         raise HTTPException(status_code=500, detail="Could not save fetched object") from exc
 
     return FetchResult(

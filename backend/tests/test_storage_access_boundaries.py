@@ -130,6 +130,26 @@ async def test_data_download_uses_canonical_key_and_hides_other_owner(
 async def test_votable_convert_requires_owner_and_upload_creates_owner_record(
     app_client, db_session, test_user, monkeypatch, tmp_path
 ):
+    from app.services import artifact_cleanup
+
+    # The shared API fixture uses an in-memory dependency-overridden database,
+    # while durable cleanup receipts intentionally use an independent engine.
+    # Dedicated durability tests exercise the real receipt lifecycle.
+    monkeypatch.setattr(
+        artifact_cleanup,
+        "stage_artifact_cleanup_sync",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        artifact_cleanup,
+        "renew_artifact_cleanup_grace_sync",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        artifact_cleanup,
+        "clear_artifact_cleanup_sync",
+        lambda *_args, **_kwargs: None,
+    )
     storage = _use_local_storage(monkeypatch, tmp_path)
     user, token = test_user
     other = User(
