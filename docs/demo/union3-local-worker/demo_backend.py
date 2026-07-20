@@ -32,7 +32,8 @@ def _create_local_demo_upload_url(
     content_type: str = "application/octet-stream",
     expires_seconds: int = 15 * 60,
 ) -> dict[str, object]:
-    if settings.env != "dev" or str(settings.storage_backend).lower() != "local":
+    environment = os.environ.get("ENV", "").strip().lower()
+    if environment != "dev" or str(settings.storage_backend).lower() != "local":
         raise RuntimeError("The localhost artifact fixture is development-only")
     base_url = os.environ.get("DEMO_ARTIFACT_UPLOAD_BASE_URL", "").strip().rstrip("/")
     secret = os.environ.get("DEMO_ARTIFACT_UPLOAD_SECRET", "")
