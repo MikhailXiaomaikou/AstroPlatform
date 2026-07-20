@@ -33,6 +33,27 @@ class TestSubmit:
         # dispatcher fired exactly once
         assert len(atr._dispatched_for_test) == 1
 
+    def test_https_worker_mode_rejects_generic_celery_science_before_publish(
+        self, monkeypatch
+    ):
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "science_execution_backend", "https_worker")
+
+        banner = atr.submit_async_job(
+            "fit_cosmology_mcmc",
+            {"n_walkers": 32, "n_steps": 5000},
+        )
+
+        assert banner["__tool_status__"] == "FAILED"
+        assert banner["error_class"] == "science_workflow_not_registered"
+        assert banner["background_backend"] == "https_worker"
+        assert banner["publication_ready"] is False
+        assert banner["__do_not_claim__"] is True
+        assert "job_id" not in banner
+        assert atr._dispatched_for_test == []
+        assert atr._JOBS_STORE.scan_keys() == []
+
     def test_submit_dedupes_identical_running_jobs(self):
         b1 = atr.submit_async_job("transit_search_bls", {"target": "TOI-700"})
         b2 = atr.submit_async_job("transit_search_bls", {"target": "TOI-700"})

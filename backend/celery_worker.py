@@ -4,6 +4,7 @@ import re
 import ssl
 import time
 import uuid
+from fnmatch import fnmatchcase
 
 from celery import Celery
 from celery.beat import PersistentScheduler
@@ -40,6 +41,43 @@ _SCIENCE_TASK_ROUTES = {
     "isochrone.prefetch_grid": {"queue": "science.heavy"},
     "pipeline.*": {"queue": "science.heavy"},
 }
+
+
+class ScienceTaskPublishRejected(RuntimeError):
+    """Raised before Redis publish when hosted science Celery is disabled."""
+
+
+class ControlPlaneTaskRouter:
+    """Fail closed on science or unknown tasks in HTTPS Worker topology.
+
+    Render and the production Compose stack intentionally run only the
+    control-plane Celery queues.  This router is first in ``task_routes`` so a
+    forgotten producer cannot silently fall through to the ``science.short``
+    default queue and remain there forever.
+    """
+
+    _ALLOWED_QUEUES = frozenset({"control", "maintenance", "verification"})
+
+    def __call__(self, name, args, kwargs, options, task=None):
+        del args, kwargs, task
+        if settings.science_execution_backend == "celery":
+            return None
+        requested_queue = options.get("queue")
+        requested_queue_name = getattr(requested_queue, "name", requested_queue)
+        if (
+            requested_queue_name is not None
+            and str(requested_queue_name) not in self._ALLOWED_QUEUES
+        ):
+            raise ScienceTaskPublishRejected(
+                f"Celery queue {requested_queue_name!r} is disabled when "
+                "SCIENCE_EXECUTION_BACKEND is not 'celery'"
+            )
+        if any(fnmatchcase(str(name), pattern) for pattern in _CONTROL_TASK_ROUTES):
+            return None
+        raise ScienceTaskPublishRejected(
+            f"Celery science task {name!r} is disabled when "
+            "SCIENCE_EXECUTION_BACKEND is not 'celery'"
+        )
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -141,7 +179,10 @@ celery_app.conf.update(
     enable_utc=True,
     task_track_started=True,
     task_default_queue="science.short",
-    task_routes={**_CONTROL_TASK_ROUTES, **_SCIENCE_TASK_ROUTES},
+    task_routes=(
+        ControlPlaneTaskRouter(),
+        {**_CONTROL_TASK_ROUTES, **_SCIENCE_TASK_ROUTES},
+    ),
     # Long scientific tasks must be returned to Redis when a worker process is
     # lost.  Prefetch=1 prevents one worker from reserving a backlog it cannot
     # finish, and the visibility timeout exceeds the hard task limit so a live

@@ -318,6 +318,34 @@ def submit_async_job(
                 "__do_not_claim__": True,
             }
 
+    # The hosted HTTPS Worker accepts only server-registered workflow
+    # envelopes.  It cannot safely execute this legacy generic-tool payload,
+    # and Render deliberately has no Celery science consumer.  Fail before
+    # creating a durable QUEUED record or publishing to an unconsumed queue.
+    from app.config import settings
+
+    if settings.science_execution_backend != "celery":
+        logger.warning(
+            "Rejected legacy Celery science job %s while backend=%s",
+            tool_name,
+            settings.science_execution_backend,
+        )
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "status": "failed",
+            "tool_name": tool_name,
+            "background_backend": settings.science_execution_backend,
+            "error_class": "science_workflow_not_registered",
+            "error": (
+                "This generic background tool is not registered for the HTTPS "
+                "science Worker; no task was queued."
+            ),
+            "publication_ready": False,
+            "__do_not_claim__": True,
+        }
+
     if dedup:
         existing = _find_running_job_by_hash(
             tool_name, inputs_hash, owner_id=effective_owner,

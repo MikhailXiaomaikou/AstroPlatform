@@ -215,7 +215,7 @@ services:
     environment:
       ENV: production
       APP_ROLE: beat
-      SCIENCE_EXECUTION_BACKEND: celery
+      SCIENCE_EXECUTION_BACKEND: https_worker
       DATABASE_URL: postgresql+asyncpg://astro:astro@postgres:5432/astro
       REDIS_URL: redis://redis:6379/0
       POSTGRES_BACKUP_ENABLED: ${POSTGRES_BACKUP_ENABLED:-false}

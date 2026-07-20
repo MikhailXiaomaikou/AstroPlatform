@@ -402,7 +402,8 @@ def test_celery_task_and_schedule_are_opt_in_and_maintenance_only(monkeypatch):
     monkeypatch.delenv("POSTGRES_BACKUP_ENABLED", raising=False)
     assert postgres_backup_tasks.postgres_backup_task.run() == {"status": "disabled"}
     assert "daily-encrypted-postgresql-backup" not in celery_worker._build_beat_schedule()
-    assert celery_worker.celery_app.conf.task_routes["maintenance.*"] == {
+    _guard, task_routes = celery_worker.celery_app.conf.task_routes
+    assert task_routes["maintenance.*"] == {
         "queue": "maintenance"
     }
 

@@ -120,6 +120,9 @@ services:
       - key: EVIDENCE_V2_VERIFICATION_KEYS
         sync: false
       - key: PIPELINE_MODE
+        # Celery remains required for control/maintenance/verification health.
+        # Science producers additionally require SCIENCE_EXECUTION_BACKEND=celery;
+        # with https_worker they fail before publishing an unconsumed task.
         value: celery
       - key: RATE_LIMIT_ENABLED
         value: "true"
@@ -285,6 +288,8 @@ services:
           type: web
           envVarKey: EVIDENCE_VERIFICATION_KEYS
       - key: PIPELINE_MODE
+        # This control worker never consumes science queues. Producer-side
+        # SCIENCE_EXECUTION_BACKEND guards keep them empty in this topology.
         value: celery
       - key: CLAIM_AUDIT_ENABLED
         fromService:
@@ -450,7 +455,9 @@ services:
       - key: APP_ROLE
         value: beat
       - key: SCIENCE_EXECUTION_BACKEND
-        value: celery
+        # Beat publishes only the explicit control-plane allowlist. Giving it
+        # the same backend identity activates the publish router's science deny.
+        value: https_worker
       - key: DATABASE_URL
         fromDatabase:
           name: standard-astro-db

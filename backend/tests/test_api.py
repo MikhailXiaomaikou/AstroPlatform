@@ -310,8 +310,106 @@ class TestPipelineEndpoints:
         assert resp.status_code == 503
         assert "heavy nodes" in resp.json()["detail"]
 
+    async def test_https_worker_mode_never_publishes_arbitrary_pipeline(
+        self, app_client, db_session, test_user, monkeypatch
+    ):
+        from app.api import pipeline as pipeline_api
+        from app.config import settings
+        from app.models.schemas import PipelineRun
+        from sqlalchemy import select
+
+        monkeypatch.setattr(settings, "pipeline_mode", "celery")
+        monkeypatch.setattr(settings, "science_execution_backend", "https_worker")
+
+        def _fail_delay(*_args, **_kwargs):
+            raise AssertionError("Hosted control plane published a science task")
+
+        monkeypatch.setattr(pipeline_api.execute_pipeline_task, "delay", _fail_delay)
+        dag = {
+            "nodes": [{"id": "stack", "type": "ImageStack", "params": {}}],
+            "edges": [],
+        }
+
+        _user, token = test_user
+        resp = await app_client.post(
+            "/api/pipeline/run?async_mode=true",
+            json={"dag": dag, "input_data_id": "test.fits"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert resp.status_code == 503
+        assert "no registered executor" in resp.json()["detail"]
+        assert (await db_session.execute(select(PipelineRun))).scalars().all() == []
+
+    async def test_heavy_pipeline_broker_failure_never_runs_in_api_process(
+        self, app_client, db_session, test_user, monkeypatch
+    ):
+        from app.api import pipeline as pipeline_api
+        from app.config import settings
+        from app.models.schemas import PipelineRun
+        from sqlalchemy import select
+
+        monkeypatch.setattr(settings, "pipeline_mode", "celery")
+        monkeypatch.setattr(settings, "science_execution_backend", "celery")
+        monkeypatch.setattr(
+            pipeline_api.execute_pipeline_task,
+            "delay",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                ConnectionError("broker unavailable")
+            ),
+        )
+        monkeypatch.setattr(
+            pipeline_api,
+            "execute_dag",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("Heavy DAG ran inside the API process")
+            ),
+        )
+        dag = {
+            "nodes": [{"id": "stack", "type": "ImageStack", "params": {}}],
+            "edges": [],
+        }
+
+        _user, token = test_user
+        resp = await app_client.post(
+            "/api/pipeline/run?async_mode=true",
+            json={"dag": dag, "input_data_id": "test.fits"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert resp.status_code == 503
+        assert "no local fallback ran" in resp.json()["detail"]
+        runs = (await db_session.execute(select(PipelineRun))).scalars().all()
+        assert len(runs) == 1
+        assert runs[0].status == "failed"
+        assert runs[0].results["error_class"] == "celery_dispatch_failed"
+        assert not [run for run in runs if run.status == "pending"]
+
 
 class TestSchedulerEndpoints:
+    async def test_https_worker_mode_rejects_new_scheduled_pipeline(
+        self, app_client, test_user, monkeypatch
+    ):
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "pipeline_mode", "celery")
+        monkeypatch.setattr(settings, "science_execution_backend", "https_worker")
+        _, token = test_user
+
+        resp = await app_client.post(
+            "/api/scheduler/schedules",
+            json={
+                "name": "unsupported hosted schedule",
+                "dag": {"nodes": [], "edges": []},
+                "input_data_id": "unused",
+                "cron_expr": "daily",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert resp.status_code == 503
+        assert "registered science workflow" in resp.json()["detail"]
+
     async def test_scheduler_crud(self, app_client, test_user):
         _, token = test_user
         headers = {"Authorization": f"Bearer {token}"}

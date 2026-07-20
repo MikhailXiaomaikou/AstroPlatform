@@ -360,6 +360,40 @@ async def run_pipeline(
         db=db,
     )
 
+    # Hosted HTTPS workers accept only registered workflow envelopes, never an
+    # arbitrary Pipeline DAG.  Reject an asynchronous request before creating
+    # a pending ledger row that no executor can consume.  Callers may still
+    # request async_mode=false for explicitly classified light nodes.
+    science_celery_enabled = settings.science_execution_backend == "celery"
+    science_celery_dispatch = (
+        async_mode
+        and settings.pipeline_mode == "celery"
+        and science_celery_enabled
+    )
+    if (
+        async_mode
+        and settings.pipeline_mode == "celery"
+        and not science_celery_enabled
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "This deployment has no registered executor for arbitrary "
+                "asynchronous pipelines; use a registered science workflow."
+            ),
+        )
+
+    heavy_ids = dag_has_heavy_nodes(bound_dag)
+    if heavy_ids and not science_celery_dispatch:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"This DAG contains heavy nodes ({', '.join(heavy_ids)}) but this "
+                "deployment has no registered executor for arbitrary pipelines. "
+                "Remove the heavy nodes or use a registered science workflow."
+            ),
+        )
+
     # Create DB record
     run_id = uuid.uuid4()
 
@@ -374,25 +408,33 @@ async def run_pipeline(
 
     run_id_str = str(run_id)
 
-    # Async execution via Celery only when the deployment mode explicitly
-    # enables Celery.  In sync mode, heavy nodes must fail before dispatch.
-    if async_mode and settings.pipeline_mode == "celery":
+    # Publishing science tasks requires both Celery pipeline mode and an
+    # actual Celery science executor.  Hosted Render keeps Celery for control
+    # and verification work while SCIENCE_EXECUTION_BACKEND=https_worker; its
+    # registered HTTPS Worker must never receive an arbitrary pipeline DAG.
+    if science_celery_dispatch:
         try:
             execute_pipeline_task.delay(run_id_str, bound_dag, bound_input_data_id)
             return RunResponse(run_id=run_id_str, status="running", warnings=dag_warnings)
         except Exception as e:
+            if heavy_ids:
+                run.status = "failed"
+                run.completed_at = datetime.now(timezone.utc)
+                run.results = {
+                    "success": False,
+                    "error_class": "celery_dispatch_failed",
+                    "error": "Heavy pipeline could not be queued.",
+                }
+                await db.commit()
+                logger.exception(
+                    "Heavy pipeline %s could not be published to Celery",
+                    run_id_str,
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail="Heavy pipeline could not be queued; no local fallback ran.",
+                ) from e
             logger.warning(f"Celery dispatch failed, falling back to sync: {e}")
-
-    heavy_ids = dag_has_heavy_nodes(bound_dag)
-    if heavy_ids:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                f"This DAG contains heavy nodes ({', '.join(heavy_ids)}) that must "
-                "run through Celery. Start a Celery worker (PIPELINE_MODE=celery) "
-                "or remove the heavy nodes before running in sync mode."
-            ),
-        )
 
     # Synchronous execution in thread executor (avoids blocking async event loop)
     import asyncio

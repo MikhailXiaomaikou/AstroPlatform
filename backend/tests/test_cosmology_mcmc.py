@@ -303,6 +303,28 @@ def test_background_status_roundtrip():
     assert queued["background_backend"] == "celery"
 
 
+def test_background_submission_fails_honestly_in_https_worker_mode(monkeypatch):
+    from app.config import settings
+    from app.services.cosmology_mcmc import submit_emcee_job
+
+    monkeypatch.setattr(settings, "science_execution_backend", "https_worker")
+
+    rejected = submit_emcee_job(
+        rows=toy_distance_modulus_rows(),
+        model="flat_lcdm",
+        n_walkers=10,
+        n_steps=24,
+        n_burn=6,
+        random_seed=9,
+    )
+
+    assert rejected["__tool_status__"] == "FAILED"
+    assert rejected["error_class"] == "science_workflow_not_registered"
+    assert rejected["background_backend"] == "https_worker"
+    assert "job_id" not in rejected
+    assert "No cosmology chain was queued" in rejected["warning"]
+
+
 @pytest.mark.asyncio
 async def test_legacy_cosmology_poll_is_owner_scoped_end_to_end():
     from app.services.ai_tools_cosmology import dispatch_cosmology
