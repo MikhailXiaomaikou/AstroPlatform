@@ -72,6 +72,23 @@ def test_ci_exercises_real_postgresql_legacy_uuid_bridge():
     )
 
 
+def test_ci_migration_role_does_not_receive_runtime_secrets():
+    workflow = _yaml(".github/workflows/ci.yml")
+    migration_env = workflow["jobs"]["migration-and-recovery"]["env"]
+
+    assert migration_env["APP_ROLE"] == "migration"
+    assert migration_env["TOOL_VERSION"] == "${{ github.sha }}"
+    for key in (
+        "ADMIN_SECRET",
+        "DELETION_TOMBSTONE_KEY",
+        "EVIDENCE_SIGNING_KEY",
+        "FERNET_KEY",
+        "JWT_SECRET",
+        "WORKER_TASK_SIGNING_PRIVATE_KEY",
+    ):
+        assert key not in migration_env
+
+
 def test_ci_builds_the_images_used_by_production_and_compose():
     workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
         encoding="utf-8"
@@ -137,6 +154,7 @@ def test_render_workers_wait_for_exact_schema_head():
     worker = services["standard-astro-celery-worker"]
     assert worker["maxShutdownDelaySeconds"] == 300
     assert "--concurrency=1" in worker["dockerCommand"]
+    assert "--queues=control,maintenance,verification" in worker["dockerCommand"]
     assert "--hostname=worker-${RENDER_GIT_COMMIT}@%h" in worker["dockerCommand"]
     for name in ("standard-astro-celery-worker", "standard-astro-celery-beat"):
         command = services[name]["dockerCommand"]
@@ -149,7 +167,13 @@ def test_render_workers_wait_for_exact_schema_head():
 
     frontend = services["standard-astro-frontend"]
     backend_env = {item["key"]: item for item in backend["envVars"]}
+    worker_env = {item["key"]: item for item in worker["envVars"]}
     frontend_env = {item["key"]: item for item in frontend["envVars"]}
+    assert backend_env["APP_ROLE"]["value"] == "api"
+    assert worker_env["APP_ROLE"]["value"] == "control_worker"
+    assert beat_env["APP_ROLE"]["value"] == "beat"
+    for service_env in (backend_env, worker_env, beat_env):
+        assert service_env["SCIENCE_EXECUTION_BACKEND"]["value"] == "celery"
     for key in (
         "ADMIN_SECRET",
         "JWT_SECRET",
@@ -158,6 +182,14 @@ def test_render_workers_wait_for_exact_schema_head():
         "DELETION_TOMBSTONE_VERIFICATION_KEYS",
         "EVIDENCE_SIGNING_KEY",
         "EVIDENCE_SIGNING_KEY_ID",
+        "WORKER_TASK_SIGNING_PRIVATE_KEY",
+        "WORKER_TASK_SIGNING_KEY_ID",
+        "WORKER_TASK_SIGNING_PUBLIC_KEY",
+        "WORKER_TASK_VERIFICATION_KEYS",
+        "EVIDENCE_V2_SIGNING_PRIVATE_KEY",
+        "EVIDENCE_V2_SIGNING_KEY_ID",
+        "EVIDENCE_V2_SIGNING_PUBLIC_KEY",
+        "EVIDENCE_V2_VERIFICATION_KEYS",
     ):
         assert backend_env[key] == {"key": key, "sync": False}
         assert "generateValue" not in backend_env[key]
@@ -166,6 +198,14 @@ def test_render_workers_wait_for_exact_schema_head():
     assert backend_env["SHARED_DEEPSEEK_API_KEY_ENABLED"]["value"] == "false"
     assert backend_env["SIGNUP_MODE"]["value"] == "invite_only"
     assert backend_env["CLAIM_AUDIT_ENABLED"]["value"] == "false"
+    for key in (
+        "RESEARCH_WORKSPACE_ENABLED",
+        "ARXIV_READER_ENABLED",
+        "UNION3_REPRODUCTION_ENABLED",
+        "EVIDENCE_PACK_V2_ENABLED",
+        "LOCAL_SCIENCE_WORKER_ENABLED",
+    ):
+        assert backend_env[key]["value"] == "false"
     assert backend_env["PRODUCT_ANALYTICS_RETENTION_DAYS"]["value"] == "30"
     assert backend_env["DELETION_TOMBSTONE_KEY_ID"]["value"] == "deletion-prod-v1"
     assert backend_env["TRUSTED_PROXY_MODE"]["value"] == "none"
@@ -182,6 +222,38 @@ def test_render_workers_wait_for_exact_schema_head():
     }
     assert frontend_env["NODE_VERSION"]["value"] == "20.19.0"
 
+    for key in (
+        "JWT_SECRET",
+        "FERNET_KEY",
+        "ADMIN_SECRET",
+        "PRIVACY_OPERATOR_NAME",
+        "PRIVACY_CONTACT",
+        "PRIVACY_JURISDICTION",
+        "WORKER_TASK_SIGNING_PRIVATE_KEY",
+        "EVIDENCE_V2_SIGNING_PRIVATE_KEY",
+    ):
+        assert key not in worker_env
+    for key in (
+        "JWT_SECRET",
+        "FERNET_KEY",
+        "ADMIN_SECRET",
+        "DELETION_TOMBSTONE_KEY",
+        "EVIDENCE_SIGNING_KEY",
+        "PRIVACY_OPERATOR_NAME",
+        "WORKER_TASK_SIGNING_PRIVATE_KEY",
+        "EVIDENCE_V2_SIGNING_PRIVATE_KEY",
+    ):
+        assert key not in beat_env
+    for key in (
+        "DELETION_TOMBSTONE_KEY",
+        "DELETION_TOMBSTONE_KEY_ID",
+        "DELETION_TOMBSTONE_VERIFICATION_KEYS",
+        "EVIDENCE_SIGNING_KEY",
+        "EVIDENCE_SIGNING_KEY_ID",
+        "EVIDENCE_VERIFICATION_KEYS",
+    ):
+        assert worker_env[key]["fromService"]["name"] == "standard-astro-backend"
+
     # Render injects RENDER_GIT_COMMIT on every deploy. Do not mirror it through
     # a Blueprint self-reference: fromService values refresh on Blueprint sync,
     # not on every commit deploy, and would override the runtime SHA with a stale
@@ -190,16 +262,6 @@ def test_render_workers_wait_for_exact_schema_head():
     for name in ("standard-astro-celery-worker", "standard-astro-celery-beat"):
         service_env = {item["key"]: item for item in services[name]["envVars"]}
         assert "TOOL_VERSION" not in service_env
-        assert service_env["CONNECTOR_CACHE_BACKEND"]["value"] == "redis"
-        for key in (
-            "DELETION_TOMBSTONE_KEY",
-            "DELETION_TOMBSTONE_KEY_ID",
-            "DELETION_TOMBSTONE_VERIFICATION_KEYS",
-            "PRIVACY_OPERATOR_NAME",
-            "PRIVACY_CONTACT",
-            "PRIVACY_JURISDICTION",
-        ):
-            assert service_env[key]["fromService"]["name"] == "standard-astro-backend"
 
     cache_headers = {
         item["path"]: item["value"]
@@ -240,6 +302,52 @@ def test_compose_frontend_is_built_for_local_backend_not_render():
     ] == "none"
 
 
+def test_compose_declares_role_scoped_secrets_and_one_release_identity():
+    services = _yaml("docker-compose.yml")["services"]
+    expected_roles = {
+        "migrate": "migration",
+        "backend": "api",
+        "celery-worker": "control_worker",
+        "celery-beat": "beat",
+    }
+    release_arg = (
+        "${GIT_COMMIT:?GIT_COMMIT must be one full 40-character Git SHA}"
+    )
+
+    for service_name, role in expected_roles.items():
+        service = services[service_name]
+        assert service["environment"]["APP_ROLE"] == role
+        assert service["build"]["args"]["TOOL_VERSION"] == release_arg
+
+    migration_env = services["migrate"]["environment"]
+    assert set(migration_env) == {
+        "ENV",
+        "APP_ROLE",
+        "SCIENCE_EXECUTION_BACKEND",
+        "DATABASE_URL",
+    }
+    worker = services["celery-worker"]
+    for key in (
+        "RESEARCH_WORKSPACE_ENABLED",
+        "ARXIV_READER_ENABLED",
+        "UNION3_REPRODUCTION_ENABLED",
+        "EVIDENCE_PACK_V2_ENABLED",
+        "LOCAL_SCIENCE_WORKER_ENABLED",
+    ):
+        assert services["backend"]["environment"][key] == "false"
+    assert "--queues=control,maintenance,verification" in worker["command"]
+    assert "worker-$${TOOL_VERSION}@%h" in worker["command"]
+    for key in ("JWT_SECRET", "FERNET_KEY", "ADMIN_SECRET", "PRIVACY_OPERATOR_NAME"):
+        assert key not in worker["environment"]
+    assert set(services["celery-beat"]["environment"]) == {
+        "ENV",
+        "APP_ROLE",
+        "SCIENCE_EXECUTION_BACKEND",
+        "DATABASE_URL",
+        "REDIS_URL",
+    }
+
+
 def test_celery_delivery_semantics_are_fail_safe():
     import celery_worker
     from celery.utils.imports import symbol_by_name
@@ -249,6 +357,14 @@ def test_celery_delivery_semantics_are_fail_safe():
     assert celery_app.conf.task_acks_late is True
     assert celery_app.conf.task_reject_on_worker_lost is True
     assert celery_app.conf.worker_prefetch_multiplier == 1
+    assert celery_app.conf.task_default_queue == "science.short"
+    assert celery_app.conf.task_routes["scheduler.check_due_schedules"] == {
+        "queue": "control"
+    }
+    assert celery_app.conf.task_routes["privacy.*"] == {"queue": "maintenance"}
+    assert celery_app.conf.task_routes["claim_audit.process"] == {
+        "queue": "science.heavy"
+    }
     assert celery_app.conf.task_soft_time_limit > 0
     assert celery_app.conf.task_time_limit > celery_app.conf.task_soft_time_limit
     assert (

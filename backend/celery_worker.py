@@ -20,6 +20,23 @@ _BEAT_RELEASE_HEARTBEAT_TTL_SECONDS = 120
 _GIT_COMMIT = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
 _BEAT_OWNER = re.compile(r"[0-9a-f]{32}")
 
+# Hosted workers are control-plane processes. Any task without an explicit
+# control/maintenance route lands on a science queue that Render never
+# consumes; a future no-secrets HTTPS worker owns those computations.
+_CONTROL_TASK_ROUTES = {
+    "scheduler.check_due_schedules": {"queue": "control"},
+    "alerts.ingest": {"queue": "control"},
+    "ai_tools.reconcile_stale_jobs": {"queue": "maintenance"},
+    "claim_audit.reconcile_stale": {"queue": "maintenance"},
+    "privacy.*": {"queue": "maintenance"},
+}
+_SCIENCE_TASK_ROUTES = {
+    "ai_tools.run_long_tool": {"queue": "science.short"},
+    "claim_audit.process": {"queue": "science.heavy"},
+    "isochrone.prefetch_grid": {"queue": "science.heavy"},
+    "pipeline.*": {"queue": "science.heavy"},
+}
+
 
 def _positive_int_env(name: str, default: int) -> int:
     raw = os.getenv(name, str(default)).strip()
@@ -107,6 +124,8 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     task_track_started=True,
+    task_default_queue="science.short",
+    task_routes={**_CONTROL_TASK_ROUTES, **_SCIENCE_TASK_ROUTES},
     # Long scientific tasks must be returned to Redis when a worker process is
     # lost.  Prefetch=1 prevents one worker from reserving a backlog it cannot
     # finish, and the visibility timeout exceeds the hard task limit so a live

@@ -6,6 +6,11 @@ from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+# Alembic is a dedicated process, including when invoked by a web service's
+# pre-deploy hook. Force its least-privilege startup contract before importing
+# database metadata so schema changes never require API/admin/runtime secrets.
+os.environ["APP_ROLE"] = "migration"
+
 # Alembic Config object
 config = context.config
 

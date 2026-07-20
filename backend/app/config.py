@@ -1,7 +1,11 @@
+import base64
+import binascii
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 from pydantic_settings import BaseSettings
 
@@ -10,6 +14,10 @@ _PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
 _ENV = os.getenv("ENV", "dev").strip().lower()
 if _ENV == "prod":
     _ENV = "production"
+
+_APP_ROLES = {"api", "migration", "control_worker", "beat", "science_worker"}
+_SCIENCE_EXECUTION_BACKENDS = {"celery", "https_worker"}
+_FULL_GIT_SHA = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
 
 # ---------------------------------------------------------------------------
 # Ensure astropy / astroquery have a writable cache & config directory.
@@ -37,7 +45,53 @@ def _ensure_writable_home():
 _ensure_writable_home()
 
 
+def _runtime_git_sha() -> str:
+    """Return the deployed revision only when it is a complete Git SHA."""
+
+    raw = (
+        os.getenv("RENDER_GIT_COMMIT")
+        or os.getenv("GIT_COMMIT")
+        or os.getenv("TOOL_VERSION")
+        or ""
+    )
+    commit = str(raw).strip().lower()
+    return commit if _FULL_GIT_SHA.fullmatch(commit) else ""
+
+
+def _decode_ed25519_key(name: str, value: str) -> bytes:
+    """Decode one canonical base64 Ed25519 seed/public key."""
+
+    try:
+        decoded = base64.b64decode(str(value or ""), validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(f"{name} must be valid base64") from exc
+    if len(decoded) != 32:
+        raise ValueError(f"{name} must encode exactly 32 bytes")
+    return decoded
+
+
+def _secret_reuses_ed25519_seed(seed: bytes, value: str) -> bool:
+    """Detect direct or base64-encoded reuse across signing trust domains."""
+
+    secret = str(value or "")
+    if not secret:
+        return False
+    if secret.encode("utf-8") == seed:
+        return True
+    try:
+        return base64.b64decode(secret, validate=True) == seed
+    except (binascii.Error, ValueError):
+        return False
+
+
 class Settings(BaseSettings):
+    # Each process declares a least-privilege startup role. The default remains
+    # API for local development and backwards compatibility; production
+    # manifests set APP_ROLE explicitly so missing role-specific configuration
+    # fails before the process starts serving work.
+    app_role: str = "" if _ENV == "production" else "api"
+    science_execution_backend: str = "celery"
+
     database_url: str = f"sqlite+aiosqlite:///{_PROJECT_DIR / 'data' / 'astro.db'}"
     redis_url: str = "redis://localhost:6379/0"
     jwt_secret: str = ""
@@ -164,6 +218,11 @@ class Settings(BaseSettings):
     # development can opt in explicitly without changing production defaults.
     signup_mode: str = "invite_only" if _ENV == "production" else "public"
     claim_audit_enabled: bool = False
+    research_workspace_enabled: bool = False
+    arxiv_reader_enabled: bool = False
+    union3_reproduction_enabled: bool = False
+    evidence_pack_v2_enabled: bool = False
+    local_science_worker_enabled: bool = False
     claim_audit_execution_mode: str = (
         "celery" if _ENV == "production" else "inline"
     )
@@ -177,6 +236,30 @@ class Settings(BaseSettings):
     privacy_contact: str = ""
     privacy_jurisdiction: str = ""
 
+    # The HTTPS science worker is deliberately independent from the control
+    # plane's database, Redis and runtime secrets. These fields are dark until
+    # APP_ROLE=science_worker is selected by its dedicated image/entrypoint.
+    science_control_plane_url: str = ""
+    science_worker_node_key: str = ""
+    science_worker_cache_dir: str = str(_PROJECT_DIR / "data" / "science-worker")
+
+    # HTTPS-worker task envelopes use a dedicated Ed25519 key, never an
+    # Evidence Pack or login-token key. The API owns the private seed; science
+    # workers receive only the current public key plus retired verification
+    # keys needed during controlled rotation.
+    worker_task_signing_private_key: str = ""
+    worker_task_signing_key_id: str = ""
+    worker_task_signing_public_key: str = ""
+    worker_task_verification_keys: str = ""
+
+    # Evidence Pack v2 has a second independent Ed25519 trust domain. These
+    # fields intentionally do not reuse either the legacy HMAC Evidence key or
+    # the HTTPS-worker task-envelope signing key.
+    evidence_v2_signing_private_key: str = ""
+    evidence_v2_signing_key_id: str = ""
+    evidence_v2_signing_public_key: str = ""
+    evidence_v2_verification_keys: str = ""
+
     # Docker image digest for reproducibility
     docker_image_digest: str = ""
 
@@ -187,13 +270,138 @@ class Settings(BaseSettings):
     model_config = {"env_file": ".env", "extra": "ignore"}
 
     def __init__(self, **kwargs):
+        role_contract_explicit = (
+            not kwargs or "app_role" in kwargs or "APP_ROLE" in os.environ
+        )
         super().__init__(**kwargs)
+
+        self.app_role = str(self.app_role or "").strip().lower()
+        if not self.app_role:
+            if _ENV == "production":
+                raise ValueError("APP_ROLE must be set explicitly in production")
+            self.app_role = "api"
+        if self.app_role not in _APP_ROLES:
+            raise ValueError(
+                "APP_ROLE must be one of api, migration, control_worker, beat, "
+                "or science_worker"
+            )
+        self.science_execution_backend = str(
+            self.science_execution_backend or "celery"
+        ).strip().lower()
+        if self.science_execution_backend not in _SCIENCE_EXECUTION_BACKENDS:
+            raise ValueError(
+                "SCIENCE_EXECUTION_BACKEND must be 'celery' or 'https_worker'"
+            )
+
         # Auto-fix PostgreSQL URL for async driver
         if self.database_url.startswith("postgresql://"):
             self.database_url = self.database_url.replace(
                 "postgresql://", "postgresql+asyncpg://", 1
             )
-        if not self.jwt_secret:
+        elif self.database_url.startswith("postgres://"):
+            self.database_url = self.database_url.replace(
+                "postgres://", "postgresql+asyncpg://", 1
+            )
+
+        # Explicit APP_ROLE turns on the deployment startup contract. Keeping
+        # the legacy implicit API default avoids surprising library callers,
+        # while every checked-in production manifest opts into strict checks.
+        if _ENV == "production" and role_contract_explicit:
+            commit = _runtime_git_sha()
+            if not commit:
+                raise ValueError(
+                    f"APP_ROLE={self.app_role} requires a full 40-character Git "
+                    "SHA from RENDER_GIT_COMMIT, GIT_COMMIT, or TOOL_VERSION"
+                )
+            if self.app_role in {"api", "migration", "control_worker", "beat"}:
+                if not self.database_url.startswith("postgresql+asyncpg://"):
+                    raise ValueError(
+                        f"APP_ROLE={self.app_role} requires a production "
+                        "PostgreSQL DATABASE_URL"
+                    )
+            if self.app_role in {"api", "control_worker", "beat"}:
+                redis = urlparse(self.redis_url)
+                if redis.scheme not in {"redis", "rediss"} or redis.hostname in {
+                    None,
+                    "localhost",
+                    "127.0.0.1",
+                    "::1",
+                }:
+                    raise ValueError(
+                        f"APP_ROLE={self.app_role} requires a non-local REDIS_URL"
+                    )
+
+        # Migration and Beat must not depend on HTTP, invitation, encryption,
+        # deletion, evidence, storage or model-provider secrets merely to boot.
+        if self.app_role in {"migration", "beat"}:
+            return
+
+        if self.app_role == "science_worker":
+            if (
+                _ENV == "production"
+                and self.science_execution_backend != "https_worker"
+            ):
+                raise ValueError(
+                    "APP_ROLE=science_worker requires "
+                    "SCIENCE_EXECUTION_BACKEND=https_worker in production"
+                )
+            if _ENV == "production":
+                control_plane = urlparse(self.science_control_plane_url)
+                if control_plane.scheme != "https" or not control_plane.netloc:
+                    raise ValueError(
+                        "APP_ROLE=science_worker requires an HTTPS "
+                        "SCIENCE_CONTROL_PLANE_URL"
+                    )
+                if len(self.science_worker_node_key.encode("utf-8")) < 32:
+                    raise ValueError(
+                        "APP_ROLE=science_worker requires a "
+                        "SCIENCE_WORKER_NODE_KEY of at least 32 bytes"
+                    )
+                if not str(self.science_worker_cache_dir or "").strip():
+                    raise ValueError(
+                        "APP_ROLE=science_worker requires SCIENCE_WORKER_CACHE_DIR"
+                    )
+                if str(self.worker_task_signing_private_key or "").strip():
+                    raise ValueError(
+                        "APP_ROLE=science_worker must not receive "
+                        "WORKER_TASK_SIGNING_PRIVATE_KEY"
+                    )
+                self.worker_task_signing_key_id = str(
+                    self.worker_task_signing_key_id or ""
+                ).strip()
+                if not self.worker_task_signing_key_id or any(
+                    ch.isspace() for ch in self.worker_task_signing_key_id
+                ):
+                    raise ValueError(
+                        "APP_ROLE=science_worker requires a whitespace-free "
+                        "WORKER_TASK_SIGNING_KEY_ID"
+                    )
+                verification_keys = self.worker_task_verification_keyring
+                current_public_key = str(
+                    self.worker_task_signing_public_key
+                    or verification_keys.get(self.worker_task_signing_key_id, "")
+                ).strip()
+                if not current_public_key:
+                    raise ValueError(
+                        "APP_ROLE=science_worker requires "
+                        "WORKER_TASK_SIGNING_PUBLIC_KEY or a current entry in "
+                        "WORKER_TASK_VERIFICATION_KEYS"
+                    )
+                _decode_ed25519_key(
+                    "WORKER_TASK_SIGNING_PUBLIC_KEY", current_public_key
+                )
+                keyring_current = verification_keys.get(
+                    self.worker_task_signing_key_id
+                )
+                if keyring_current and keyring_current != current_public_key:
+                    raise ValueError(
+                        "WORKER_TASK_VERIFICATION_KEYS contains the current key id "
+                        "with a different public key"
+                    )
+                self.worker_task_signing_public_key = current_public_key
+            return
+
+        if self.app_role == "api" and not self.jwt_secret:
             if _ENV == "dev":
                 import secrets as _s
                 self.jwt_secret = _s.token_hex(32)
@@ -204,7 +412,7 @@ class Settings(BaseSettings):
                     "JWT_SECRET environment variable must be set in production. "
                     "Set ENV=dev to use the development fallback."
                 )
-        if not self.fernet_key:
+        if self.app_role == "api" and not self.fernet_key:
             if _ENV == "dev":
                 import secrets as _s
                 self.fernet_key = _s.token_urlsafe(32)
@@ -221,7 +429,12 @@ class Settings(BaseSettings):
                 )
         if not self.deletion_tombstone_key:
             if _ENV == "dev":
-                self.deletion_tombstone_key = self.fernet_key
+                if self.fernet_key:
+                    self.deletion_tombstone_key = self.fernet_key
+                else:
+                    import secrets as _s
+
+                    self.deletion_tombstone_key = _s.token_hex(32)
             else:
                 raise ValueError(
                     "DELETION_TOMBSTONE_KEY must be set in production and "
@@ -295,17 +508,25 @@ class Settings(BaseSettings):
             )
 
         self.signup_mode = str(self.signup_mode or "public").strip().lower()
-        if self.signup_mode not in {"public", "invite_only", "closed"}:
+        if (
+            self.app_role == "api"
+            and self.signup_mode not in {"public", "invite_only", "closed"}
+        ):
             raise ValueError(
                 "SIGNUP_MODE must be 'public', 'invite_only', or 'closed'"
             )
-        if _ENV == "production" and self.signup_mode == "public":
+        if (
+            self.app_role == "api"
+            and _ENV == "production"
+            and self.signup_mode == "public"
+        ):
             raise ValueError(
                 "Production signup cannot fail open; set SIGNUP_MODE=invite_only "
                 "or SIGNUP_MODE=closed"
             )
         if (
-            _ENV == "production"
+            self.app_role == "api"
+            and _ENV == "production"
             and self.signup_mode == "invite_only"
             and not str(self.admin_secret or "").strip()
         ):
@@ -354,7 +575,7 @@ class Settings(BaseSettings):
             raise ValueError(
                 "Production product analytics retention cannot exceed 30 days"
             )
-        if _ENV == "production":
+        if self.app_role == "api" and _ENV == "production":
             missing_privacy_fields = [
                 name
                 for name, value in (
@@ -400,7 +621,11 @@ class Settings(BaseSettings):
                 )
         if any(ch.isspace() for ch in self.evidence_signing_key_id):
             raise ValueError("EVIDENCE_SIGNING_KEY_ID must not contain whitespace")
-        if _ENV == "production" and self.evidence_signing_key == self.jwt_secret:
+        if (
+            self.app_role == "api"
+            and _ENV == "production"
+            and self.evidence_signing_key == self.jwt_secret
+        ):
             raise ValueError(
                 "EVIDENCE_SIGNING_KEY must be independent from JWT_SECRET in production."
             )
@@ -418,6 +643,180 @@ class Settings(BaseSettings):
             raise ValueError(
                 "EVIDENCE_SIGNING_KEY must contain at least 32 bytes in production."
             )
+
+        if (
+            self.app_role == "control_worker"
+            and _ENV == "production"
+            and str(self.worker_task_signing_private_key or "").strip()
+        ):
+            raise ValueError(
+                "APP_ROLE=control_worker must not receive "
+                "WORKER_TASK_SIGNING_PRIVATE_KEY"
+            )
+
+        task_signing_configured = any(
+            str(value or "").strip()
+            for value in (
+                self.worker_task_signing_private_key,
+                self.worker_task_signing_key_id,
+                self.worker_task_signing_public_key,
+                self.worker_task_verification_keys,
+            )
+        )
+        if (
+            self.app_role == "api"
+            and _ENV == "production"
+            and self.local_science_worker_enabled
+            and self.science_execution_backend != "https_worker"
+        ):
+            raise ValueError(
+                "LOCAL_SCIENCE_WORKER_ENABLED requires "
+                "SCIENCE_EXECUTION_BACKEND=https_worker"
+            )
+        task_signing_required = (
+            self.app_role == "api"
+            and _ENV == "production"
+            and (
+                self.science_execution_backend == "https_worker"
+                or self.local_science_worker_enabled
+            )
+        )
+        if self.app_role == "api" and (
+            task_signing_required or task_signing_configured
+        ):
+            private_seed = _decode_ed25519_key(
+                "WORKER_TASK_SIGNING_PRIVATE_KEY",
+                self.worker_task_signing_private_key,
+            )
+            self.worker_task_signing_key_id = str(
+                self.worker_task_signing_key_id or ""
+            ).strip()
+            if not self.worker_task_signing_key_id or any(
+                ch.isspace() for ch in self.worker_task_signing_key_id
+            ):
+                raise ValueError(
+                    "WORKER_TASK_SIGNING_KEY_ID must be non-empty and contain no "
+                    "whitespace"
+                )
+            if any(
+                _secret_reuses_ed25519_seed(private_seed, secret)
+                for secret in (
+                    self.jwt_secret,
+                    self.deletion_tombstone_key,
+                    self.evidence_signing_key,
+                )
+            ):
+                raise ValueError(
+                    "WORKER_TASK_SIGNING_PRIVATE_KEY must be independent from "
+                    "JWT, deletion, and Evidence signing keys"
+                )
+
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+                Ed25519PrivateKey,
+            )
+
+            derived_public_key = base64.b64encode(
+                Ed25519PrivateKey.from_private_bytes(private_seed)
+                .public_key()
+                .public_bytes(
+                    encoding=serialization.Encoding.Raw,
+                    format=serialization.PublicFormat.Raw,
+                )
+            ).decode("ascii")
+            configured_public_key = str(
+                self.worker_task_signing_public_key or ""
+            ).strip()
+            if configured_public_key:
+                _decode_ed25519_key(
+                    "WORKER_TASK_SIGNING_PUBLIC_KEY", configured_public_key
+                )
+                if configured_public_key != derived_public_key:
+                    raise ValueError(
+                        "WORKER_TASK_SIGNING_PUBLIC_KEY does not match the private "
+                        "signing seed"
+                    )
+            self.worker_task_signing_public_key = derived_public_key
+            verification_keys = self.worker_task_verification_keyring
+            current_public_key = verification_keys.get(
+                self.worker_task_signing_key_id
+            )
+            if current_public_key and current_public_key != derived_public_key:
+                raise ValueError(
+                    "WORKER_TASK_VERIFICATION_KEYS contains the current key id "
+                    "with a different public key"
+                )
+
+        if self.app_role == "api" and self.evidence_pack_v2_enabled:
+            evidence_v2_seed = _decode_ed25519_key(
+                "EVIDENCE_V2_SIGNING_PRIVATE_KEY",
+                self.evidence_v2_signing_private_key,
+            )
+            self.evidence_v2_signing_key_id = str(
+                self.evidence_v2_signing_key_id or ""
+            ).strip()
+            if not self.evidence_v2_signing_key_id or any(
+                ch.isspace() for ch in self.evidence_v2_signing_key_id
+            ):
+                raise ValueError(
+                    "EVIDENCE_V2_SIGNING_KEY_ID must be non-empty and contain no "
+                    "whitespace"
+                )
+            if any(
+                _secret_reuses_ed25519_seed(evidence_v2_seed, secret)
+                for secret in (
+                    self.jwt_secret,
+                    self.deletion_tombstone_key,
+                    self.evidence_signing_key,
+                    self.worker_task_signing_private_key,
+                )
+            ):
+                raise ValueError(
+                    "EVIDENCE_V2_SIGNING_PRIVATE_KEY must be independent from "
+                    "login, deletion, legacy Evidence, and worker-task keys"
+                )
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+                Ed25519PrivateKey,
+            )
+
+            derived_evidence_v2_public_key = base64.b64encode(
+                Ed25519PrivateKey.from_private_bytes(evidence_v2_seed)
+                .public_key()
+                .public_bytes(
+                    encoding=serialization.Encoding.Raw,
+                    format=serialization.PublicFormat.Raw,
+                )
+            ).decode("ascii")
+            configured_evidence_v2_public_key = str(
+                self.evidence_v2_signing_public_key or ""
+            ).strip()
+            if configured_evidence_v2_public_key:
+                _decode_ed25519_key(
+                    "EVIDENCE_V2_SIGNING_PUBLIC_KEY",
+                    configured_evidence_v2_public_key,
+                )
+                if (
+                    configured_evidence_v2_public_key
+                    != derived_evidence_v2_public_key
+                ):
+                    raise ValueError(
+                        "EVIDENCE_V2_SIGNING_PUBLIC_KEY does not match the private "
+                        "signing seed"
+                    )
+            self.evidence_v2_signing_public_key = derived_evidence_v2_public_key
+            verification_keys = self.evidence_v2_verification_keyring
+            current_public_key = verification_keys.get(
+                self.evidence_v2_signing_key_id
+            )
+            if (
+                current_public_key
+                and current_public_key != derived_evidence_v2_public_key
+            ):
+                raise ValueError(
+                    "EVIDENCE_V2_VERIFICATION_KEYS contains the current key id "
+                    "with a different public key"
+                )
 
     @property
     def deletion_tombstone_verification_keyring(self) -> dict[str, str]:
@@ -479,6 +878,74 @@ class Settings(BaseSettings):
                     "key ids and non-empty secrets"
                 )
             normalized[key_id] = secret
+        return normalized
+
+    @property
+    def worker_task_verification_keyring(self) -> dict[str, str]:
+        """Parse retired Ed25519 task-verification keys without private data."""
+
+        raw = str(self.worker_task_verification_keys or "").strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "WORKER_TASK_VERIFICATION_KEYS must be a JSON object mapping key "
+                "ids to base64 public keys"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                "WORKER_TASK_VERIFICATION_KEYS must be a JSON object mapping key "
+                "ids to base64 public keys"
+            )
+        normalized: dict[str, str] = {}
+        for raw_key_id, raw_public_key in parsed.items():
+            key_id = str(raw_key_id or "").strip()
+            public_key = str(raw_public_key or "").strip()
+            if not key_id or any(ch.isspace() for ch in key_id):
+                raise ValueError(
+                    "WORKER_TASK_VERIFICATION_KEYS requires non-empty, "
+                    "whitespace-free key ids"
+                )
+            _decode_ed25519_key(
+                f"WORKER_TASK_VERIFICATION_KEYS[{key_id}]", public_key
+            )
+            normalized[key_id] = public_key
+        return normalized
+
+    @property
+    def evidence_v2_verification_keyring(self) -> dict[str, str]:
+        """Parse retired Evidence v2 Ed25519 public keys."""
+
+        raw = str(self.evidence_v2_verification_keys or "").strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "EVIDENCE_V2_VERIFICATION_KEYS must be a JSON object mapping key "
+                "ids to base64 public keys"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                "EVIDENCE_V2_VERIFICATION_KEYS must be a JSON object mapping key "
+                "ids to base64 public keys"
+            )
+        normalized: dict[str, str] = {}
+        for raw_key_id, raw_public_key in parsed.items():
+            key_id = str(raw_key_id or "").strip()
+            public_key = str(raw_public_key or "").strip()
+            if not key_id or any(ch.isspace() for ch in key_id):
+                raise ValueError(
+                    "EVIDENCE_V2_VERIFICATION_KEYS requires non-empty, "
+                    "whitespace-free key ids"
+                )
+            _decode_ed25519_key(
+                f"EVIDENCE_V2_VERIFICATION_KEYS[{key_id}]", public_key
+            )
+            normalized[key_id] = public_key
         return normalized
 
     @property

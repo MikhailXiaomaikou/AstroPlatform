@@ -50,6 +50,10 @@ services:
     envVars:
       - key: ENV
         value: production
+      - key: APP_ROLE
+        value: api
+      - key: SCIENCE_EXECUTION_BACKEND
+        value: celery
       - key: DATABASE_URL
         fromDatabase:
           name: standard-astro-db
@@ -93,6 +97,25 @@ services:
       # current key; legacy JWT evidence can retain its old JWT secret here.
       - key: EVIDENCE_VERIFICATION_KEYS
         sync: false
+      # Dedicated Ed25519 task-signing material for the future HTTPS science
+      # worker. It is unused while SCIENCE_EXECUTION_BACKEND=celery and must
+      # never be copied to control/Beat/science-worker processes.
+      - key: WORKER_TASK_SIGNING_PRIVATE_KEY
+        sync: false
+      - key: WORKER_TASK_SIGNING_KEY_ID
+        sync: false
+      - key: WORKER_TASK_SIGNING_PUBLIC_KEY
+        sync: false
+      - key: WORKER_TASK_VERIFICATION_KEYS
+        sync: false
+      - key: EVIDENCE_V2_SIGNING_PRIVATE_KEY
+        sync: false
+      - key: EVIDENCE_V2_SIGNING_KEY_ID
+        sync: false
+      - key: EVIDENCE_V2_SIGNING_PUBLIC_KEY
+        sync: false
+      - key: EVIDENCE_V2_VERIFICATION_KEYS
+        sync: false
       - key: PIPELINE_MODE
         value: celery
       - key: RATE_LIMIT_ENABLED
@@ -107,6 +130,16 @@ services:
       - key: SIGNUP_MODE
         value: invite_only
       - key: CLAIM_AUDIT_ENABLED
+        value: "false"
+      - key: RESEARCH_WORKSPACE_ENABLED
+        value: "false"
+      - key: ARXIV_READER_ENABLED
+        value: "false"
+      - key: UNION3_REPRODUCTION_ENABLED
+        value: "false"
+      - key: EVIDENCE_PACK_V2_ENABLED
+        value: "false"
+      - key: LOCAL_SCIENCE_WORKER_ENABLED
         value: "false"
       - key: CLAIM_AUDIT_EXECUTION_MODE
         value: celery
@@ -194,15 +227,19 @@ services:
     dockerContext: backend
     plan: starter
     autoDeployTrigger: checksPass
-    # Starter has 512 MB; one scientific child avoids memory overcommit. Give
-    # an acknowledged late task the maximum Render graceful-shutdown window.
+    # Starter has 512 MB; one control child avoids memory overcommit. Give an
+    # acknowledged late maintenance task the maximum graceful-shutdown window.
     maxShutdownDelaySeconds: 300
     # The backend owns migrations.  A worker deploy is independent on Render,
     # so it must wait for this image's exact Alembic head before consuming work.
-    dockerCommand: sh -c 'python scripts/wait_for_schema_head.py && exec celery -A celery_worker worker --loglevel=info --concurrency=1 --hostname=worker-${RENDER_GIT_COMMIT}@%h'
+    dockerCommand: sh -c 'python scripts/wait_for_schema_head.py && exec celery -A celery_worker worker --loglevel=info --concurrency=1 --queues=control,maintenance,verification --hostname=worker-${RENDER_GIT_COMMIT}@%h'
     envVars:
       - key: ENV
         value: production
+      - key: APP_ROLE
+        value: control_worker
+      - key: SCIENCE_EXECUTION_BACKEND
+        value: celery
       - key: DATABASE_URL
         fromDatabase:
           name: standard-astro-db
@@ -214,16 +251,6 @@ services:
           property: connectionString
       - key: CONNECTOR_CACHE_BACKEND
         value: redis
-      - key: JWT_SECRET
-        fromService:
-          name: standard-astro-backend
-          type: web
-          envVarKey: JWT_SECRET
-      - key: FERNET_KEY
-        fromService:
-          name: standard-astro-backend
-          type: web
-          envVarKey: FERNET_KEY
       - key: DELETION_TOMBSTONE_KEY
         fromService:
           name: standard-astro-backend
@@ -254,11 +281,6 @@ services:
           name: standard-astro-backend
           type: web
           envVarKey: EVIDENCE_VERIFICATION_KEYS
-      - key: ANTHROPIC_API_KEY
-        fromService:
-          name: standard-astro-backend
-          type: web
-          envVarKey: ANTHROPIC_API_KEY
       - key: PIPELINE_MODE
         value: celery
       - key: CLAIM_AUDIT_ENABLED
@@ -293,21 +315,6 @@ services:
           name: standard-astro-backend
           type: web
           envVarKey: PRODUCT_ANALYTICS_RETENTION_DAYS
-      - key: PRIVACY_OPERATOR_NAME
-        fromService:
-          name: standard-astro-backend
-          type: web
-          envVarKey: PRIVACY_OPERATOR_NAME
-      - key: PRIVACY_CONTACT
-        fromService:
-          name: standard-astro-backend
-          type: web
-          envVarKey: PRIVACY_CONTACT
-      - key: PRIVACY_JURISDICTION
-        fromService:
-          name: standard-astro-backend
-          type: web
-          envVarKey: PRIVACY_JURISDICTION
       - key: SCHEMA_WAIT_TIMEOUT_SECONDS
         value: "900"
       - key: CELERY_TASK_SOFT_TIME_LIMIT_SECONDS
@@ -375,6 +382,10 @@ services:
     envVars:
       - key: ENV
         value: production
+      - key: APP_ROLE
+        value: beat
+      - key: SCIENCE_EXECUTION_BACKEND
+        value: celery
       - key: DATABASE_URL
         fromDatabase:
           name: standard-astro-db
@@ -384,69 +395,8 @@ services:
           name: standard-astro-redis
           type: keyvalue
           property: connectionString
-      - key: CONNECTOR_CACHE_BACKEND
-        value: redis
-      - key: JWT_SECRET
-        fromService:
-          name: standard-astro-backend
-          type: web
-          envVarKey: JWT_SECRET
-      - key: FERNET_KEY
-        fromService:
-          name: standard-astro-backend
-          type: web
-          envVarKey: FERNET_KEY
-      - key: DELETION_TOMBSTONE_KEY
-        fromService:
-          name: standard-astro-backend
-          type: web
-          envVarKey: DELETION_TOMBSTONE_KEY
-      - key: DELETION_TOMBSTONE_KEY_ID
-        fromService:
-          name: standard-astro-backend
-          type: web
-          envVarKey: DELETION_TOMBSTONE_KEY_ID
-      - key: DELETION_TOMBSTONE_VERIFICATION_KEYS
-        fromService:
-          name: standard-astro-backend
-          type: web
-          envVarKey: DELETION_TOMBSTONE_VERIFICATION_KEYS
-      - key: EVIDENCE_SIGNING_KEY
-        fromService:
-          name: standard-astro-backend
-          type: web
-          envVarKey: EVIDENCE_SIGNING_KEY
-      - key: EVIDENCE_SIGNING_KEY_ID
-        fromService:
-          name: standard-astro-backend
-          type: web
-          envVarKey: EVIDENCE_SIGNING_KEY_ID
-      - key: EVIDENCE_VERIFICATION_KEYS
-        fromService:
-          name: standard-astro-backend
-          type: web
-          envVarKey: EVIDENCE_VERIFICATION_KEYS
-      - key: PRIVACY_OPERATOR_NAME
-        fromService:
-          name: standard-astro-backend
-          type: web
-          envVarKey: PRIVACY_OPERATOR_NAME
-      - key: PRIVACY_CONTACT
-        fromService:
-          name: standard-astro-backend
-          type: web
-          envVarKey: PRIVACY_CONTACT
-      - key: PRIVACY_JURISDICTION
-        fromService:
-          name: standard-astro-backend
-          type: web
-          envVarKey: PRIVACY_JURISDICTION
-      - key: PIPELINE_MODE
-        value: celery
       - key: SCHEMA_WAIT_TIMEOUT_SECONDS
         value: "900"
-      - key: ASTRO_RESEARCH_FOCUS
-        value: cosmology
       - key: ENABLE_TRANSIENT_ALERT_INGEST
         value: "false"
 
