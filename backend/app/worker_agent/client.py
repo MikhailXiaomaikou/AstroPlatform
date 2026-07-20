@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import time
@@ -12,6 +13,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from cryptography.exceptions import InvalidSignature
@@ -65,11 +67,13 @@ def state_path(home: Path | None = None) -> Path:
 
 
 def save_config(config: WorkerConfig, *, home: Path | None = None) -> Path:
+    payload = asdict(config)
+    payload["control_plane_url"] = _control_plane_base_url(config.control_plane_url)
     path = config_path(home)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = path.with_suffix(".tmp")
     temporary.write_text(
-        json.dumps(asdict(config), sort_keys=True, separators=(",", ":")) + "\n",
+        json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
         encoding="utf-8",
     )
     temporary.chmod(0o600)
@@ -84,7 +88,14 @@ def load_config(*, home: Path | None = None) -> WorkerConfig:
         if path.stat().st_mode & 0o077:
             raise WorkerClientError(f"Worker config permissions must be 0600: {path}")
         payload = json.loads(path.read_text(encoding="utf-8"))
-        return WorkerConfig(**payload)
+        config = WorkerConfig(**payload)
+        normalized_url = _control_plane_base_url(config.control_plane_url)
+        return WorkerConfig(
+            **{
+                **asdict(config),
+                "control_plane_url": normalized_url,
+            }
+        )
     except FileNotFoundError as exc:
         raise WorkerClientError("Worker is not enrolled; run `astro worker enroll`") from exc
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -133,6 +144,58 @@ def _private_key(value: str) -> Ed25519PrivateKey:
         raise WorkerClientError("Worker private key is invalid") from exc
 
 
+def _control_plane_base_url(value: str) -> str:
+    """Validate and normalize the origin used for Worker enrollment."""
+
+    raw = str(value or "").strip()
+    if (
+        not raw
+        or any(ord(character) <= 32 for character in raw)
+        or "\\" in raw
+        or "?" in raw
+        or "#" in raw
+    ):
+        raise WorkerClientError(
+            "Control plane URL must be an origin without query or fragment"
+        )
+    try:
+        parsed = urlsplit(raw)
+        port = parsed.port
+    except ValueError as exc:
+        raise WorkerClientError("Control plane URL is invalid") from exc
+    scheme = parsed.scheme.lower()
+    hostname = parsed.hostname
+    if (
+        scheme not in {"http", "https"}
+        or not hostname
+        or port == 0
+        or parsed.netloc.endswith(":")
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+    ):
+        raise WorkerClientError(
+            "Control plane URL must be an HTTPS origin without credentials or path"
+        )
+    hostname = hostname.lower()
+    if scheme == "http":
+        try:
+            address = ipaddress.ip_address(hostname) if "%" not in hostname else None
+        except ValueError:
+            address = None
+        loopback = bool(
+            (isinstance(address, ipaddress.IPv4Address) and address.is_loopback)
+            or address == ipaddress.IPv6Address("::1")
+        )
+        if not loopback:
+            raise WorkerClientError(
+                "Control plane must use HTTPS; HTTP is limited to an exact loopback host"
+            )
+    rendered_host = f"[{hostname}]" if ":" in hostname else hostname
+    rendered_port = f":{port}" if port is not None else ""
+    return f"{scheme}://{rendered_host}{rendered_port}"
+
+
 def enroll(
     *,
     control_plane_url: str,
@@ -143,9 +206,7 @@ def enroll(
 ) -> WorkerConfig:
     """Generate the node key locally and consume a one-time enrollment code."""
 
-    base_url = control_plane_url.strip().rstrip("/")
-    if not base_url.startswith("https://") and not base_url.startswith("http://127.0.0.1"):
-        raise WorkerClientError("Control plane must use HTTPS (localhost is allowed for tests)")
+    base_url = _control_plane_base_url(control_plane_url)
     _private, private_text, public_text = generate_private_key()
     response = httpx.post(
         base_url + "/api/compute/v1/nodes/enroll",
@@ -164,8 +225,10 @@ def enroll(
             },
         },
         timeout=timeout,
+        follow_redirects=False,
+        trust_env=base_url.startswith("https://"),
     )
-    if response.status_code >= 400:
+    if response.status_code != 201:
         raise WorkerClientError(
             f"Enrollment failed ({response.status_code}): {response.text[:500]}"
         )
@@ -203,6 +266,7 @@ def signed_request(
     query: str = "",
     timeout: float = 35.0,
 ) -> httpx.Response:
+    base_url = _control_plane_base_url(config.control_plane_url)
     body = canonical_json(payload) if payload is not None else b""
     timestamp = str(int(time.time()))
     nonce = uuid.uuid4().hex
@@ -227,10 +291,12 @@ def signed_request(
         headers["content-type"] = "application/json"
     return httpx.request(
         method,
-        config.control_plane_url + path + query,
+        base_url + path + query,
         content=body,
         headers=headers,
         timeout=timeout,
+        follow_redirects=False,
+        trust_env=base_url.startswith("https://"),
     )
 
 
