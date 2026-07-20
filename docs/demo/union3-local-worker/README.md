@@ -82,6 +82,22 @@ that no Evidence Pack exists. Ephemeral credentials and the local ledger are
 removed after the run. Use `--keep-state` only for debugging; the retained
 directory contains private development credentials.
 
+## Recorded artifact / 已录制产物
+
+The checked-in recording was produced from clean commit
+`4c9de6e27b19d7111c8307ce25ccd617f22399af` on 2026-07-20. Its expected and
+observed verdict is `WITHHELD`.
+
+- [MP4 video](artifacts/standard-astro-union3-local-worker-demo.mp4)
+- [Poster](artifacts/union3-local-worker-demo-poster.png)
+- [Machine-readable receipt](artifacts/union3-demo-receipt.json)
+- [Primary numerical analysis](artifacts/union3-primary-analysis.json)
+- [SHA-256 manifest](artifacts/SHA256SUMS)
+
+仓库内的正式录制来自干净提交
+`4c9de6e27b19d7111c8307ce25ccd617f22399af`。它证明数值主计算和安全拒绝都真实
+发生过，但不代表生产 S3、Render、签名 OCI、人工审核或 `SUPPORTED` 已完成。
+
 ## Failure diagnosis / 失败排查
 
 Use `--state-dir /private/tmp/astro-union3-debug --keep-state` to retain:

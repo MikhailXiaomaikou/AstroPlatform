@@ -1,0 +1,260 @@
+{
+  "worker_attempt_id": "ef299ac5-6b1c-4f8a-8d7d-e51b85d05c97",
+  "worker_result_hash": "sha256:1b3fd5cbf0433eb22a5d678ac21ba556efbedea3fba91ebbc4ae2560047523ba",
+  "worker_result": {
+    "claim": "Using the released Union3/UNITY1.5 22-node distance product and full covariance, the supernova-only flat-LambdaCDM profile-chi-square calculation reproduces omega_m = 0.356 (+0.028/-0.026) at 68.3% confidence (Delta chi-square = 1), consistent with Rubin et al. Table 9.",
+    "claim_scope": "reproduction_of_published_constraint",
+    "half_step_statistics": {
+      "grid_point_count": "3001",
+      "grid_step": "0.00025000",
+      "omega_m_best": "0.35592439",
+      "omega_m_lower": "0.32948065",
+      "omega_m_upper": "0.38352307"
+    },
+    "input_verification": {
+      "cholesky": "passed",
+      "covariance_sha256": "64c79abd24bf5154bc1e38ad0c031e31dd6247cdcc5ca930829698169809a146",
+      "covariance_shape": [
+        "22",
+        "22"
+      ],
+      "measurement_vector_sha256": "a840fe71c606bda11b869dbfcacc21c0199a5dc393f3790d10a7b58de97deae7",
+      "symmetric": true,
+      "vector_length": "22"
+    },
+    "limitations": [
+      "This reproduces the released 22-node distance product only.",
+      "The constant magnitude zero point is eliminated, so no absolute scale is inferred.",
+      "This does not rerun the 2,087 individual light curves.",
+      "This is not a new scientific finding or a peer-review decision.",
+      "The calculation follows the authors' released flat-LambdaCDM code with omega_r=0. Adding the paper's fixed-radiation term shifts the reported best value and interval endpoints by less than 0.0002 and does not change the rounded Table 9 reproduction, but it defines a different profile curve and is not used in the cross-implementation 0.0001 profile gate."
+    ],
+    "machine_support_eligible": false,
+    "mcmc_diagnostics": "not_applicable",
+    "method": {
+      "fitted_parameter": "omega_m",
+      "grid_point_count": "1501",
+      "grid_step": "0.00050000",
+      "magnitude_offset": "analytically_eliminated",
+      "model": "flat_lcdm",
+      "omega_m_max": "0.80000000",
+      "omega_m_min": "0.05000000",
+      "radiation_convention": "omega_r_zero_author_code_approximation",
+      "radiation_convention_source": {
+        "commit": "7f805c9cc4e7643f0392faad03a275094501f8a2",
+        "path": "stan_code_fixed.txt",
+        "release": "v1.0",
+        "repository": "rubind/union3_release",
+        "sha256": "ed156b739f7bffd208f1dec48ddbe7039b1c88c8ac85ee3703195ae4e5f23c2d"
+      },
+      "refinement": "Brent minimum and Delta-chi-square=1 roots",
+      "statistic": "profile_chi_square"
+    },
+    "normalized_profile": [
+      {
+        "normalized_chi_square": "249.20811848",
+        "omega_m": "0.05000000"
+      },
+      {
+        "normalized_chi_square": "206.96486922",
+        "omega_m": "0.06875000"
+      },
+      {
+        "normalized_chi_square": "171.17634779",
+        "omega_m": "0.08750000"
+      },
+      {
+        "normalized_chi_square": "140.70388420",
+        "omega_m": "0.10625000"
+      },
+      {
+        "normalized_chi_square": "114.70009006",
+        "omega_m": "0.12500000"
+      },
+      {
+        "normalized_chi_square": "92.51095380",
+        "omega_m": "0.14375000"
+      },
+      {
+        "normalized_chi_square": "73.61776929",
+        "omega_m": "0.16250000"
+      },
+      {
+        "normalized_chi_square": "57.60030946",
+        "omega_m": "0.18125000"
+      },
+      {
+        "normalized_chi_square": "44.11226457",
+        "omega_m": "0.20000000"
+      },
+      {
+        "normalized_chi_square": "32.86419903",
+        "omega_m": "0.21875000"
+      },
+      {
+        "normalized_chi_square": "23.61134061",
+        "omega_m": "0.23750000"
+      },
+      {
+        "normalized_chi_square": "16.14459721",
+        "omega_m": "0.25625000"
+      },
+      {
+        "normalized_chi_square": "10.28379939",
+        "omega_m": "0.27500000"
+      },
+      {
+        "normalized_chi_square": "5.87251946",
+        "omega_m": "0.29375000"
+      },
+      {
+        "normalized_chi_square": "2.77403374",
+        "omega_m": "0.31250000"
+      },
+      {
+        "normalized_chi_square": "0.86813007",
+        "omega_m": "0.33125000"
+      },
+      {
+        "normalized_chi_square": "0.04855164",
+        "omega_m": "0.35000000"
+      },
+      {
+        "normalized_chi_square": "0.22092722",
+        "omega_m": "0.36875000"
+      },
+      {
+        "normalized_chi_square": "1.30107828",
+        "omega_m": "0.38750000"
+      },
+      {
+        "normalized_chi_square": "3.21362184",
+        "omega_m": "0.40625000"
+      },
+      {
+        "normalized_chi_square": "5.89080797",
+        "omega_m": "0.42500000"
+      },
+      {
+        "normalized_chi_square": "9.27154531",
+        "omega_m": "0.44375000"
+      },
+      {
+        "normalized_chi_square": "13.30057854",
+        "omega_m": "0.46250000"
+      },
+      {
+        "normalized_chi_square": "17.92779000",
+        "omega_m": "0.48125000"
+      },
+      {
+        "normalized_chi_square": "23.10760304",
+        "omega_m": "0.50000000"
+      },
+      {
+        "normalized_chi_square": "28.79846985",
+        "omega_m": "0.51875000"
+      },
+      {
+        "normalized_chi_square": "34.96242947",
+        "omega_m": "0.53750000"
+      },
+      {
+        "normalized_chi_square": "41.56472463",
+        "omega_m": "0.55625000"
+      },
+      {
+        "normalized_chi_square": "48.57346829",
+        "omega_m": "0.57500000"
+      },
+      {
+        "normalized_chi_square": "55.95935220",
+        "omega_m": "0.59375000"
+      },
+      {
+        "normalized_chi_square": "63.69539120",
+        "omega_m": "0.61250000"
+      },
+      {
+        "normalized_chi_square": "71.75669821",
+        "omega_m": "0.63125000"
+      },
+      {
+        "normalized_chi_square": "80.12028545",
+        "omega_m": "0.65000000"
+      },
+      {
+        "normalized_chi_square": "88.76488839",
+        "omega_m": "0.66875000"
+      },
+      {
+        "normalized_chi_square": "97.67080931",
+        "omega_m": "0.68750000"
+      },
+      {
+        "normalized_chi_square": "106.81977790",
+        "omega_m": "0.70625000"
+      },
+      {
+        "normalized_chi_square": "116.19482680",
+        "omega_m": "0.72500000"
+      },
+      {
+        "normalized_chi_square": "125.78018009",
+        "omega_m": "0.74375000"
+      },
+      {
+        "normalized_chi_square": "135.56115325",
+        "omega_m": "0.76250000"
+      },
+      {
+        "normalized_chi_square": "145.52406310",
+        "omega_m": "0.78125000"
+      },
+      {
+        "normalized_chi_square": "155.65614666",
+        "omega_m": "0.80000000"
+      }
+    ],
+    "paper_reference": {
+      "chi_square": "24.0",
+      "degrees_of_freedom": "20",
+      "locator": "PDF Table 9, Flat LambdaCDM, SNe row",
+      "minus_error": "0.026",
+      "omega_m_center": "0.356",
+      "plus_error": "0.028",
+      "source": "arXiv:2311.12098v4"
+    },
+    "primary_gates": {
+      "half_step_stability": {
+        "measured": "0.00000001",
+        "passed": true,
+        "threshold": "0.00020000"
+      },
+      "input_integrity": {
+        "measured": "two exact sha256 pins and valid matrices",
+        "passed": true,
+        "threshold": "required"
+      }
+    },
+    "primary_ready": true,
+    "publication_ready": false,
+    "reproduction_ready": false,
+    "review_status": "NOT_SUBMITTED",
+    "scientific_status": "WITHHELD",
+    "statistics": {
+      "chi_square_min": "23.95789014",
+      "confidence_level": "0.683",
+      "degrees_of_freedom": "20",
+      "minus_error": "0.02644375",
+      "omega_m_best": "0.35592440",
+      "omega_m_lower": "0.32948065",
+      "omega_m_upper": "0.38352307",
+      "plus_error": "0.02759868"
+    },
+    "status": "COMPLETED",
+    "workflow_id": "union3_flat_lcdm_sn_only_v1"
+  },
+  "scientific_verdict": null,
+  "publication_ready": false
+}
