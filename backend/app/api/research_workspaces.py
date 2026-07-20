@@ -219,7 +219,14 @@ def _serialize_review_queue_item(
     ):
         return item
 
-    candidate = audit.atomic_claim if isinstance(audit.atomic_claim, dict) else {}
+    normalized_claims = (
+        audit.normalized_claims if isinstance(audit.normalized_claims, list) else []
+    )
+    candidate = (
+        normalized_claims[0]
+        if len(normalized_claims) == 1 and isinstance(normalized_claims[0], dict)
+        else {}
+    )
     candidate_id = candidate.get("candidate_id")
     claim_hash = candidate.get("claim_hash")
     anchor_ids = candidate.get("source_anchor_ids")
