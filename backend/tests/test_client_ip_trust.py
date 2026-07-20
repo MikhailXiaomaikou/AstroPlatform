@@ -204,6 +204,10 @@ def test_production_default_trusts_no_forwarded_headers():
     code = (
         "import os;"
         "os.environ['ENV'] = 'production';"
+        "os.environ['APP_ROLE'] = 'api';"
+        "os.environ['TOOL_VERSION'] = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';"
+        "os.environ['DATABASE_URL'] = 'postgresql+asyncpg://astro:astro@db/astro';"
+        "os.environ['REDIS_URL'] = 'rediss://redis.example.invalid/0';"
         "os.environ['JWT_SECRET'] = 'test-secret';"
         "os.environ['FERNET_KEY'] = 'test-fernet';"
         "os.environ['DELETION_TOMBSTONE_KEY'] = 'test-deletion-key-at-least-32-bytes';"

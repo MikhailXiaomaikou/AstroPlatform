@@ -177,10 +177,10 @@ jobs:
           --health-retries 10
     env:
       ENV: production
+      APP_ROLE: migration
+      SCIENCE_EXECUTION_BACKEND: celery
+      TOOL_VERSION: ${{ github.sha }}
       DATABASE_URL: postgresql+asyncpg://astro:astro@127.0.0.1:5432/astro
-      JWT_SECRET: ci-only-jwt-secret-not-for-production
-      FERNET_KEY: ci-only-fernet-secret-not-for-production
-      EVIDENCE_SIGNING_KEY: ci-only-evidence-secret-not-for-production
       EVIDENCE_SIGNING_KEY_ID: ci-evidence-v1
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

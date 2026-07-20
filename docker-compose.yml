@@ -47,15 +47,15 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        TOOL_VERSION: ${GIT_COMMIT:?GIT_COMMIT must be one full 40-character Git SHA}
     command: ["sh", "-c", "alembic upgrade head && alembic check"]
     restart: "no"
     environment:
       ENV: production
+      APP_ROLE: migration
+      SCIENCE_EXECUTION_BACKEND: celery
       DATABASE_URL: postgresql+asyncpg://astro:astro@postgres:5432/astro
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set explicitly (no default)}
-      FERNET_KEY: ${FERNET_KEY:?FERNET_KEY must be set explicitly (encrypts stored user API keys)}
-      EVIDENCE_SIGNING_KEY: ${EVIDENCE_SIGNING_KEY:?EVIDENCE_SIGNING_KEY must be set explicitly}
-      EVIDENCE_SIGNING_KEY_ID: ${EVIDENCE_SIGNING_KEY_ID:-evidence-compose-v1}
     depends_on:
       postgres:
         condition: service_healthy
@@ -64,19 +64,47 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        TOOL_VERSION: ${GIT_COMMIT:?GIT_COMMIT must be one full 40-character Git SHA}
     restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
       ENV: production
+      APP_ROLE: api
+      SCIENCE_EXECUTION_BACKEND: celery
       DATABASE_URL: postgresql+asyncpg://astro:astro@postgres:5432/astro
       REDIS_URL: redis://redis:6379/0
       # 生产密钥必须显式提供, 不给弱默认值 (render.yaml 用 generateValue, 这里同理 fail-fast)
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set explicitly (no default)}
       FERNET_KEY: ${FERNET_KEY:?FERNET_KEY must be set explicitly (encrypts stored user API keys)}
+      ADMIN_SECRET: ${ADMIN_SECRET:?ADMIN_SECRET must be set for invite-only signup}
+      DELETION_TOMBSTONE_KEY: ${DELETION_TOMBSTONE_KEY:?DELETION_TOMBSTONE_KEY must be set explicitly}
+      DELETION_TOMBSTONE_KEY_ID: ${DELETION_TOMBSTONE_KEY_ID:-deletion-compose-v1}
+      DELETION_TOMBSTONE_VERIFICATION_KEYS: ${DELETION_TOMBSTONE_VERIFICATION_KEYS:-}
       EVIDENCE_SIGNING_KEY: ${EVIDENCE_SIGNING_KEY:?EVIDENCE_SIGNING_KEY must be set explicitly}
       EVIDENCE_SIGNING_KEY_ID: ${EVIDENCE_SIGNING_KEY_ID:-evidence-compose-v1}
       EVIDENCE_VERIFICATION_KEYS: ${EVIDENCE_VERIFICATION_KEYS:-}
+      SIGNUP_MODE: invite_only
+      CLAIM_AUDIT_ENABLED: "false"
+      RESEARCH_WORKSPACE_ENABLED: "false"
+      ARXIV_READER_ENABLED: "false"
+      UNION3_REPRODUCTION_ENABLED: "false"
+      EVIDENCE_PACK_V2_ENABLED: "false"
+      LOCAL_SCIENCE_WORKER_ENABLED: "false"
+      CLAIM_AUDIT_EXECUTION_MODE: celery
+      SHARED_DEEPSEEK_API_KEY_ENABLED: "false"
+      PRIVACY_OPERATOR_NAME: ${PRIVACY_OPERATOR_NAME:?PRIVACY_OPERATOR_NAME must identify the operator}
+      PRIVACY_CONTACT: ${PRIVACY_CONTACT:?PRIVACY_CONTACT must be set}
+      PRIVACY_JURISDICTION: ${PRIVACY_JURISDICTION:?PRIVACY_JURISDICTION must be set}
+      WORKER_TASK_SIGNING_PRIVATE_KEY: ${WORKER_TASK_SIGNING_PRIVATE_KEY:-}
+      WORKER_TASK_SIGNING_KEY_ID: ${WORKER_TASK_SIGNING_KEY_ID:-}
+      WORKER_TASK_SIGNING_PUBLIC_KEY: ${WORKER_TASK_SIGNING_PUBLIC_KEY:-}
+      WORKER_TASK_VERIFICATION_KEYS: ${WORKER_TASK_VERIFICATION_KEYS:-}
+      EVIDENCE_V2_SIGNING_PRIVATE_KEY: ${EVIDENCE_V2_SIGNING_PRIVATE_KEY:-}
+      EVIDENCE_V2_SIGNING_KEY_ID: ${EVIDENCE_V2_SIGNING_KEY_ID:-}
+      EVIDENCE_V2_SIGNING_PUBLIC_KEY: ${EVIDENCE_V2_SIGNING_PUBLIC_KEY:-}
+      EVIDENCE_V2_VERIFICATION_KEYS: ${EVIDENCE_V2_VERIFICATION_KEYS:-}
       PIPELINE_MODE: celery
       STORAGE_BACKEND: local
       PERSISTENT_STORAGE_MOUNT: /app/data
@@ -107,19 +135,24 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A celery_worker worker --loglevel=info --concurrency=4 --hostname=worker@%h
+      args:
+        TOOL_VERSION: ${GIT_COMMIT:?GIT_COMMIT must be one full 40-character Git SHA}
+    command: celery -A celery_worker worker --loglevel=info --concurrency=4 --queues=control,maintenance,verification --hostname=worker-$${TOOL_VERSION}@%h
     restart: unless-stopped
     environment:
       ENV: production
+      APP_ROLE: control_worker
+      SCIENCE_EXECUTION_BACKEND: celery
       DATABASE_URL: postgresql+asyncpg://astro:astro@postgres:5432/astro
       REDIS_URL: redis://redis:6379/0
-      # app.config 在 ENV=production 下没有这两个密钥会直接拒绝启动
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set explicitly (no default)}
-      FERNET_KEY: ${FERNET_KEY:?FERNET_KEY must be set explicitly (encrypts stored user API keys)}
+      DELETION_TOMBSTONE_KEY: ${DELETION_TOMBSTONE_KEY:?DELETION_TOMBSTONE_KEY must be set explicitly}
+      DELETION_TOMBSTONE_KEY_ID: ${DELETION_TOMBSTONE_KEY_ID:-deletion-compose-v1}
+      DELETION_TOMBSTONE_VERIFICATION_KEYS: ${DELETION_TOMBSTONE_VERIFICATION_KEYS:-}
       EVIDENCE_SIGNING_KEY: ${EVIDENCE_SIGNING_KEY:?EVIDENCE_SIGNING_KEY must be set explicitly}
       EVIDENCE_SIGNING_KEY_ID: ${EVIDENCE_SIGNING_KEY_ID:-evidence-compose-v1}
       EVIDENCE_VERIFICATION_KEYS: ${EVIDENCE_VERIFICATION_KEYS:-}
       PIPELINE_MODE: celery
+      CLAIM_AUDIT_EXECUTION_MODE: celery
       STORAGE_BACKEND: local
       CELERY_TASK_SOFT_TIME_LIMIT_SECONDS: "43200"
       CELERY_TASK_TIME_LIMIT_SECONDS: "45000"
@@ -134,7 +167,7 @@ services:
       - runtime-data:/app/data
       - fitsdata:/app/data/fits
     healthcheck:
-      test: ["CMD-SHELL", "celery -A celery_worker inspect ping -d worker@$$HOSTNAME --timeout 5 | grep -q pong"]
+      test: ["CMD-SHELL", "celery -A celery_worker inspect ping -d worker-$${TOOL_VERSION}@$$HOSTNAME --timeout 5 | grep -q pong"]
       interval: 20s
       timeout: 10s
       retries: 5
@@ -149,18 +182,16 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        TOOL_VERSION: ${GIT_COMMIT:?GIT_COMMIT must be one full 40-character Git SHA}
     command: celery -A celery_worker beat --loglevel=info --pidfile=/tmp/celerybeat.pid
     restart: unless-stopped
     environment:
       ENV: production
+      APP_ROLE: beat
+      SCIENCE_EXECUTION_BACKEND: celery
       DATABASE_URL: postgresql+asyncpg://astro:astro@postgres:5432/astro
       REDIS_URL: redis://redis:6379/0
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set explicitly (no default)}
-      FERNET_KEY: ${FERNET_KEY:?FERNET_KEY must be set explicitly (encrypts stored user API keys)}
-      EVIDENCE_SIGNING_KEY: ${EVIDENCE_SIGNING_KEY:?EVIDENCE_SIGNING_KEY must be set explicitly}
-      EVIDENCE_SIGNING_KEY_ID: ${EVIDENCE_SIGNING_KEY_ID:-evidence-compose-v1}
-      EVIDENCE_VERIFICATION_KEYS: ${EVIDENCE_VERIFICATION_KEYS:-}
-      PIPELINE_MODE: celery
     depends_on:
       migrate:
         condition: service_completed_successfully
