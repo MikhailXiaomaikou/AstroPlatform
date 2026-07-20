@@ -27,6 +27,7 @@ Worker image.
 - The local control-worker helper calls the exact production reconciliation and independent-verifier code, but it does **not** claim that Render itself was deployed or observed for 72 hours.
 - Review, deterministic finalization, and Evidence Pack creation are not attempted after the machine gate fails. A human review is not allowed to override this refusal.
 - The recorder starts a single-process RESP2 nonce fixture that implements atomic `SET NX EX`, so signed Worker requests retain replay protection without requiring Homebrew Redis. It rejects non-nonce queue commands and does **not** claim to test production Redis durability, clustering, or Celery transport.
+- The recorder also starts a localhost-only HMAC capability upload fixture. It exercises direct HTTP PUT, server-side byte re-download, SHA-256 verification, and promotion into a Worker-unwritable authoritative key, but it does **not** claim to test production S3/R2, bucket versioning, or SigV4.
 - The next required step is to merge and run `.github/workflows/worker-image.yml`, obtain its immutable multi-architecture digest and Cosign verification, and execute the Worker from that image on a Docker-capable machine.
 
 ## Requirements / 依赖
@@ -36,8 +37,8 @@ Worker image.
 - Google Chrome or Playwright Chromium;
 - `pdftotext`, `ffmpeg`, Node.js, and npm;
 - network access to the registered `https://arxiv.org/pdf/2311.12098v4` artifact;
-- free local ports 8010, 5180, and 6399 (overridable with `--backend-port`,
-  `--frontend-port`, and `--redis-port`).
+- free local ports 8010, 5180, 6399, and 6400 (overridable with
+  `--backend-port`, `--frontend-port`, `--redis-port`, and `--artifact-port`).
 
 Docker and an installed Redis server are not required for this laptop recorder. The production Worker image and Render/Redis/Celery deployment have separate release gates.
 
@@ -90,6 +91,7 @@ backend.log
 frontend.log
 control-worker.log
 nonce-redis.log
+artifact-store.log
 astro-demo.db
 worker-home/
 objects/
