@@ -42,7 +42,7 @@ _GL_NODES, _GL_WEIGHTS = np.polynomial.legendre.leggauss(64)
 _C_LIGHT_KM_S: Final = 299792.458
 _H0_REFERENCE: Final = 70.0
 
-_HALF_STEP_TOLERANCE: Final = 2e-4
+_HALF_STEP_TOLERANCE: Final = Decimal("0.00020000")
 _DECIMAL_QUANTUM: Final = Decimal("0.00000001")
 
 
@@ -69,10 +69,33 @@ class _ProfileSummary:
     grid_point_count: int
 
 
-def _decimal_string(value: float) -> str:
+def _decimal_string(value: float | Decimal) -> str:
+    decimal_value = value if isinstance(value, Decimal) else Decimal(str(float(value)))
     return format(
-        Decimal(str(float(value))).quantize(_DECIMAL_QUANTUM, rounding=ROUND_HALF_EVEN),
+        decimal_value.quantize(_DECIMAL_QUANTUM, rounding=ROUND_HALF_EVEN),
         "f",
+    )
+
+
+def _serialized_profile_endpoints(summary: _ProfileSummary) -> dict[str, str]:
+    """Return the signed/public endpoint representation for a profile result."""
+
+    return {
+        "omega_m_best": _decimal_string(summary.omega_best),
+        "omega_m_lower": _decimal_string(summary.omega_lower),
+        "omega_m_upper": _decimal_string(summary.omega_upper),
+    }
+
+
+def _canonical_half_step_difference(
+    primary_endpoints: dict[str, str],
+    half_step_endpoints: dict[str, str],
+) -> Decimal:
+    """Measure stability in the same canonical Decimal domain the verifier sees."""
+
+    return max(
+        abs(Decimal(primary_endpoints[field]) - Decimal(half_step_endpoints[field]))
+        for field in ("omega_m_best", "omega_m_lower", "omega_m_upper")
     )
 
 
@@ -148,7 +171,9 @@ def _load_verified_input(vector_path: Path, covariance_path: Path) -> _VerifiedI
 def _chi_square_values(data: _VerifiedInput, omega_m: np.ndarray) -> np.ndarray:
     omega = np.asarray(omega_m, dtype=np.float64).reshape(-1)
     if np.any((omega < _OMEGA_MIN) | (omega > _OMEGA_MAX)):
-        raise Union3ReproductionError("omega_m lies outside the registered search interval")
+        raise Union3ReproductionError(
+            "omega_m lies outside the registered search interval"
+        )
 
     integration_z = 0.5 * data.z_cmb[:, None] * (_GL_NODES[None, :] + 1.0)
     expansion_cubed = (1.0 + integration_z) ** 3
@@ -156,9 +181,13 @@ def _chi_square_values(data: _VerifiedInput, omega_m: np.ndarray) -> np.ndarray:
         omega[:, None, None] * expansion_cubed[None, :, :]
         + (1.0 - omega[:, None, None])
     )
-    integrals = 0.5 * data.z_cmb[None, :] * np.sum(
-        _GL_WEIGHTS[None, None, :] / expansion_rate,
-        axis=2,
+    integrals = (
+        0.5
+        * data.z_cmb[None, :]
+        * np.sum(
+            _GL_WEIGHTS[None, None, :] / expansion_rate,
+            axis=2,
+        )
     )
     comoving_distance = (_C_LIGHT_KM_S / _H0_REFERENCE) * integrals
     luminosity_distance = (1.0 + data.z_hel[None, :]) * comoving_distance
@@ -196,7 +225,10 @@ def _profile_summary(data: _VerifiedInput, grid_step: float) -> _ProfileSummary:
     omega_best = float(minimum.x)
     chi_square_min = float(minimum.fun)
     target = chi_square_min + 1.0
-    if scalar_chi_square(_OMEGA_MIN) <= target or scalar_chi_square(_OMEGA_MAX) <= target:
+    if (
+        scalar_chi_square(_OMEGA_MIN) <= target
+        or scalar_chi_square(_OMEGA_MAX) <= target
+    ):
         raise Union3ReproductionError("Delta-chi-square roots are not bracketed")
     omega_lower = float(
         brentq(
@@ -256,7 +288,9 @@ def run_union3_primary_reproduction(
     ``SUPPORTED``.
     """
 
-    vector = Path(vector_path) if vector_path is not None else _DATA_DIR / "lcparam_full.txt"
+    vector = (
+        Path(vector_path) if vector_path is not None else _DATA_DIR / "lcparam_full.txt"
+    )
     covariance = (
         Path(covariance_path)
         if covariance_path is not None
@@ -269,10 +303,13 @@ def run_union3_primary_reproduction(
     except Union3ReproductionError as exc:
         return _failure_result(str(exc))
 
-    half_step_max_difference = max(
-        abs(primary.omega_best - half_step.omega_best),
-        abs(primary.omega_lower - half_step.omega_lower),
-        abs(primary.omega_upper - half_step.omega_upper),
+    # Receipts sign the 8-decimal strings below, not platform-specific raw floats.
+    # Compute the gate in that same canonical domain so ARM64/AMD64 BLAS last-bit
+    # differences cannot make an honest receipt fail its exact anti-forgery check.
+    primary_endpoints = _serialized_profile_endpoints(primary)
+    half_step_endpoints = _serialized_profile_endpoints(half_step)
+    half_step_max_difference = _canonical_half_step_difference(
+        primary_endpoints, half_step_endpoints
     )
 
     profile_omega = np.linspace(_OMEGA_MIN, _OMEGA_MAX, _PROFILE_POINT_COUNT)
@@ -282,7 +319,9 @@ def run_union3_primary_reproduction(
     degrees_of_freedom = int(data.observed_mu.size - 2)
 
     primary_gates = {
-        "input_integrity": _gate(True, "two exact sha256 pins and valid matrices", "required"),
+        "input_integrity": _gate(
+            True, "two exact sha256 pins and valid matrices", "required"
+        ),
         "half_step_stability": _gate(
             half_step_max_difference <= _HALF_STEP_TOLERANCE,
             _decimal_string(half_step_max_difference),
@@ -296,7 +335,9 @@ def run_union3_primary_reproduction(
             "omega_m": _decimal_string(omega_m),
             "normalized_chi_square": _decimal_string(delta_chi_square),
         }
-        for omega_m, delta_chi_square in zip(profile_omega, primary_profile, strict=True)
+        for omega_m, delta_chi_square in zip(
+            profile_omega, primary_profile, strict=True
+        )
     ]
     return {
         "workflow_id": UNION3_REPRODUCTION_WORKFLOW_ID,
@@ -339,9 +380,9 @@ def run_union3_primary_reproduction(
             },
         },
         "statistics": {
-            "omega_m_best": _decimal_string(primary.omega_best),
-            "omega_m_lower": _decimal_string(primary.omega_lower),
-            "omega_m_upper": _decimal_string(primary.omega_upper),
+            "omega_m_best": primary_endpoints["omega_m_best"],
+            "omega_m_lower": primary_endpoints["omega_m_lower"],
+            "omega_m_upper": primary_endpoints["omega_m_upper"],
             "minus_error": _decimal_string(minus_error),
             "plus_error": _decimal_string(plus_error),
             "confidence_level": "0.683",
@@ -351,9 +392,9 @@ def run_union3_primary_reproduction(
         "half_step_statistics": {
             "grid_step": _decimal_string(_HALF_GRID_STEP),
             "grid_point_count": str(half_step.grid_point_count),
-            "omega_m_best": _decimal_string(half_step.omega_best),
-            "omega_m_lower": _decimal_string(half_step.omega_lower),
-            "omega_m_upper": _decimal_string(half_step.omega_upper),
+            "omega_m_best": half_step_endpoints["omega_m_best"],
+            "omega_m_lower": half_step_endpoints["omega_m_lower"],
+            "omega_m_upper": half_step_endpoints["omega_m_upper"],
         },
         "paper_reference": {
             "source": "arXiv:2311.12098v4",
