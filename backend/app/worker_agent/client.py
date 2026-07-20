@@ -220,7 +220,10 @@ def enroll(
                 "concurrency": 1,
             },
             "release_manifest": {
-                "git_commit": os.getenv("GIT_COMMIT") or os.getenv("TOOL_VERSION") or "unknown",
+                # Signed images bake TOOL_VERSION at build time. Prefer it over
+                # any host-provided compatibility value so enrollment cannot
+                # relabel an older image as a newer commit.
+                "git_commit": os.getenv("TOOL_VERSION") or os.getenv("GIT_COMMIT") or "unknown",
                 "image_digest": os.getenv("WORKER_IMAGE_DIGEST") or "unknown",
             },
         },
@@ -384,7 +387,7 @@ def verify_task_envelope(
     local_digest = str(os.getenv("WORKER_IMAGE_DIGEST") or "")
     required_commit = normalize_release_commit(envelope.get("git_commit"))
     local_commit = normalize_release_commit(
-        os.getenv("GIT_COMMIT") or os.getenv("TOOL_VERSION")
+        os.getenv("TOOL_VERSION") or os.getenv("GIT_COMMIT")
     )
     if local_digest and not required_digest:
         raise WorkerClientError("Task omitted the pinned signed worker image digest")

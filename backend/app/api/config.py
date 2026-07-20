@@ -30,6 +30,10 @@ async def get_config() -> dict:
         "focus": _ASTRO_RESEARCH_FOCUS,
         "signup_mode": settings.signup_mode,
         "claim_audit_enabled": settings.claim_audit_enabled,
+        # Public execution topology lets the frontend route users away from
+        # the legacy free-text form when hosted science accepts only
+        # server-registered Workspace candidates.
+        "claim_audit_execution_mode": settings.claim_audit_execution_mode,
         "research_workspace_enabled": settings.research_workspace_enabled,
         "arxiv_reader_enabled": settings.arxiv_reader_enabled,
         "union3_reproduction_enabled": settings.union3_reproduction_enabled,

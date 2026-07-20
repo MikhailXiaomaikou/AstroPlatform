@@ -4,13 +4,16 @@
 
 The production Worker must be started through the preflight script. It verifies the immutable digest and the GitHub OIDC/Cosign identity before Docker pulls or runs the image.
 
-准备三个值：
+准备官方发布的不可变镜像地址：
 
 ```bash
 export ASTRO_WORKER_IMAGE='ghcr.io/mikhailxiaomaikou/standard-astro/science-worker@sha256:<release-digest>'
-export WORKER_IMAGE_DIGEST='sha256:<release-digest>'
-export GIT_COMMIT='<40-character-release-commit>'
 ```
+
+脚本会从已签名镜像内部读取构建时写入的 `TOOL_VERSION`，并把它作为
+Worker 的代码身份。若另有官方 release manifest，可选设置
+`GIT_COMMIT=<40-character-release-commit>` 做一致性检查；它不会被注入容器，
+也不能覆盖镜像内的身份。
 
 登记节点（一次性 code 不会写入配置文件）：
 
@@ -27,4 +30,4 @@ export GIT_COMMIT='<40-character-release-commit>'
 ./deploy/start-signed-worker.sh status
 ```
 
-脚本只信任 `MikhailXiaomaikou/Standard-Astro` 仓库中 `worker-image.yml` 在 `v*` 标签上的 OIDC 身份。分支构建、未签名镜像、浮动 tag、错误 commit 或错误 digest 都会在容器启动前被拒绝。
+脚本只信任 `MikhailXiaomaikou/Standard-Astro` 仓库中 `worker-image.yml` 在 `v*` 标签上的 OIDC 身份。分支构建、未签名镜像、浮动 tag、错误 commit、镜像内外 commit 不一致或错误 digest 都会在容器启动前被拒绝。

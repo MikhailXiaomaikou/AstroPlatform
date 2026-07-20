@@ -240,6 +240,7 @@ export interface RuntimeConfig {
   focus: string;
   signup_mode: "public" | "invite_only" | "closed";
   claim_audit_enabled: boolean;
+  claim_audit_execution_mode?: "inline" | "celery" | "https_worker";
   research_workspace_enabled?: boolean;
   arxiv_reader_enabled?: boolean;
   union3_reproduction_enabled?: boolean;

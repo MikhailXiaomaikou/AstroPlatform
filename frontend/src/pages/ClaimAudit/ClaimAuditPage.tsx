@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import {
   cancelClaimAudit,
   createClaimAudit,
@@ -304,7 +304,9 @@ function AuditDetail({
 
 export default function ClaimAuditPage() {
   const { user, loading: authLoading } = useAuth();
-  const [featureState, setFeatureState] = useState<"loading" | "enabled" | "disabled" | "unreachable">("loading");
+  const [featureState, setFeatureState] = useState<
+    "loading" | "enabled" | "workspace_only" | "disabled" | "unreachable"
+  >("loading");
   const [audits, setAudits] = useState<ClaimAuditSummary[]>([]);
   const [selected, setSelected] = useState<ClaimAuditSummary | null>(null);
   const [claimText, setClaimText] = useState("");
@@ -333,7 +335,14 @@ export default function ClaimAuditPage() {
     let cancelled = false;
     void getRuntimeConfig()
       .then((config) => {
-        if (!cancelled) setFeatureState(config.claim_audit_enabled ? "enabled" : "disabled");
+        if (cancelled) return;
+        if (!config.claim_audit_enabled) {
+          setFeatureState("disabled");
+        } else if (config.claim_audit_execution_mode === "https_worker") {
+          setFeatureState("workspace_only");
+        } else {
+          setFeatureState("enabled");
+        }
       })
       .catch(() => { if (!cancelled) setFeatureState("unreachable"); });
     return () => { cancelled = true; };
@@ -400,6 +409,9 @@ export default function ClaimAuditPage() {
 
   if (authLoading || featureState === "loading") {
     return <div className="claim-page claim-empty">Loading Claim Audit…</div>;
+  }
+  if (featureState === "workspace_only") {
+    return <Navigate to="/research" replace />;
   }
   if (!user) {
     return (

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import re
 import ssl
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -15,6 +17,57 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def _yaml(name: str) -> dict:
     return yaml.safe_load((REPO_ROOT / name).read_text(encoding="utf-8"))
+
+
+def _run_signed_worker_preflight(
+    tmp_path: Path,
+    *,
+    image_commit: str,
+    expected_commit: str | None,
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(parents=True)
+    log_path = tmp_path / "docker.log"
+    cosign = fake_bin / "cosign"
+    cosign.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    cosign.chmod(0o755)
+    docker = fake_bin / "docker"
+    docker.write_text(
+        """#!/bin/sh
+printf '%s\n' "$*" >>"$FAKE_DOCKER_LOG"
+if [ "${1:-}" = "image" ] && [ "${2:-}" = "inspect" ]; then
+  printf 'PATH=/usr/local/bin\nTOOL_VERSION=%s\n' "$FAKE_IMAGE_COMMIT"
+fi
+exit 0
+""",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+            "ASTRO_WORKER_IMAGE": "example.invalid/worker@sha256:" + "a" * 64,
+            "ASTRO_WORKER_COMPOSE_FILE": str(
+                REPO_ROOT / "deploy" / "compose.worker.yml"
+            ),
+            "FAKE_DOCKER_LOG": str(log_path),
+            "FAKE_IMAGE_COMMIT": image_commit,
+        }
+    )
+    if expected_commit is None:
+        env.pop("GIT_COMMIT", None)
+    else:
+        env["GIT_COMMIT"] = expected_commit
+    result = subprocess.run(
+        ["sh", str(REPO_ROOT / "deploy" / "start-signed-worker.sh")],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return result, log_path.read_text(encoding="utf-8")
 
 
 def test_external_ci_and_container_inputs_are_immutable_and_updates_are_reviewed():
@@ -146,6 +199,7 @@ def test_render_workers_wait_for_exact_schema_head():
     predeploy = backend["preDeployCommand"]
     assert "alembic upgrade head" in predeploy
     assert "alembic check" in predeploy
+    assert predeploy.count("APP_ROLE=migration") == 2
     assert backend["healthCheckPath"] == "/health/ready"
 
     database = databases["standard-astro-db"]
@@ -176,6 +230,15 @@ def test_render_workers_wait_for_exact_schema_head():
     assert backend_env["SCIENCE_EXECUTION_BACKEND"]["value"] == "https_worker"
     assert worker_env["SCIENCE_EXECUTION_BACKEND"]["value"] == "https_worker"
     assert beat_env["SCIENCE_EXECUTION_BACKEND"]["value"] == "https_worker"
+    assert backend_env["STANDARD_ASTRO_RELEASE"] == {
+        "key": "STANDARD_ASTRO_RELEASE",
+        "sync": False,
+    }
+    assert worker_env["STANDARD_ASTRO_RELEASE"]["fromService"] == {
+        "name": "standard-astro-backend",
+        "type": "web",
+        "envVarKey": "STANDARD_ASTRO_RELEASE",
+    }
     for key in (
         "ADMIN_SECRET",
         "JWT_SECRET",
@@ -192,6 +255,7 @@ def test_render_workers_wait_for_exact_schema_head():
         "EVIDENCE_V2_SIGNING_KEY_ID",
         "EVIDENCE_V2_SIGNING_PUBLIC_KEY",
         "EVIDENCE_V2_VERIFICATION_KEYS",
+        "SCIENTIFIC_REVIEWER_USERNAMES",
     ):
         assert backend_env[key] == {"key": key, "sync": False}
         assert "generateValue" not in backend_env[key]
@@ -341,6 +405,12 @@ def test_compose_declares_role_scoped_secrets_and_one_release_identity():
         "LOCAL_SCIENCE_WORKER_ENABLED",
     ):
         assert services["backend"]["environment"][key] == "false"
+    assert services["backend"]["environment"][
+        "SCIENTIFIC_REVIEWER_USERNAMES"
+    ] == (
+        "${SCIENTIFIC_REVIEWER_USERNAMES:?SCIENTIFIC_REVIEWER_USERNAMES must "
+        "list an independent reviewer}"
+    )
     assert "--queues=control,maintenance,verification" in worker["command"]
     assert "worker-$${TOOL_VERSION}@%h" in worker["command"]
     for key in ("JWT_SECRET", "FERNET_KEY", "ADMIN_SECRET", "PRIVACY_OPERATOR_NAME"):
@@ -349,6 +419,13 @@ def test_compose_declares_role_scoped_secrets_and_one_release_identity():
         "https_worker"
     )
     assert worker["environment"]["SCIENCE_EXECUTION_BACKEND"] == "https_worker"
+    release_identity = (
+        "${STANDARD_ASTRO_RELEASE:?STANDARD_ASTRO_RELEASE must identify this release}"
+    )
+    assert services["backend"]["environment"]["STANDARD_ASTRO_RELEASE"] == (
+        release_identity
+    )
+    assert worker["environment"]["STANDARD_ASTRO_RELEASE"] == release_identity
     assert services["celery-beat"]["environment"][
         "SCIENCE_EXECUTION_BACKEND"
     ] == "https_worker"
@@ -370,11 +447,15 @@ def test_local_worker_requires_digest_pin_cosign_and_hardened_container():
     )
     assert worker["read_only"] is True
     assert worker["user"] == "10001:10001"
+    assert worker["environment"]["ENV"] == "production"
+    assert worker["environment"]["APP_ROLE"] == "science_worker"
+    assert worker["environment"]["SCIENCE_EXECUTION_BACKEND"] == "https_worker"
     assert worker["cap_drop"] == ["ALL"]
     assert worker["security_opt"] == ["no-new-privileges:true"]
     assert worker["environment"]["WORKER_IMAGE_DIGEST"] == (
         "${WORKER_IMAGE_DIGEST:?set the pinned image digest}"
     )
+    assert "GIT_COMMIT" not in worker["environment"]
     assert not any("/var/run/docker.sock" in mount for mount in worker["volumes"])
 
     preflight = (REPO_ROOT / "deploy" / "start-signed-worker.sh").read_text(
@@ -383,6 +464,8 @@ def test_local_worker_requires_digest_pin_cosign_and_hardened_container():
     assert "cosign verify" in preflight
     assert "MikhailXiaomaikou/Standard-Astro" in preflight
     assert "refs/tags/v" in preflight
+    assert "docker image inspect" in preflight
+    assert "Worker image TOOL_VERSION" in preflight
     assert "docker compose" in preflight
     assert preflight.index("cosign verify") < preflight.index("docker compose")
 
@@ -398,6 +481,46 @@ def test_local_worker_requires_digest_pin_cosign_and_hardened_container():
     assert build["push"] is True
     assert build["provenance"] == "mode=max"
     assert build["sbom"] is True
+
+    worker_cli = (REPO_ROOT / "backend" / "app" / "worker_agent" / "cli.py").read_text(
+        encoding="utf-8"
+    )
+    pure_plot = (
+        REPO_ROOT / "backend" / "app" / "services" / "union3_profile_plot.py"
+    ).read_text(encoding="utf-8")
+    assert "app.services.union3_profile_plot" in worker_cli
+    assert "app.services.union3_research_loop" not in worker_cli
+    for forbidden_import in ("app.config", "app.models", "app.storage", "sqlalchemy"):
+        assert forbidden_import not in pure_plot
+
+
+def test_signed_worker_rejects_host_commit_that_differs_from_baked_image(
+    tmp_path,
+):
+    expected_commit = "a" * 40
+    result, docker_log = _run_signed_worker_preflight(
+        tmp_path,
+        image_commit="b" * 40,
+        expected_commit=expected_commit,
+    )
+
+    assert result.returncode == 2
+    assert "does not match the signed Worker image TOOL_VERSION" in result.stderr
+    assert "pull science-worker" in docker_log
+    assert "image inspect" in docker_log
+    assert "up -d science-worker" not in docker_log
+
+
+def test_signed_worker_uses_baked_commit_without_host_override(tmp_path):
+    result, docker_log = _run_signed_worker_preflight(
+        tmp_path,
+        image_commit="c" * 40,
+        expected_commit=None,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "image inspect" in docker_log
+    assert "up -d science-worker" in docker_log
 
 
 def test_celery_delivery_semantics_are_fail_safe(monkeypatch):

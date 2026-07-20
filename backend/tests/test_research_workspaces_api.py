@@ -144,6 +144,23 @@ async def test_workspace_source_and_independent_review_http_contract(
                 candidate
             ]
 
+            retried_source = await client.post(
+                f"/api/research/sources/{source['source_document_id']}/retry"
+            )
+            assert retried_source.status_code == 202, retried_source.text
+            assert retried_source.json()["version"] == 2
+            assert (
+                retried_source.json()["source_document_id"]
+                != source["source_document_id"]
+            )
+
+            state["user"] = outsider
+            hidden_retry = await client.post(
+                f"/api/research/sources/{source['source_document_id']}/retry"
+            )
+            assert hidden_retry.status_code == 404
+            state["user"] = owner
+
             audit = ClaimAudit(
                 id=uuid.uuid4(),
                 user_id=owner.id,

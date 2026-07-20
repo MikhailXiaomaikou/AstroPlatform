@@ -99,6 +99,18 @@ def test_config_endpoint_publishes_hosted_privacy_identity(reload_chat_and_confi
     }
 
 
+def test_config_endpoint_publishes_claim_audit_execution_topology(
+    reload_chat_and_config, monkeypatch
+):
+    config_mod = reload_chat_and_config("cosmology")
+    monkeypatch.setattr(
+        config_mod.settings, "claim_audit_execution_mode", "https_worker"
+    )
+    with _client_for(config_mod) as client:
+        body = client.get("/api/config").json()
+    assert body["claim_audit_execution_mode"] == "https_worker"
+
+
 @pytest.fixture(autouse=True)
 def _restore_modules(monkeypatch):
     """Restore chat + config modules after each test."""
