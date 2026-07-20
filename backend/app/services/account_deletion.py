@@ -25,9 +25,13 @@ from app.models.claim_audit_records import (
 from app.models.database import Base, async_session
 from app.models.research_records import ResearchJob
 from app.models.schemas import ChatSession, DataFile, PipelineRun, RunResult, User
+from app.models.worker_records import ScienceExecutionAttempt, WorkerArtifactIssuance
+from app.models.workspace_records import ClaimAuditReview, SourceExtraction
+from app.services.research_workspace_service import reviewer_pseudonym
 from app.storage import (
     delete_fits_all_versions,
     download_fits,
+    list_storage_keys,
     normalize_storage_key,
     upload_fits,
 )
@@ -36,6 +40,7 @@ logger = logging.getLogger(__name__)
 _EXTERNAL_TOMBSTONE_CACHE: dict[uuid.UUID, tuple[float, bool]] = {}
 _EXTERNAL_TOMBSTONE_CACHE_SECONDS = 60.0
 _DELETION_LEASE_SECONDS = 10 * 60
+_DIRECT_UPLOAD_SETTLE_SECONDS = 60 * 60
 
 
 class AccountDeletionLeaseLost(RuntimeError):
@@ -44,6 +49,82 @@ class AccountDeletionLeaseLost(RuntimeError):
 
 class AccountArtifactOwnerInactive(RuntimeError):
     """A tool output cannot be registered after account deletion starts."""
+
+
+class AccountArtifactUploadActive(RuntimeError):
+    """A previously issued direct-upload capability may still write bytes."""
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+async def require_worker_uploads_settled(
+    db: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    now: datetime | None = None,
+) -> None:
+    """Block final erasure until every issued upload URL is safely quiescent.
+
+    S3 checks a presigned URL when a PUT begins, so a transfer that started
+    immediately before expiry may finish afterwards.  The extra settle window
+    is deliberately conservative.  During it the account is already disabled;
+    only asynchronous row/object removal waits.
+    """
+
+    expiries = list(
+        (
+            await db.execute(
+                select(WorkerArtifactIssuance.expires_at).where(
+                    WorkerArtifactIssuance.user_id == user_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not expiries:
+        return
+    safe_after = max(_as_utc(value) for value in expiries) + timedelta(
+        seconds=_DIRECT_UPLOAD_SETTLE_SECONDS
+    )
+    if _as_utc(now or datetime.now(timezone.utc)) < safe_after:
+        raise AccountArtifactUploadActive(
+            "A signed Worker upload URL has not finished its safety window"
+        )
+
+
+async def require_attempt_uploads_settled(
+    db: AsyncSession,
+    *,
+    attempt_ids: list[uuid.UUID],
+    now: datetime | None = None,
+) -> None:
+    """Block one Audit deletion until its issued PUT URLs are quiescent."""
+
+    if not attempt_ids:
+        return
+    expiries = list(
+        (
+            await db.execute(
+                select(WorkerArtifactIssuance.expires_at).where(
+                    WorkerArtifactIssuance.attempt_id.in_(attempt_ids)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not expiries:
+        return
+    safe_after = max(_as_utc(value) for value in expiries) + timedelta(
+        seconds=_DIRECT_UPLOAD_SETTLE_SECONDS
+    )
+    if _as_utc(now or datetime.now(timezone.utc)) < safe_after:
+        raise AccountArtifactUploadActive(
+            "A signed Worker upload URL has not finished its safety window"
+        )
 
 
 def deletion_user_fingerprint(user_id: uuid.UUID) -> str:
@@ -64,6 +145,35 @@ def _legacy_deletion_user_fingerprint(user_id: uuid.UUID, secret: str) -> str:
 
 def deletion_receipt_hash(receipt: str) -> str:
     return hashlib.sha256(receipt.encode("utf-8")).hexdigest()
+
+
+async def anonymize_reviewer_identity(
+    db: AsyncSession,
+    *,
+    reviewer_user_id: uuid.UUID,
+) -> int:
+    """Detach an account from reviews owned by other researchers."""
+
+    reviews = list(
+        (
+            await db.execute(
+                select(ClaimAuditReview)
+                .where(ClaimAuditReview.reviewer_user_id == reviewer_user_id)
+                .with_for_update()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for review in reviews:
+        review.reviewer_username = reviewer_pseudonym(
+            review.audit_id,
+            reviewer_user_id,
+        )
+        review.reviewer_user_id = None
+    if reviews:
+        await db.flush()
+    return len(reviews)
 
 
 def external_tombstone_key(user_id: uuid.UUID) -> str:
@@ -630,6 +740,72 @@ async def _owned_storage_keys(
             if value
         )
 
+    # Direct-upload issuance rows are the append-only authority for every
+    # Worker-writable staging key and every server-controlled promoted key.
+    # Query by owner directly instead of relying only on the connected-row
+    # snapshot so a partially migrated graph cannot hide an issued capability.
+    issuance_refs = (
+        await db.execute(
+            select(
+                WorkerArtifactIssuance.artifact_ref,
+                WorkerArtifactIssuance.authoritative_ref,
+            ).where(WorkerArtifactIssuance.user_id == user_id)
+        )
+    ).all()
+    for staging_ref, authoritative_ref in issuance_refs:
+        if staging_ref:
+            keys.add(str(staging_ref))
+        if authoritative_ref:
+            keys.add(str(authoritative_ref))
+
+    # Recovery fallback: an older PostgreSQL snapshot can predate a URL
+    # issuance while the object store still contains the uploaded key.  The
+    # owner prefix is unguessable from another account and is enumerated only
+    # inside the deletion worker.
+    keys.update(
+        await asyncio.to_thread(
+            list_storage_keys,
+            f"science-attempts/{user_id}",
+        )
+    )
+    # Evidence Pack v2 keys are owner-scoped and content-addressed. Prefix
+    # enumeration recovers a ZIP uploaded after an older database backup but
+    # before its staged EvidencePack row was captured.
+    keys.update(
+        await asyncio.to_thread(
+            list_storage_keys,
+            f"evidence-packs/v2/{user_id}",
+        )
+    )
+
+    attempt_ids = selected.get("science_execution_attempts", set())
+    if attempt_ids:
+        manifests = (
+            await db.scalars(
+                select(ScienceExecutionAttempt.artifact_manifest).where(
+                    _pk_clause(ScienceExecutionAttempt.__table__, attempt_ids)
+                )
+            )
+        ).all()
+        for manifest in manifests:
+            for item in list(manifest or []):
+                if isinstance(item, dict) and item.get("artifact_ref"):
+                    keys.add(str(item["artifact_ref"]))
+
+    extraction_ids = selected.get("source_extractions", set())
+    if extraction_ids:
+        extraction_artifacts = (
+            await db.scalars(
+                select(SourceExtraction.extraction_artifacts).where(
+                    _pk_clause(SourceExtraction.__table__, extraction_ids)
+                )
+            )
+        ).all()
+        for manifest in extraction_artifacts:
+            for item in list(manifest or []):
+                if isinstance(item, dict) and item.get("artifact_ref"):
+                    keys.add(str(item["artifact_ref"]))
+
     job_ids = selected.get("research_jobs", set())
     if job_ids:
         results = (
@@ -801,6 +977,14 @@ async def erase_account_data(
             return {"rows_deleted": 0, "objects_deleted": 0, "claimed": 0}
 
         try:
+            await anonymize_reviewer_identity(
+                session,
+                reviewer_user_id=user_id,
+            )
+            await require_worker_uploads_settled(
+                session,
+                user_id=user_id,
+            )
             selected = await _connected_rows(session, user_id)
             object_keys = await _owned_storage_keys(
                 session,

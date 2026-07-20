@@ -6,9 +6,10 @@ import os
 from pathlib import Path
 import re
 import time
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 
 from app.auth import get_current_user
 from app.models.schemas import User
@@ -144,6 +145,80 @@ async def _probe_celery_workers(expected_commit: str) -> tuple[int, bool]:
     except Exception as exc:
         logger.warning("health/deep: Celery worker probe failed: %s", exc)
         return 0, False
+
+
+async def _probe_verification_queue() -> bool:
+    """Require at least one hosted worker subscribed to verification work."""
+
+    try:
+        from celery_worker import celery_app
+
+        def _queues() -> dict:
+            inspector = celery_app.control.inspect(timeout=_CELERY_PING_TIMEOUT_SECONDS)
+            return inspector.active_queues() or {}
+
+        queues_by_worker = await asyncio.wait_for(
+            asyncio.to_thread(_queues),
+            timeout=_CELERY_PING_TIMEOUT_SECONDS + 1.0,
+        )
+        return any(
+            any(
+                isinstance(queue, dict) and queue.get("name") == "verification"
+                for queue in queues
+            )
+            for queues in queues_by_worker.values()
+            if isinstance(queues, list)
+        )
+    except Exception as exc:
+        logger.warning("health/deep: verification queue probe failed: %s", exc)
+        return False
+
+
+async def _probe_worker_registry() -> int:
+    """Count recently seen local nodes without exposing owner information."""
+
+    try:
+        from app.models.database import async_session
+        from app.models.worker_records import WorkerNode
+
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=180)
+        async with async_session() as session:
+            count = await session.scalar(
+                select(func.count(WorkerNode.id)).where(
+                    WorkerNode.status.in_({"ACTIVE", "DRAINING"}),
+                    WorkerNode.last_seen_at >= cutoff,
+                )
+            )
+        return int(count or 0)
+    except Exception as exc:
+        logger.warning("health/deep: worker registry probe failed: %s", exc)
+        return -1
+
+
+def _probe_evidence_v2_key() -> bool:
+    try:
+        from app.config import settings
+        from app.services.evidence_pack_v2 import evidence_keyring_document
+
+        key_id = str(settings.evidence_v2_signing_key_id or "").strip()
+        public_key = str(settings.evidence_v2_signing_public_key or "").strip()
+        configured = dict(settings.evidence_v2_verification_keyring)
+        if key_id and public_key:
+            configured.setdefault(
+                key_id,
+                {
+                    "key_id": key_id,
+                    "algorithm": "ed25519",
+                    "public_key": public_key,
+                    "status": "active",
+                },
+            )
+        records = [dict(record) for record in configured.values()]
+        document = evidence_keyring_document(records)
+        return bool(key_id and any(row["key_id"] == key_id for row in document["keys"]))
+    except Exception as exc:
+        logger.warning("health/deep: Evidence Pack v2 key probe failed: %s", exc)
+        return False
 
 
 async def _probe_celery_beat(expected_commit: str) -> tuple[bool, str]:
@@ -515,6 +590,44 @@ async def health_deep():
         result["components"]["broker"] = "not_required"
         result["components"]["celery_worker"] = "not_required"
         result["components"]["celery_beat"] = "not_required"
+
+    if settings.evidence_pack_v2_enabled:
+        evidence_key_ok = _probe_evidence_v2_key()
+        result["components"]["evidence_v2_key"] = (
+            "ok" if evidence_key_ok else "unavailable"
+        )
+        if not evidence_key_ok:
+            result["ok"] = False
+    else:
+        result["components"]["evidence_v2_key"] = "not_required"
+
+    if settings.local_science_worker_enabled:
+        online_nodes = await _probe_worker_registry()
+        result["online_science_workers"] = max(0, online_nodes)
+        if online_nodes < 0:
+            result["components"]["worker_registry"] = "unavailable"
+            result["components"]["science_capacity"] = "degraded"
+        elif online_nodes == 0:
+            result["components"]["worker_registry"] = "ok"
+            result["components"]["science_capacity"] = "degraded"
+        else:
+            result["components"]["worker_registry"] = "ok"
+            result["components"]["science_capacity"] = "ok"
+    else:
+        result["components"]["worker_registry"] = "not_required"
+        result["components"]["science_capacity"] = "not_enabled"
+
+    if settings.union3_reproduction_enabled:
+        verification_queue_ok = await _probe_verification_queue()
+        result["components"]["verification_queue"] = (
+            "ok" if verification_queue_ok else "unavailable"
+        )
+        # Local capacity may be zero without taking down the API, but no
+        # independent hosted verifier means SUPPORTED cannot be produced.
+        if not verification_queue_ok:
+            result["ok"] = False
+    else:
+        result["components"]["verification_queue"] = "not_required"
 
     # At least one AI provider key configured.  Scanning env so we
     # don't inadvertently read a user's localStorage-sent key.

@@ -1124,7 +1124,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
     "union3": CosmologyDatasetEntry(
         key="union3",
         display_name="Union3 / UNITY1.5",
-        version="Union3 2023 arXiv release",
+        version="Union3 arXiv:2311.12098v4",
         probe="sn",
         z_coverage=(0.01, 2.26),
         status="external_likelihood",
@@ -1146,7 +1146,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             url="https://github.com/CobayaSampler/sn_data",
             format="lcparam (zcmb zhel mb) + dense covariance matrix",
         ),
-        source_url="https://arxiv.org/abs/2311.12098",
+        source_url="https://arxiv.org/abs/2311.12098v4",
         citations=(
             DatasetCitation(label="Rubin et al. Union3/UNITY1.5", year=2023, arxiv="2311.12098"),
         ),
@@ -1170,11 +1170,12 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             mean=(0.356,),
             covariance=((0.027 ** 2,),),
             units={"omegam": "dimensionless"},
-            source_locator="Rubin et al. 2023 (arXiv:2311.12098) Table 9, Flat-ΛCDM SN-only: Ωm = 0.356 (+0.028/-0.026); symmetrized σ = 0.027.",
-            approximation="1D SN-only flat-ΛCDM Ωm Gaussian — published anchor for the in-process full 22-bin likelihood (which reproduces Ωm=0.356 at its chi2 minimum).",
+            source_locator="Rubin et al. (arXiv:2311.12098v4), PDF Table 9, Flat-ΛCDM SNe row: Ωm = 0.356 (+0.028/-0.026), with limits defined by Δχ²=1.",
+            approximation="Symmetrized 1D Gaussian approximation to the published SN-only frequentist profile-χ² interval; literature anchor only, not the Table 9 statistical method or an executable Gaussian likelihood.",
             source_prior=(
-                "Published flat-LambdaCDM SN-only posterior after UNITY nuisance "
-                "marginalisation; retained only as a literature anchor."
+                "Published flat-LambdaCDM SN-only frequentist profile-chi-square "
+                "constraint with plus/minus limits at Delta chi-square = 1; retained "
+                "only as a literature anchor."
             ),
         ),
         data_products=(

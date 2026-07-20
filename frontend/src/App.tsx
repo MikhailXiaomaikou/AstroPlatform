@@ -2,7 +2,7 @@ import { Component, lazy, Suspense, useState, useEffect, type ErrorInfo, type Re
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { I18nProvider, useI18n, ALL_LANGS, LANG_NAMES, type Lang } from "./i18n";
-import api from "./api/client";
+import api, { getRuntimeConfig } from "./api/client";
 import { useTracking } from "./hooks/useTracking";
 import CommandPalette from "./components/CommandPalette";
 import OnboardingOverlay from "./components/OnboardingOverlay";
@@ -64,6 +64,8 @@ const PapersPage = lazy(() => import("./pages/Papers/PapersPage"));
 const BotPage = lazy(() => import("./pages/Bot/BotPage"));
 const ClaimAuditPage = lazy(() => import("./pages/ClaimAudit/ClaimAuditPage"));
 const PrivacyPage = lazy(() => import("./pages/Privacy/PrivacyPage"));
+const ResearchPage = lazy(() => import("./pages/Research/ResearchPage"));
+const ResearchWorkspacePage = lazy(() => import("./pages/Research/ResearchWorkspacePage"));
 
 function useTheme() {
   // Journal edition: default to light. We use a new key (astro_theme_v2) so
@@ -116,6 +118,28 @@ function LangSwitch() {
   );
 }
 
+function ResearchNavLink({ onNavigate }: { onNavigate: () => void }) {
+  const { t } = useI18n();
+  const [enabled, setEnabled] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getRuntimeConfig()
+      .then((config) => {
+        if (!cancelled) setEnabled(config.research_workspace_enabled === true);
+      })
+      .catch(() => {
+        if (!cancelled) setEnabled(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!enabled) return null;
+  return <NavLink to="/research" onClick={onNavigate}>{t("nav.research")}</NavLink>;
+}
+
 function NavBar() {
   const { theme, toggle } = useTheme();
   const { user, logout } = useAuth();
@@ -154,6 +178,7 @@ function NavBar() {
           <NavLink to="/"          end onClick={() => setMenuOpen(false)}>{t("nav.home")}</NavLink>
           <NavLink to="/chat"          onClick={() => setMenuOpen(false)}>{t("nav.ai_assistant")}</NavLink>
           <NavLink to="/claim-audit"   onClick={() => setMenuOpen(false)}>{t("nav.claim_audit")}</NavLink>
+          <ResearchNavLink onNavigate={() => setMenuOpen(false)} />
           {BOT_CONSOLE_ENABLED && (
             <NavLink to="/bot" onClick={() => setMenuOpen(false)}>{t("nav.research_bot")}</NavLink>
           )}
@@ -395,7 +420,8 @@ function App() {
                 <Route path="/account" element={<AccountPage />} />
                 <Route path="/papers" element={<PapersPage />} />
                 <Route path="/papers/public/:token" element={<PapersPage />} />
-                <Route path="/research" element={<Navigate to="/account" replace />} />
+                <Route path="/research" element={<ResearchPage />} />
+                <Route path="/research/workspaces/:workspaceId" element={<ResearchWorkspacePage />} />
                 <Route path="/settings" element={<Navigate to="/account" replace />} />
                 <Route path="/shared/:token" element={<SharedSessionPage />} />
                 <Route path="/observations" element={<ObservationsPage />} />

@@ -240,6 +240,11 @@ export interface RuntimeConfig {
   focus: string;
   signup_mode: "public" | "invite_only" | "closed";
   claim_audit_enabled: boolean;
+  research_workspace_enabled?: boolean;
+  arxiv_reader_enabled?: boolean;
+  union3_reproduction_enabled?: boolean;
+  evidence_pack_v2_enabled?: boolean;
+  local_science_worker_enabled?: boolean;
   analytics_requires_consent: boolean;
   privacy_notice?: {
     operator_name: string;
@@ -1489,6 +1494,28 @@ export interface ClaimAuditNormalizedClaim {
   verdict: ClaimAuditVerdict;
   parse_coverage: ClaimParseCoverage;
   supporting_evidence_ids: string[];
+  candidate_id?: string;
+  claim_hash?: string;
+  source_anchor_ids?: string[];
+}
+
+export interface ClaimAuditReviewBinding {
+  source_document_id: string;
+  source_extraction_id: string;
+  candidate_id: string;
+  claim_hash: string;
+  source_hash: string;
+  anchor_ids: string[];
+}
+
+export interface ClaimAuditReviewEvidence {
+  canonical_identifier: string;
+  source_url: string;
+  source_document_hash: string;
+  source_extraction_hash: string;
+  candidate: Record<string, unknown>;
+  anchors: SourceAnchor[];
+  limitations: string[];
 }
 
 export interface ClaimAuditSummary {
@@ -1510,6 +1537,7 @@ export interface ClaimAuditSummary {
     edges?: Array<{ from: string; to: string; kind: string }>;
     supported_claims?: Array<Record<string, unknown>>;
     unsupported_claims?: Array<Record<string, unknown>>;
+    source_document_hash?: string;
   } | null;
   fact_check_report: Record<string, unknown> | null;
   error: string | null;
@@ -1520,6 +1548,7 @@ export interface ClaimAuditSummary {
     status: string;
     schema_version: number;
     manifest_hash: string;
+    pack_hash: string | null;
     key_id: string;
     download_url: string;
     finalized_at: string;
@@ -1529,6 +1558,27 @@ export interface ClaimAuditSummary {
   completed_at: string | null;
   can_cancel: boolean;
   can_retry: boolean;
+  can_revise?: boolean;
+  supersedes_audit_id?: string | null;
+  workspace_id?: string | null;
+  source_document_id?: string | null;
+  source_extraction_id?: string | null;
+  candidate_id?: string | null;
+  workflow_key?: string | null;
+  review_status?:
+    | "NOT_SUBMITTED"
+    | "PENDING"
+    | "APPROVED"
+    | "REJECTED"
+    | "CHANGES_REQUESTED"
+    | null;
+  machine_support_eligible?: boolean;
+  reproduction_ready?: boolean;
+  publication_ready?: boolean;
+  progress?: number | null;
+  progress_stage?: string | null;
+  review_binding?: ClaimAuditReviewBinding | null;
+  review_evidence?: ClaimAuditReviewEvidence | null;
 }
 
 export interface ClaimAuditCreatePayload {
@@ -1579,6 +1629,16 @@ export async function retryClaimAudit(auditId: string): Promise<ClaimAuditSummar
   return data;
 }
 
+export async function createClaimAuditRevision(
+  auditId: string,
+): Promise<ClaimAuditSummary> {
+  const { data } = await api.post<ClaimAuditSummary>(
+    `/api/research/claim-audits/${encodeURIComponent(auditId)}/revisions`,
+    {},
+  );
+  return data;
+}
+
 export async function deleteClaimAudit(auditId: string): Promise<void> {
   await api.delete(`/api/research/claim-audits/${auditId}`);
 }
@@ -1620,6 +1680,328 @@ export async function verifyEvidencePackFile(
   const { data } = await api.post<EvidencePackVerification>(
     "/api/research/evidence-packs/verify",
     form,
+  );
+  return data;
+}
+
+// ── Research Workspace API ──
+
+export type ResearchWorkspaceStatus = "ACTIVE" | "ARCHIVED";
+
+export interface ResearchWorkspaceSummary {
+  workspace_id: string;
+  title: string;
+  description: string;
+  status: ResearchWorkspaceStatus;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface SourceCandidateValue {
+  central: string;
+  plus: string;
+  minus: string;
+  lower: string;
+  upper: string;
+  confidence_level: string;
+}
+
+export interface SourceCandidate {
+  candidate_id: string;
+  candidate_hash: string;
+  claim_hash: string;
+  candidate_type: string;
+  claim_text: string;
+  parameter: string;
+  reported_value: SourceCandidateValue;
+  model_scope: string;
+  data_scope: string;
+  interval_kind: "frequentist_profile_chi_square";
+  statistical_semantics: "frequentist_profile_chi_square";
+  confidence_definition: string;
+  delta_chi_square: string;
+  claim_scope: string;
+  publication_ready: false;
+  review_required: boolean;
+  source_anchor_ids: string[];
+}
+
+export interface SourceExtractionPayload {
+  schema_version: string;
+  reader_version: string;
+  source: Record<string, unknown>;
+  anchors: Array<Record<string, unknown>>;
+  candidates: SourceCandidate[];
+  coverage_status: string;
+  limitations: string[];
+  publication_ready: false;
+  review_required: boolean;
+  extraction_hash: string;
+}
+
+export interface SourceAnchor {
+  anchor_id: string;
+  source_document_hash: string;
+  locator: {
+    source_kind?: string;
+    section_label?: string;
+    pdf_page_label?: string;
+    table_label?: string;
+    role?: string;
+    text_normalization?: string;
+    [key: string]: unknown;
+  };
+  raw_text: string;
+}
+
+export interface SourceDocumentContent {
+  source_document_id: string;
+  canonical_identifier: string;
+  source_document_hash: string;
+  content_kind: "registered_anchors" | string;
+  anchors: SourceAnchor[];
+  limitations: string[];
+}
+
+export interface SourceDocumentTables {
+  source_document_id: string;
+  table_label: string;
+  section_label: string;
+  pdf_page_label: string;
+  statistical_semantics: "frequentist_profile_chi_square" | string;
+  candidates: SourceCandidate[];
+  extraction: SourceExtractionSummary | null;
+}
+
+export interface SourceExtractionSummary {
+  source_extraction_id: string;
+  schema_version: string;
+  reader_version: string;
+  input_source_document_hash: string;
+  extraction_payload: SourceExtractionPayload;
+  extraction_payload_hash: string;
+  extraction_artifacts: Array<Record<string, unknown>>;
+  extraction_artifact_hashes: Record<string, string>;
+  created_at: string | null;
+}
+
+export interface SourceDocumentSummary {
+  source_document_id: string;
+  workspace_id: string;
+  supersedes_source_document_id: string | null;
+  source_profile_key: string;
+  requested_identifier: string;
+  canonical_identifier: string;
+  version: number;
+  source_url: string;
+  source_document_hash: string;
+  raw_artifacts: Array<Record<string, unknown>>;
+  raw_artifact_hashes: Record<string, string>;
+  lifecycle_status: string;
+  coverage_status: string;
+  source_metadata: Record<string, unknown>;
+  error: string | null;
+  error_class: string | null;
+  extraction: SourceExtractionSummary | null;
+  created_at: string | null;
+}
+
+export async function createResearchWorkspace(payload: {
+  title: string;
+  description?: string;
+}): Promise<ResearchWorkspaceSummary> {
+  const { data } = await api.post<ResearchWorkspaceSummary>(
+    "/api/research/workspaces",
+    payload,
+  );
+  return data;
+}
+
+export async function listResearchWorkspaces(): Promise<{
+  items: ResearchWorkspaceSummary[];
+}> {
+  const { data } = await api.get("/api/research/workspaces");
+  return data;
+}
+
+export async function getResearchWorkspace(
+  workspaceId: string,
+): Promise<ResearchWorkspaceSummary> {
+  const { data } = await api.get<ResearchWorkspaceSummary>(
+    `/api/research/workspaces/${encodeURIComponent(workspaceId)}`,
+  );
+  return data;
+}
+
+export async function updateResearchWorkspace(
+  workspaceId: string,
+  payload: Partial<Pick<ResearchWorkspaceSummary, "title" | "description" | "status">>,
+): Promise<ResearchWorkspaceSummary> {
+  const { data } = await api.patch<ResearchWorkspaceSummary>(
+    `/api/research/workspaces/${encodeURIComponent(workspaceId)}`,
+    payload,
+  );
+  return data;
+}
+
+export async function archiveResearchWorkspace(workspaceId: string): Promise<void> {
+  await api.delete(`/api/research/workspaces/${encodeURIComponent(workspaceId)}`);
+}
+
+export async function createSourceDocument(
+  workspaceId: string,
+  payload: { source_profile_key: "union3_arxiv_v1"; identifier: "2311.12098v4" },
+): Promise<SourceDocumentSummary> {
+  const { data } = await api.post<SourceDocumentSummary>(
+    `/api/research/workspaces/${encodeURIComponent(workspaceId)}/sources`,
+    payload,
+  );
+  return data;
+}
+
+export async function listSourceDocuments(
+  workspaceId: string,
+): Promise<{ items: SourceDocumentSummary[] }> {
+  const { data } = await api.get(
+    `/api/research/workspaces/${encodeURIComponent(workspaceId)}/sources`,
+  );
+  return data;
+}
+
+export async function getSourceDocumentContent(
+  sourceDocumentId: string,
+): Promise<SourceDocumentContent> {
+  const { data } = await api.get<SourceDocumentContent>(
+    `/api/research/sources/${encodeURIComponent(sourceDocumentId)}/content`,
+  );
+  return data;
+}
+
+export async function getSourceDocumentTables(
+  sourceDocumentId: string,
+): Promise<SourceDocumentTables> {
+  const { data } = await api.get<SourceDocumentTables>(
+    `/api/research/sources/${encodeURIComponent(sourceDocumentId)}/tables`,
+  );
+  return data;
+}
+
+export async function getSourceDocument(
+  workspaceId: string,
+  sourceDocumentId: string,
+): Promise<SourceDocumentSummary> {
+  const { data } = await api.get<SourceDocumentSummary>(
+    `/api/research/workspaces/${encodeURIComponent(workspaceId)}/sources/`
+      + encodeURIComponent(sourceDocumentId),
+  );
+  return data;
+}
+
+export async function retrySourceDocument(
+  workspaceId: string,
+  sourceDocumentId: string,
+): Promise<SourceDocumentSummary> {
+  const { data } = await api.post<SourceDocumentSummary>(
+    `/api/research/workspaces/${encodeURIComponent(workspaceId)}/sources/`
+      + `${encodeURIComponent(sourceDocumentId)}/retry`,
+  );
+  return data;
+}
+
+export interface WorkspaceClaimAuditCreatePayload {
+  source_document_id: string;
+  candidate_id: string;
+  workflow_key: "union3_flat_lcdm_sn_only_v1";
+}
+
+export async function createWorkspaceClaimAudit(
+  workspaceId: string,
+  payload: WorkspaceClaimAuditCreatePayload,
+): Promise<ClaimAuditSummary> {
+  const { data } = await api.post<ClaimAuditSummary>(
+    `/api/research/workspaces/${encodeURIComponent(workspaceId)}/claim-audits`,
+    payload,
+  );
+  return data;
+}
+
+export async function listWorkspaceClaimAudits(
+  workspaceId: string,
+): Promise<{ items: ClaimAuditSummary[]; total?: number }> {
+  const { data } = await api.get(
+    `/api/research/workspaces/${encodeURIComponent(workspaceId)}/claim-audits`,
+  );
+  return data;
+}
+
+export interface WorkerEnrollment {
+  enrollment_id: string;
+  enrollment_code: string;
+  expires_at: string;
+  display_once: true;
+}
+
+export interface WorkerNodeSummary {
+  node_id: string;
+  name: string;
+  status: "ACTIVE" | "DRAINING" | "REVOKED" | string;
+  online: boolean;
+  protocol_version: string;
+  public_key_fingerprint: string;
+  capabilities: Record<string, unknown>;
+  release_manifest: Record<string, unknown>;
+  last_seen_at: string | null;
+  created_at: string | null;
+  revoked_at: string | null;
+}
+
+export async function createWorkerEnrollment(): Promise<WorkerEnrollment> {
+  const { data } = await api.post<WorkerEnrollment>("/api/compute/v1/enrollments");
+  return data;
+}
+
+export async function listWorkerNodes(): Promise<{ nodes: WorkerNodeSummary[] }> {
+  const { data } = await api.get<{ nodes: WorkerNodeSummary[] }>("/api/compute/v1/nodes");
+  return data;
+}
+
+export async function revokeWorkerNode(nodeId: string): Promise<void> {
+  await api.delete(`/api/compute/v1/nodes/${encodeURIComponent(nodeId)}`);
+}
+
+export type ClaimAuditReviewDecision = "APPROVED" | "REJECTED" | "CHANGES_REQUESTED";
+
+export interface ClaimAuditReviewCreatePayload extends ClaimAuditReviewBinding {
+  decision: ClaimAuditReviewDecision;
+  comment: string;
+}
+
+export interface ClaimAuditReviewSummary extends ClaimAuditReviewCreatePayload {
+  review_id: string;
+  audit_id: string;
+  workspace_id: string;
+  reviewer_pseudonym: string;
+  review_scope: string;
+  supports_finalization: boolean;
+  created_at: string | null;
+}
+
+export async function listScientificReviewQueue(): Promise<{
+  items: ClaimAuditSummary[];
+}> {
+  const { data } = await api.get<{ items: ClaimAuditSummary[] }>(
+    "/api/research/review-queue",
+  );
+  return data;
+}
+
+export async function submitClaimAuditReview(
+  auditId: string,
+  payload: ClaimAuditReviewCreatePayload,
+): Promise<ClaimAuditReviewSummary> {
+  const { data } = await api.post<ClaimAuditReviewSummary>(
+    `/api/research/claim-audits/${encodeURIComponent(auditId)}/reviews`,
+    payload,
   );
   return data;
 }

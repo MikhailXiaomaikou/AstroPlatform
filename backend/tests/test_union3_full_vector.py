@@ -50,6 +50,19 @@ def test_vendored_files_match_pins():
     assert data["cov"].shape == (22, 22)
 
 
+def test_table9_anchor_is_version_pinned_frequentist_profile_chi_square():
+    entry = cl.get_cosmology_dataset("union3")
+    anchor = entry.compressed_likelihood
+    assert entry.version == "Union3 arXiv:2311.12098v4"
+    assert entry.source_url == "https://arxiv.org/abs/2311.12098v4"
+    assert "2311.12098v4" in anchor.source_locator
+    serialized = " ".join(
+        (anchor.source_locator, anchor.approximation, anchor.source_prior)
+    ).lower()
+    assert "profile-chi" in serialized
+    assert "posterior" not in serialized
+
+
 def test_marginalization_parity_with_cobaya_projection():
     # cobaya (_marginalize_abs_mag): invcov_marg = C^-1 - (C^-1 1)(1'C^-1 1)^-1(1'C^-1),
     # then chi2 = delta' invcov_marg delta. Ours computes the algebraically

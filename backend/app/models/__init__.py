@@ -13,6 +13,18 @@ from app.models.claim_audit_records import (
     PrivacyPreference,
 )
 from app.models.research_records import ProvenanceRecord, ResearchJob
+from app.models.worker_records import (
+    ScienceExecutionAttempt,
+    WorkerArtifactIssuance,
+    WorkerEnrollmentToken,
+    WorkerNode,
+)
+from app.models.workspace_records import (
+    ClaimAuditReview,
+    ResearchWorkspace,
+    SourceDocument,
+    SourceExtraction,
+)
 
 __all__ = [
     "AccountDeletionTombstone",
@@ -23,4 +35,12 @@ __all__ = [
     "PrivacyPreference",
     "ProvenanceRecord",
     "ResearchJob",
+    "ResearchWorkspace",
+    "SourceDocument",
+    "SourceExtraction",
+    "ClaimAuditReview",
+    "WorkerEnrollmentToken",
+    "WorkerNode",
+    "ScienceExecutionAttempt",
+    "WorkerArtifactIssuance",
 ]

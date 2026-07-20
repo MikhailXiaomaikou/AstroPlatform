@@ -59,6 +59,18 @@ from app.models.claim_audit_records import (  # noqa: E402, F401
     Invitation,
     PrivacyPreference,
 )
+from app.models.worker_records import (  # noqa: E402, F401
+    ScienceExecutionAttempt,
+    WorkerArtifactIssuance,
+    WorkerEnrollmentToken,
+    WorkerNode,
+)
+from app.models.workspace_records import (  # noqa: E402, F401
+    ClaimAuditReview,
+    ResearchWorkspace,
+    SourceDocument,
+    SourceExtraction,
+)
 
 target_metadata = Base.metadata
 

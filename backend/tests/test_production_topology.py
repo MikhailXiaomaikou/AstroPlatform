@@ -30,6 +30,7 @@ def test_external_ci_and_container_inputs_are_immutable_and_updates_are_reviewed
 
     dockerfiles = (
         REPO_ROOT / "backend" / "Dockerfile",
+        REPO_ROOT / "backend" / "Dockerfile.worker",
         REPO_ROOT / "frontend" / "Dockerfile",
     )
     image_ref = re.compile(r"^FROM\s+([^\s]+)", re.MULTILINE)
@@ -172,8 +173,9 @@ def test_render_workers_wait_for_exact_schema_head():
     assert backend_env["APP_ROLE"]["value"] == "api"
     assert worker_env["APP_ROLE"]["value"] == "control_worker"
     assert beat_env["APP_ROLE"]["value"] == "beat"
-    for service_env in (backend_env, worker_env, beat_env):
-        assert service_env["SCIENCE_EXECUTION_BACKEND"]["value"] == "celery"
+    assert backend_env["SCIENCE_EXECUTION_BACKEND"]["value"] == "https_worker"
+    assert worker_env["SCIENCE_EXECUTION_BACKEND"]["value"] == "https_worker"
+    assert beat_env["SCIENCE_EXECUTION_BACKEND"]["value"] == "celery"
     for key in (
         "ADMIN_SECRET",
         "JWT_SECRET",
@@ -230,9 +232,13 @@ def test_render_workers_wait_for_exact_schema_head():
         "PRIVACY_CONTACT",
         "PRIVACY_JURISDICTION",
         "WORKER_TASK_SIGNING_PRIVATE_KEY",
-        "EVIDENCE_V2_SIGNING_PRIVATE_KEY",
     ):
         assert key not in worker_env
+    assert worker_env["EVIDENCE_V2_SIGNING_PRIVATE_KEY"]["fromService"] == {
+        "name": "standard-astro-backend",
+        "type": "web",
+        "envVarKey": "EVIDENCE_V2_SIGNING_PRIVATE_KEY",
+    }
     for key in (
         "JWT_SECRET",
         "FERNET_KEY",
@@ -345,7 +351,46 @@ def test_compose_declares_role_scoped_secrets_and_one_release_identity():
         "SCIENCE_EXECUTION_BACKEND",
         "DATABASE_URL",
         "REDIS_URL",
+        "POSTGRES_BACKUP_ENABLED",
     }
+
+
+def test_local_worker_requires_digest_pin_cosign_and_hardened_container():
+    compose = _yaml("deploy/compose.worker.yml")
+    worker = compose["services"]["science-worker"]
+    assert worker["image"] == (
+        "${ASTRO_WORKER_IMAGE:?set ASTRO_WORKER_IMAGE to a signed digest}"
+    )
+    assert worker["read_only"] is True
+    assert worker["user"] == "10001:10001"
+    assert worker["cap_drop"] == ["ALL"]
+    assert worker["security_opt"] == ["no-new-privileges:true"]
+    assert worker["environment"]["WORKER_IMAGE_DIGEST"] == (
+        "${WORKER_IMAGE_DIGEST:?set the pinned image digest}"
+    )
+    assert not any("/var/run/docker.sock" in mount for mount in worker["volumes"])
+
+    preflight = (REPO_ROOT / "deploy" / "start-signed-worker.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "cosign verify" in preflight
+    assert "MikhailXiaomaikou/Standard-Astro" in preflight
+    assert "refs/tags/v" in preflight
+    assert "docker compose" in preflight
+    assert preflight.index("cosign verify") < preflight.index("docker compose")
+
+    workflow = _yaml(".github/workflows/worker-image.yml")
+    assert workflow["permissions"] == {
+        "contents": "read",
+        "packages": "write",
+        "id-token": "write",
+    }
+    steps = workflow["jobs"]["build-sign"]["steps"]
+    build = next(step for step in steps if step.get("id") == "build")["with"]
+    assert build["platforms"] == "linux/amd64,linux/arm64"
+    assert build["push"] is True
+    assert build["provenance"] == "mode=max"
+    assert build["sbom"] is True
 
 
 def test_celery_delivery_semantics_are_fail_safe():
@@ -362,6 +407,7 @@ def test_celery_delivery_semantics_are_fail_safe():
         "queue": "control"
     }
     assert celery_app.conf.task_routes["privacy.*"] == {"queue": "maintenance"}
+    assert celery_app.conf.task_routes["research_source.*"] == {"queue": "control"}
     assert celery_app.conf.task_routes["claim_audit.process"] == {
         "queue": "science.heavy"
     }
@@ -376,6 +422,7 @@ def test_celery_delivery_semantics_are_fail_safe():
         > celery_app.conf.broker_transport_options["visibility_timeout"]
     )
     assert "reconcile-stale-research-jobs" in celery_app.conf.beat_schedule
+    assert "reconcile-queued-union3-sources" in celery_app.conf.beat_schedule
     assert "release-heartbeat" not in celery_app.conf.beat_schedule
     assert "system.release_heartbeat" not in celery_app.tasks
     assert celery_app.conf.beat_scheduler == (

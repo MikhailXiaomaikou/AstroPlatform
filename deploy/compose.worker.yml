@@ -1,0 +1,32 @@
+services:
+  science-worker:
+    # Production releases pin a multi-architecture image by digest, for example
+    # ghcr.io/example/standard-astro-worker@sha256:...
+    image: ${ASTRO_WORKER_IMAGE:?set ASTRO_WORKER_IMAGE to a signed digest}
+    restart: unless-stopped
+    read_only: true
+    user: "10001:10001"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m
+    volumes:
+      - astro-worker-state:/worker-state
+      - astro-worker-cache:/cache
+    environment:
+      ASTRO_WORKER_HOME: /worker-state
+      ASTRO_WORKER_CACHE_DIR: /cache
+      WORKER_IMAGE_DIGEST: ${WORKER_IMAGE_DIGEST:?set the pinned image digest}
+      GIT_COMMIT: ${GIT_COMMIT:?set the full release commit}
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 6G
+    stop_grace_period: 2m
+
+volumes:
+  astro-worker-state:
+  astro-worker-cache:

@@ -1,0 +1,29 @@
+FROM python:3.11-slim@sha256:e031123e3d85762b141ad1cbc56452ba69c6e722ebf2f042cc0dc86c47c0d8b3
+
+ARG TOOL_VERSION=""
+ARG WORKER_IMAGE_DIGEST=""
+ENV TOOL_VERSION=${TOOL_VERSION} \
+    GIT_COMMIT=${TOOL_VERSION} \
+    WORKER_IMAGE_DIGEST=${WORKER_IMAGE_DIGEST} \
+    ASTRO_WORKER_HOME=/worker-state \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY requirements.txt requirements.lock ./
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
+
+COPY app ./app
+COPY data/union3 ./data/union3
+COPY astro /usr/local/bin/astro
+
+RUN addgroup --system --gid 10001 astro-worker \
+    && adduser --system --uid 10001 --ingroup astro-worker --home /nonexistent astro-worker \
+    && mkdir -p /worker-state /cache \
+    && chown -R astro-worker:astro-worker /worker-state /cache \
+    && chmod 0555 /usr/local/bin/astro
+
+USER astro-worker
+ENTRYPOINT ["astro", "worker"]
+CMD ["start"]

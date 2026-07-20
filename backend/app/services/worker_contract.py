@@ -1,0 +1,51 @@
+"""Pure, dependency-free wire contract shared by control plane and worker."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from typing import Any
+
+WORKER_PROTOCOL_VERSION = "1"
+
+
+def canonical_json(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def canonical_result_hash(value: Any) -> str:
+    """Return the server-computed SHA-256 for a worker result."""
+
+    return hashlib.sha256(canonical_json(value)).hexdigest()
+
+
+def canonical_worker_request(
+    *,
+    method: str,
+    path: str,
+    timestamp: str,
+    nonce: str,
+    body_sha256: str,
+    worker_id: str,
+    protocol_version: str,
+) -> bytes:
+    """Build the exact bytes every local worker request signs."""
+
+    values = (
+        method.upper().strip(),
+        path.strip(),
+        timestamp.strip(),
+        nonce.strip(),
+        body_sha256.strip().lower(),
+        worker_id.strip().lower(),
+        protocol_version.strip(),
+    )
+    if any("\n" in value or "\r" in value for value in values):
+        raise ValueError("invalid_worker_signature_input")
+    return ("\n".join(values) + "\n").encode("utf-8")

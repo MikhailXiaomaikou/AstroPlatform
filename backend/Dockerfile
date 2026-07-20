@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     g++ \
     libpq-dev \
     postgresql-client \
+    poppler-utils \
     gfortran \
     libgsl-dev \
     libfftw3-dev \

@@ -44,6 +44,7 @@ async def _heartbeat(
 
 
 async def _process(audit_id: uuid.UUID) -> str:
+    from app.config import settings
     from app.models.claim_audit_records import ClaimAudit
     from app.models.database import async_session
     from app.models.schemas import User
@@ -62,11 +63,43 @@ async def _process(audit_id: uuid.UUID) -> str:
         ).scalar_one_or_none()
         if audit is None or audit.lifecycle_status not in {"QUEUED", "RUNNING"}:
             return "terminal"
+        if settings.claim_audit_execution_mode == "https_worker":
+            if (
+                audit.mode == "execute_registered"
+                and audit.claim_schema_version
+                == "union3_parameter_interval_reproduction_v1"
+                and audit.workspace_id is not None
+                and audit.source_extraction_id is not None
+            ):
+                # Registered runs are owned by the HTTPS Worker, independent
+                # verifier, and human-review finalizer.  A stale legacy Celery
+                # message must never race that evidence lane.
+                return "registered_https_worker"
+            # Pre-upgrade generic tasks may still exist in PostgreSQL or in a
+            # broker.  Production's registered-only mode fails them closed;
+            # the legacy deterministic path is not allowed to self-promote a
+            # claim to SUPPORTED without the new independent human review.
+            audit.lifecycle_status = "COMPLETED"
+            audit.scientific_verdict = "WITHHELD"
+            audit.machine_support_eligible = False
+            audit.reproduction_ready = False
+            audit.publication_ready = False
+            audit.review_status = "NOT_SUBMITTED"
+            audit.progress = 1.0
+            audit.progress_stage = "legacy_execution_withheld"
+            audit.error_class = "legacy_claim_audit_disabled"
+            audit.error = (
+                "This pre-upgrade Claim Audit cannot run in registered-only "
+                "HTTPS Worker mode; create a registered Workspace revision"
+            )
+            audit.worker_lease_id = None
+            audit.lease_expires_at = None
+            audit.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+            return "legacy_withheld"
         worker_lease_id = uuid.uuid4().hex
         stop = asyncio.Event()
-        heartbeat = asyncio.create_task(
-            _heartbeat(audit_id, worker_lease_id, stop)
-        )
+        heartbeat = asyncio.create_task(_heartbeat(audit_id, worker_lease_id, stop))
         try:
             result = await process_claim_audit(
                 db,
@@ -95,7 +128,7 @@ def process_claim_audit_task(self, audit_id: str) -> None:
         outcome = asyncio.run(_process(uuid.UUID(audit_id)))
     except Exception as exc:
         logger.exception("Claim Audit worker failed before lifecycle finalization")
-        raise self.retry(exc=exc, countdown=min(1800, 30 * (2 ** self.request.retries)))
+        raise self.retry(exc=exc, countdown=min(1800, 30 * (2**self.request.retries)))
     if outcome == "active_lease":
         from app.config import settings
 
@@ -118,6 +151,7 @@ async def _reconcile_stale() -> int:
     )
     reconciled = 0
     async with async_session() as db:
+
         def lease_expired(value: datetime | None) -> bool:
             if value is None:
                 return True
@@ -133,13 +167,19 @@ async def _reconcile_stale() -> int:
         ) -> int:
             if not audit.child_job_ids:
                 return 0
-            children = list((await db.execute(
-                select(ResearchJob).where(
-                    ResearchJob.user_id == audit.user_id,
-                    ResearchJob.job_id.in_(audit.child_job_ids),
-                    ResearchJob.status.in_({"queued", "running"}),
+            children = list(
+                (
+                    await db.execute(
+                        select(ResearchJob).where(
+                            ResearchJob.user_id == audit.user_id,
+                            ResearchJob.job_id.in_(audit.child_job_ids),
+                            ResearchJob.status.in_({"queued", "running"}),
+                        )
+                    )
                 )
-            )).scalars().all())
+                .scalars()
+                .all()
+            )
             for child in children:
                 if isinstance(child.result, dict) and child.result.get("_artifact_ref"):
                     try:
@@ -160,28 +200,34 @@ async def _reconcile_stale() -> int:
                 child.status = status
                 child.error_class = error_class
                 child.error = (
-                    "Parent Claim Audit worker lease expired"
-                    if error_class
-                    else None
+                    "Parent Claim Audit worker lease expired" if error_class else None
                 )
-                child.progress_message = f"{status.capitalize()} during Claim Audit recovery"
+                child.progress_message = (
+                    f"{status.capitalize()} during Claim Audit recovery"
+                )
                 child.completed_at = datetime.now(timezone.utc)
                 child.attestation = None
             return len(children)
 
-        staged = list((await db.execute(
-            select(EvidencePack)
-            .where(
-                EvidencePack.status == "UPLOADING",
-                EvidencePack.upload_started_at < upload_cutoff,
-                EvidencePack.user_id.in_(
-                    select(User.id).where(User.account_status == "ACTIVE")
-                ),
+        staged = list(
+            (
+                await db.execute(
+                    select(EvidencePack)
+                    .where(
+                        EvidencePack.status == "UPLOADING",
+                        EvidencePack.upload_started_at < upload_cutoff,
+                        EvidencePack.user_id.in_(
+                            select(User.id).where(User.account_status == "ACTIVE")
+                        ),
+                    )
+                    .order_by(EvidencePack.upload_started_at.asc())
+                    .limit(100)
+                    .with_for_update(skip_locked=True)
+                )
             )
-            .order_by(EvidencePack.upload_started_at.asc())
-            .limit(100)
-            .with_for_update(skip_locked=True)
-        )).scalars().all())
+            .scalars()
+            .all()
+        )
         for pack in staged:
             audit = await db.get(ClaimAudit, pack.audit_id)
             if (
@@ -205,9 +251,7 @@ async def _reconcile_stale() -> int:
             except FileNotFoundError:
                 cleaned = True
             except Exception:
-                logger.exception(
-                    "Could not reconcile staged Evidence Pack %s", pack.id
-                )
+                logger.exception("Could not reconcile staged Evidence Pack %s", pack.id)
             parent_lease_expired = (
                 audit is not None
                 and audit.lifecycle_status == "RUNNING"
@@ -218,7 +262,9 @@ async def _reconcile_stale() -> int:
                 audit.lifecycle_status = "FAILED_RETRYABLE"
                 audit.scientific_verdict = None
                 audit.error_class = "stale_evidence_pack_upload"
-                audit.error = "Evidence Pack upload did not finalize before its lease expired"
+                audit.error = (
+                    "Evidence Pack upload did not finalize before its lease expired"
+                )
                 await stop_generated_children(
                     audit,
                     status="failed",
@@ -230,22 +276,38 @@ async def _reconcile_stale() -> int:
                 await db.delete(pack)
             reconciled += 1
 
-        running = list((await db.execute(
-            select(ClaimAudit)
-            .where(
-                ClaimAudit.lifecycle_status == "RUNNING",
-                ClaimAudit.user_id.in_(
-                    select(User.id).where(User.account_status == "ACTIVE")
-                ),
-                or_(
-                    ClaimAudit.lease_expires_at.is_(None),
-                    ClaimAudit.lease_expires_at < now,
-                ),
+        running = list(
+            (
+                await db.execute(
+                    select(ClaimAudit)
+                    .where(
+                        ClaimAudit.lifecycle_status == "RUNNING",
+                        ClaimAudit.user_id.in_(
+                            select(User.id).where(User.account_status == "ACTIVE")
+                        ),
+                        # Registered Workspace runs keep their authoritative lease in
+                        # ScienceExecutionAttempt and are reconciled by
+                        # union3.reconcile.  The legacy ClaimAudit lease is
+                        # intentionally NULL while waiting for a local Worker, so the
+                        # legacy Celery reconciler must not falsely fail that state.
+                        or_(
+                            ClaimAudit.mode != "execute_registered",
+                            ClaimAudit.workspace_id.is_(None),
+                            ClaimAudit.source_extraction_id.is_(None),
+                        ),
+                        or_(
+                            ClaimAudit.lease_expires_at.is_(None),
+                            ClaimAudit.lease_expires_at < now,
+                        ),
+                    )
+                    .order_by(ClaimAudit.lease_expires_at.asc())
+                    .limit(100)
+                    .with_for_update(skip_locked=True)
+                )
             )
-            .order_by(ClaimAudit.lease_expires_at.asc())
-            .limit(100)
-            .with_for_update(skip_locked=True)
-        )).scalars().all())
+            .scalars()
+            .all()
+        )
         for audit in running:
             audit.lifecycle_status = "FAILED_RETRYABLE"
             audit.scientific_verdict = None
@@ -260,19 +322,25 @@ async def _reconcile_stale() -> int:
             audit.lease_expires_at = None
             reconciled += 1
 
-        cancelled = list((await db.execute(
-            select(ClaimAudit)
-            .where(
-                ClaimAudit.lifecycle_status == "CANCELLED",
-                ClaimAudit.updated_at < upload_cutoff,
-                ClaimAudit.user_id.in_(
-                    select(User.id).where(User.account_status == "ACTIVE")
-                ),
+        cancelled = list(
+            (
+                await db.execute(
+                    select(ClaimAudit)
+                    .where(
+                        ClaimAudit.lifecycle_status == "CANCELLED",
+                        ClaimAudit.updated_at < upload_cutoff,
+                        ClaimAudit.user_id.in_(
+                            select(User.id).where(User.account_status == "ACTIVE")
+                        ),
+                    )
+                    .order_by(ClaimAudit.updated_at.asc())
+                    .limit(100)
+                    .with_for_update(skip_locked=True)
+                )
             )
-            .order_by(ClaimAudit.updated_at.asc())
-            .limit(100)
-            .with_for_update(skip_locked=True)
-        )).scalars().all())
+            .scalars()
+            .all()
+        )
         for audit in cancelled:
             reconciled += await stop_generated_children(
                 audit,

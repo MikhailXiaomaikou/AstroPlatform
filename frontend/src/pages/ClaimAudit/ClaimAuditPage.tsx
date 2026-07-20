@@ -40,10 +40,6 @@ function formatTime(value: string | null): string {
   return Number.isNaN(parsed.valueOf()) ? value : parsed.toLocaleString();
 }
 
-function splitValues(value: string): string[] {
-  return [...new Set(value.split(/[\n,]/).map((part) => part.trim()).filter(Boolean))];
-}
-
 function verdictLabel(verdict: ClaimAuditVerdict | null): string {
   if (verdict === "SUPPORTED") return "Supported by this run";
   if (verdict === "CAPABILITY_GAP") return "Capability gap";
@@ -315,8 +311,6 @@ export default function ClaimAuditPage() {
   const [sourceKind, setSourceKind] = useState<ClaimAuditCreatePayload["source"]["kind"]>("doi");
   const [sourceValue, setSourceValue] = useState("");
   const [mode, setMode] = useState<ClaimAuditCreatePayload["mode"]>("audit_only");
-  const [evidenceRefs, setEvidenceRefs] = useState("");
-  const [datasetHints, setDatasetHints] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -381,8 +375,6 @@ export default function ClaimAuditPage() {
       const created = await createClaimAudit({
         claim_text: claimText.trim(),
         source: { kind: sourceKind, value: sourceValue.trim() },
-        evidence_input_refs: splitValues(evidenceRefs),
-        dataset_hints: splitValues(datasetHints),
         mode,
       });
       await loadList(created.audit_id);
@@ -488,17 +480,9 @@ export default function ClaimAuditPage() {
                 placeholder={sourceKind === "doi" ? "10.1234/example" : sourceKind === "arxiv" ? "2501.01234" : "Pinned identifier"}
               />
             </label>
-            <details>
-              <summary>Registered evidence inputs</summary>
-              <label>
-                Research job IDs, comma or line separated
-                <textarea value={evidenceRefs} onChange={(event) => setEvidenceRefs(event.target.value)} rows={2} />
-              </label>
-              <label>
-                Dataset registry keys, comma or line separated
-                <textarea value={datasetHints} onChange={(event) => setDatasetHints(event.target.value)} rows={2} />
-              </label>
-            </details>
+            <p className="claim-muted">
+              Registered evidence, datasets, and tool settings are selected by the server.
+            </p>
             <button className="btn-primary" type="submit" disabled={!canSubmit}>
               {busy ? "Starting…" : "Start Claim Audit"}
             </button>
