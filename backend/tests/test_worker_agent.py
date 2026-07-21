@@ -358,7 +358,7 @@ def test_worker_accepts_only_signed_registered_task_envelope():
         verify_task_envelope(config, wrong_pins, now=now)
 
 
-def test_v2_worker_rejects_stale_registry_binding():
+def test_v2_worker_rejects_non_static_adapter_binding():
     control_key = Ed25519PrivateKey.generate()
     legacy_config = _config(control_key)
     config = replace(legacy_config, protocol_version=WORKER_PROTOCOL_VERSION)
@@ -375,6 +375,8 @@ def test_v2_worker_rejects_stale_registry_binding():
         "registry_epoch": binding["registry_epoch"],
         "registry_entry_hash": binding["registry_entry_hash"],
         "entrypoint_id": binding["entrypoint_id"],
+        "execution_adapter_id": binding["execution_adapter_id"],
+        "tool_spec_hash": binding["tool_spec_hash"],
         "normalized_inputs": {},
         "input_sha256": "b" * 64,
         "dataset_pins": get_registered_dataset_pins(
@@ -400,11 +402,9 @@ def test_v2_worker_rejects_stale_registry_binding():
         }
 
     verify_task_envelope(config, signed(envelope), now=now)
-    stale = {**envelope, "registry_entry_hash": "sha256:" + "0" * 64}
-    with pytest.raises(
-        WorkerClientError, match="workflow_registry_entry_hash_mismatch"
-    ):
-        verify_task_envelope(config, signed(stale), now=now)
+    incompatible = {**envelope, "tool_spec_hash": "sha256:" + "0" * 64}
+    with pytest.raises(WorkerClientError, match="image-static"):
+        verify_task_envelope(config, signed(incompatible), now=now)
 
 
 def test_cli_surface_is_narrow_and_has_no_arbitrary_exec_command():
@@ -524,6 +524,27 @@ def test_heartbeat_503_is_classified_as_retryable(monkeypatch):
     with pytest.raises(WorkerClientError) as caught:
         heartbeat.current_action()
     assert worker_cli._is_retryable_failure(caught.value) is True
+
+
+def test_heartbeat_409_server_cancellation_becomes_cancel_action(monkeypatch):
+    config = _config(Ed25519PrivateKey.generate())
+    envelope = {"attempt_id": str(uuid.uuid4()), "lease_id": "8" * 64}
+
+    class Response:
+        status_code = 409
+
+        @staticmethod
+        def json():
+            return {"detail": "science_job_cancelled"}
+
+    monkeypatch.setattr(
+        worker_cli,
+        "signed_request",
+        lambda *_args, **_kwargs: Response(),
+    )
+    heartbeat = worker_cli._LeaseHeartbeat(config, envelope)
+    heartbeat._heartbeat_once()
+    assert heartbeat.current_action() == "cancel"
 
 
 def test_run_once_keeps_heartbeat_active_through_uploads_and_completion(

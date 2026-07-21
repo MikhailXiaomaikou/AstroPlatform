@@ -105,7 +105,7 @@ class WorkspaceClaimAuditCreateRequest(BaseModel):
 
     source_document_id: uuid.UUID
     candidate_id: str = Field(min_length=1, max_length=71)
-    workflow_key: Literal["union3_flat_lcdm_sn_only_v1"]
+    workflow_key: str = Field(min_length=3, max_length=128)
 
 
 def _require_union3_loop_enabled() -> None:
@@ -160,7 +160,7 @@ def _serialize_union3_audit(
             str(audit.source_extraction_id) if audit.source_extraction_id else None
         ),
         "candidate_id": atomic_claim.get("candidate_id"),
-        "workflow_key": "union3_flat_lcdm_sn_only_v1",
+        "workflow_key": audit.workflow_id or "union3_flat_lcdm_sn_only_v1",
         "review_status": audit.review_status,
         "machine_support_eligible": audit.machine_support_eligible,
         "reproduction_ready": audit.reproduction_ready,

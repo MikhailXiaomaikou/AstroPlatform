@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import copy
 import json
+import runpy
+import stat
 from pathlib import Path
 
 import pytest
@@ -26,6 +28,25 @@ _REPORT_SCHEMA = (
 )
 
 
+def test_demo_artifacts_are_host_readable_and_never_overwritten(
+    tmp_path: Path,
+) -> None:
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "run_foundry_candidate_demo.py"
+    )
+    write_exclusive = runpy.run_path(str(script))["_write_exclusive"]
+    output = tmp_path / "demo-report.json"
+
+    write_exclusive(output, b"{}\n")
+
+    assert output.read_bytes() == b"{}\n"
+    assert stat.S_IMODE(output.stat().st_mode) == 0o644
+    with pytest.raises(FileExistsError):
+        write_exclusive(output, b"replacement")
+
+
 def test_checked_in_candidate_is_non_formal_and_records_partial_without_mirror(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -48,6 +69,20 @@ def test_checked_in_candidate_is_non_formal_and_records_partial_without_mirror(
     assert len(report["demo_report_sha256"]) == 64
     assert len(report["stdout_sha256"]) == 64
     assert len(report["stderr_sha256"]) == 64
+    assert report["artifact_manifest"] == [
+        {
+            "path": "stdout.log",
+            "kind": "STDOUT",
+            "sha256": report["stdout_sha256"],
+            "bytes": report["stdout_bytes"],
+        },
+        {
+            "path": "stderr.log",
+            "kind": "STDERR",
+            "sha256": report["stderr_sha256"],
+            "bytes": report["stderr_bytes"],
+        },
+    ]
     assert len(report["environment_sha256"]) == 64
     assert report["environment"]["entrypoint_id"] == bundle["entrypoint_id"]
     user_cpu_seconds = report["resource_usage"]["user_cpu_seconds"]
@@ -158,9 +193,12 @@ def test_candidate_stream_capture_is_bounded(monkeypatch: pytest.MonkeyPatch) ->
         bundle["entrypoint_id"],
         noisy_entrypoint,
     )
-    report = run_candidate_demo(bundle)
+    streams: dict[str, bytes] = {}
+    report = run_candidate_demo(bundle, captured_streams=streams)
 
     assert report["stdout_bytes"] == foundry_demo_runner._STREAM_CAPTURE_LIMIT_BYTES
+    assert len(streams["stdout.log"]) == report["stdout_bytes"]
+    assert streams["stderr.log"] == b""
     assert report["resource_usage"]["stdout_truncated"] is True
     assert (
         report["resource_usage"]["stdout_observed_bytes"]

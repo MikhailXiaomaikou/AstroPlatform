@@ -182,6 +182,7 @@ async def _start_registered_workflow(
         from app.services.workflow_registry_v2 import (
             UNION3_REPRODUCTION_WORKFLOW_ID,
             assert_workflow_executable,
+            get_static_execution_adapter_binding,
         )
 
         binding = assert_workflow_executable(workflow_id)
@@ -190,10 +191,20 @@ async def _start_registered_workflow(
             str(getattr(exc, "code", None) or "workflow_not_registered"),
             "The requested workflow is not active in the verified Formal Registry.",
         )
-    if workflow_id != UNION3_REPRODUCTION_WORKFLOW_ID:
+    try:
+        adapter = get_static_execution_adapter_binding(workflow_id)
+    except Exception as exc:
         return _failure(
-            "registered_workflow_start_not_available",
-            "This formal workflow has no Workspace start adapter in this release.",
+            str(
+                getattr(exc, "code", None)
+                or "workflow_execution_adapter_not_static"
+            ),
+            "This formal workflow has no image-static Workspace adapter.",
+        )
+    if adapter["canonical_workflow_id"] != UNION3_REPRODUCTION_WORKFLOW_ID:
+        return _failure(
+            "workflow_execution_adapter_not_static",
+            "This formal workflow has no image-static Workspace adapter.",
         )
 
     try:

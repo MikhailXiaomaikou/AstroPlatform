@@ -1,0 +1,301 @@
+name: Foundry AI candidate draft
+
+on:
+  workflow_dispatch:
+    inputs:
+      draft_run_id:
+        description: Immutable Candidate event UUID used as the Draft run id
+        required: true
+        type: string
+      candidate_id:
+        description: Opaque Candidate Catalog UUID
+        required: true
+        type: string
+      gap_fingerprint:
+        description: SHA-256 of the server-approved structured gap descriptor
+        required: true
+        type: string
+      gap_code:
+        description: Stable non-user-content capability code
+        required: true
+        type: string
+      gap_descriptor:
+        description: Canonical server-allowlisted capability descriptor JSON
+        required: true
+        type: string
+      generation_route:
+        description: COMPOSITION, DATA_ADAPTER, or SCIENCE_CODE
+        required: true
+        type: string
+      risk_level:
+        description: R0 through R3 (R4 is forbidden in Foundry v1)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foundry-draft-${{ inputs.draft_run_id }}
+  cancel-in-progress: false
+
+jobs:
+  # This is the only job that can see the AI credential.  It emits inert JSON,
+  # an inert patch, and an SBOM proposal.  It does not apply/import/run the
+  # patch and it has no Candidate callback, Registry, Evidence, DB, or Worker
+  # credential.
+  draft-with-ai:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Repository administrators must restrict this Environment to deployments
+    # from main.  The Environment, rather than this removable shell check, is
+    # the unbypassable boundary around the AI credential.
+    environment: foundry-candidate-draft-ai
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      artifact_name: foundry-draft-${{ inputs.draft_run_id }}
+    steps:
+      - name: Require the protected main workflow source
+        shell: bash
+        run: test "$GITHUB_REF" = "refs/heads/main"
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Generate inert candidate artifacts through the provider contract
+        id: generate
+        env:
+          FOUNDRY_AI_DRAFT_PROVIDER_COMMAND_JSON: ${{ vars.FOUNDRY_AI_DRAFT_PROVIDER_COMMAND_JSON }}
+          FOUNDRY_AI_DRAFT_API_KEY: ${{ secrets.FOUNDRY_AI_DRAFT_API_KEY }}
+          DRAFT_RUN_ID: ${{ inputs.draft_run_id }}
+          CANDIDATE_ID: ${{ inputs.candidate_id }}
+          GAP_FINGERPRINT: ${{ inputs.gap_fingerprint }}
+          GAP_CODE: ${{ inputs.gap_code }}
+          GAP_DESCRIPTOR: ${{ inputs.gap_descriptor }}
+          GENERATION_ROUTE: ${{ inputs.generation_route }}
+          RISK_LEVEL: ${{ inputs.risk_level }}
+        shell: bash
+        run: |
+          set +e
+          python backend/scripts/run_foundry_ai_draft_job.py generate \
+            --draft-run-id "$DRAFT_RUN_ID" \
+            --candidate-id "$CANDIDATE_ID" \
+            --gap-fingerprint "$GAP_FINGERPRINT" \
+            --gap-code "$GAP_CODE" \
+            --gap-descriptor "$GAP_DESCRIPTOR" \
+            --generation-route "$GENERATION_ROUTE" \
+            --risk-level "$RISK_LEVEL" \
+            --output-dir foundry-draft-output
+          exit_code="$?"
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload secret-free inert Draft artifacts
+        id: upload
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: foundry-draft-${{ inputs.draft_run_id }}
+          path: foundry-draft-output
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Preserve provider failure in the workflow conclusion
+        if: ${{ steps.generate.outputs.exit_code != '0' }}
+        run: exit 1
+
+  # This host-side job can materialize and package inert output, but it has no
+  # AI credential and no callback bearer. Candidate validation remains in
+  # foundry-candidate-demo.yml. Generated Python is copied only after the final
+  # Dockerfile RUN instruction, so it is not executed while packages:write is
+  # available.
+  materialize-and-build-without-callback:
+    if: ${{ always() }}
+    needs: draft-with-ai
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # This Environment has no long-lived secret.  Its main-only deployment
+    # policy protects the packages:write GITHUB_TOKEN from branch workflows.
+    environment: foundry-candidate-draft-build
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Require the protected main workflow source
+        shell: bash
+        run: test "$GITHUB_REF" = "refs/heads/main"
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          path: candidate-source
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Download inert Draft artifacts
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: foundry-draft-${{ inputs.draft_run_id }}
+          path: foundry-draft-output
+
+      - name: Classify the secret-free provider receipt
+        id: provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(python -c 'import json; print(json.load(open("foundry-draft-output/provider-result.json"))["status"])')"
+          case "$status" in
+            SUCCEEDED) echo "candidate_ready=true" >> "$GITHUB_OUTPUT" ;;
+            FAILED) echo "candidate_ready=false" >> "$GITHUB_OUTPUT" ;;
+            *) exit 1 ;;
+          esac
+
+      - name: Apply the inert allowlisted patch and hash the staged source
+        if: ${{ steps.provider.outputs.candidate_ready == 'true' }}
+        shell: bash
+        env:
+          DRAFT_RUN_ID: ${{ inputs.draft_run_id }}
+          CANDIDATE_ID: ${{ inputs.candidate_id }}
+          GAP_FINGERPRINT: ${{ inputs.gap_fingerprint }}
+          GAP_CODE: ${{ inputs.gap_code }}
+          GAP_DESCRIPTOR: ${{ inputs.gap_descriptor }}
+          GENERATION_ROUTE: ${{ inputs.generation_route }}
+          RISK_LEVEL: ${{ inputs.risk_level }}
+        run: |
+          set -euo pipefail
+          python candidate-source/backend/scripts/run_foundry_ai_draft_job.py materialize \
+            --draft-run-id "$DRAFT_RUN_ID" \
+            --candidate-id "$CANDIDATE_ID" \
+            --gap-fingerprint "$GAP_FINGERPRINT" \
+            --gap-code "$GAP_CODE" \
+            --gap-descriptor "$GAP_DESCRIPTOR" \
+            --generation-route "$GENERATION_ROUTE" \
+            --risk-level "$RISK_LEVEL" \
+            --input-dir foundry-draft-output \
+            --source-repo candidate-source \
+            --output foundry-draft-source-receipt.json
+
+      - name: Log in to the non-formal Candidate image registry
+        if: ${{ steps.provider.outputs.candidate_ready == 'true' }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the unexecuted Candidate Validation image
+        if: ${{ steps.provider.outputs.candidate_ready == 'true' }}
+        id: image
+        env:
+          DRAFT_RUN_ID: ${{ inputs.draft_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}/foundry-candidate:${DRAFT_RUN_ID}"
+          docker build --pull \
+            --build-arg TOOL_VERSION="$GITHUB_SHA" \
+            --file candidate-source/backend/Dockerfile.foundry-demo \
+            --tag "$image" \
+            candidate-source/backend
+          docker push "$image"
+          digest="$(docker image inspect --format '{{index .RepoDigests 0}}' "$image")"
+          digest="${digest##*@}"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Freeze the host-computed callback document
+        env:
+          VALIDATION_RUNNER_IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          DRAFT_RUN_ID: ${{ inputs.draft_run_id }}
+          CANDIDATE_ID: ${{ inputs.candidate_id }}
+          GAP_FINGERPRINT: ${{ inputs.gap_fingerprint }}
+          GAP_CODE: ${{ inputs.gap_code }}
+          GAP_DESCRIPTOR: ${{ inputs.gap_descriptor }}
+          GENERATION_ROUTE: ${{ inputs.generation_route }}
+          RISK_LEVEL: ${{ inputs.risk_level }}
+          ARTIFACT_REPOSITORY: ${{ github.repository }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+          ARTIFACT_ID: ${{ needs.draft-with-ai.outputs.artifact_id }}
+          ARTIFACT_NAME: ${{ needs.draft-with-ai.outputs.artifact_name }}
+          ARTIFACT_DIGEST: ${{ needs.draft-with-ai.outputs.artifact_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python candidate-source/backend/scripts/run_foundry_ai_draft_job.py finalize \
+            --draft-run-id "$DRAFT_RUN_ID" \
+            --candidate-id "$CANDIDATE_ID" \
+            --gap-fingerprint "$GAP_FINGERPRINT" \
+            --gap-code "$GAP_CODE" \
+            --gap-descriptor "$GAP_DESCRIPTOR" \
+            --generation-route "$GENERATION_ROUTE" \
+            --risk-level "$RISK_LEVEL" \
+            --input-dir foundry-draft-output \
+            --output foundry-draft-callback.json \
+            --validation-runner-image-digest "$VALIDATION_RUNNER_IMAGE_DIGEST" \
+            --source-repo candidate-source \
+            --source-receipt foundry-draft-source-receipt.json \
+            --artifact-repository "$ARTIFACT_REPOSITORY" \
+            --workflow-run-id "$WORKFLOW_RUN_ID" \
+            --artifact-id "$ARTIFACT_ID" \
+            --artifact-name "$ARTIFACT_NAME" \
+            --artifact-digest "$ARTIFACT_DIGEST"
+
+      - name: Upload the frozen callback document
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: foundry-draft-callback-${{ inputs.draft_run_id }}
+          path: foundry-draft-callback.json
+          if-no-files-found: error
+          retention-days: 1
+
+  # The callback bearer exists only here. This job never checks out candidate
+  # source, downloads provider output, invokes a candidate script, builds an
+  # image, or executes generated code. Its sole untrusted input is posted as a
+  # request body to the fixed HTTPS control-plane endpoint.
+  callback-only:
+    if: ${{ always() }}
+    needs: materialize-and-build-without-callback
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: foundry-candidate-draft-callback
+    permissions:
+      actions: read
+      contents: none
+    steps:
+      - name: Require the protected main workflow source
+        shell: bash
+        run: test "$GITHUB_REF" = "refs/heads/main"
+
+      - name: Download only the frozen callback document
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: foundry-draft-callback-${{ inputs.draft_run_id }}
+          path: callback
+
+      - name: Require one bounded regular callback document
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find callback -type f -maxdepth 1 | wc -l | tr -d ' ')" = "1"
+          test -f callback/foundry-draft-callback.json
+          test ! -L callback/foundry-draft-callback.json
+          test "$(wc -c < callback/foundry-draft-callback.json)" -le 1048576
+
+      - name: Append the Draft result to the Candidate ledger
+        env:
+          CONTROL_PLANE_URL: ${{ vars.FOUNDRY_CONTROL_PLANE_URL }}
+          RESULT_SECRET: ${{ secrets.FOUNDRY_DRAFT_RESULT_SECRET }}
+          DRAFT_RUN_ID: ${{ inputs.draft_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CONTROL_PLANE_URL"
+          test -n "$RESULT_SECRET"
+          callback="${CONTROL_PLANE_URL%/}/api/internal/foundry/draft-runs/${DRAFT_RUN_ID}/result"
+          curl --fail --silent --show-error --output /dev/null \
+            --proto '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --connect-timeout 10 --max-time 60 \
+            -H "Authorization: Bearer $RESULT_SECRET" \
+            -H "Content-Type: application/json" \
+            --data-binary @callback/foundry-draft-callback.json \
+            "$callback"

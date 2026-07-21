@@ -41,7 +41,9 @@ services:
     dockerfilePath: backend/Dockerfile
     dockerContext: backend
     plan: standard              # 2 GB RAM / 1 CPU
-    autoDeployTrigger: checksPass
+    # Registry activation is commit-pinned. Keep auto deploy disabled so
+    # merging the public activation bundle cannot boot it before approval.
+    autoDeployTrigger: off
     # Pre-deploy inherits the web service environment, so override APP_ROLE on
     # both Alembic processes. Migration startup must not require API secrets.
     preDeployCommand: sh -c 'APP_ROLE=migration alembic upgrade head && APP_ROLE=migration alembic check'
@@ -163,17 +165,104 @@ services:
         value: "false"
       - key: FOUNDRY_CANDIDATE_CATALOG_ENABLED
         value: "false"
+      - key: FOUNDRY_SOURCE_MATERIALIZATION_ENABLED
+        value: "false"
       - key: FOUNDRY_REGISTRATION_ENABLED
         value: "false"
+      - key: FOUNDRY_DRAFT_RESULT_SECRET
+        # Used only by the post-AI host callback; never reuse an AI/API key.
+        sync: false
+      - key: FOUNDRY_DRAFT_DISPATCH_BACKEND
+        value: disabled
+      - key: FOUNDRY_DRAFT_GITHUB_TOKEN
+        sync: false
+      - key: FOUNDRY_DRAFT_GITHUB_REPOSITORY
+        sync: false
+      - key: FOUNDRY_DRAFT_GITHUB_WORKFLOW
+        value: foundry-candidate-draft.yml
+      - key: FOUNDRY_DRAFT_GITHUB_REF
+        # GitHub workflow_dispatch requires a branch/tag; Environment policy
+        # and an in-workflow gate restrict this to protected main.
+        value: main
       - key: FOUNDRY_VALIDATION_RESULT_SECRET
         # Narrow result-ingestion secret. Never reuse another trust-domain key.
         sync: false
+      - key: FOUNDRY_VALIDATION_DISPATCH_BACKEND
+        value: disabled
+      - key: FOUNDRY_VALIDATION_GITHUB_TOKEN
+        sync: false
+      - key: FOUNDRY_VALIDATION_GITHUB_REPOSITORY
+        sync: false
+      - key: FOUNDRY_VALIDATION_GITHUB_WORKFLOW
+        value: foundry-candidate-demo.yml
+      - key: FOUNDRY_VALIDATION_GITHUB_REF
+        value: main
+      - key: FOUNDRY_MATERIALIZATION_RESULT_SECRET
+        # Bearer only; every callback also requires a dedicated Ed25519 receipt.
+        sync: false
+      - key: FOUNDRY_MATERIALIZATION_ATTESTATION_VERIFICATION_KEYS
+        # Public keys only. Private materialization key remains in protected GitHub CI.
+        sync: false
+      - key: FOUNDRY_MATERIALIZATION_DISPATCH_BACKEND
+        value: disabled
+      - key: FOUNDRY_MATERIALIZATION_GITHUB_TOKEN
+        sync: false
+      - key: FOUNDRY_MATERIALIZATION_GITHUB_REPOSITORY
+        sync: false
+      - key: FOUNDRY_MATERIALIZATION_GITHUB_WORKFLOW
+        value: foundry-materialize-candidate.yml
+      - key: FOUNDRY_MATERIALIZATION_FINALIZE_GITHUB_WORKFLOW
+        value: foundry-finalize-materialization.yml
+      - key: FOUNDRY_MATERIALIZATION_GITHUB_REF
+        value: main
+      - key: FOUNDRY_FORMAL_BUILD_RESULT_SECRET
+        # Narrow callback secret; the signing key remains inside protected CI.
+        sync: false
+      - key: FOUNDRY_FORMAL_BUILD_OIDC_SUBJECT
+        sync: false
+      - key: FOUNDRY_FORMAL_BUILD_ATTESTATION_VERIFICATION_KEYS
+        sync: false
+      - key: FOUNDRY_FORMAL_BUILD_DISPATCH_BACKEND
+        value: disabled
+      - key: FOUNDRY_FORMAL_BUILD_GITHUB_TOKEN
+        sync: false
+      - key: FOUNDRY_FORMAL_BUILD_GITHUB_REPOSITORY
+        sync: false
+      - key: FOUNDRY_FORMAL_BUILD_GITHUB_WORKFLOW
+        value: foundry-formal-worker.yml
+      - key: FOUNDRY_FORMAL_BUILD_GITHUB_REF
+        value: main
+      - key: FOUNDRY_REGISTRY_EXPORT_SECRET
+        sync: false
+      - key: FOUNDRY_REGISTRY_IMPORT_RESULT_SECRET
+        sync: false
+      - key: FOUNDRY_REGISTRY_ACTIVATION_RESULT_SECRET
+        # Used by the protected exact-commit deploy workflow; never a signer.
+        sync: false
+      - key: FOUNDRY_REGISTRY_DISPATCH_BACKEND
+        value: disabled
+      - key: FOUNDRY_REGISTRY_GITHUB_TOKEN
+        sync: false
+      - key: FOUNDRY_REGISTRY_GITHUB_REPOSITORY
+        sync: false
+      - key: FOUNDRY_REGISTRY_GITHUB_WORKFLOW
+        value: foundry-registry-release.yml
+      - key: FOUNDRY_REGISTRY_GITHUB_REF
+        value: main
       - key: WORKFLOW_REGISTRY_SIGNING_KEY_ID
         sync: false
       - key: WORKFLOW_REGISTRY_SIGNING_PUBLIC_KEY
         sync: false
       - key: WORKFLOW_REGISTRY_VERIFICATION_KEYS
         sync: false
+      - key: WORKFLOW_REGISTRY_RELEASE_PATH
+        # Set to a fixed file only in the explicit activation deploy. A
+        # configured missing/invalid file intentionally fails process boot.
+        value: ""
+      - key: WORKFLOW_REGISTRY_TRUSTED_KEYRING_PATH
+        value: ""
+      - key: WORKFLOW_REGISTRY_ACTIVATION_MANIFEST_PATH
+        value: ""
       - key: CLAIM_AUDIT_EXECUTION_MODE
         value: https_worker
       - key: CLAIM_AUDIT_REGISTERED_TIMEOUT_SECONDS
@@ -264,7 +353,8 @@ services:
     dockerfilePath: backend/Dockerfile
     dockerContext: backend
     plan: starter
-    autoDeployTrigger: checksPass
+    # Deployed with Backend/Beat by the exact-commit activation workflow.
+    autoDeployTrigger: off
     # Starter has 512 MB; one control child avoids memory overcommit. Give an
     # acknowledged late maintenance task the maximum graceful-shutdown window.
     maxShutdownDelaySeconds: 300
@@ -500,7 +590,8 @@ services:
     dockerfilePath: backend/Dockerfile
     dockerContext: backend
     plan: starter
-    autoDeployTrigger: checksPass
+    # Deployed with Backend/Worker by the exact-commit activation workflow.
+    autoDeployTrigger: off
     # Beat must not enqueue tasks from a new image until the backend migration
     # for that same image has reached Alembic head.
     dockerCommand: sh -c 'python scripts/wait_for_schema_head.py && exec celery -A celery_worker beat --loglevel=info --pidfile=/tmp/celerybeat.pid'

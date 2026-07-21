@@ -1,0 +1,201 @@
+name: Protected Foundry Registry release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_request_id:
+        description: Exact server-issued PENDING Registry release UUID
+        required: true
+        type: string
+      release_request_sha256:
+        description: Server-recorded canonical SHA-256 of the PENDING request JSON
+        required: true
+        type: string
+
+# Configure `foundry-registry-release` with required human reviewers and a
+# deployment-branch policy limited to main. The Ed25519 seed exists only as an
+# Environment secret used by one host signing step; it is never a Render secret.
+permissions:
+  contents: read
+
+concurrency:
+  group: foundry-registry-release
+  cancel-in-progress: false
+
+jobs:
+  sign-complete-snapshot-and-import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: foundry-registry-release
+    permissions:
+      contents: read
+    steps:
+      - name: Require a protected workflow definition and exact inputs
+        env:
+          RELEASE_REQUEST_ID: ${{ inputs.release_request_id }}
+          RELEASE_REQUEST_SHA256: ${{ inputs.release_request_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          [[ "$RELEASE_REQUEST_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
+          [[ "$RELEASE_REQUEST_SHA256" =~ ^sha256:[0-9a-f]{64}$ ]]
+
+      - name: Check out the reviewed offline signer from protected main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          path: release-tools
+          persist-credentials: false
+
+      # This credential is read-only and independent from the signing and
+      # import credentials. The endpoint exports only a server-ledger request.
+      - name: Fetch the exact PENDING request from the control center
+        env:
+          CONTROL_PLANE_URL: ${{ vars.FOUNDRY_CONTROL_PLANE_URL }}
+          EXPORT_SECRET: ${{ secrets.FOUNDRY_REGISTRY_EXPORT_SECRET }}
+          RELEASE_REQUEST_ID: ${{ inputs.release_request_id }}
+          RELEASE_REQUEST_SHA256: ${{ inputs.release_request_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CONTROL_PLANE_URL"
+          test -n "$EXPORT_SECRET"
+          mkdir -p release-request
+          endpoint="${CONTROL_PLANE_URL%/}/api/internal/foundry/registry-releases/${RELEASE_REQUEST_ID}/export"
+          curl --fail-with-body --silent --show-error \
+            --proto '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --connect-timeout 10 --max-time 60 \
+            --get \
+            -H "Authorization: Bearer $EXPORT_SECRET" \
+            --data-urlencode "release_request_hash=$RELEASE_REQUEST_SHA256" \
+            --output release-request/registry-release-export.json \
+            "$endpoint"
+
+      - name: Verify and extract the privacy-minimized export envelope
+        env:
+          RELEASE_REQUEST_ID: ${{ inputs.release_request_id }}
+          RELEASE_REQUEST_SHA256: ${{ inputs.release_request_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import uuid
+          from pathlib import Path
+
+          path = Path("release-request/registry-release-export.json")
+          if not path.is_file() or path.is_symlink() or path.stat().st_size > 20 * 1024 * 1024:
+              raise SystemExit("registry release export is not a bounded regular file")
+          envelope = json.loads(path.read_text(encoding="utf-8"))
+          if not isinstance(envelope, dict) or set(envelope) != {
+              "schema_version",
+              "release_request_id",
+              "release_request_sha256",
+              "pending_release_request",
+          }:
+              raise SystemExit("registry release export shape is not registered")
+          request_id = str(uuid.UUID(os.environ["RELEASE_REQUEST_ID"]))
+          expected_hash = os.environ["RELEASE_REQUEST_SHA256"]
+          pending = envelope["pending_release_request"]
+          if not isinstance(pending, dict):
+              raise SystemExit("pending release request must be an object")
+          canonical = json.dumps(
+              pending,
+              ensure_ascii=False,
+              sort_keys=True,
+              separators=(",", ":"),
+              allow_nan=False,
+          ).encode("utf-8")
+          actual_hash = "sha256:" + hashlib.sha256(canonical).hexdigest()
+          if (
+              envelope["schema_version"]
+              != "standard_astro_registry_release_export_v1"
+              or envelope["release_request_id"] != request_id
+              or pending.get("request_id") != request_id
+              or envelope["release_request_sha256"] != expected_hash
+              or actual_hash != expected_hash
+          ):
+              raise SystemExit("registry release export binding mismatch")
+          Path("release-request/pending-release-request.json").write_bytes(
+              canonical + b"\n"
+          )
+          PY
+          rm -f release-request/registry-release-export.json
+
+      # This is trusted host code from main. No candidate container runs in
+      # this job. The private seed is removed by the shell trap before the next
+      # step and is never uploaded or sent to the control center.
+      - name: Compile all prior entries and sign the complete registry overlay
+        env:
+          REGISTRY_PRIVATE_KEY: ${{ secrets.WORKFLOW_REGISTRY_SIGNING_PRIVATE_KEY }}
+          REGISTRY_KEY_ID: ${{ vars.WORKFLOW_REGISTRY_SIGNING_KEY_ID }}
+          REQUEST_SHA256: ${{ inputs.release_request_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          test -n "$REGISTRY_PRIVATE_KEY"
+          test -n "$REGISTRY_KEY_ID"
+          key_file="$RUNNER_TEMP/foundry-registry-ed25519.key"
+          cleanup() {
+            rm -f "$key_file"
+          }
+          trap cleanup EXIT
+          umask 077
+          printf '%s' "$REGISTRY_PRIVATE_KEY" > "$key_file"
+          unset REGISTRY_PRIVATE_KEY
+          mkdir -p registry-release
+
+          request_id="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          print(json.loads(Path("release-request/pending-release-request.json").read_text())["request_id"])
+          PY
+          )"
+          epoch="foundry.${request_id}"
+
+          python3 release-tools/backend/scripts/build_foundry_registry_release.py \
+            --request release-request/pending-release-request.json \
+            --request-sha256 "$REQUEST_SHA256" \
+            --private-key-file "$key_file" \
+            --key-id "$REGISTRY_KEY_ID" \
+            --registry-epoch "$epoch" \
+            --snapshot-output registry-release/signed-registry-snapshot.json \
+            --import-output registry-release/registry-release-import.json
+          test -s registry-release/signed-registry-snapshot.json
+          test -s registry-release/registry-release-import.json
+
+      # This endpoint is an explicit automation contract. Until the protected
+      # import API is merged and configured, this step fails closed; a signed
+      # artifact alone must never be reported as REGISTERED.
+      - name: Import the verified signed snapshot into the control center
+        env:
+          CONTROL_PLANE_URL: ${{ vars.FOUNDRY_CONTROL_PLANE_URL }}
+          IMPORT_SECRET: ${{ secrets.FOUNDRY_REGISTRY_IMPORT_RESULT_SECRET }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CONTROL_PLANE_URL"
+          test -n "$IMPORT_SECRET"
+          callback="${CONTROL_PLANE_URL%/}/api/internal/foundry/registry-releases/import"
+          curl --fail-with-body --silent --show-error \
+            --proto '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --connect-timeout 10 --max-time 90 \
+            -H "Authorization: Bearer $IMPORT_SECRET" \
+            -H "Content-Type: application/json" \
+            --data-binary @registry-release/registry-release-import.json \
+            "$callback" > registry-release/import-response.json
+
+      - name: Retain the signed public release bundle
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: foundry-signed-registry-${{ inputs.release_request_id }}-${{ github.run_attempt }}
+          path: registry-release
+          if-no-files-found: warn
+          retention-days: 90

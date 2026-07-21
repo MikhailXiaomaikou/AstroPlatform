@@ -60,12 +60,16 @@ async def test_formal_build_dispatch_binds_exact_version() -> None:
     candidate_id = uuid.uuid4()
     version_id = uuid.uuid4()
     version_hash = "a" * 64
+    source_commit = "b" * 40
+    source_tree_hash = "c" * 64
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         await dispatch_formal_worker_build(
             _config(),
             candidate_id=candidate_id,
             candidate_version_id=version_id,
             candidate_version_hash=version_hash,
+            source_commit=source_commit,
+            source_tree_sha256=source_tree_hash,
             client=client,
         )
 
@@ -75,6 +79,8 @@ async def test_formal_build_dispatch_binds_exact_version() -> None:
             "candidate_id": str(candidate_id),
             "candidate_version_id": str(version_id),
             "candidate_version_hash": version_hash,
+            "source_commit": source_commit,
+            "source_tree_sha256": source_tree_hash,
         },
     }
 
@@ -87,6 +93,25 @@ async def test_dispatch_rejects_untrusted_identifiers_before_network() -> None:
             candidate_key="../../secret",
             validation_run_id=uuid.uuid4(),
         )
+    with pytest.raises(FoundryCIDispatchError, match="source_commit_invalid"):
+        await dispatch_formal_worker_build(
+            _config(),
+            candidate_id=uuid.uuid4(),
+            candidate_version_id=uuid.uuid4(),
+            candidate_version_hash="a" * 64,
+            source_commit="main",
+            source_tree_sha256="c" * 64,
+        )
+
+
+def test_dispatch_requires_protected_main_definition() -> None:
+    config = FoundryCIDispatchConfig(
+        repository="standard-astro/platform",
+        ref="feature/untrusted",
+        token="github-actions-token-for-tests",
+    )
+    with pytest.raises(FoundryCIDispatchError, match="foundry_ci_ref_invalid"):
+        config.validate()
 
 
 @pytest.mark.asyncio

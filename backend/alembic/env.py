@@ -63,6 +63,7 @@ from app.models.foundry_records import (  # noqa: E402, F401
     FoundryValidationRun,
     WorkflowRegistryEntry,
     WorkflowRegistryRelease,
+    WorkflowRegistryReleaseImport,
 )
 from app.models.claim_audit_records import (  # noqa: E402, F401
     AccountDeletionTombstone,

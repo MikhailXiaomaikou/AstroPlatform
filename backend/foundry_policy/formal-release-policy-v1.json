@@ -1,0 +1,83 @@
+{
+  "dependency_policy": {
+    "allow_unlocked_runtime_tools": [
+      "pip",
+      "setuptools",
+      "wheel"
+    ],
+    "require_exact_pins": true,
+    "require_sha256_hashes": true,
+    "require_installed_environment_match": true
+  },
+  "license_policy": {
+    "forbidden_markers": [
+      {
+        "fragments": [
+          "agpl-",
+          "gnu affero general public license"
+        ],
+        "id": "network_copyleft_agpl"
+      },
+      {
+        "fragments": [
+          "sspl-",
+          "server side public license"
+        ],
+        "id": "service_restricted_sspl"
+      },
+      {
+        "fragments": [
+          "business source license",
+          "bsl-1.1",
+          "busl-1.1"
+        ],
+        "id": "source_available_bsl"
+      },
+      {
+        "fragments": [
+          "elastic license"
+        ],
+        "id": "source_available_elastic"
+      },
+      {
+        "fragments": [
+          "commons clause"
+        ],
+        "id": "commons_clause_restriction"
+      },
+      {
+        "fragments": [
+          "other/proprietary license",
+          "proprietary license"
+        ],
+        "id": "proprietary_restriction"
+      },
+      {
+        "fragments": [
+          "cc-by-nc",
+          "cc by-nc",
+          "creative commons attribution-noncommercial",
+          "polyform noncommercial"
+        ],
+        "id": "noncommercial_restriction"
+      }
+    ],
+    "missing_evidence": "DENY"
+  },
+  "policy_id": "standard-astro-formal-release-minimal-v1",
+  "schema_version": "standard_astro_formal_release_policy_v1",
+  "secret_policy": {
+    "allowlist": [],
+    "pattern_ids": [
+      "private_key_block",
+      "aws_access_key_id",
+      "github_legacy_token",
+      "github_fine_grained_pat",
+      "google_api_key",
+      "slack_token",
+      "openai_live_key",
+      "anthropic_live_key",
+      "stripe_live_secret"
+    ]
+  }
+}

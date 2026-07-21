@@ -783,6 +783,134 @@ _BUILTIN_SNAPSHOT: Final = compile_registry(
 )
 
 
+_EXECUTION_ADAPTER_METADATA_FIELDS: Final = frozenset(
+    {
+        "workflow_id",
+        "version",
+        "display_name",
+        "summary",
+        "state",
+        "revocation_reason",
+    }
+)
+_STATIC_EXECUTION_ADAPTER_WORKFLOWS: Final = {
+    "union3_profile_chi_square_v1": UNION3_REPRODUCTION_WORKFLOW_ID,
+}
+
+
+def _execution_adapter_contract(workflow: WorkflowSpec) -> dict[str, Any]:
+    """Return the scientific/runtime fields that a static adapter implements.
+
+    A signed Registry entry may rename or re-version a shipped workflow, but it
+    cannot reinterpret the static Python entrypoint.  Operational state and
+    human-facing labels are deliberately excluded; every scientific, data,
+    DAG, policy, risk, and execution field remains in the comparison.
+    """
+
+    contract = workflow.to_dict()
+    for field_name in _EXECUTION_ADAPTER_METADATA_FIELDS:
+        contract.pop(field_name, None)
+    return contract
+
+
+def _static_execution_adapter_for_spec(workflow: WorkflowSpec) -> dict[str, Any]:
+    observed = _execution_adapter_contract(workflow)
+    builtin_by_id = {
+        item.workflow_id: item for item in _BUILTIN_SNAPSHOT.workflows
+    }
+    for adapter_id, canonical_workflow_id in sorted(
+        _STATIC_EXECUTION_ADAPTER_WORKFLOWS.items()
+    ):
+        canonical = builtin_by_id[canonical_workflow_id]
+        if observed == _execution_adapter_contract(canonical):
+            return {
+                "execution_adapter_id": adapter_id,
+                "canonical_workflow_id": canonical.workflow_id,
+                "primary_entrypoint_id": canonical.primary_entrypoint_id,
+                "independent_verifier_entrypoint_id": (
+                    canonical.independent_verifier_entrypoint_id
+                ),
+            }
+    raise WorkflowRegistryError("workflow_execution_adapter_not_static")
+
+
+def get_static_execution_adapter_binding(
+    workflow_id: str,
+    version: str | None = None,
+) -> dict[str, Any]:
+    """Resolve an active Registry identity to one shipped scientific adapter."""
+
+    workflow = get_formal_workflow_spec(workflow_id, version)
+    return _static_execution_adapter_for_spec(workflow)
+
+
+def get_static_execution_adapter_contract(adapter_id: str) -> dict[str, Any]:
+    """Return the immutable image-side contract for one shipped adapter."""
+
+    canonical_workflow_id = _STATIC_EXECUTION_ADAPTER_WORKFLOWS.get(adapter_id)
+    if canonical_workflow_id is None:
+        raise WorkflowRegistryError("workflow_execution_adapter_not_static")
+    workflow = next(
+        item
+        for item in _BUILTIN_SNAPSHOT.workflows
+        if item.workflow_id == canonical_workflow_id
+    )
+    tool = next(
+        item
+        for item in _BUILTIN_SNAPSHOT.tools
+        if item.entrypoint_id == workflow.primary_entrypoint_id
+    )
+    return {
+        "execution_adapter_id": adapter_id,
+        "canonical_workflow_id": workflow.workflow_id,
+        "primary_entrypoint_id": workflow.primary_entrypoint_id,
+        "independent_verifier_entrypoint_id": (
+            workflow.independent_verifier_entrypoint_id
+        ),
+        "dataset_pins": [dict(pin) for pin in workflow.dataset_pins],
+        "tool_spec_hash": _tool_spec_hash(tool),
+    }
+
+
+def _tool_spec_hash(tool: ToolSpec) -> str:
+    return "sha256:" + hashlib.sha256(canonical_json(tool.to_dict())).hexdigest()
+
+
+def list_static_worker_entrypoint_capabilities(
+    *,
+    worker_image_digest: str,
+) -> list[dict[str, str]]:
+    """Describe code-static Worker entrypoints without reading a signed Registry.
+
+    Formal images are built before a Registry release is signed.  They therefore
+    advertise only code that is physically present in the image; the control
+    plane later maps signed workflow aliases onto these immutable capabilities.
+    """
+
+    digest = str(worker_image_digest or "unknown").strip().lower()
+    if digest != "unknown" and not _IMAGE_DIGEST_RE.fullmatch(digest):
+        raise WorkflowRegistryError("invalid_worker_image_digest")
+    builtin_tools = {
+        tool.entrypoint_id: tool for tool in _BUILTIN_SNAPSHOT.tools
+    }
+    entrypoints = {
+        next(
+            workflow.primary_entrypoint_id
+            for workflow in _BUILTIN_SNAPSHOT.workflows
+            if workflow.workflow_id == canonical_workflow_id
+        )
+        for canonical_workflow_id in _STATIC_EXECUTION_ADAPTER_WORKFLOWS.values()
+    }
+    return [
+        {
+            "entrypoint_id": entrypoint_id,
+            "tool_spec_hash": _tool_spec_hash(builtin_tools[entrypoint_id]),
+            "worker_image_digest": digest,
+        }
+        for entrypoint_id in sorted(entrypoints)
+    ]
+
+
 def _workflow_indexes(
     snapshot: RegistrySnapshot,
 ) -> tuple[
@@ -841,6 +969,41 @@ def registry_snapshot() -> dict[str, Any]:
 
     snapshot, _, _, _ = _active_registry()
     return snapshot.to_dict()
+
+
+def builtin_registry_identity() -> dict[str, str]:
+    """Return the immutable code-registry identity used by every overlay.
+
+    Foundry releases are complete cumulative overlays.  They always replay
+    from this fixed base, even after a previous signed release is active, so a
+    newly signed file can be verified and loaded by a fresh process without
+    needing any older release file.
+    """
+
+    return {
+        "schema_version": _BUILTIN_SNAPSHOT.schema_version,
+        "registry_epoch": _BUILTIN_SNAPSHOT.epoch,
+        "registry_hash": _BUILTIN_SNAPSHOT.registry_hash,
+        "status": _BUILTIN_SNAPSHOT.status,
+    }
+
+
+def active_registry_identity() -> dict[str, Any]:
+    """Return non-secret release identity shared by API, workers and health."""
+
+    snapshot, _, _, _ = _active_registry()
+    return {
+        "schema_version": snapshot.schema_version,
+        "registry_epoch": snapshot.epoch,
+        "registry_hash": snapshot.registry_hash,
+        "status": snapshot.status,
+        "release_kind": _ACTIVE_RELEASE_TRUST["release_kind"],
+        "signature_algorithm": _ACTIVE_RELEASE_TRUST["signature_algorithm"],
+        "signature_key_id": _ACTIVE_RELEASE_TRUST["signature_key_id"],
+        "signed_payload_sha256": _ACTIVE_RELEASE_TRUST[
+            "signed_payload_sha256"
+        ],
+    }
 
 
 def get_registry_snapshot_object() -> RegistrySnapshot:
@@ -978,7 +1141,9 @@ def get_worker_execution_binding(
     workflow_id: str,
     version: str | None = None,
 ) -> dict[str, Any]:
-    snapshot, workflows_by_identity, workflows_by_id, _ = _active_registry()
+    snapshot, workflows_by_identity, workflows_by_id, tools_by_entrypoint = (
+        _active_registry()
+    )
     workflow = (
         workflows_by_identity.get((workflow_id, version))
         if version is not None
@@ -990,6 +1155,7 @@ def get_worker_execution_binding(
         raise WorkflowRegistryError("workflow_not_local_worker_executable")
     if snapshot.status != "ACTIVE" or workflow.state not in _EXECUTABLE_STATES:
         raise WorkflowRegistryError(f"workflow_{workflow.state.lower()}")
+    adapter_binding = _static_execution_adapter_for_spec(workflow)
     entry_key = f"{workflow.workflow_id}@{workflow.version}"
     release_binding = snapshot.workflow_release_bindings.get(entry_key) or {}
     return {
@@ -998,6 +1164,10 @@ def get_worker_execution_binding(
         "registry_epoch": snapshot.epoch,
         "registry_entry_hash": _entry_hash(workflow, snapshot),
         "entrypoint_id": workflow.primary_entrypoint_id,
+        "tool_spec_hash": _tool_spec_hash(
+            tools_by_entrypoint[workflow.primary_entrypoint_id]
+        ),
+        **adapter_binding,
         "binding_kind": release_binding.get(
             "binding_kind", "release_configured_builtin"
         ),
@@ -1021,6 +1191,47 @@ def get_worker_execution_binding(
             "signed_payload_sha256"
         ],
     }
+
+
+def worker_image_digest_is_approved(
+    worker_image_digest: str,
+    *,
+    builtin_worker_image_digest: str | None,
+) -> bool:
+    """Return whether one image digest is trusted by the active Registry.
+
+    Candidate-derived releases carry their own approved image digest in the
+    signed release binding.  Built-in workflows predate those bindings, so
+    production pins their official image through ``DOCKER_IMAGE_DIGEST``.
+    Merely advertising a static entrypoint is never an image trust proof.
+    """
+
+    observed = str(worker_image_digest or "").strip().lower()
+    builtin = str(builtin_worker_image_digest or "").strip().lower()
+    if not _IMAGE_DIGEST_RE.fullmatch(observed):
+        return False
+    if builtin and not _IMAGE_DIGEST_RE.fullmatch(builtin):
+        return False
+    snapshot, _, _, _ = _active_registry()
+    for workflow in snapshot.workflows:
+        if (
+            not workflow.local_worker_executable
+            or workflow.state not in _EXECUTABLE_STATES
+        ):
+            continue
+        try:
+            binding = get_worker_execution_binding(
+                workflow.workflow_id,
+                workflow.version,
+            )
+        except WorkflowRegistryError:
+            continue
+        approved = binding.get("approved_worker_image_digest")
+        if approved is None and binding.get("binding_kind") == "release_configured_builtin":
+            approved = builtin or None
+        if approved and hmac.compare_digest(str(approved), observed):
+            return True
+    return False
 
 
 def bind_formal_registry_record(
@@ -1061,7 +1272,7 @@ def list_worker_execution_bindings(*, worker_image_digest: str) -> list[dict[str
         binding = get_worker_execution_binding(workflow.workflow_id)
         approved_digest = binding.get("approved_worker_image_digest")
         if approved_digest and not hmac.compare_digest(str(approved_digest), digest):
-            raise WorkflowRegistryError("worker_image_not_approved_for_workflow")
+            continue
         bindings.append({**binding, "worker_image_digest": digest})
     return bindings
 
@@ -1218,6 +1429,7 @@ def build_registry_entry_from_approved_candidate(
         if isinstance(exc, WorkflowRegistryError):
             raise
         raise WorkflowRegistryError("candidate_registry_entry_invalid") from exc
+    _static_execution_adapter_for_spec(workflow)
     approved_human_reviews = [
         review
         for review in reviews
@@ -1416,6 +1628,68 @@ def _validate_pending_registry_entry(entry: Mapping[str, Any]) -> dict[str, Any]
     ):
         raise WorkflowRegistryError("registry_entry_hash_mismatch")
     return copy.deepcopy(dict(entry))
+
+
+def assert_registry_entry_static_compatible(
+    entry: Mapping[str, Any],
+    *,
+    static_tool_specs: Sequence[ToolSpec] | None = None,
+) -> dict[str, Any]:
+    """Require every candidate ToolSpec to exist in the shipped dispatch table.
+
+    A protected build proves which bytes are present in a Worker image, but a
+    signed Registry release must not turn an arbitrary module path into an
+    executable entrypoint.  Registration calls this gate *before* creating a
+    release request; startup repeats the same comparison before activation.
+
+    AI-generated ``SCIENCE_CODE`` may therefore remain a durable Candidate
+    Demo until its primary executor and independent verifier have been added
+    to the reviewed, image-static ToolSpec table.  A Demo-only entrypoint is
+    deliberately insufficient.
+    """
+
+    normalized = _validate_pending_registry_entry(entry)
+    try:
+        workflow = _workflow_spec_from_mapping(
+            normalized["workflow"],
+            force_registered=False,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        if isinstance(exc, WorkflowRegistryError):
+            raise
+        raise WorkflowRegistryError("registry_release_entry_invalid") from exc
+    _static_execution_adapter_for_spec(workflow)
+    shipped_tools = tuple(
+        _BUILTIN_SNAPSHOT.tools
+        if static_tool_specs is None
+        else static_tool_specs
+    )
+    static_by_entrypoint: dict[str, ToolSpec] = {}
+    static_by_identity: dict[tuple[str, str], ToolSpec] = {}
+    for tool in shipped_tools:
+        _validate_tool(tool)
+        identity = (tool.tool_id, tool.version)
+        if (
+            tool.entrypoint_id in static_by_entrypoint
+            or identity in static_by_identity
+        ):
+            raise WorkflowRegistryError("duplicate_static_tool_binding")
+        static_by_entrypoint[tool.entrypoint_id] = tool
+        static_by_identity[identity] = tool
+
+    for raw_tool in normalized["tools"]:
+        try:
+            release_tool = _tool_spec_from_mapping(raw_tool)
+        except (KeyError, TypeError, ValueError) as exc:
+            if isinstance(exc, WorkflowRegistryError):
+                raise
+            raise WorkflowRegistryError("registry_release_entry_invalid") from exc
+        shipped_tool = static_by_entrypoint.get(release_tool.entrypoint_id)
+        if shipped_tool is None:
+            raise WorkflowRegistryError("registry_release_entrypoint_not_static")
+        if release_tool.to_dict() != shipped_tool.to_dict():
+            raise WorkflowRegistryError("registry_release_static_tool_mismatch")
+    return normalized
 
 
 def build_signed_registry_snapshot(
@@ -1692,6 +1966,7 @@ def load_verified_registry_release(
             if isinstance(exc, WorkflowRegistryError):
                 raise
             raise WorkflowRegistryError("registry_release_entry_invalid") from exc
+        _static_execution_adapter_for_spec(workflow)
         identity = (workflow.workflow_id, workflow.version)
         entry_key = f"{workflow.workflow_id}@{workflow.version}"
         release_binding = {
@@ -1723,10 +1998,11 @@ def load_verified_registry_release(
 
         existing_workflow = merged_workflows.get(identity)
         if existing_workflow is None:
-            if workflow.state != "REGISTERED":
-                raise WorkflowRegistryError(
-                    "registry_release_new_workflow_not_registered"
-                )
+            # A fixed-base release is a complete cumulative overlay. A later
+            # release can therefore contain a candidate that was registered
+            # in an earlier release and is now suspended, superseded, or
+            # revoked. The trusted cumulative signer and catalog binding prove
+            # that history; the final state still remains non-executable.
             merged_workflows[identity] = workflow
             merged_release_bindings[entry_key] = release_binding
             continue
@@ -1871,9 +2147,31 @@ def activate_configured_registry_release(
     )
 
 
+_PACKAGED_ACTIVATION_DIRECTORY = (
+    Path(__file__).resolve().parents[1] / "registry_releases"
+)
+_PACKAGED_ACTIVATION_MANIFEST = (
+    _PACKAGED_ACTIVATION_DIRECTORY / "activation-manifest.json"
+)
+
 if os.getenv("WORKFLOW_REGISTRY_RELEASE_PATH"):
     # A configured-but-invalid release must fail process boot in every role.
     activate_configured_registry_release()
+elif _PACKAGED_ACTIVATION_MANIFEST.is_file():
+    # Render cannot safely inject a new immutable file at deploy time. A
+    # protected activation PR therefore bakes only public signed material into
+    # the image. Presence of its manifest is an explicit boot-time activation
+    # request; later startup guards verify the manifest and DB import exactly.
+    activate_configured_registry_release(
+        {
+            "WORKFLOW_REGISTRY_RELEASE_PATH": str(
+                _PACKAGED_ACTIVATION_DIRECTORY / "active-signed-registry.json"
+            ),
+            "WORKFLOW_REGISTRY_TRUSTED_KEYRING_PATH": str(
+                _PACKAGED_ACTIVATION_DIRECTORY / "trusted-registry-keyring.json"
+            ),
+        }
+    )
 
 
 __all__ = [
@@ -1897,10 +2195,13 @@ __all__ = [
     "WorkflowRegistryError",
     "WorkflowSpec",
     "WorkflowToolRef",
+    "assert_registry_entry_static_compatible",
     "assert_workflow_executable",
     "activate_verified_registry_release",
+    "active_registry_identity",
     "activate_configured_registry_release",
     "bind_formal_registry_record",
+    "builtin_registry_identity",
     "build_signed_registry_snapshot",
     "build_registry_status_entry",
     "build_registry_entry_from_approved_candidate",
@@ -1909,9 +2210,12 @@ __all__ = [
     "get_formal_workflow_spec",
     "get_legacy_workflow_contract",
     "get_registry_snapshot_object",
+    "get_static_execution_adapter_binding",
+    "get_static_execution_adapter_contract",
     "get_tool_spec_for_entrypoint",
     "get_worker_execution_binding",
     "list_formal_workflows",
+    "list_static_worker_entrypoint_capabilities",
     "list_worker_execution_bindings",
     "load_verified_registry_release",
     "registry_snapshot",

@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import json
 import sys
 import types
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from sqlalchemy import select
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import IntegrityError
 
 from app.auth import create_access_token
 from app.config import settings
@@ -17,6 +23,7 @@ from app.models.claim_audit_records import ClaimAudit
 from app.models.foundry_records import (
     CapabilityRequest,
     FoundryCandidate,
+    FoundryCandidateEvent,
     FoundryCandidateVersion,
     WorkflowRegistryEntry,
     WorkflowRegistryRelease,
@@ -24,6 +31,7 @@ from app.models.foundry_records import (
 from app.models.schemas import User
 from app.services.foundry_catalog import (
     FoundryCatalogError,
+    _append_event,
     _pending_registry_release_request,
     append_candidate_version,
     record_demo_report,
@@ -43,19 +51,42 @@ from app.services.foundry_validation_dispatch import (
 
 VALIDATION_IMAGE = "sha256:" + "a" * 64
 FORMAL_IMAGE = "sha256:" + "b" * 64
-OIDC_SUBJECT = "repo:standard-astro/platform:ref:refs/heads/main"
+GITHUB_REPOSITORY = "standard-astro/platform"
+GITHUB_WORKFLOW = "foundry-formal-worker.yml"
+GITHUB_WORKFLOW_REF = (
+    f"{GITHUB_REPOSITORY}/.github/workflows/{GITHUB_WORKFLOW}@refs/heads/main"
+)
+OIDC_SUBJECT = f"https://github.com/{GITHUB_WORKFLOW_REF}"
+ATTESTATION_KEY_ID = "formal-build-test-1"
+_ATTESTATION_PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(b"\x1d" * 32)
+ATTESTATION_PUBLIC_KEY = base64.b64encode(
+    _ATTESTATION_PRIVATE_KEY.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+).decode("ascii")
+EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 
 
-def _bundle(*, version: int = 1, suffix: str = "one") -> dict:
+def _bundle(
+    *,
+    version: int = 1,
+    suffix: str = "one",
+    workflow_id: str | None = None,
+    workflow_version: str | None = None,
+    formal_source: bool = False,
+) -> dict:
+    proposed_workflow_id = workflow_id or f"desi_dr2_workflow_{suffix}"
     return {
         "schema_version": 1,
         "candidate_id": f"desi_dr2_candidate_{suffix}",
         "candidate_version": version,
-        "proposed_workflow_id": f"desi_dr2_workflow_{suffix}",
+        "proposed_workflow_id": proposed_workflow_id,
         "entrypoint_id": "desi_dr2_official_chain_summary_demo_v1",
         "risk_level": "R1",
         "workflow_spec": {
-            "workflow_version": f"1.0.0-candidate.{version}",
+            "workflow_id": proposed_workflow_id,
+            "workflow_version": workflow_version or f"1.0.0-candidate.{version}",
             "claim_scope": "published_external_chain_context",
             "output_policy": {"publication_ready": False},
         },
@@ -69,12 +100,26 @@ def _bundle(*, version: int = 1, suffix: str = "one") -> dict:
         "fixture_hashes": [],
         "dependency_lock_sha256": "2" * 64,
         "runner_definition_sha256": "3" * 64,
-        "generation": {
-            "kind": "test_fixture",
-            "model": "codex",
-            "prompt_or_claim_stored": False,
-            "generated_code_executed_by_draft_job": False,
-        },
+        "generation": (
+            {
+                "kind": "ai_draft_provider_contract_v1",
+                "model": "codex",
+                "prompt_or_claim_stored": False,
+                "generated_code_executed_by_draft_job": False,
+                "source_hash_algorithm": "standard_astro_tracked_source_manifest_v1",
+                "source_base_commit": "6" * 40,
+                "source_base_tree_sha256": "4" * 64,
+                "source_tree_sha256": "4" * 64,
+                "source_materialization_required": False,
+            }
+            if formal_source
+            else {
+                "kind": "test_fixture",
+                "model": "codex",
+                "prompt_or_claim_stored": False,
+                "generated_code_executed_by_draft_job": False,
+            }
+        ),
         "limitations": ["Non-formal Demo only."],
         "output_policy": {
             "evidence_class": "NON_FORMAL_DEMO",
@@ -102,7 +147,8 @@ def _demo_report(version: FoundryCandidateVersion) -> dict:
         "publication_ready": False,
         "claim_eligible": False,
         "evidence_pack_allowed": False,
-        "candidate_bundle_sha256": version.version_hash,
+        "candidate_bundle_sha256": sha256_json(version.candidate_bundle),
+        "candidate_version_sha256": version.version_hash,
         "workflow_spec_sha256": version.workflow_spec_hash,
         "dependency_lock_sha256": version.dependency_lock_hash,
         "runner_definition_sha256": version.candidate_bundle[
@@ -121,6 +167,20 @@ def _demo_report(version: FoundryCandidateVersion) -> dict:
         "stderr_sha256": hashlib.sha256(b"").hexdigest(),
         "stdout_bytes": 0,
         "stderr_bytes": 0,
+        "artifact_manifest": [
+            {
+                "path": "stdout.log",
+                "kind": "STDOUT",
+                "sha256": hashlib.sha256(b"").hexdigest(),
+                "bytes": 0,
+            },
+            {
+                "path": "stderr.log",
+                "kind": "STDERR",
+                "sha256": hashlib.sha256(b"").hexdigest(),
+                "bytes": 0,
+            },
+        ],
         "resource_usage": {"user_cpu_seconds": 0.1},
         "failure_class": None,
         "validation_summary": {"checks_passed": 4},
@@ -145,7 +205,14 @@ async def _user(db_session, name: str) -> User:
     return row
 
 
-async def _candidate_with_demo(db_session, *, suffix: str = "one"):
+async def _candidate_with_demo(
+    db_session,
+    *,
+    suffix: str = "one",
+    workflow_id: str | None = None,
+    workflow_version: str | None = None,
+    formal_source: bool = False,
+):
     candidate = FoundryCandidate(
         gap_fingerprint=hashlib.sha256(suffix.encode()).hexdigest(),
         gap_code="registered_workflow_missing",
@@ -165,12 +232,18 @@ async def _candidate_with_demo(db_session, *, suffix: str = "one"):
         db_session,
         candidate=candidate,
         draft={
-            "candidate_bundle": _bundle(suffix=suffix),
+            "candidate_bundle": _bundle(
+                suffix=suffix,
+                workflow_id=workflow_id,
+                workflow_version=workflow_version,
+                formal_source=formal_source,
+            ),
             "validation_runner_image_digest": VALIDATION_IMAGE,
             "code_tree_hash": "4" * 64,
+            **({"patch_hash": EMPTY_SHA256} if formal_source else {}),
             "sbom_hash": "5" * 64,
         },
-        actor_kind="AI_SERVICE",
+        actor_kind="AI_DRAFT_JOB" if formal_source else "AI_SERVICE",
         actor_user_id=None,
     )
     await db_session.commit()
@@ -188,6 +261,118 @@ async def _candidate_with_demo(db_session, *, suffix: str = "one"):
     )
     await db_session.refresh(candidate)
     return candidate, version, run, demo, report
+
+
+async def test_event_append_locks_candidate_before_reading_chain_head() -> None:
+    candidate_id = uuid.uuid4()
+
+    class RecordingSession:
+        def __init__(self) -> None:
+            self.statements = []
+            self.added = []
+
+        async def scalar(self, statement):
+            self.statements.append(statement)
+            # First query locks the owning candidate; the second reads an empty
+            # event chain.
+            return candidate_id if len(self.statements) == 1 else None
+
+        def add(self, row) -> None:
+            self.added.append(row)
+
+        async def flush(self) -> None:
+            return None
+
+    db = RecordingSession()
+    await _append_event(
+        db,  # type: ignore[arg-type]
+        candidate_id=candidate_id,
+        event_type="CONCURRENT_CALLBACK_TEST",
+        actor_kind="CONTROL_PLANE",
+        actor_user_id=None,
+        payload={},
+    )
+
+    lock_sql = str(
+        db.statements[0].compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+    assert "FROM foundry_candidates" in lock_sql
+    assert "FOR UPDATE" in lock_sql
+    assert db.added[0].previous_event_hash is None
+
+
+async def test_event_chain_constraints_reject_genesis_and_parent_forks(
+    db_session,
+) -> None:
+    candidate = FoundryCandidate(
+        gap_fingerprint=hashlib.sha256(b"event-chain-constraints").hexdigest(),
+        gap_code="registered_workflow_missing",
+        gap_descriptor={
+            "gap_code": "registered_workflow_missing",
+            "research_domain": "cosmology",
+        },
+        status="DRAFT",
+    )
+    db_session.add(candidate)
+    await db_session.commit()
+    await db_session.refresh(candidate)
+    candidate_id = candidate.id
+
+    genesis_hash = "1" * 64
+    db_session.add(
+        FoundryCandidateEvent(
+            candidate_id=candidate_id,
+            event_type="GENESIS",
+            actor_kind="CONTROL_PLANE",
+            event_payload={},
+            previous_event_hash=None,
+            event_hash=genesis_hash,
+        )
+    )
+    await db_session.commit()
+
+    db_session.add(
+        FoundryCandidateEvent(
+            candidate_id=candidate_id,
+            event_type="SECOND_GENESIS",
+            actor_kind="CONTROL_PLANE",
+            event_payload={},
+            previous_event_hash=None,
+            event_hash="2" * 64,
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await db_session.commit()
+    await db_session.rollback()
+
+    db_session.add(
+        FoundryCandidateEvent(
+            candidate_id=candidate_id,
+            event_type="FIRST_CHILD",
+            actor_kind="CONTROL_PLANE",
+            event_payload={},
+            previous_event_hash=genesis_hash,
+            event_hash="3" * 64,
+        )
+    )
+    await db_session.commit()
+
+    db_session.add(
+        FoundryCandidateEvent(
+            candidate_id=candidate_id,
+            event_type="FORKED_CHILD",
+            actor_kind="CONTROL_PLANE",
+            event_payload={},
+            previous_event_hash=genesis_hash,
+            event_hash="4" * 64,
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await db_session.commit()
+    await db_session.rollback()
 
 
 async def test_capability_request_dedupes_without_leaking_owner_data(
@@ -274,6 +459,20 @@ async def test_demo_callback_is_hash_bound_idempotent_and_non_formal(db_session)
     assert view["evidence_pack_allowed"] is False
     assert view["validation_runner_image_digest"] == VALIDATION_IMAGE
     assert "stdout" not in view and "stderr" not in view
+    assert view["artifact_receipts"] == [
+        {
+            "name": "stdout.log",
+            "sha256": hashlib.sha256(b"").hexdigest(),
+            "size_bytes": 0,
+            "media_type": "text/plain; charset=utf-8",
+        },
+        {
+            "name": "stderr.log",
+            "sha256": hashlib.sha256(b"").hexdigest(),
+            "size_bytes": 0,
+            "media_type": "text/plain; charset=utf-8",
+        },
+    ]
     forged = dict(report)
     forged["result"] = {"scientific_verdict": "SUPPORTED"}
     forged["demo_report_sha256"] = sha256_json(
@@ -288,6 +487,94 @@ async def test_demo_callback_is_hash_bound_idempotent_and_non_formal(db_session)
     with pytest.raises(ValueError, match="append-only"):
         await db_session.flush()
     await db_session.rollback()
+
+
+async def test_old_version_demo_is_recorded_without_overwriting_new_version_status(
+    db_session,
+):
+    candidate = FoundryCandidate(
+        gap_fingerprint=hashlib.sha256(b"version-race").hexdigest(),
+        gap_code="registered_workflow_missing",
+        gap_descriptor={
+            "gap_code": "registered_workflow_missing",
+            "dataset_key": "version-race",
+            "research_domain": "cosmology",
+        },
+        status="BUILDING",
+        risk_level="R1",
+        generation_route="COMPOSITION",
+    )
+    db_session.add(candidate)
+    await db_session.commit()
+    await db_session.refresh(candidate)
+
+    version_one = await append_candidate_version(
+        db_session,
+        candidate=candidate,
+        draft={
+            "candidate_bundle": _bundle(version=1, suffix="version_race"),
+            "validation_runner_image_digest": VALIDATION_IMAGE,
+            "code_tree_hash": "4" * 64,
+            "sbom_hash": "5" * 64,
+        },
+        actor_kind="AI_SERVICE",
+        actor_user_id=None,
+    )
+    await db_session.commit()
+    run_one = await start_validation_run(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version_one.id,
+        candidate_version_hash=version_one.version_hash,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+    )
+
+    version_two = await append_candidate_version(
+        db_session,
+        candidate=candidate,
+        draft={
+            "candidate_bundle": _bundle(version=2, suffix="version_race"),
+            "validation_runner_image_digest": VALIDATION_IMAGE,
+            "code_tree_hash": "6" * 64,
+            "sbom_hash": "7" * 64,
+        },
+        actor_kind="AI_SERVICE",
+        actor_user_id=None,
+    )
+    await db_session.commit()
+    await db_session.refresh(candidate)
+    assert candidate.current_version_number == version_two.version_number == 2
+    assert candidate.status == "BUILDING"
+
+    demo_one = await record_demo_report(
+        db_session,
+        validation_run_id=run_one.id,
+        demo_report=_demo_report(version_one),
+    )
+    await db_session.refresh(candidate)
+    await db_session.refresh(run_one)
+
+    assert demo_one.candidate_version_id == version_one.id
+    assert demo_one.candidate_version_hash == version_one.version_hash
+    assert run_one.status == "PASSED"
+    assert candidate.current_version_number == 2
+    assert candidate.status == "BUILDING"
+    recorded_events = list(
+        (
+            await db_session.execute(
+                select(FoundryCandidateEvent).where(
+                    FoundryCandidateEvent.candidate_id == candidate.id,
+                    FoundryCandidateEvent.candidate_version_id == version_one.id,
+                    FoundryCandidateEvent.event_type == "DEMO_RECORDED",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(recorded_events) == 1
+    assert recorded_events[0].event_payload["demo_run_id"] == str(demo_one.id)
 
 
 async def test_ai_admin_secret_cannot_review_or_register(
@@ -335,7 +622,10 @@ async def test_validate_dispatch_records_success_and_retryable_failure(
     async def _success(**_kwargs):
         return None
 
-    monkeypatch.setattr("app.api.foundry.dispatch_candidate_validation", _success)
+    monkeypatch.setattr(
+        "app.services.foundry_validation_dispatch.dispatch_candidate_validation",
+        _success,
+    )
     response = await app_client.post(
         f"/api/admin/foundry/candidates/{candidate.id}/validate",
         headers={"X-Admin-Secret": "validation-admin"},
@@ -355,7 +645,10 @@ async def test_validate_dispatch_records_success_and_retryable_failure(
     async def _failure(**_kwargs):
         raise FoundryValidationDispatchError("validation_dispatch_timeout")
 
-    monkeypatch.setattr("app.api.foundry.dispatch_candidate_validation", _failure)
+    monkeypatch.setattr(
+        "app.services.foundry_validation_dispatch.dispatch_candidate_validation",
+        _failure,
+    )
     failed = await app_client.post(
         f"/api/admin/foundry/candidates/{failed_candidate.id}/validate",
         headers={"X-Admin-Secret": "validation-admin"},
@@ -394,51 +687,185 @@ async def test_github_dispatch_sends_only_opaque_validation_identifiers(monkeypa
     monkeypatch.setattr(settings, "foundry_validation_dispatch_backend", "github_actions")
     monkeypatch.setattr(settings, "foundry_validation_github_repository", "standard-astro/platform")
     monkeypatch.setattr(settings, "foundry_validation_github_workflow", "foundry-demo.yml")
-    monkeypatch.setattr(settings, "foundry_validation_github_ref", "f" * 40)
+    monkeypatch.setattr(settings, "foundry_validation_github_ref", "main")
     monkeypatch.setattr(settings, "foundry_validation_github_token", "github-" + "t" * 40)
     monkeypatch.setattr("app.services.foundry_validation_dispatch.httpx.AsyncClient", _Client)
+    version_binding = {
+        "candidate_id": str(uuid.uuid4()),
+        "candidate_version_id": str(uuid.uuid4()),
+        "candidate_key": "desi_dr2_candidate_dispatch",
+        "candidate_version_number": "1",
+        "candidate_version_hash": "a" * 64,
+        "candidate_bundle_hash": "b" * 64,
+        "validation_runner_image_digest": VALIDATION_IMAGE,
+    }
     await dispatch_candidate_validation(
         validation_run_id=run_id,
         candidate_key="desi_dr2_candidate_dispatch",
+        version_binding=version_binding,
     )
     assert captured["json"] == {
-        "ref": "f" * 40,
+        "ref": "main",
         "inputs": {
             "candidate_key": "desi_dr2_candidate_dispatch",
             "validation_run_id": str(run_id),
+            "version_binding": json.dumps(
+                version_binding,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ),
         },
     }
     assert set(captured["json"]["inputs"]) == {
         "candidate_key",
         "validation_run_id",
+        "version_binding",
     }
 
 
+async def test_github_validation_dispatch_rejects_non_main_ref(monkeypatch):
+    monkeypatch.setattr(settings, "foundry_validation_dispatch_backend", "github_actions")
+    monkeypatch.setattr(settings, "foundry_validation_github_repository", "standard-astro/platform")
+    monkeypatch.setattr(settings, "foundry_validation_github_workflow", "foundry-demo.yml")
+    monkeypatch.setattr(settings, "foundry_validation_github_ref", "feature/untrusted")
+    monkeypatch.setattr(settings, "foundry_validation_github_token", "github-" + "t" * 40)
+    version_binding = {
+        "candidate_id": str(uuid.uuid4()),
+        "candidate_version_id": str(uuid.uuid4()),
+        "candidate_key": "desi_dr2_candidate_dispatch",
+        "candidate_version_number": "1",
+        "candidate_version_hash": "a" * 64,
+        "candidate_bundle_hash": "b" * 64,
+        "validation_runner_image_digest": VALIDATION_IMAGE,
+    }
+
+    with pytest.raises(
+        FoundryValidationDispatchError,
+        match="validation_dispatch_misconfigured",
+    ):
+        await dispatch_candidate_validation(
+            validation_run_id=uuid.uuid4(),
+            candidate_key="desi_dr2_candidate_dispatch",
+            version_binding=version_binding,
+        )
+
+
+def _resign_formal_build_report(report: dict) -> dict:
+    report.pop("attestation_artifact_sha256", None)
+    payload_bytes = json.dumps(
+        report["payload"],
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    report["payload_sha256"] = hashlib.sha256(payload_bytes).hexdigest()
+    report["signature"] = {
+        "algorithm": "ed25519",
+        "key_id": ATTESTATION_KEY_ID,
+        "value": base64.b64encode(
+            _ATTESTATION_PRIVATE_KEY.sign(
+                b"standard-astro/formal-build-attestation/v2\0" + payload_bytes
+            )
+        ).decode("ascii"),
+    }
+    report["attestation_artifact_sha256"] = sha256_json(report)
+    return report
+
+
 def _formal_build_report(candidate, version, *, built_at: datetime) -> dict:
-    report = {
-        "schema_version": 1,
+    workflow_sha = "e" * 40
+    git_commit = "6" * 40
+    receipt_names = (
+        "dependency_lock",
+        "secret_scan",
+        "static_audit",
+        "linux_amd64_dependency_integrity",
+        "linux_amd64_license_policy",
+        "linux_amd64_environment",
+        "linux_arm64_dependency_integrity",
+        "linux_arm64_license_policy",
+        "linux_arm64_environment",
+    )
+    release_audit = {
+        "schema_version": "standard_astro_formal_release_audit_v1",
+        "status": "PASSED",
+        "policy_id": "standard-astro-formal-release-minimal-v1",
+        "policy_sha256": "1" * 64,
+        "source_tree_sha256": version.code_tree_hash,
+        "dependency_lock_sha256": version.dependency_lock_hash,
+        "formal_sbom_sha256": "7" * 64,
+        "architectures": ["linux/amd64", "linux/arm64"],
+        "receipts": {
+            name: format(index + 2, "x") * 64
+            for index, name in enumerate(receipt_names)
+        },
+        "gates": {
+            "dependency_integrity": True,
+            "license_inventory_policy": True,
+            "tracked_source_secret_scan": True,
+        },
+        "advisory_database_checked": False,
+        "vulnerability_status": "NOT_EVALUATED",
+        "legal_review_complete": False,
+        "aggregate_receipt_sha256": "d" * 64,
+    }
+    payload = {
+        "schema_version": "standard_astro_formal_build_attestation_v2",
         "attestation_id": str(uuid.uuid4()),
         "candidate_id": str(candidate.id),
         "candidate_version_id": str(version.id),
         "candidate_version_hash": version.version_hash,
         "source_tree_sha256": version.code_tree_hash,
-        "git_commit": "6" * 40,
+        "git_commit": git_commit,
         "dependency_lock_sha256": version.dependency_lock_hash,
         "formal_sbom_sha256": "7" * 64,
         "test_report_sha256": "8" * 64,
+        "release_audit": release_audit,
         "tests_passed": True,
-        "formal_worker_image_digest": FORMAL_IMAGE,
-        "oidc_issuer": "https://token.actions.githubusercontent.com",
-        "oidc_subject": OIDC_SUBJECT,
-        "sigstore_verified": True,
-        "sigstore_bundle_sha256": "9" * 64,
+        "subject": {
+            "image": f"ghcr.io/{GITHUB_REPOSITORY}/science-worker",
+            "digest": FORMAL_IMAGE,
+        },
+        "build_identity": {
+            "github_repository": GITHUB_REPOSITORY,
+            "github_workflow_ref": GITHUB_WORKFLOW_REF,
+            "github_workflow_sha": workflow_sha,
+            "github_run_id": "123456789",
+            "github_run_attempt": 1,
+        },
+        "sigstore": {
+            "oidc_issuer": "https://token.actions.githubusercontent.com",
+            "certificate_identity": OIDC_SUBJECT,
+            "bundle_sha256": "9" * 64,
+            "verification_record_sha256": "c" * 64,
+        },
         "provenance_sha256": "a" * 64,
-        "verification_method": "protected_ci_callback_after_sigstore_verification",
-        "build_metadata": {"runner": "github-hosted"},
+        "verification_method": "github_oidc_cosign_plus_ed25519_callback_v2",
+        "build_metadata": {
+            "candidate_id": str(candidate.id),
+            "candidate_version_id": str(version.id),
+            "candidate_version_hash": version.version_hash,
+            "source_commit": git_commit,
+            "source_tree_sha256": version.code_tree_hash,
+            "formal_worker_image_digest": FORMAL_IMAGE,
+            "tests_passed": True,
+            "platforms": ["linux/amd64", "linux/arm64"],
+            "image": f"ghcr.io/{GITHUB_REPOSITORY}/science-worker",
+            "repository": GITHUB_REPOSITORY,
+            "workflow_ref": GITHUB_WORKFLOW_REF,
+            "workflow_sha": workflow_sha,
+            "run_id": "123456789",
+            "run_attempt": "1",
+        },
         "built_at": built_at.isoformat(),
     }
-    report["receipt_sha256"] = sha256_json(report)
-    return report
+    report = {
+        "schema_version": "standard_astro_formal_build_attestation_bundle_v2",
+        "payload": payload,
+    }
+    return _resign_formal_build_report(report)
 
 
 async def test_formal_build_is_protected_and_registration_stays_pending(
@@ -465,6 +892,16 @@ async def test_formal_build_is_protected_and_registration_stays_pending(
     monkeypatch.setattr(settings, "foundry_registration_enabled", True)
     monkeypatch.setattr(settings, "foundry_formal_build_result_secret", "build-" + "x" * 40)
     monkeypatch.setattr(settings, "foundry_formal_build_oidc_subject", OIDC_SUBJECT)
+    monkeypatch.setattr(
+        settings,
+        "foundry_formal_build_attestation_verification_keys",
+        json.dumps({ATTESTATION_KEY_ID: ATTESTATION_PUBLIC_KEY}),
+    )
+    monkeypatch.setattr(
+        settings, "foundry_formal_build_github_repository", GITHUB_REPOSITORY
+    )
+    monkeypatch.setattr(settings, "foundry_formal_build_github_workflow", GITHUB_WORKFLOW)
+    monkeypatch.setattr(settings, "foundry_formal_build_github_ref", "main")
     denied = await app_client.post(
         "/api/internal/foundry/formal-build-attestations",
         headers={"Authorization": "Bearer wrong"},
@@ -475,13 +912,24 @@ async def test_formal_build_is_protected_and_registration_stays_pending(
         db_session,
         attestation_report=report,
         expected_oidc_subject=OIDC_SUBJECT,
+        expected_github_repository=GITHUB_REPOSITORY,
+        expected_github_workflow=GITHUB_WORKFLOW,
+        expected_github_ref="main",
+        trusted_attestation_public_keys={
+            ATTESTATION_KEY_ID: ATTESTATION_PUBLIC_KEY
+        },
     )
     assert attestation.formal_worker_image_digest == FORMAL_IMAGE
+    assert attestation.formal_release_audit_hash == "d" * 64
+    assert (
+        attestation.formal_release_audit_receipts["vulnerability_status"]
+        == "NOT_EVALUATED"
+    )
     assert version.validation_runner_image_digest == VALIDATION_IMAGE
 
     fake_registry = types.ModuleType("app.services.workflow_registry_v2")
-    fake_registry.registry_snapshot = lambda: {
-        "epoch": "2026-07-21.1",
+    fake_registry.builtin_registry_identity = lambda: {
+        "registry_epoch": "2026-07-21.1",
         "registry_hash": "sha256:" + "c" * 64,
     }
     fake_registry.build_registry_entry_from_approved_candidate = lambda payload: {
@@ -499,6 +947,10 @@ async def test_formal_build_is_protected_and_registration_stays_pending(
         "installation_status": "PENDING_RELEASE",
         "runtime_registry_modified": False,
     }
+    static_gate_calls: list[dict] = []
+    fake_registry.assert_registry_entry_static_compatible = (
+        lambda entry: static_gate_calls.append(entry) or entry
+    )
     monkeypatch.setitem(sys.modules, "app.services.workflow_registry_v2", fake_registry)
     entry, release = await register_candidate_version(
         db_session,
@@ -516,6 +968,193 @@ async def test_formal_build_is_protected_and_registration_stays_pending(
     assert release.signature is None and release.key_id is None
     assert release.manifest["runtime_registry_modified"] is False
     assert release.manifest["base_registry_hash"] == "sha256:" + "c" * 64
+    assert release.manifest["context"]["formal_build_release_audit_sha256"] == (
+        attestation.formal_release_audit_hash
+    )
+    assert str(reviewer.id) not in json.dumps(release.manifest, sort_keys=True)
+    assert static_gate_calls == [entry.release_entry]
+
+
+async def test_formal_build_callback_verifies_signature_and_workflow_identity(
+    db_session,
+):
+    candidate, version, *_ = await _candidate_with_demo(
+        db_session, suffix="formal_attestation_security"
+    )
+    reviewer = await _user(db_session, "formal_attestation_security_reviewer")
+    await review_candidate_version(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        reviewer_user_id=reviewer.id,
+        review_scope="SCIENTIFIC",
+        decision="APPROVED",
+        comment="Exact-version security fixture approval",
+    )
+    report = _formal_build_report(
+        candidate,
+        version,
+        built_at=datetime.now(timezone.utc) + timedelta(minutes=1),
+    )
+
+    tampered = json.loads(json.dumps(report))
+    tampered["payload"]["subject"]["digest"] = "sha256:" + "f" * 64
+    tampered["payload_sha256"] = sha256_json(tampered["payload"])
+    tampered.pop("attestation_artifact_sha256")
+    tampered["attestation_artifact_sha256"] = sha256_json(tampered)
+    with pytest.raises(FoundryCatalogError) as invalid_signature:
+        await record_formal_build_attestation(
+            db_session,
+            attestation_report=tampered,
+            expected_oidc_subject=OIDC_SUBJECT,
+            expected_github_repository=GITHUB_REPOSITORY,
+            expected_github_workflow=GITHUB_WORKFLOW,
+            expected_github_ref="main",
+            trusted_attestation_public_keys={
+                ATTESTATION_KEY_ID: ATTESTATION_PUBLIC_KEY
+            },
+        )
+    assert (
+        invalid_signature.value.error_class
+        == "formal_build_attestation_signature_invalid"
+    )
+
+    wrong_identity = json.loads(json.dumps(report))
+    wrong_identity["payload"]["build_identity"]["github_repository"] = (
+        "attacker/fork"
+    )
+    _resign_formal_build_report(wrong_identity)
+    with pytest.raises(FoundryCatalogError) as identity_mismatch:
+        await record_formal_build_attestation(
+            db_session,
+            attestation_report=wrong_identity,
+            expected_oidc_subject=OIDC_SUBJECT,
+            expected_github_repository=GITHUB_REPOSITORY,
+            expected_github_workflow=GITHUB_WORKFLOW,
+            expected_github_ref="main",
+            trusted_attestation_public_keys={
+                ATTESTATION_KEY_ID: ATTESTATION_PUBLIC_KEY
+            },
+        )
+    assert identity_mismatch.value.error_class == "formal_build_identity_mismatch"
+
+    failed_supply_gate = json.loads(json.dumps(report))
+    failed_supply_gate["payload"]["release_audit"]["status"] = "FAILED"
+    _resign_formal_build_report(failed_supply_gate)
+    with pytest.raises(FoundryCatalogError) as supply_gate_rejected:
+        await record_formal_build_attestation(
+            db_session,
+            attestation_report=failed_supply_gate,
+            expected_oidc_subject=OIDC_SUBJECT,
+            expected_github_repository=GITHUB_REPOSITORY,
+            expected_github_workflow=GITHUB_WORKFLOW,
+            expected_github_ref="main",
+            trusted_attestation_public_keys={
+                ATTESTATION_KEY_ID: ATTESTATION_PUBLIC_KEY
+            },
+        )
+    assert supply_gate_rejected.value.error_class == "formal_release_audit_invalid"
+
+
+async def test_formal_build_dispatch_is_server_bound_and_idempotent(
+    app_client, db_session, monkeypatch
+):
+    candidate, version, _run, _demo, _report = await _candidate_with_demo(
+        db_session,
+        suffix="formal_dispatch",
+        formal_source=True,
+    )
+    reviewer = await _user(db_session, "formal_dispatch_reviewer")
+    await review_candidate_version(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        reviewer_user_id=reviewer.id,
+        review_scope="ENGINEERING",
+        decision="APPROVED",
+        comment="Approve the exact composition candidate",
+    )
+    monkeypatch.setenv("FOUNDRY_HUMAN_REVIEWER_USERNAMES", reviewer.username)
+    monkeypatch.setattr(settings, "foundry_registration_enabled", True)
+    monkeypatch.setattr(
+        settings, "foundry_formal_build_dispatch_backend", "github_actions"
+    )
+    monkeypatch.setattr(
+        settings, "foundry_formal_build_github_repository", "astro/platform"
+    )
+    monkeypatch.setattr(
+        settings, "foundry_formal_build_github_workflow", "foundry-formal-worker.yml"
+    )
+    monkeypatch.setattr(settings, "foundry_formal_build_github_ref", "main")
+    monkeypatch.setattr(
+        settings,
+        "foundry_formal_build_github_token",
+        "formal-dispatch-token-" + "x" * 32,
+    )
+    dispatched: list[dict] = []
+
+    async def _dispatch(_config, **kwargs):
+        dispatched.append(kwargs)
+
+    monkeypatch.setattr("app.api.foundry.dispatch_formal_worker_build", _dispatch)
+    payload = {
+        "candidate_version_id": str(version.id),
+        "candidate_version_hash": version.version_hash,
+    }
+    headers = {"Authorization": f"Bearer {create_access_token(reviewer.id)}"}
+    forged = await app_client.post(
+        f"/api/admin/foundry/candidates/{candidate.id}/formal-build",
+        headers=headers,
+        json={**payload, "source_commit": "f" * 40},
+    )
+    assert forged.status_code == 422
+    assert dispatched == []
+    first = await app_client.post(
+        f"/api/admin/foundry/candidates/{candidate.id}/formal-build",
+        headers=headers,
+        json=payload,
+    )
+    assert first.status_code == 202, first.text
+    assert first.json()["status"] == "DISPATCHED"
+    assert first.json()["idempotent_replay"] is False
+    assert dispatched == [
+        {
+            "candidate_id": str(candidate.id),
+            "candidate_version_id": str(version.id),
+            "candidate_version_hash": version.version_hash,
+            "source_commit": "6" * 40,
+            "source_tree_sha256": "4" * 64,
+        }
+    ]
+    repeated = await app_client.post(
+        f"/api/admin/foundry/candidates/{candidate.id}/formal-build",
+        headers=headers,
+        json=payload,
+    )
+    assert repeated.status_code == 202, repeated.text
+    assert repeated.json()["status"] == "DISPATCHED"
+    assert repeated.json()["idempotent_replay"] is True
+    assert len(dispatched) == 1
+    events = list(
+        (
+            await db_session.execute(
+                select(FoundryCandidateEvent).where(
+                    FoundryCandidateEvent.candidate_id == candidate.id,
+                    FoundryCandidateEvent.event_type.in_(
+                        {"FORMAL_BUILD_REQUESTED", "FORMAL_BUILD_DISPATCHED"}
+                    ),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [event.event_type for event in events] == [
+        "FORMAL_BUILD_REQUESTED",
+        "FORMAL_BUILD_DISPATCHED",
+    ]
 
 
 async def test_pending_release_requests_form_a_complete_deterministic_delta_chain(
@@ -523,8 +1162,8 @@ async def test_pending_release_requests_form_a_complete_deterministic_delta_chai
 ):
     actor = await _user(db_session, "release_actor")
     fake_registry = types.ModuleType("app.services.workflow_registry_v2")
-    fake_registry.registry_snapshot = lambda: {
-        "epoch": "base.1",
+    fake_registry.builtin_registry_identity = lambda: {
+        "registry_epoch": "base.1",
         "registry_hash": "sha256:" + "e" * 64,
     }
     monkeypatch.setitem(sys.modules, "app.services.workflow_registry_v2", fake_registry)
@@ -567,5 +1206,149 @@ async def test_pending_release_requests_form_a_complete_deterministic_delta_chai
     assert revoke.manifest["operation_sequence_hash"] == "sha256:" + sha256_json(
         revoke.manifest["operation_sequence"]
     )
+    assert first.manifest["requested_by_actor_hash"].startswith("sha256:")
+    assert first.manifest["requested_by_actor_hash"] == "sha256:" + sha256_json(
+        {
+            "actor_user_id": str(actor.id),
+            "release_request_id": str(first.id),
+            "domain": "foundry_registry_release_request_v1",
+        }
+    )
+    assert str(actor.id) not in str(first.manifest)
     assert not list((await db_session.execute(select(WorkflowRegistryEntry))).scalars())
     assert len(list((await db_session.execute(select(WorkflowRegistryRelease))).scalars())) == 2
+
+
+async def test_registering_new_workflow_version_atomically_supersedes_old_version(
+    db_session, monkeypatch
+):
+    workflow_id = "candidate_shared_cosmology_workflow"
+    old_candidate, old_version, *_ = await _candidate_with_demo(
+        db_session,
+        suffix="supersede_old",
+        workflow_id=workflow_id,
+        workflow_version="1.0.0",
+    )
+    new_candidate, new_version, *_ = await _candidate_with_demo(
+        db_session,
+        suffix="supersede_new",
+        workflow_id=workflow_id,
+        workflow_version="2.0.0",
+    )
+    reviewer = await _user(db_session, "supersede_reviewer")
+    for candidate, version in (
+        (old_candidate, old_version),
+        (new_candidate, new_version),
+    ):
+        await review_candidate_version(
+            db_session,
+            candidate_id=candidate.id,
+            candidate_version_id=version.id,
+            candidate_version_hash=version.version_hash,
+            reviewer_user_id=reviewer.id,
+            review_scope="SCIENTIFIC",
+            decision="APPROVED",
+            comment="Exact-version scientific approval",
+        )
+    old_attestation = await record_formal_build_attestation(
+        db_session,
+        attestation_report=_formal_build_report(
+            old_candidate,
+            old_version,
+            built_at=datetime.now(timezone.utc) + timedelta(minutes=1),
+        ),
+        expected_oidc_subject=OIDC_SUBJECT,
+        expected_github_repository=GITHUB_REPOSITORY,
+        expected_github_workflow=GITHUB_WORKFLOW,
+        expected_github_ref="main",
+        trusted_attestation_public_keys={
+            ATTESTATION_KEY_ID: ATTESTATION_PUBLIC_KEY
+        },
+    )
+    new_attestation = await record_formal_build_attestation(
+        db_session,
+        attestation_report=_formal_build_report(
+            new_candidate,
+            new_version,
+            built_at=datetime.now(timezone.utc) + timedelta(minutes=2),
+        ),
+        expected_oidc_subject=OIDC_SUBJECT,
+        expected_github_repository=GITHUB_REPOSITORY,
+        expected_github_workflow=GITHUB_WORKFLOW,
+        expected_github_ref="main",
+        trusted_attestation_public_keys={
+            ATTESTATION_KEY_ID: ATTESTATION_PUBLIC_KEY
+        },
+    )
+
+    fake_registry = types.ModuleType("app.services.workflow_registry_v2")
+    fake_registry.builtin_registry_identity = lambda: {
+        "registry_epoch": "builtin.supersede.1",
+        "registry_hash": "sha256:" + "c" * 64,
+    }
+
+    def _fake_release_entry(payload):
+        spec = payload["workflow_spec"]
+        return {
+            "candidate_id": payload["candidate_id"],
+            "candidate_version": payload["candidate_version"],
+            "candidate_version_hash": payload["candidate_version_hash"],
+            "workflow_spec_hash": payload["workflow_spec_hash"],
+            "approval_attestation_hash": "sha256:" + "a" * 64,
+            "build_attestation_hash": "sha256:" + "b" * 64,
+            "worker_image_digest": payload["worker_image_digest"],
+            "workflow": {
+                "workflow_id": spec["workflow_id"],
+                "version": spec["workflow_version"],
+                "state": "REGISTERED",
+            },
+            "tools": [],
+            "registry_entry_hash": "sha256:" + payload["candidate_version_hash"],
+            "installation_status": "PENDING_RELEASE",
+            "runtime_registry_modified": False,
+        }
+
+    fake_registry.build_registry_entry_from_approved_candidate = _fake_release_entry
+    fake_registry.assert_registry_entry_static_compatible = lambda entry: entry
+    monkeypatch.setitem(sys.modules, "app.services.workflow_registry_v2", fake_registry)
+    old_entry, first_release = await register_candidate_version(
+        db_session,
+        candidate_id=old_candidate.id,
+        candidate_version_id=old_version.id,
+        candidate_version_hash=old_version.version_hash,
+        build_attestation_id=old_attestation.id,
+        registrar_user_id=reviewer.id,
+    )
+    _new_entry, second_release = await register_candidate_version(
+        db_session,
+        candidate_id=new_candidate.id,
+        candidate_version_id=new_version.id,
+        candidate_version_hash=new_version.version_hash,
+        build_attestation_id=new_attestation.id,
+        registrar_user_id=reviewer.id,
+    )
+    changes = second_release.manifest["status_changes"]
+    assert second_release.manifest["previous_request_hash"] == first_release.manifest_hash
+    assert second_release.manifest["request_kind"] == (
+        "REGISTER_CANDIDATE_AND_SUPERSEDE"
+    )
+    assert changes == [
+        {
+            "registry_entry_id": str(old_entry.id),
+            "registry_entry_hash": old_entry.registry_entry_hash,
+            "workflow_id": workflow_id,
+            "workflow_version": "1.0.0",
+            "requested_status": "SUPERSEDED",
+            "reason": f"superseded_by={workflow_id}@2.0.0",
+            "superseded_by_workflow_id": workflow_id,
+            "superseded_by_workflow_version": "2.0.0",
+        }
+    ]
+    assert [
+        operation["operation"]
+        for operation in second_release.manifest["new_operations"]
+    ] == ["UPSERT_ENTRY", "SET_ENTRY_STATUS"]
+    await db_session.refresh(old_entry)
+    await db_session.refresh(old_candidate)
+    assert old_entry.status == "PENDING_RELEASE"
+    assert old_candidate.status == "APPROVED"

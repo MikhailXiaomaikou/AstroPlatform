@@ -34,6 +34,15 @@ This is not a “reproduce any paper” machine, and it does not replace peer re
   The backend, UI, private Evidence Pack, invitation, and privacy flows are
   under integration verification. The flag defaults to `false`; disabled
   endpoints return 404 and are not a production feature.
+- **Workflow Foundry** — 能力缺口现在可以进入 AI 候选、隔离验证和可恢复的 Demo
+  记录。候选始终是 `NON_FORMAL_DEMO`，不能被聊天模型或正式 Worker 调用，也不能
+  输出 `SUPPORTED`；只有精确版本经过人工审核、签名构建和签名 Registry 发布后，
+  才能成为正式工作流。全部 Foundry 开关默认关闭。 / Capability gaps can now enter
+  AI drafting, isolated validation, and durable Demo records. Candidates remain
+  `NON_FORMAL_DEMO`: neither the chat model nor a formal Worker can invoke them,
+  and they cannot output `SUPPORTED`. An exact version becomes formal only after
+  human review, a signed build, and a signed Registry release. All Foundry flags
+  default to off.
 - **DESI DR2 Matrix** — 只后处理操作员本地镜像中、经过 SHA-256 核验的官方外部
   链。单元属于 `published_external`；矩阵汇总始终是
   `publication_ready=false` 且 `__do_not_claim__=true`。共享 DESI/CMB 数据时不
@@ -122,6 +131,9 @@ npm run build
 - [部署 / Deployment](./DEPLOYMENT.md) · [生产切换清单 / Cutover checklist](./docs/PRODUCTION_CUTOVER_CHECKLIST.md)
 - [隐私 / Privacy](./PRIVACY.md) · [安全 / Security](./SECURITY.md) · [数据许可证 / Data licences](./docs/DATA_LICENSES.md)
 - [P0 + P1 完整路线图 / Complete P0 + P1 roadmap](./docs/roadmaps/P0_P1_COMPLETE_PLAN.zh-CN.md)
+- [AI 科研工作流工厂 v1 / AI Workflow Foundry v1](./docs/roadmaps/AI_WORKFLOW_FOUNDRY_V1.zh-CN.md)
+- [Workflow Foundry 发布与激活手册 / Release and activation runbook](./docs/runbooks/FOUNDRY_RELEASE_AND_ACTIVATION.zh-CN.md)
+- [AI 候选代码落盘与合并手册 / Candidate source materialization](./docs/runbooks/FOUNDRY_SOURCE_MATERIALIZATION.zh-CN.md)
 
 ## 许可证 / Licence
 

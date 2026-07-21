@@ -6,6 +6,7 @@ import base64
 import hashlib
 import time
 import uuid
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -21,6 +22,7 @@ from app.models.worker_records import (
     WorkerNode,
 )
 from app.services import worker_protocol as worker_protocol_service
+from app.services import workflow_registry_v2 as registry_module
 from app.services.worker_protocol import (
     WORKER_PROTOCOL_VERSION,
     WorkerProtocolError,
@@ -33,6 +35,7 @@ from app.services.worker_protocol import (
     fail_attempt,
     heartbeat_attempt,
     lease_next_task,
+    prepare_attempt_completion,
     reconcile_expired_attempts,
     verify_worker_request,
 )
@@ -115,6 +118,105 @@ async def _user(db_session, *, username: str = "worker-owner") -> User:
     db_session.add(row)
     await db_session.commit()
     return row
+
+
+async def _leased_v2_union3_attempt(db_session, *, username: str):
+    owner = await _user(db_session, username=username)
+    _token, code = await create_enrollment_token(db_session, user_id=owner.id)
+    image_digest = "sha256:" + "2" * 64
+    node = await enroll_worker_node(
+        db_session,
+        enrollment_code=code,
+        name=f"{username} node",
+        public_key=_worker_keypair()[1],
+        protocol_version=WORKER_PROTOCOL_VERSION,
+        capabilities={
+            "workflows": list_worker_execution_bindings(
+                worker_image_digest=image_digest
+            ),
+            "concurrency": 1,
+        },
+        release_manifest={
+            "git_commit": "1" * 40,
+            "image_digest": image_digest,
+        },
+    )
+    job = ResearchJob(
+        job_id=f"{username}-job",
+        user_id=owner.id,
+        tool_name="union3_flat_lcdm_sn_only_v1",
+        workflow_key="union3_flat_lcdm_sn_only_v1",
+        inputs_hash="a" * 64,
+        args={
+            "workflow_key": "union3_flat_lcdm_sn_only_v1",
+            "worker_protocol_version": WORKER_PROTOCOL_VERSION,
+            "dataset_pins": [],
+        },
+        status="QUEUED",
+        background_backend="https_worker",
+        capability_requirements={"protocol_version": WORKER_PROTOCOL_VERSION},
+        created_at=datetime.now(timezone.utc),
+    )
+    db_session.add(job)
+    await db_session.commit()
+    attempt = await lease_next_task(
+        db_session,
+        node=node,
+        private_key=_private_seed(Ed25519PrivateKey.generate()),
+        key_id="control-v2",
+        release_commit="1" * 40,
+        image_digest=image_digest,
+    )
+    assert attempt is not None
+    return owner, node, job, attempt
+
+
+def _install_changed_runtime_registry(monkeypatch, state: str) -> str:
+    """Mimic a fresh process booting a later Registry, with full isolation."""
+
+    current = registry_module.get_registry_snapshot_object()
+    if state == "IDENTITY_CHANGED":
+        next_snapshot = registry_module.compile_registry(
+            tools=current.tools,
+            workflows=current.workflows,
+            epoch=current.epoch + ".replacement",
+            status=current.status,
+            workflow_release_bindings=current.workflow_release_bindings,
+        )
+        expected_error = "workflow_registry_epoch_mismatch"
+    else:
+        workflows = tuple(
+            replace(
+                workflow,
+                state=state,
+                revocation_reason=(
+                    "runtime_registry_test" if state == "REVOKED" else None
+                ),
+            )
+            if workflow.workflow_id == "union3_flat_lcdm_sn_only_v1"
+            else workflow
+            for workflow in current.workflows
+        )
+        next_snapshot = registry_module.compile_registry(
+            tools=current.tools,
+            workflows=workflows,
+            epoch=current.epoch,
+            status=current.status,
+            workflow_release_bindings=current.workflow_release_bindings,
+        )
+        expected_error = f"workflow_{state.lower()}"
+
+    by_identity, by_id = registry_module._workflow_indexes(next_snapshot)
+    monkeypatch.setattr(registry_module, "_SNAPSHOT", next_snapshot)
+    monkeypatch.setattr(registry_module, "_WORKFLOWS_BY_IDENTITY", by_identity)
+    monkeypatch.setattr(registry_module, "_WORKFLOWS_BY_ID", by_id)
+    monkeypatch.setattr(
+        registry_module,
+        "_TOOLS_BY_ENTRYPOINT",
+        {item.entrypoint_id: item for item in next_snapshot.tools},
+    )
+    monkeypatch.setattr(registry_module, "_REGISTRY_LOOKUP_STARTED", False)
+    return expected_error
 
 
 @pytest.mark.asyncio
@@ -428,6 +530,357 @@ async def test_v2_task_envelope_is_bound_to_compiled_registry(db_session):
     assert envelope["entrypoint_id"] == binding["entrypoint_id"]
     assert envelope["worker_image_digest"] == image_digest
     assert "image_digest" not in envelope
+    assert attempt.workflow_id == binding["workflow_id"]
+    assert attempt.workflow_version == binding["workflow_version"]
+    assert attempt.registry_epoch == binding["registry_epoch"]
+    assert attempt.registry_entry_hash == binding["registry_entry_hash"]
+
+
+@pytest.mark.asyncio
+async def test_v2_builtin_task_rejects_unconfigured_self_reported_image(
+    db_session,
+    monkeypatch,
+):
+    owner = await _user(db_session, username="v2-unapproved-image-owner")
+    _token, code = await create_enrollment_token(db_session, user_id=owner.id)
+    approved_digest = "sha256:" + "1" * 64
+    observed_digest = "sha256:" + "2" * 64
+    monkeypatch.setattr(
+        worker_protocol_service.settings,
+        "docker_image_digest",
+        approved_digest,
+    )
+    node = await enroll_worker_node(
+        db_session,
+        enrollment_code=code,
+        name="Self-reported image node",
+        public_key=_worker_keypair()[1],
+        protocol_version=WORKER_PROTOCOL_VERSION,
+        capabilities={
+            "entrypoints": registry_module.list_static_worker_entrypoint_capabilities(
+                worker_image_digest=observed_digest
+            ),
+            "concurrency": 1,
+        },
+        release_manifest={
+            "git_commit": "1" * 40,
+            "image_digest": observed_digest,
+        },
+    )
+    db_session.add(
+        ResearchJob(
+            job_id="v2-unapproved-image-job",
+            user_id=owner.id,
+            tool_name="union3_flat_lcdm_sn_only_v1",
+            workflow_key="union3_flat_lcdm_sn_only_v1",
+            inputs_hash="a" * 64,
+            args={
+                "workflow_key": "union3_flat_lcdm_sn_only_v1",
+                "worker_protocol_version": WORKER_PROTOCOL_VERSION,
+            },
+            status="QUEUED",
+            background_backend="https_worker",
+            capability_requirements={"protocol_version": WORKER_PROTOCOL_VERSION},
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    await db_session.commit()
+
+    attempt = await lease_next_task(
+        db_session,
+        node=node,
+        private_key=_private_seed(Ed25519PrivateKey.generate()),
+        key_id="control-v2",
+        release_commit="1" * 40,
+        image_digest=observed_digest,
+    )
+
+    assert attempt is None
+
+
+@pytest.mark.parametrize(
+    "runtime_state",
+    ["SUSPENDED", "SUPERSEDED", "REVOKED", "IDENTITY_CHANGED"],
+)
+@pytest.mark.asyncio
+async def test_v2_heartbeat_cancels_lease_when_registry_binding_stops_executing(
+    db_session,
+    monkeypatch,
+    runtime_state,
+):
+    _owner, node, job, attempt = await _leased_v2_union3_attempt(
+        db_session,
+        username=f"runtime-heartbeat-{runtime_state.lower()}",
+    )
+    expected_registry_error = _install_changed_runtime_registry(
+        monkeypatch,
+        runtime_state,
+    )
+
+    with pytest.raises(WorkerProtocolError) as error:
+        await heartbeat_attempt(
+            db_session,
+            node=node,
+            attempt_id=attempt.id,
+            lease_id=attempt.lease_id,
+            progress=0.5,
+            checkpoint={"phase": "late-result"},
+        )
+    assert error.value.code == "science_job_cancelled"
+    assert error.value.status_code == 409
+
+    await db_session.refresh(attempt)
+    await db_session.refresh(job)
+    assert attempt.status != "SUCCEEDED"
+    assert attempt.result is None
+    assert attempt.error_class == "workflow_registry_execution_cancelled"
+    assert attempt.diagnostics["registry_cancellation"]["code"] == (
+        expected_registry_error
+    )
+    assert job.status == "CANCELLED"
+    assert job.status != "COMPLETED"
+
+    # The stable 409 is already understood by the shipped Worker, whose next
+    # request is the ordinary cancellation acknowledgment.
+    acknowledged = await acknowledge_cancel(
+        db_session,
+        node=node,
+        attempt_id=attempt.id,
+        lease_id=attempt.lease_id,
+    )
+    assert acknowledged.status == "CANCELLED"
+
+
+@pytest.mark.asyncio
+async def test_v2_prepare_rejects_result_after_workflow_revocation(
+    db_session,
+    monkeypatch,
+):
+    _owner, node, job, attempt = await _leased_v2_union3_attempt(
+        db_session,
+        username="runtime-prepare-revoked",
+    )
+    _install_changed_runtime_registry(monkeypatch, "REVOKED")
+    result = {
+        "workflow_key": "union3_flat_lcdm_sn_only_v1",
+        "best_fit": "0.356",
+    }
+
+    with pytest.raises(WorkerProtocolError) as error:
+        await prepare_attempt_completion(
+            db_session,
+            node=node,
+            attempt_id=attempt.id,
+            lease_id=attempt.lease_id,
+            result=result,
+            claimed_result_hash=canonical_result_hash(result),
+        )
+    assert error.value.code == "science_job_cancelled"
+    assert error.value.status_code == 409
+
+    await db_session.refresh(attempt)
+    await db_session.refresh(job)
+    assert attempt.status != "SUCCEEDED"
+    assert attempt.result is None
+    assert job.status == "CANCELLED"
+    assert job.result is None
+
+
+@pytest.mark.asyncio
+async def test_v2_heartbeat_rejects_missing_persisted_registry_binding(
+    db_session,
+):
+    _owner, node, job, attempt = await _leased_v2_union3_attempt(
+        db_session,
+        username="runtime-binding-missing",
+    )
+    attempt.workflow_id = None
+    attempt.workflow_version = None
+    attempt.registry_epoch = None
+    attempt.registry_entry_hash = None
+    await db_session.commit()
+
+    with pytest.raises(WorkerProtocolError) as error:
+        await heartbeat_attempt(
+            db_session,
+            node=node,
+            attempt_id=attempt.id,
+            lease_id=attempt.lease_id,
+            progress=None,
+            checkpoint=None,
+        )
+    assert error.value.code == "science_job_cancelled"
+    assert error.value.status_code == 409
+
+    await db_session.refresh(attempt)
+    await db_session.refresh(job)
+    assert attempt.status != "SUCCEEDED"
+    assert attempt.diagnostics["registry_cancellation"]["code"] == (
+        "workflow_registry_binding_incomplete"
+    )
+    assert job.status == "CANCELLED"
+
+
+@pytest.mark.asyncio
+async def test_v2_complete_rechecks_registry_after_preparation(
+    db_session,
+    monkeypatch,
+):
+    _owner, node, job, attempt = await _leased_v2_union3_attempt(
+        db_session,
+        username="runtime-complete-identity",
+    )
+    result = {
+        "workflow_key": "union3_flat_lcdm_sn_only_v1",
+        "best_fit": "0.356",
+    }
+    prepared = await prepare_attempt_completion(
+        db_session,
+        node=node,
+        attempt_id=attempt.id,
+        lease_id=attempt.lease_id,
+        result=result,
+        claimed_result_hash=canonical_result_hash(result),
+    )
+    _install_changed_runtime_registry(monkeypatch, "IDENTITY_CHANGED")
+
+    with pytest.raises(WorkerProtocolError) as error:
+        await complete_attempt(
+            db_session,
+            node=node,
+            attempt_id=attempt.id,
+            lease_id=attempt.lease_id,
+            result=result,
+            claimed_result_hash=canonical_result_hash(result),
+            diagnostics={},
+            artifact_manifest=[],
+            prepared=prepared,
+        )
+    assert error.value.code == "science_job_cancelled"
+    assert error.value.status_code == 409
+
+    await db_session.refresh(attempt)
+    await db_session.refresh(job)
+    assert attempt.status != "SUCCEEDED"
+    assert attempt.result is None
+    assert job.status == "CANCELLED"
+    assert job.result is None
+
+
+@pytest.mark.asyncio
+async def test_v2_nodes_with_different_images_skip_incompatible_queued_jobs(
+    db_session,
+    monkeypatch,
+):
+    owner = await _user(db_session, username="multi-image-worker-owner")
+    entrypoint_id = "union3.primary_reproduction.v1"
+    tool_spec_hash = "sha256:" + "a" * 64
+    old_digest = "sha256:" + "1" * 64
+    new_digest = "sha256:" + "2" * 64
+    bindings = {
+        "union3_alias_old_v1": {
+            "workflow_id": "union3_alias_old_v1",
+            "workflow_version": "1.0.0",
+            "registry_epoch": "signed-old-new",
+            "registry_entry_hash": "sha256:" + "3" * 64,
+            "entrypoint_id": entrypoint_id,
+            "execution_adapter_id": "union3_profile_chi_square_v1",
+            "canonical_workflow_id": "union3_flat_lcdm_sn_only_v1",
+            "tool_spec_hash": tool_spec_hash,
+            "approved_worker_image_digest": old_digest,
+        },
+        "union3_alias_new_v1": {
+            "workflow_id": "union3_alias_new_v1",
+            "workflow_version": "1.0.0",
+            "registry_epoch": "signed-old-new",
+            "registry_entry_hash": "sha256:" + "4" * 64,
+            "entrypoint_id": entrypoint_id,
+            "execution_adapter_id": "union3_profile_chi_square_v1",
+            "canonical_workflow_id": "union3_flat_lcdm_sn_only_v1",
+            "tool_spec_hash": tool_spec_hash,
+            "approved_worker_image_digest": new_digest,
+        },
+    }
+    monkeypatch.setattr(
+        worker_protocol_service,
+        "_registered_local_workflows",
+        lambda: frozenset(bindings),
+    )
+    monkeypatch.setattr(
+        worker_protocol_service,
+        "get_worker_execution_binding",
+        lambda workflow_id: dict(bindings[workflow_id]),
+    )
+    monkeypatch.setattr(
+        worker_protocol_service,
+        "assert_workflow_executable",
+        lambda *_args, **_kwargs: {},
+    )
+
+    async def enroll(name: str, digest: str):
+        _token, code = await create_enrollment_token(db_session, user_id=owner.id)
+        return await enroll_worker_node(
+            db_session,
+            enrollment_code=code,
+            name=name,
+            public_key=_worker_keypair()[1],
+            protocol_version=WORKER_PROTOCOL_VERSION,
+            capabilities={
+                "entrypoints": [
+                    {
+                        "entrypoint_id": entrypoint_id,
+                        "tool_spec_hash": tool_spec_hash,
+                        "worker_image_digest": digest,
+                    }
+                ],
+                "concurrency": 1,
+            },
+            release_manifest={"git_commit": "5" * 40, "image_digest": digest},
+        )
+
+    old_node = await enroll("old image", old_digest)
+    new_node = await enroll("new image", new_digest)
+    now = datetime.now(timezone.utc)
+    for index, workflow_id in enumerate(bindings):
+        db_session.add(
+            ResearchJob(
+                job_id=f"multi-image-{index}",
+                user_id=owner.id,
+                tool_name=entrypoint_id,
+                workflow_key=workflow_id,
+                inputs_hash=str(index + 1) * 64,
+                args={
+                    "workflow_key": workflow_id,
+                    "worker_protocol_version": WORKER_PROTOCOL_VERSION,
+                },
+                status="QUEUED",
+                background_backend="https_worker",
+                capability_requirements={"protocol_version": WORKER_PROTOCOL_VERSION},
+                created_at=now + timedelta(seconds=index),
+            )
+        )
+    await db_session.commit()
+
+    new_attempt = await lease_next_task(
+        db_session,
+        node=new_node,
+        private_key=_private_seed(Ed25519PrivateKey.generate()),
+        key_id="control-v2",
+        release_commit="5" * 40,
+        image_digest=new_digest,
+    )
+    assert new_attempt is not None
+    assert new_attempt.task_envelope["workflow_key"] == "union3_alias_new_v1"
+    old_attempt = await lease_next_task(
+        db_session,
+        node=old_node,
+        private_key=_private_seed(Ed25519PrivateKey.generate()),
+        key_id="control-v2",
+        release_commit="5" * 40,
+        image_digest=old_digest,
+    )
+    assert old_attempt is not None
+    assert old_attempt.task_envelope["workflow_key"] == "union3_alias_old_v1"
 
 
 @pytest.mark.asyncio

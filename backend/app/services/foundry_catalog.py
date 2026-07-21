@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
+import hmac
 import json
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
@@ -26,6 +32,7 @@ from app.models.foundry_records import (
     WorkflowRegistryEntry,
     WorkflowRegistryRelease,
 )
+from app.services.foundry_candidate_identity import candidate_version_sha256
 
 
 CANDIDATE_STATUSES = frozenset(
@@ -39,6 +46,7 @@ CANDIDATE_STATUSES = frozenset(
         "REJECTED",
         "PROMOTED",
         "SUSPENDED",
+        "SUPERSEDED",
         "REVOKED",
     }
 )
@@ -52,6 +60,24 @@ NON_FORMAL_EVIDENCE_CLASS = "NON_FORMAL_DEMO"
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _IMAGE_DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 _GIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
+_EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
+_FORMAL_BUILD_SIGNING_DOMAIN = b"standard-astro/formal-build-attestation/v2\0"
+_FORMAL_BUILD_BUNDLE_SCHEMA = "standard_astro_formal_build_attestation_bundle_v2"
+_FORMAL_BUILD_PAYLOAD_SCHEMA = "standard_astro_formal_build_attestation_v2"
+_FORMAL_RELEASE_AUDIT_SCHEMA = "standard_astro_formal_release_audit_v1"
+_FORMAL_RELEASE_RECEIPT_KEYS = frozenset(
+    {
+        "dependency_lock",
+        "secret_scan",
+        "static_audit",
+        "linux_amd64_dependency_integrity",
+        "linux_amd64_license_policy",
+        "linux_amd64_environment",
+        "linux_arm64_dependency_integrity",
+        "linux_arm64_license_policy",
+        "linux_arm64_environment",
+    }
+)
 _FINGERPRINT_KEYS = (
     "gap_code",
     "dataset_key",
@@ -177,6 +203,69 @@ def _require_image_digest(value: str) -> str:
     return normalized
 
 
+def _validate_formal_release_audit(
+    value: Any,
+    *,
+    source_tree_hash: str,
+    dependency_lock_hash: str,
+    formal_sbom_hash: str,
+) -> tuple[str, dict[str, Any]]:
+    required = {
+        "schema_version",
+        "status",
+        "policy_id",
+        "policy_sha256",
+        "source_tree_sha256",
+        "dependency_lock_sha256",
+        "formal_sbom_sha256",
+        "architectures",
+        "receipts",
+        "gates",
+        "advisory_database_checked",
+        "vulnerability_status",
+        "legal_review_complete",
+        "aggregate_receipt_sha256",
+    }
+    if not isinstance(value, dict) or set(value) != required:
+        raise FoundryCatalogError(
+            "formal_release_audit_invalid",
+            "Formal release supply-chain receipt is malformed",
+        )
+    receipts = value.get("receipts")
+    if (
+        value.get("schema_version") != _FORMAL_RELEASE_AUDIT_SCHEMA
+        or value.get("status") != "PASSED"
+        or value.get("architectures") != ["linux/amd64", "linux/arm64"]
+        or value.get("gates")
+        != {
+            "dependency_integrity": True,
+            "license_inventory_policy": True,
+            "tracked_source_secret_scan": True,
+        }
+        or value.get("advisory_database_checked") is not False
+        or value.get("vulnerability_status") != "NOT_EVALUATED"
+        or value.get("legal_review_complete") is not False
+        or value.get("source_tree_sha256") != source_tree_hash
+        or value.get("dependency_lock_sha256") != dependency_lock_hash
+        or value.get("formal_sbom_sha256") != formal_sbom_hash
+        or not isinstance(receipts, dict)
+        or set(receipts) != _FORMAL_RELEASE_RECEIPT_KEYS
+        or not str(value.get("policy_id") or "")
+    ):
+        raise FoundryCatalogError(
+            "formal_release_audit_invalid",
+            "Formal release supply-chain gates did not produce the registered receipt",
+        )
+    _require_sha256(str(value.get("policy_sha256") or ""), "release_audit.policy_sha256")
+    for name, digest in receipts.items():
+        _require_sha256(str(digest or ""), f"release_audit.receipts.{name}")
+    aggregate_hash = _require_sha256(
+        str(value.get("aggregate_receipt_sha256") or ""),
+        "release_audit.aggregate_receipt_sha256",
+    )
+    return aggregate_hash, json.loads(canonical_json(value))
+
+
 def _contains_formal_claim_escape(value: Any) -> bool:
     """Reject nested candidate output that impersonates formal evidence."""
 
@@ -280,6 +369,21 @@ async def _append_event(
     payload: dict[str, Any],
     candidate_version_id: uuid.UUID | None = None,
 ) -> FoundryCandidateEvent:
+    # PostgreSQL READ COMMITTED takes a fresh snapshot after this lock is
+    # acquired.  Serializing every append on the durable candidate row means a
+    # callback that waited here observes the event committed by the callback
+    # ahead of it, rather than creating a second child of the same parent.
+    candidate_row = await db.scalar(
+        select(FoundryCandidate.id)
+        .where(FoundryCandidate.id == candidate_id)
+        .with_for_update()
+    )
+    if candidate_row is None:
+        raise FoundryCatalogError(
+            "candidate_not_found",
+            "Candidate event chain owner does not exist",
+            status_code=404,
+        )
     previous = await db.scalar(
         select(FoundryCandidateEvent)
         .where(FoundryCandidateEvent.candidate_id == candidate_id)
@@ -473,11 +577,24 @@ def serialize_demo_run(
     for raw_artifact in row.artifact_manifest or []:
         if not isinstance(raw_artifact, dict):
             continue
-        receipt = {
-            key: raw_artifact[key]
-            for key in ("name", "sha256", "size_bytes", "media_type")
-            if key in raw_artifact
-        }
+        if set(raw_artifact) == {
+            "path",
+            "kind",
+            "sha256",
+            "bytes",
+        }:
+            receipt = {
+                "name": raw_artifact["path"],
+                "sha256": raw_artifact["sha256"],
+                "size_bytes": raw_artifact["bytes"],
+                "media_type": "text/plain; charset=utf-8",
+            }
+        else:
+            receipt = {
+                key: raw_artifact[key]
+                for key in ("name", "sha256", "size_bytes", "media_type")
+                if key in raw_artifact
+            }
         if receipt:
             artifact_receipts.append(receipt)
     return {
@@ -662,7 +779,7 @@ async def append_candidate_version(
             "candidate workflow_spec.workflow_version is required",
         )
     workflow_spec_hash = sha256_json(workflow_spec)
-    version_hash = sha256_json(bundle)
+    bundle_hash = sha256_json(bundle)
     generation = dict(bundle.get("generation") or {})
     ai_model = str(generation.get("model") or "unspecified")
     source_pins = list(bundle.get("source_pins") or [])
@@ -680,7 +797,7 @@ async def append_candidate_version(
     )
     patch_hash = _require_sha256(
         draft.get("patch_hash")
-        or sha256_json({"candidate_bundle_sha256": version_hash}),
+        or sha256_json({"candidate_bundle_sha256": bundle_hash}),
         "patch_hash",
     )
     sbom_hash = _require_sha256(
@@ -688,6 +805,17 @@ async def append_candidate_version(
     )
     image_digest = _require_image_digest(
         draft.get("validation_runner_image_digest")
+    )
+    version_hash = candidate_version_sha256(
+        candidate_bundle_sha256=bundle_hash,
+        workflow_spec_sha256=workflow_spec_hash,
+        code_tree_sha256=code_tree_hash,
+        patch_sha256=patch_hash,
+        dependency_lock_sha256=str(bundle["dependency_lock_sha256"]),
+        sbom_sha256=sbom_hash,
+        fixture_hashes=fixture_pins,
+        data_hashes=data_hashes,
+        validation_runner_image_digest=image_digest,
     )
     row = FoundryCandidateVersion(
         candidate_id=candidate.id,
@@ -725,6 +853,7 @@ async def append_candidate_version(
         payload={
             "version_number": row.version_number,
             "version_hash": row.version_hash,
+            "candidate_bundle_hash": bundle_hash,
             "workflow_id": row.workflow_id,
             "workflow_version": row.workflow_version,
         },
@@ -762,7 +891,7 @@ async def triage_capability_request(
     )
     if candidate is None:
         raise FoundryCatalogError("candidate_not_found", "Foundry candidate not found", status_code=404)
-    if candidate.status in {"PROMOTED", "SUSPENDED", "REVOKED"}:
+    if candidate.status in {"PROMOTED", "SUSPENDED", "SUPERSEDED", "REVOKED"}:
         raise FoundryCatalogError(
             "candidate_not_triageable",
             "A promoted, suspended, or revoked candidate cannot be re-triaged",
@@ -798,6 +927,814 @@ async def triage_capability_request(
     await db.refresh(request)
     await db.refresh(candidate)
     return request, candidate, version
+
+
+_DRAFT_EVENT_TYPES = frozenset(
+    {
+        "AI_DRAFT_QUEUED",
+        "AI_DRAFT_DISPATCHED",
+        "AI_DRAFT_DISPATCH_FAILED",
+        "AI_DRAFT_RESULT_ACCEPTED",
+        "AI_DRAFT_RESULT_FAILED",
+    }
+)
+_DRAFT_FAILURE_RE = re.compile(r"^[a-z][a-z0-9_]{1,127}$")
+_SAFE_ARTIFACT_PATH_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+_SAFE_PROVIDER_RE = re.compile(r"^[A-Za-z0-9_.:/-]{1,255}$")
+_DRAFT_REPOSITORY_RE = re.compile(
+    r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$"
+)
+_DRAFT_PATCH_PATH_RE = re.compile(
+    r"^backend/app/services/foundry_generated/[a-z][a-z0-9_]{2,96}\.py$"
+)
+
+
+def _draft_run_id(event: FoundryCandidateEvent) -> str:
+    if event.event_type == "AI_DRAFT_QUEUED":
+        return str(event.id)
+    return str((event.event_payload or {}).get("draft_run_id") or "")
+
+
+async def queue_ai_draft(
+    db: AsyncSession,
+    *,
+    candidate_id: uuid.UUID,
+    actor_kind: str,
+    actor_user_id: uuid.UUID | None,
+) -> tuple[FoundryCandidateEvent, bool]:
+    """Append a durable, privacy-minimized Draft request event.
+
+    The event id is the ``draft_run_id``.  A separate mutable job table is not
+    needed: every dispatch and result is another hash-chained event referring
+    to this immutable id.
+    """
+
+    candidate = await db.scalar(
+        select(FoundryCandidate)
+        .where(FoundryCandidate.id == candidate_id)
+        .with_for_update()
+    )
+    if candidate is None:
+        raise FoundryCatalogError(
+            "candidate_not_found", "Foundry candidate not found", status_code=404
+        )
+    if candidate.status in {
+        "APPROVED",
+        "REJECTED",
+        "PROMOTED",
+        "SUSPENDED",
+        "SUPERSEDED",
+        "REVOKED",
+    }:
+        raise FoundryCatalogError(
+            "candidate_not_draftable",
+            "A reviewed or formal candidate cannot be drafted in place",
+            status_code=409,
+        )
+    if (
+        candidate.generation_route not in GENERATION_ROUTES
+        or candidate.risk_level not in RISK_LEVELS
+    ):
+        raise FoundryCatalogError(
+            "candidate_triage_incomplete",
+            "Generation route and risk level must be fixed before AI drafting",
+            status_code=409,
+        )
+
+    # Rebuild the provider-visible descriptor from the server-owned Candidate
+    # row.  This strips request prose such as ``next_action`` and retains only
+    # the small, explicit _FINGERPRINT_KEYS allowlist plus research_domain.
+    descriptor = gap_descriptor(dict(candidate.gap_descriptor or {}))
+    if (
+        descriptor.get("gap_code") != candidate.gap_code
+        or sha256_json(descriptor) != candidate.gap_fingerprint
+    ):
+        raise FoundryCatalogError(
+            "candidate_gap_binding_invalid",
+            "Candidate gap descriptor no longer matches its immutable fingerprint",
+            status_code=409,
+        )
+
+    recent = list(
+        (
+            await db.execute(
+                select(FoundryCandidateEvent)
+                .where(
+                    FoundryCandidateEvent.candidate_id == candidate.id,
+                    FoundryCandidateEvent.event_type.in_(_DRAFT_EVENT_TYPES),
+                )
+                .order_by(
+                    FoundryCandidateEvent.created_at.desc(),
+                    FoundryCandidateEvent.id.desc(),
+                )
+                .limit(100)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if recent:
+        latest = recent[0]
+        if latest.event_type in {"AI_DRAFT_QUEUED", "AI_DRAFT_DISPATCHED"}:
+            run_id = _draft_run_id(latest)
+            queued = next(
+                (
+                    event
+                    for event in recent
+                    if event.event_type == "AI_DRAFT_QUEUED"
+                    and str(event.id) == run_id
+                ),
+                None,
+            )
+            if queued is not None:
+                return queued, False
+        if latest.event_type == "AI_DRAFT_RESULT_ACCEPTED":
+            raise FoundryCatalogError(
+                "candidate_draft_already_accepted",
+                "The current candidate already has an accepted immutable draft version",
+                status_code=409,
+            )
+
+    event = await _append_event(
+        db,
+        candidate_id=candidate.id,
+        event_type="AI_DRAFT_QUEUED",
+        actor_kind=actor_kind,
+        actor_user_id=actor_user_id,
+        payload={
+            # Deliberately omit claim, source, prompt, user, and workspace data.
+            "candidate_id": str(candidate.id),
+            "gap_fingerprint": candidate.gap_fingerprint,
+            "gap_code": candidate.gap_code,
+            "gap_descriptor": descriptor,
+            "generation_route": candidate.generation_route,
+            "risk_level": candidate.risk_level,
+        },
+    )
+    candidate.status = "BUILDING"
+    await db.commit()
+    await db.refresh(event)
+    return event, True
+
+
+async def record_ai_draft_dispatch(
+    db: AsyncSession,
+    *,
+    draft_run_id: uuid.UUID,
+    dispatched: bool,
+    failure_class: str | None = None,
+    retryable: bool = False,
+) -> FoundryCandidateEvent:
+    """Append the sanitized GitHub dispatch outcome for one queued Draft."""
+
+    queued = await db.get(FoundryCandidateEvent, draft_run_id)
+    if queued is None or queued.event_type != "AI_DRAFT_QUEUED":
+        raise FoundryCatalogError(
+            "draft_run_not_found", "AI Draft run not found", status_code=404
+        )
+    outcomes = list(
+        (
+            await db.execute(
+                select(FoundryCandidateEvent)
+                .where(
+                    FoundryCandidateEvent.candidate_id == queued.candidate_id,
+                    FoundryCandidateEvent.event_type.in_(
+                        {"AI_DRAFT_DISPATCHED", "AI_DRAFT_DISPATCH_FAILED"}
+                    ),
+                )
+                .order_by(FoundryCandidateEvent.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    existing = next(
+        (event for event in outcomes if _draft_run_id(event) == str(draft_run_id)),
+        None,
+    )
+    expected_type = (
+        "AI_DRAFT_DISPATCHED" if dispatched else "AI_DRAFT_DISPATCH_FAILED"
+    )
+    sanitized_failure = None
+    if not dispatched:
+        sanitized_failure = str(failure_class or "draft_dispatch_failed")
+        if not _DRAFT_FAILURE_RE.fullmatch(sanitized_failure):
+            sanitized_failure = "draft_dispatch_failed"
+    if existing is not None:
+        if (
+            existing.event_type != expected_type
+            or (existing.event_payload or {}).get("failure_class")
+            != sanitized_failure
+        ):
+            raise FoundryCatalogError(
+                "draft_dispatch_outcome_conflict",
+                "The Draft dispatch outcome is already recorded differently",
+                status_code=409,
+            )
+        return existing
+
+    candidate = await db.scalar(
+        select(FoundryCandidate)
+        .where(FoundryCandidate.id == queued.candidate_id)
+        .with_for_update()
+    )
+    event = await _append_event(
+        db,
+        candidate_id=queued.candidate_id,
+        event_type=expected_type,
+        actor_kind="CONTROL_PLANE",
+        actor_user_id=None,
+        payload={
+            "draft_run_id": str(draft_run_id),
+            "failure_class": sanitized_failure,
+            "retryable": bool(retryable) if not dispatched else False,
+        },
+    )
+    if candidate is not None:
+        candidate.status = "BUILDING"
+    await db.commit()
+    await db.refresh(event)
+    return event
+
+
+def _validate_ai_draft_report(
+    report_value: dict[str, Any],
+) -> tuple[dict[str, Any], str]:
+    if not isinstance(report_value, dict):
+        raise FoundryCatalogError(
+            "invalid_draft_result", "AI Draft result must be an object"
+        )
+    report = json.loads(canonical_json(report_value))
+    expected_keys = {
+        "schema_version",
+        "draft_run_id",
+        "candidate_id",
+        "gap_fingerprint",
+        "gap_code",
+        "gap_descriptor",
+        "generation_route",
+        "risk_level",
+        "status",
+        "candidate_version",
+        "provider_receipt",
+        "artifact_manifest",
+        "artifact_receipt",
+        "source_receipt",
+        "failure_class",
+        "draft_result_sha256",
+    }
+    if set(report) != expected_keys or report.get("schema_version") != 1:
+        raise FoundryCatalogError(
+            "invalid_draft_result", "AI Draft result shape is not registered"
+        )
+    declared_hash = _require_sha256(
+        report.pop("draft_result_sha256"), "draft_result_sha256"
+    )
+    if sha256_json(report) != declared_hash:
+        raise FoundryCatalogError(
+            "draft_result_hash_mismatch", "AI Draft result hash does not match"
+        )
+    report["draft_result_sha256"] = declared_hash
+
+    provider = report.get("provider_receipt")
+    provider_keys = {
+        "contract_version",
+        "provider",
+        "model",
+        "request_id_sha256",
+        "prompt_or_user_data_stored",
+        "generated_code_executed",
+        "tests_executed",
+    }
+    if (
+        not isinstance(provider, dict)
+        or set(provider) != provider_keys
+        or provider.get("contract_version") != 1
+        or provider.get("prompt_or_user_data_stored") is not False
+        or provider.get("generated_code_executed") is not False
+        or provider.get("tests_executed") is not False
+        or not _SAFE_PROVIDER_RE.fullmatch(str(provider.get("provider") or ""))
+        or len(str(provider.get("provider") or "")) > 128
+        or not _SAFE_PROVIDER_RE.fullmatch(str(provider.get("model") or ""))
+    ):
+        raise FoundryCatalogError(
+            "invalid_draft_provider_receipt",
+            "AI Draft provider receipt violates the non-execution contract",
+        )
+    request_hash = provider.get("request_id_sha256")
+    if request_hash is not None:
+        _require_sha256(request_hash, "request_id_sha256")
+
+    artifacts = report.get("artifact_manifest")
+    if not isinstance(artifacts, list) or len(artifacts) > 16:
+        raise FoundryCatalogError(
+            "invalid_draft_artifact_manifest",
+            "AI Draft artifact manifest must be a bounded list",
+        )
+    for artifact in artifacts:
+        if (
+            not isinstance(artifact, dict)
+            or set(artifact) != {"path", "kind", "sha256", "bytes"}
+            or not _SAFE_ARTIFACT_PATH_RE.fullmatch(str(artifact.get("path") or ""))
+            or artifact.get("kind")
+            not in {"CANDIDATE_BUNDLE", "PATCH", "SBOM", "PROVIDER_RECEIPT"}
+            or not isinstance(artifact.get("bytes"), int)
+            or isinstance(artifact.get("bytes"), bool)
+            or not 0 <= artifact["bytes"] <= 2 * 1024 * 1024
+        ):
+            raise FoundryCatalogError(
+                "invalid_draft_artifact_manifest",
+                "AI Draft artifact entry is invalid or exceeds its size bound",
+            )
+        _require_sha256(artifact.get("sha256"), "artifact.sha256")
+    return report, declared_hash
+
+
+async def record_ai_draft_result(
+    db: AsyncSession,
+    *,
+    draft_run_id: uuid.UUID,
+    draft_result: dict[str, Any],
+    expected_repository: str | None = None,
+    expected_base_commit: str | None = None,
+) -> tuple[FoundryCandidateVersion | None, FoundryCandidateEvent]:
+    """Append one host-ingested Draft result and, on success, one AI version."""
+
+    report, report_hash = _validate_ai_draft_report(draft_result)
+    queued = await db.get(FoundryCandidateEvent, draft_run_id)
+    if queued is None or queued.event_type != "AI_DRAFT_QUEUED":
+        raise FoundryCatalogError(
+            "draft_run_not_found", "AI Draft run not found", status_code=404
+        )
+    binding = dict(queued.event_payload or {})
+    expected_binding = {
+        "draft_run_id": str(draft_run_id),
+        "candidate_id": str(queued.candidate_id),
+        "gap_fingerprint": str(binding.get("gap_fingerprint") or ""),
+        "gap_code": str(binding.get("gap_code") or ""),
+        "gap_descriptor": binding.get("gap_descriptor"),
+        "generation_route": str(binding.get("generation_route") or ""),
+        "risk_level": str(binding.get("risk_level") or ""),
+    }
+    actual_binding = {
+        **{
+            key: str(report.get(key) or "")
+            for key in expected_binding
+            if key != "gap_descriptor"
+        },
+        "gap_descriptor": report.get("gap_descriptor"),
+    }
+    if actual_binding != expected_binding:
+        raise FoundryCatalogError(
+            "draft_result_binding_mismatch",
+            "AI Draft result does not match its immutable dispatch binding",
+            status_code=409,
+        )
+    descriptor = gap_descriptor(dict(report.get("gap_descriptor") or {}))
+    if (
+        descriptor != report.get("gap_descriptor")
+        or sha256_json(descriptor) != report.get("gap_fingerprint")
+        or descriptor.get("gap_code") != report.get("gap_code")
+    ):
+        raise FoundryCatalogError(
+            "draft_gap_descriptor_invalid",
+            "AI Draft descriptor is not the canonical server-approved gap binding",
+            status_code=409,
+        )
+
+    # Serialize callback/replay handling on the candidate before checking the
+    # result ledger.  Without this lock, two simultaneous callbacks could both
+    # observe "not completed" and append two versions.
+    candidate = await db.scalar(
+        select(FoundryCandidate)
+        .where(FoundryCandidate.id == queued.candidate_id)
+        .with_for_update()
+    )
+    if candidate is None:
+        raise FoundryCatalogError(
+            "candidate_not_found", "Foundry candidate not found", status_code=404
+        )
+
+    lifecycle_events = list(
+        (
+            await db.execute(
+                select(FoundryCandidateEvent)
+                .where(
+                    FoundryCandidateEvent.candidate_id == queued.candidate_id,
+                    FoundryCandidateEvent.event_type.in_(
+                        {
+                            "AI_DRAFT_DISPATCHED",
+                            "AI_DRAFT_DISPATCH_FAILED",
+                            "AI_DRAFT_RESULT_ACCEPTED",
+                            "AI_DRAFT_RESULT_FAILED",
+                        }
+                    ),
+                )
+                .order_by(FoundryCandidateEvent.created_at.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    bound_events = [
+        event
+        for event in lifecycle_events
+        if _draft_run_id(event) == str(draft_run_id)
+    ]
+    completed = next(
+        (
+            event
+            for event in bound_events
+            if event.event_type
+            in {"AI_DRAFT_RESULT_ACCEPTED", "AI_DRAFT_RESULT_FAILED"}
+        ),
+        None,
+    )
+    if completed is not None:
+        if (completed.event_payload or {}).get("draft_result_sha256") != report_hash:
+            raise FoundryCatalogError(
+                "draft_result_conflict",
+                "The AI Draft run already has a different immutable result",
+                status_code=409,
+            )
+        version_id = (completed.event_payload or {}).get("candidate_version_id")
+        version = (
+            await db.get(FoundryCandidateVersion, uuid.UUID(str(version_id)))
+            if version_id
+            else None
+        )
+        return version, completed
+    if not any(event.event_type == "AI_DRAFT_DISPATCHED" for event in bound_events):
+        raise FoundryCatalogError(
+            "draft_result_not_dispatched",
+            "AI Draft result cannot be ingested before a successful dispatch",
+            status_code=409,
+        )
+    if any(event.event_type == "AI_DRAFT_DISPATCH_FAILED" for event in bound_events):
+        raise FoundryCatalogError(
+            "draft_result_after_failed_dispatch",
+            "A failed Draft dispatch must be retried with a new run id",
+            status_code=409,
+        )
+
+    status = str(report.get("status") or "").upper()
+    if status not in {"SUCCEEDED", "FAILED"}:
+        raise FoundryCatalogError(
+            "invalid_draft_result", "AI Draft status must be SUCCEEDED or FAILED"
+        )
+    failure_class = report.get("failure_class")
+    if failure_class is not None and not _DRAFT_FAILURE_RE.fullmatch(
+        str(failure_class)
+    ):
+        raise FoundryCatalogError(
+            "invalid_draft_failure_class", "AI Draft failure class is invalid"
+        )
+
+    if status == "FAILED":
+        if (
+            report.get("candidate_version") is not None
+            or report.get("artifact_receipt") is not None
+            or report.get("source_receipt") is not None
+            or failure_class is None
+        ):
+            raise FoundryCatalogError(
+                "invalid_draft_result",
+                "A failed AI Draft must contain only a classified failure",
+            )
+        event = await _append_event(
+            db,
+            candidate_id=candidate.id,
+            event_type="AI_DRAFT_RESULT_FAILED",
+            actor_kind="AI_DRAFT_JOB",
+            actor_user_id=None,
+            payload={
+                "draft_run_id": str(draft_run_id),
+                "draft_result_sha256": report_hash,
+                "failure_class": str(failure_class),
+                "retryable": True,
+            },
+        )
+        candidate.status = "BUILDING"
+        await db.commit()
+        await db.refresh(event)
+        return None, event
+
+    if failure_class is not None or not isinstance(report.get("candidate_version"), dict):
+        raise FoundryCatalogError(
+            "invalid_draft_result",
+            "A successful AI Draft requires one candidate version and no failure",
+        )
+    artifact_receipt = report.get("artifact_receipt")
+    source_receipt = report.get("source_receipt")
+    if (
+        not isinstance(artifact_receipt, dict)
+        or set(artifact_receipt)
+        != {
+            "repository",
+            "workflow_run_id",
+            "artifact_id",
+            "artifact_name",
+            "artifact_sha256",
+        }
+        or not _DRAFT_REPOSITORY_RE.fullmatch(
+            str(artifact_receipt.get("repository") or "")
+        )
+        or not str(artifact_receipt.get("workflow_run_id") or "").isdigit()
+        or not str(artifact_receipt.get("artifact_id") or "").isdigit()
+        or artifact_receipt.get("artifact_name")
+        != f"foundry-draft-{draft_run_id}"
+    ):
+        raise FoundryCatalogError(
+            "draft_artifact_receipt_invalid",
+            "Successful AI Drafts require an exact immutable artifact receipt",
+        )
+    artifact_sha256 = _require_sha256(
+        artifact_receipt.get("artifact_sha256"), "artifact_sha256"
+    )
+    if expected_repository and artifact_receipt["repository"] != expected_repository:
+        raise FoundryCatalogError(
+            "draft_artifact_repository_mismatch",
+            "AI Draft artifact came from an unexpected repository",
+            status_code=409,
+        )
+    source_keys = {
+        "hash_algorithm",
+        "base_commit",
+        "base_source_tree_sha256",
+        "post_patch_source_tree_sha256",
+        "patch_sha256",
+        "patch_applied",
+        "changed_paths",
+        "dependency_lock_sha256",
+        "runner_definition_sha256",
+    }
+    if (
+        not isinstance(source_receipt, dict)
+        or set(source_receipt) != source_keys
+        or source_receipt.get("hash_algorithm")
+        != "standard_astro_tracked_source_manifest_v1"
+        or not _GIT_SHA_RE.fullmatch(str(source_receipt.get("base_commit") or ""))
+        or not isinstance(source_receipt.get("patch_applied"), bool)
+        or not isinstance(source_receipt.get("changed_paths"), list)
+        or len(source_receipt["changed_paths"]) > 64
+        or any(
+            not _DRAFT_PATCH_PATH_RE.fullmatch(str(path))
+            for path in source_receipt["changed_paths"]
+        )
+    ):
+        raise FoundryCatalogError(
+            "draft_source_receipt_invalid",
+            "AI Draft source receipt violates the canonical patch policy",
+        )
+    for field in (
+        "base_source_tree_sha256",
+        "post_patch_source_tree_sha256",
+        "patch_sha256",
+        "dependency_lock_sha256",
+        "runner_definition_sha256",
+    ):
+        _require_sha256(source_receipt.get(field), field)
+    if expected_base_commit and source_receipt["base_commit"] != expected_base_commit:
+        raise FoundryCatalogError(
+            "draft_source_base_commit_mismatch",
+            "AI Draft source was not based on the pinned dispatch commit",
+            status_code=409,
+        )
+    patch_artifact = next(
+        (
+            artifact
+            for artifact in report["artifact_manifest"]
+            if artifact.get("kind") == "PATCH"
+        ),
+        None,
+    )
+    if (
+        patch_artifact is None
+        or patch_artifact.get("sha256") != source_receipt["patch_sha256"]
+        or bool(patch_artifact.get("bytes"))
+        != source_receipt["patch_applied"]
+        or bool(source_receipt["changed_paths"])
+        != source_receipt["patch_applied"]
+    ):
+        raise FoundryCatalogError(
+            "draft_patch_receipt_mismatch",
+            "Patch bytes, changed paths, and source receipt do not agree",
+        )
+    draft = json.loads(canonical_json(report["candidate_version"]))
+    bundle = draft.get("candidate_bundle")
+    if not isinstance(bundle, dict):
+        raise FoundryCatalogError(
+            "invalid_candidate_bundle", "AI Draft did not return a candidate bundle"
+        )
+    if source_receipt["patch_applied"]:
+        expected_generated_path = (
+            "backend/app/services/foundry_generated/"
+            f"{str(bundle.get('candidate_id') or '')}.py"
+        )
+        if (
+            bundle.get("entrypoint_id")
+            != "candidate_generated_python_demo_v1"
+            or source_receipt["changed_paths"] != [expected_generated_path]
+        ):
+            raise FoundryCatalogError(
+                "draft_generated_module_binding_mismatch",
+                "A generated-code patch must bind exactly one candidate module and the fixed Validation entrypoint",
+            )
+    raw_version = bundle.get("candidate_version")
+    if raw_version is not None and raw_version != 0:
+        raise FoundryCatalogError(
+            "draft_candidate_version_not_server_assigned",
+            "AI must leave candidate_version for the control plane to assign",
+            status_code=409,
+        )
+    max_version = int(
+        await db.scalar(
+            select(func.max(FoundryCandidateVersion.version_number)).where(
+                FoundryCandidateVersion.candidate_id == candidate.id
+            )
+        )
+        or 0
+    )
+    bundle["candidate_version"] = max_version + 1
+    generation = bundle.get("generation")
+    if (
+        not isinstance(generation, dict)
+        or generation.get("prompt_or_claim_stored") is not False
+        or generation.get("generated_code_executed_by_draft_job") is not False
+        or any(
+            key in generation
+            for key in {
+                "prompt",
+                "claim",
+                "claim_text",
+                "source",
+                "source_text",
+                "user_id",
+                "workspace_id",
+            }
+        )
+        or generation.get("source_hash_algorithm")
+        != source_receipt["hash_algorithm"]
+        or generation.get("source_base_commit") != source_receipt["base_commit"]
+        or generation.get("source_base_tree_sha256")
+        != source_receipt["base_source_tree_sha256"]
+        or generation.get("source_tree_sha256")
+        != source_receipt["post_patch_source_tree_sha256"]
+        or generation.get("source_materialization_required")
+        is not source_receipt["patch_applied"]
+    ):
+        raise FoundryCatalogError(
+            "draft_generation_metadata_unsafe",
+            "AI Draft generation metadata must not retain user research content",
+        )
+    draft["candidate_bundle"] = bundle
+    if (
+        draft.get("code_tree_hash")
+        != source_receipt["post_patch_source_tree_sha256"]
+        or draft.get("patch_hash") != source_receipt["patch_sha256"]
+        or bundle.get("dependency_lock_sha256")
+        != source_receipt["dependency_lock_sha256"]
+        or bundle.get("runner_definition_sha256")
+        != source_receipt["runner_definition_sha256"]
+    ):
+        raise FoundryCatalogError(
+            "draft_source_version_binding_mismatch",
+            "Candidate version hashes do not match the trusted source receipt",
+            status_code=409,
+        )
+    version = await append_candidate_version(
+        db,
+        candidate=candidate,
+        draft=draft,
+        actor_kind="AI_DRAFT_JOB",
+        actor_user_id=None,
+    )
+    provider = dict(report["provider_receipt"])
+    event = await _append_event(
+        db,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        event_type="AI_DRAFT_RESULT_ACCEPTED",
+        actor_kind="AI_DRAFT_JOB",
+        actor_user_id=None,
+        payload={
+            "draft_run_id": str(draft_run_id),
+            "draft_result_sha256": report_hash,
+            "candidate_version_id": str(version.id),
+            "candidate_version_hash": version.version_hash,
+            "provider": provider["provider"],
+            "model": provider["model"],
+            "artifact_manifest": list(report["artifact_manifest"]),
+            "artifact_receipt": {
+                **dict(artifact_receipt),
+                "artifact_sha256": artifact_sha256,
+            },
+            "source_receipt": dict(source_receipt),
+        },
+    )
+    await db.commit()
+    await db.refresh(version)
+    await db.refresh(event)
+    return version, event
+
+
+async def ai_draft_validation_binding(
+    db: AsyncSession,
+    *,
+    version: FoundryCandidateVersion,
+) -> dict[str, Any] | None:
+    """Return the immutable Draft artifact binding for one AI-created version."""
+
+    if version.created_by_kind != "AI_DRAFT_JOB":
+        return None
+    events = list(
+        (
+            await db.execute(
+                select(FoundryCandidateEvent)
+                .where(
+                    FoundryCandidateEvent.candidate_version_id == version.id,
+                    FoundryCandidateEvent.event_type == "AI_DRAFT_RESULT_ACCEPTED",
+                )
+                .order_by(FoundryCandidateEvent.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if len(events) != 1:
+        raise FoundryCatalogError(
+            "ai_draft_artifact_binding_missing",
+            "AI-created versions require exactly one immutable Draft artifact binding",
+            status_code=409,
+        )
+    payload = dict(events[0].event_payload or {})
+    artifact = payload.get("artifact_receipt")
+    source = payload.get("source_receipt")
+    artifact_manifest = payload.get("artifact_manifest")
+    if (
+        not isinstance(artifact, dict)
+        or not isinstance(source, dict)
+        or not isinstance(artifact_manifest, list)
+    ):
+        raise FoundryCatalogError(
+            "ai_draft_artifact_binding_missing",
+            "AI Draft artifact or source receipt is missing",
+            status_code=409,
+        )
+    artifact_hashes = {
+        str(item.get("kind")): str(item.get("sha256"))
+        for item in artifact_manifest
+        if isinstance(item, dict)
+    }
+    if not all(
+        _SHA256_RE.fullmatch(artifact_hashes.get(kind, ""))
+        for kind in ("CANDIDATE_BUNDLE", "PATCH", "SBOM")
+    ):
+        raise FoundryCatalogError(
+            "ai_draft_artifact_binding_missing",
+            "AI Draft artifact file hashes are incomplete",
+            status_code=409,
+        )
+    return {
+        "candidate_id": str(version.candidate_id),
+        "candidate_version_id": str(version.id),
+        "candidate_version_number": str(version.version_number),
+        "candidate_version_hash": version.version_hash,
+        "candidate_bundle_hash": sha256_json(version.candidate_bundle),
+        "candidate_artifact_hash": artifact_hashes["CANDIDATE_BUNDLE"],
+        "draft_run_id": str(payload.get("draft_run_id") or ""),
+        "artifact_id": str(artifact.get("artifact_id") or ""),
+        "artifact_workflow_run_id": str(artifact.get("workflow_run_id") or ""),
+        "artifact_name": str(artifact.get("artifact_name") or ""),
+        "artifact_sha256": str(artifact.get("artifact_sha256") or ""),
+        "artifact_repository": str(artifact.get("repository") or ""),
+        "base_commit": str(source.get("base_commit") or ""),
+        "base_source_tree_sha256": str(
+            source.get("base_source_tree_sha256") or ""
+        ),
+        "post_patch_source_tree_sha256": str(
+            source.get("post_patch_source_tree_sha256") or ""
+        ),
+        "patch_sha256": version.patch_hash,
+        "sbom_sha256": version.sbom_hash,
+        "validation_runner_image_digest": version.validation_runner_image_digest,
+    }
+
+
+def candidate_validation_binding(
+    version: FoundryCandidateVersion,
+) -> dict[str, str]:
+    """Bind every durable Demo run to one exact immutable DB version."""
+
+    return {
+        "candidate_id": str(version.candidate_id),
+        "candidate_version_id": str(version.id),
+        "candidate_key": version.candidate_key,
+        "candidate_version_number": str(version.version_number),
+        "candidate_version_hash": version.version_hash,
+        "candidate_bundle_hash": sha256_json(version.candidate_bundle),
+        "validation_runner_image_digest": version.validation_runner_image_digest,
+    }
 
 
 async def merge_capability_request(
@@ -845,7 +1782,7 @@ async def merge_capability_request(
     return request, target
 
 
-async def start_validation_run(
+async def ensure_validation_run(
     db: AsyncSession,
     *,
     candidate_id: uuid.UUID,
@@ -853,7 +1790,17 @@ async def start_validation_run(
     candidate_version_hash: str,
     actor_kind: str,
     actor_user_id: uuid.UUID | None,
-) -> FoundryValidationRun:
+    reuse_terminal: bool = False,
+) -> tuple[FoundryValidationRun, bool]:
+    """Return one validation run and whether this call created it.
+
+    ``reuse_terminal`` is reserved for idempotent control-plane triggers such
+    as an AI Draft result callback.  It prevents a replay from turning a
+    previously recorded dispatch failure into a new implicit retry.  Human
+    validation requests leave it disabled so an explicit retry after
+    ``DISPATCH_FAILED`` still creates a fresh immutable run.
+    """
+
     candidate = await db.scalar(
         select(FoundryCandidate)
         .where(FoundryCandidate.id == candidate_id)
@@ -862,9 +1809,25 @@ async def start_validation_run(
     version = await db.get(FoundryCandidateVersion, candidate_version_id)
     if candidate is None or version is None or version.candidate_id != candidate_id:
         raise FoundryCatalogError("candidate_version_not_found", "Candidate version not found", status_code=404)
+    if version.version_hash != candidate_version_hash:
+        raise FoundryCatalogError(
+            "candidate_version_binding_mismatch",
+            "Validation must bind the exact candidate version hash",
+            status_code=409,
+        )
+    if reuse_terminal:
+        existing = await db.scalar(
+            select(FoundryValidationRun)
+            .where(
+                FoundryValidationRun.candidate_version_id == version.id,
+                FoundryValidationRun.candidate_version_hash == version.version_hash,
+            )
+            .order_by(FoundryValidationRun.created_at.asc())
+        )
+        if existing is not None:
+            return existing, False
     if (
         candidate.current_version_number != version.version_number
-        or version.version_hash != candidate_version_hash
     ):
         raise FoundryCatalogError(
             "candidate_version_binding_mismatch",
@@ -876,6 +1839,7 @@ async def start_validation_run(
         "REJECTED",
         "PROMOTED",
         "SUSPENDED",
+        "SUPERSEDED",
         "REVOKED",
     }:
         raise FoundryCatalogError(
@@ -883,7 +1847,7 @@ async def start_validation_run(
             "This exact candidate version has a terminal review decision; create a new version to validate",
             status_code=409,
         )
-    if candidate.status in {"PROMOTED", "SUSPENDED", "REVOKED"}:
+    if candidate.status in {"PROMOTED", "SUSPENDED", "SUPERSEDED", "REVOKED"}:
         raise FoundryCatalogError(
             "candidate_not_validatable", "This candidate cannot start a validation run", status_code=409
         )
@@ -894,7 +1858,7 @@ async def start_validation_run(
         )
     )
     if active is not None:
-        return active
+        return active, False
     run = FoundryValidationRun(
         candidate_id=candidate.id,
         candidate_version_id=version.id,
@@ -920,6 +1884,28 @@ async def start_validation_run(
     )
     await db.commit()
     await db.refresh(run)
+    return run, True
+
+
+async def start_validation_run(
+    db: AsyncSession,
+    *,
+    candidate_id: uuid.UUID,
+    candidate_version_id: uuid.UUID,
+    candidate_version_hash: str,
+    actor_kind: str,
+    actor_user_id: uuid.UUID | None,
+) -> FoundryValidationRun:
+    """Backward-compatible explicit validation-run creator."""
+
+    run, _created = await ensure_validation_run(
+        db,
+        candidate_id=candidate_id,
+        candidate_version_id=candidate_version_id,
+        candidate_version_hash=candidate_version_hash,
+        actor_kind=actor_kind,
+        actor_user_id=actor_user_id,
+    )
     return run
 
 
@@ -1050,7 +2036,7 @@ async def record_demo_report(
         raise FoundryCatalogError(
             "validation_run_not_found", "Validation run not found", status_code=404
         )
-    if run.status not in {"QUEUED", "RUNNING"}:
+    if run.status not in {"QUEUED", "DISPATCHED", "RUNNING"}:
         raise FoundryCatalogError(
             "validation_run_already_completed",
             "Validation run is already terminal",
@@ -1067,11 +2053,12 @@ async def record_demo_report(
             "candidate_version_not_found", "Candidate version not found", status_code=404
         )
     if (
-        candidate.current_version_number != version.version_number
-        or version.version_hash != run.candidate_version_hash
+        version.version_hash != run.candidate_version_hash
         or report.get("candidate_id") != version.candidate_key
         or report.get("candidate_version") != version.version_number
-        or report.get("candidate_bundle_sha256") != version.version_hash
+        or report.get("candidate_bundle_sha256")
+        != sha256_json(version.candidate_bundle)
+        or report.get("candidate_version_sha256") != version.version_hash
         or report.get("workflow_spec_sha256") != version.workflow_spec_hash
         or report.get("dependency_lock_sha256") != version.dependency_lock_hash
         or report.get("runner_definition_sha256")
@@ -1082,7 +2069,7 @@ async def record_demo_report(
     ):
         raise FoundryCatalogError(
             "candidate_version_binding_mismatch",
-            "DemoReport does not bind the exact current candidate bundle",
+            "DemoReport does not bind the exact immutable candidate bundle",
             status_code=409,
         )
     image_digest = _require_image_digest(report.get("runner_image_digest"))
@@ -1115,6 +2102,26 @@ async def record_demo_report(
         raise FoundryCatalogError(
             "invalid_demo_stream_receipt",
             "DemoReport stream byte counts must be non-negative integers",
+        )
+    artifact_manifest = report.get("artifact_manifest")
+    expected_artifacts = [
+        {
+            "path": "stdout.log",
+            "kind": "STDOUT",
+            "sha256": stdout_sha256,
+            "bytes": stdout_bytes,
+        },
+        {
+            "path": "stderr.log",
+            "kind": "STDERR",
+            "sha256": stderr_sha256,
+            "bytes": stderr_bytes,
+        },
+    ]
+    if artifact_manifest != expected_artifacts:
+        raise FoundryCatalogError(
+            "invalid_demo_artifact_manifest",
+            "DemoReport log artifacts must match the exact stream receipts",
         )
     resource_usage = report.get("resource_usage")
     if not isinstance(resource_usage, dict):
@@ -1153,7 +2160,7 @@ async def record_demo_report(
         claim_eligible=False,
         evidence_pack_allowed=False,
         candidate_version_hash=version.version_hash,
-        candidate_bundle_hash=version.version_hash,
+        candidate_bundle_hash=str(report["candidate_bundle_sha256"]),
         workflow_spec_hash=version.workflow_spec_hash,
         code_tree_hash=version.code_tree_hash,
         dependency_lock_hash=version.dependency_lock_hash,
@@ -1177,14 +2184,18 @@ async def record_demo_report(
         validation_summary=dict(report.get("validation_summary") or {}),
         failure_class=str(report.get("failure_class") or "") or None,
         resource_usage=resource_usage,
-        artifact_manifest=[],
+        artifact_manifest=artifact_manifest,
         duration_ms=duration_ms,
         demo_report_hash=declared_report_hash,
         started_at=started_at,
         completed_at=completed_at,
     )
     db.add(demo)
-    candidate.status = "DEMO_RECORDED"
+    # A newer immutable version may be appended while this exact-version run is
+    # still executing.  Keep the older Demo and its event, but never let that
+    # late callback overwrite the aggregate state owned by the newer version.
+    if candidate.current_version_number == version.version_number:
+        candidate.status = "DEMO_RECORDED"
     await db.flush()
     await _append_event(
         db,
@@ -1214,20 +2225,83 @@ async def record_formal_build_attestation(
     *,
     attestation_report: dict[str, Any],
     expected_oidc_subject: str,
+    expected_github_repository: str,
+    expected_github_workflow: str,
+    expected_github_ref: str,
+    trusted_attestation_public_keys: Mapping[str, str],
 ) -> FoundryFormalBuildAttestation:
-    """Accept a byte-bound formal build receipt from the protected CI callback."""
+    """Verify and append one signed protected-CI formal-build receipt."""
 
     if not isinstance(attestation_report, dict):
         raise FoundryCatalogError(
             "invalid_formal_build_attestation", "Build attestation must be an object"
         )
-    report = json.loads(canonical_json(attestation_report))
-    declared_hash = str(report.pop("receipt_sha256", ""))
-    if _require_sha256(declared_hash, "receipt_sha256") != sha256_json(report):
+    envelope = json.loads(canonical_json(attestation_report))
+    declared_artifact_hash = str(
+        envelope.pop("attestation_artifact_sha256", "")
+    )
+    if _require_sha256(
+        declared_artifact_hash, "attestation_artifact_sha256"
+    ) != sha256_json(envelope):
         raise FoundryCatalogError(
-            "formal_build_receipt_hash_mismatch",
-            "Formal build attestation content hash does not match",
+            "formal_build_attestation_artifact_hash_mismatch",
+            "Formal build attestation artifact hash does not match",
         )
+    if set(envelope) != {
+        "schema_version",
+        "payload",
+        "payload_sha256",
+        "signature",
+    } or envelope.get("schema_version") != _FORMAL_BUILD_BUNDLE_SCHEMA:
+        raise FoundryCatalogError(
+            "invalid_formal_build_attestation",
+            "Formal build attestation bundle shape is not registered",
+        )
+    report = envelope.get("payload")
+    signature = envelope.get("signature")
+    if not isinstance(report, dict) or not isinstance(signature, dict):
+        raise FoundryCatalogError(
+            "invalid_formal_build_attestation",
+            "Formal build attestation payload and signature must be objects",
+        )
+    canonical_payload = canonical_json(report)
+    declared_payload_hash = _require_sha256(
+        envelope.get("payload_sha256"), "payload_sha256"
+    )
+    actual_payload_hash = hashlib.sha256(canonical_payload).hexdigest()
+    if not hmac.compare_digest(declared_payload_hash, actual_payload_hash):
+        raise FoundryCatalogError(
+            "formal_build_payload_hash_mismatch",
+            "Formal build signed payload hash does not match",
+        )
+    if set(signature) != {"algorithm", "key_id", "value"}:
+        raise FoundryCatalogError(
+            "formal_build_attestation_signature_invalid",
+            "Formal build attestation signature shape is invalid",
+        )
+    key_id = str(signature.get("key_id") or "")
+    public_key = str(trusted_attestation_public_keys.get(key_id) or "")
+    if signature.get("algorithm") != "ed25519" or not public_key:
+        raise FoundryCatalogError(
+            "formal_build_attestation_key_untrusted",
+            "Formal build attestation signing key is not trusted",
+        )
+    try:
+        public_key_raw = base64.b64decode(public_key, validate=True)
+        signature_raw = base64.b64decode(
+            str(signature.get("value") or ""), validate=True
+        )
+        if len(public_key_raw) != 32 or len(signature_raw) != 64:
+            raise ValueError
+        Ed25519PublicKey.from_public_bytes(public_key_raw).verify(
+            signature_raw,
+            _FORMAL_BUILD_SIGNING_DOMAIN + canonical_payload,
+        )
+    except (binascii.Error, InvalidSignature, TypeError, ValueError) as exc:
+        raise FoundryCatalogError(
+            "formal_build_attestation_signature_invalid",
+            "Formal build attestation signature is invalid",
+        ) from exc
     required = {
         "schema_version",
         "attestation_id",
@@ -1239,18 +2313,20 @@ async def record_formal_build_attestation(
         "dependency_lock_sha256",
         "formal_sbom_sha256",
         "test_report_sha256",
+        "release_audit",
         "tests_passed",
-        "formal_worker_image_digest",
-        "oidc_issuer",
-        "oidc_subject",
-        "sigstore_verified",
-        "sigstore_bundle_sha256",
+        "subject",
+        "build_identity",
+        "sigstore",
         "provenance_sha256",
         "verification_method",
         "build_metadata",
         "built_at",
     }
-    if set(report) != required or report.get("schema_version") != 1:
+    if (
+        set(report) != required
+        or report.get("schema_version") != _FORMAL_BUILD_PAYLOAD_SCHEMA
+    ):
         raise FoundryCatalogError(
             "invalid_formal_build_attestation",
             "Formal build attestation shape is not registered",
@@ -1266,7 +2342,10 @@ async def record_formal_build_attestation(
         ) from exc
     existing = await db.get(FoundryFormalBuildAttestation, attestation_id)
     if existing is not None:
-        if existing.receipt_hash != declared_hash:
+        if (
+            existing.receipt_hash != declared_payload_hash
+            or existing.attestation_artifact_hash != declared_artifact_hash
+        ):
             raise FoundryCatalogError(
                 "formal_build_attestation_id_conflict",
                 "Build attestation id already exists with different content",
@@ -1324,28 +2403,89 @@ async def record_formal_build_attestation(
             "A PASSED Demo and required human approvals must precede formal build",
             status_code=409,
         )
-    if report.get("tests_passed") is not True or report.get("sigstore_verified") is not True:
+    if report.get("tests_passed") is not True:
         raise FoundryCatalogError(
             "formal_build_verification_failed",
-            "Protected CI must verify tests and Sigstore before callback",
+            "Protected CI formal tests must pass before callback",
         )
-    if report.get("verification_method") != "protected_ci_callback_after_sigstore_verification":
+    if (
+        report.get("verification_method")
+        != "github_oidc_cosign_plus_ed25519_callback_v2"
+    ):
         raise FoundryCatalogError(
             "formal_build_verification_method_invalid",
-            "Formal builds require the protected Sigstore-verifying callback",
+            "Formal builds require a signed protected-CI attestation bundle",
         )
-    if report.get("oidc_issuer") != "https://token.actions.githubusercontent.com":
+    subject = report.get("subject")
+    build_identity = report.get("build_identity")
+    sigstore = report.get("sigstore")
+    if (
+        not isinstance(subject, dict)
+        or set(subject) != {"image", "digest"}
+        or not isinstance(build_identity, dict)
+        or set(build_identity)
+        != {
+            "github_repository",
+            "github_workflow_ref",
+            "github_workflow_sha",
+            "github_run_id",
+            "github_run_attempt",
+        }
+        or not isinstance(sigstore, dict)
+        or set(sigstore)
+        != {
+            "oidc_issuer",
+            "certificate_identity",
+            "bundle_sha256",
+            "verification_record_sha256",
+        }
+    ):
+        raise FoundryCatalogError(
+            "invalid_formal_build_attestation",
+            "Formal build identity, subject, or Sigstore receipt is malformed",
+        )
+    if sigstore.get("oidc_issuer") != "https://token.actions.githubusercontent.com":
         raise FoundryCatalogError(
             "formal_build_oidc_issuer_invalid", "Untrusted formal-build OIDC issuer"
         )
     expected_subject = str(expected_oidc_subject or "").strip()
-    if not expected_subject or report.get("oidc_subject") != expected_subject:
+    if not expected_subject or sigstore.get("certificate_identity") != expected_subject:
         raise FoundryCatalogError(
             "formal_build_oidc_subject_invalid", "Untrusted formal-build OIDC subject"
         )
+    expected_repository = str(expected_github_repository or "").strip()
+    expected_workflow = str(expected_github_workflow or "").strip()
+    expected_ref = str(expected_github_ref or "").strip()
+    expected_workflow_ref = (
+        f"{expected_repository}/.github/workflows/{expected_workflow}"
+        f"@refs/heads/{expected_ref}"
+    )
+    expected_image = f"ghcr.io/{expected_repository.lower()}/science-worker"
+    if (
+        not expected_repository
+        or not expected_workflow
+        or expected_ref != "main"
+        or build_identity.get("github_repository") != expected_repository
+        or build_identity.get("github_workflow_ref") != expected_workflow_ref
+        or not _GIT_SHA_RE.fullmatch(
+            str(build_identity.get("github_workflow_sha") or "")
+        )
+        or not str(build_identity.get("github_run_id") or "").isdigit()
+        or type(build_identity.get("github_run_attempt")) is not int
+        or int(build_identity["github_run_attempt"]) < 1
+        or subject.get("image") != expected_image
+    ):
+        raise FoundryCatalogError(
+            "formal_build_identity_mismatch",
+            "Formal build does not come from the expected repository and workflow",
+        )
+    formal_worker_image_digest = _require_image_digest(subject.get("digest"))
     source_tree_hash = _require_sha256(report["source_tree_sha256"], "source_tree_sha256")
     dependency_lock_hash = _require_sha256(
         report["dependency_lock_sha256"], "dependency_lock_sha256"
+    )
+    formal_sbom_hash = _require_sha256(
+        report["formal_sbom_sha256"], "formal_sbom_sha256"
     )
     if source_tree_hash != version.code_tree_hash or dependency_lock_hash != version.dependency_lock_hash:
         raise FoundryCatalogError(
@@ -1353,11 +2493,78 @@ async def record_formal_build_attestation(
             "Formal build source tree or dependency lock differs from the approved version",
             status_code=409,
         )
+    formal_release_audit_hash, formal_release_audit_receipts = (
+        _validate_formal_release_audit(
+            report.get("release_audit"),
+            source_tree_hash=source_tree_hash,
+            dependency_lock_hash=dependency_lock_hash,
+            formal_sbom_hash=formal_sbom_hash,
+        )
+    )
     git_commit = str(report.get("git_commit") or "").lower()
     if not _GIT_SHA_RE.fullmatch(git_commit):
         raise FoundryCatalogError(
             "invalid_formal_build_git_commit", "Formal build Git commit must be 40 hex characters"
         )
+    generation = dict(version.ai_generation_config or {})
+    if version.created_by_kind == "AI_DRAFT_JOB":
+        if (
+            generation.get("source_hash_algorithm")
+            != "standard_astro_tracked_source_manifest_v1"
+            or generation.get("source_tree_sha256") != source_tree_hash
+        ):
+            raise FoundryCatalogError(
+                "formal_source_materialization_binding_mismatch",
+                "Formal source commit does not match the host-verified AI Draft source receipt",
+                status_code=409,
+            )
+        base_commit = generation.get("source_base_commit")
+        patch_applied = generation.get("source_materialization_required") is True
+        if (patch_applied and git_commit == base_commit) or (
+            not patch_applied and git_commit != base_commit
+        ):
+            raise FoundryCatalogError(
+                "formal_source_commit_binding_mismatch",
+                "Formal source commit does not match the Draft patch materialization state",
+                status_code=409,
+            )
+    elif version.created_by_kind == "PROTECTED_MATERIALIZATION":
+        from app.models.foundry_materialization_records import (
+            FoundryMaterializationReceipt,
+        )
+
+        try:
+            materialization_receipt_id = uuid.UUID(
+                str(generation.get("source_materialization_receipt_id") or "")
+            )
+        except ValueError as exc:
+            raise FoundryCatalogError(
+                "formal_materialization_receipt_missing",
+                "Formal build requires the signed materialization receipt",
+                status_code=409,
+            ) from exc
+        materialization = await db.get(
+            FoundryMaterializationReceipt, materialization_receipt_id
+        )
+        if (
+            materialization is None
+            or materialization.candidate_id != candidate.id
+            or materialization.materialized_candidate_version_id != version.id
+            or materialization.merge_commit != git_commit
+            or materialization.merge_source_tree_hash != source_tree_hash
+            or materialization.patch_hash != version.patch_hash
+            or materialization.dependency_lock_hash != dependency_lock_hash
+            or materialization.candidate_module_path
+            != generation.get("candidate_module_path")
+            or materialization.candidate_module_hash
+            != generation.get("candidate_module_sha256")
+            or materialization.validation_sbom_hash != version.sbom_hash
+        ):
+            raise FoundryCatalogError(
+                "formal_materialization_receipt_mismatch",
+                "Formal source commit does not match the signed materialization receipt",
+                status_code=409,
+            )
     built_at = _parse_report_time(report["built_at"], "built_at")
     approval_times = [
         review.created_at.replace(tzinfo=timezone.utc)
@@ -1377,6 +2584,27 @@ async def record_formal_build_attestation(
         raise FoundryCatalogError(
             "invalid_formal_build_metadata", "build_metadata must be an object"
         )
+    expected_metadata = {
+        "candidate_id": str(candidate.id),
+        "candidate_version_id": str(version.id),
+        "candidate_version_hash": version.version_hash,
+        "source_commit": git_commit,
+        "source_tree_sha256": source_tree_hash,
+        "formal_worker_image_digest": formal_worker_image_digest,
+        "tests_passed": True,
+        "platforms": ["linux/amd64", "linux/arm64"],
+        "image": expected_image,
+        "repository": expected_repository,
+        "workflow_ref": expected_workflow_ref,
+        "workflow_sha": str(build_identity["github_workflow_sha"]),
+        "run_id": str(build_identity["github_run_id"]),
+        "run_attempt": str(build_identity["github_run_attempt"]),
+    }
+    if any(build_metadata.get(name) != value for name, value in expected_metadata.items()):
+        raise FoundryCatalogError(
+            "formal_build_metadata_binding_mismatch",
+            "Formal build metadata does not match its signed identity and subject",
+        )
     row = FoundryFormalBuildAttestation(
         id=attestation_id,
         candidate_id=candidate.id,
@@ -1385,17 +2613,28 @@ async def record_formal_build_attestation(
         source_tree_hash=source_tree_hash,
         git_commit=git_commit,
         dependency_lock_hash=dependency_lock_hash,
-        formal_sbom_hash=_require_sha256(report["formal_sbom_sha256"], "formal_sbom_sha256"),
+        formal_sbom_hash=formal_sbom_hash,
         test_report_hash=_require_sha256(report["test_report_sha256"], "test_report_sha256"),
-        formal_worker_image_digest=_require_image_digest(report["formal_worker_image_digest"]),
-        oidc_issuer=str(report["oidc_issuer"]),
-        oidc_subject=str(report["oidc_subject"]),
+        formal_release_audit_hash=formal_release_audit_hash,
+        formal_release_audit_receipts=formal_release_audit_receipts,
+        formal_worker_image_digest=formal_worker_image_digest,
+        github_repository=expected_repository,
+        github_workflow_ref=expected_workflow_ref,
+        github_workflow_sha=str(build_identity["github_workflow_sha"]),
+        oidc_issuer=str(sigstore["oidc_issuer"]),
+        oidc_subject=str(sigstore["certificate_identity"]),
+        attestation_signing_key_id=key_id,
         sigstore_bundle_hash=_require_sha256(
-            report["sigstore_bundle_sha256"], "sigstore_bundle_sha256"
+            sigstore["bundle_sha256"], "sigstore.bundle_sha256"
+        ),
+        sigstore_verification_record_hash=_require_sha256(
+            sigstore["verification_record_sha256"],
+            "sigstore.verification_record_sha256",
         ),
         provenance_hash=_require_sha256(report["provenance_sha256"], "provenance_sha256"),
         build_metadata=build_metadata,
-        receipt_hash=declared_hash,
+        receipt_hash=declared_payload_hash,
+        attestation_artifact_hash=declared_artifact_hash,
         built_at=built_at,
     )
     db.add(row)
@@ -1410,13 +2649,340 @@ async def record_formal_build_attestation(
         payload={
             "build_attestation_id": str(row.id),
             "receipt_sha256": row.receipt_hash,
+            "attestation_artifact_sha256": row.attestation_artifact_hash,
+            "attestation_signing_key_id": row.attestation_signing_key_id,
             "formal_worker_image_digest": row.formal_worker_image_digest,
             "git_commit": row.git_commit,
+            "formal_release_audit_sha256": row.formal_release_audit_hash,
         },
     )
     await db.commit()
     await db.refresh(row)
     return row
+
+
+def _formal_build_source_binding(
+    version: FoundryCandidateVersion,
+) -> dict[str, str]:
+    """Rebuild the protected-build inputs from a host-verified Draft receipt.
+
+    The browser is intentionally unable to supply a commit, source hash, or
+    candidate hash.  v1 can dispatch an unchanged, pinned Draft base commit
+    (the common COMPOSITION route).  A non-empty AI patch remains a Candidate
+    until a reviewed materialization process records a real Git commit for it.
+    """
+
+    generation = dict(version.ai_generation_config or {})
+    source_commit = str(generation.get("source_base_commit") or "").lower()
+    base_tree = str(generation.get("source_base_tree_sha256") or "").lower()
+    source_tree = str(generation.get("source_tree_sha256") or "").lower()
+    if (
+        version.created_by_kind not in {"AI_DRAFT_JOB", "PROTECTED_MATERIALIZATION"}
+        or generation.get("source_hash_algorithm")
+        != "standard_astro_tracked_source_manifest_v1"
+        or not _GIT_SHA_RE.fullmatch(source_commit)
+        or not _SHA256_RE.fullmatch(base_tree)
+        or not _SHA256_RE.fullmatch(source_tree)
+        or source_tree != version.code_tree_hash
+    ):
+        raise FoundryCatalogError(
+            "formal_source_binding_untrusted",
+            "Formal build inputs require a host-verified Draft or materialization receipt",
+            status_code=409,
+        )
+    if version.created_by_kind == "PROTECTED_MATERIALIZATION":
+        origin_id = str(
+            generation.get("source_materialized_from_candidate_version_id") or ""
+        )
+        receipt_id = str(generation.get("source_materialization_receipt_id") or "")
+        module_path = str(generation.get("candidate_module_path") or "")
+        if (
+            generation.get("source_materialization_required") is not False
+            or generation.get("source_materialized") is not True
+            or base_tree != source_tree
+            or source_tree != version.code_tree_hash
+            or version.patch_hash == _EMPTY_SHA256
+            or generation.get("source_patch_sha256") != version.patch_hash
+            or not re.fullmatch(
+                r"backend/app/services/foundry_generated/[a-z][a-z0-9_]{2,96}\.py",
+                module_path,
+            )
+            or not _SHA256_RE.fullmatch(
+                str(generation.get("candidate_module_sha256") or "")
+            )
+        ):
+            raise FoundryCatalogError(
+                "formal_materialization_binding_invalid",
+                "Protected materialized source does not match its signed receipt binding",
+                status_code=409,
+            )
+        try:
+            uuid.UUID(origin_id)
+            uuid.UUID(receipt_id)
+        except ValueError as exc:
+            raise FoundryCatalogError(
+                "formal_materialization_binding_invalid",
+                "Protected materialization origin identifiers are invalid",
+                status_code=409,
+            ) from exc
+        return {
+            "candidate_id": str(version.candidate_id),
+            "candidate_version_id": str(version.id),
+            "candidate_version_hash": version.version_hash,
+            "source_commit": source_commit,
+            "source_tree_sha256": source_tree,
+        }
+    if generation.get("source_materialization_required") is True:
+        raise FoundryCatalogError(
+            "formal_source_commit_not_materialized",
+            "The approved Draft patch has no reviewed Git commit for formal build",
+            status_code=409,
+        )
+    if (
+        generation.get("source_materialization_required") is not False
+        or base_tree != source_tree
+        or version.patch_hash != _EMPTY_SHA256
+    ):
+        raise FoundryCatalogError(
+            "formal_source_binding_untrusted",
+            "An unchanged formal source binding must match the pinned Draft base",
+            status_code=409,
+        )
+    return {
+        "candidate_id": str(version.candidate_id),
+        "candidate_version_id": str(version.id),
+        "candidate_version_hash": version.version_hash,
+        "source_commit": source_commit,
+        "source_tree_sha256": source_tree,
+    }
+
+
+async def request_formal_build_dispatch(
+    db: AsyncSession,
+    *,
+    candidate_id: uuid.UUID,
+    candidate_version_id: uuid.UUID,
+    candidate_version_hash: str,
+    actor_user_id: uuid.UUID,
+) -> tuple[dict[str, str], FoundryCandidateEvent, bool, FoundryFormalBuildAttestation | None]:
+    """Create or recover one exact-version formal-build dispatch request."""
+
+    candidate = await db.scalar(
+        select(FoundryCandidate)
+        .where(FoundryCandidate.id == candidate_id)
+        .with_for_update()
+    )
+    version = await db.get(FoundryCandidateVersion, candidate_version_id)
+    expected_hash = _require_sha256(
+        candidate_version_hash, "candidate_version_hash"
+    )
+    if (
+        candidate is None
+        or version is None
+        or version.candidate_id != candidate_id
+        or candidate.status != "APPROVED"
+        or candidate.current_version_number != version.version_number
+        or version.version_hash != expected_hash
+    ):
+        raise FoundryCatalogError(
+            "formal_build_candidate_binding_mismatch",
+            "Formal build requires the exact approved current candidate version",
+            status_code=409,
+        )
+    passed_demo = await db.scalar(
+        select(FoundryDemoRun.id).where(
+            FoundryDemoRun.candidate_version_id == version.id,
+            FoundryDemoRun.status == "PASSED",
+            FoundryDemoRun.evidence_class == NON_FORMAL_EVIDENCE_CLASS,
+            FoundryDemoRun.publication_ready.is_(False),
+            FoundryDemoRun.claim_eligible.is_(False),
+            FoundryDemoRun.evidence_pack_allowed.is_(False),
+        )
+    )
+    reviews = list(
+        (
+            await db.execute(
+                select(FoundryReview).where(
+                    FoundryReview.candidate_version_id == version.id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if passed_demo is None or not _review_requirements_satisfied(
+        str(candidate.risk_level or ""), reviews
+    ):
+        raise FoundryCatalogError(
+            "formal_build_approval_missing",
+            "A PASSED Demo and required human approvals must precede formal build",
+            status_code=409,
+        )
+    binding = _formal_build_source_binding(version)
+    attestation = await db.scalar(
+        select(FoundryFormalBuildAttestation)
+        .where(
+            FoundryFormalBuildAttestation.candidate_version_id == version.id,
+            FoundryFormalBuildAttestation.candidate_version_hash
+            == version.version_hash,
+        )
+        .order_by(FoundryFormalBuildAttestation.created_at.desc())
+    )
+    events = list(
+        (
+            await db.execute(
+                select(FoundryCandidateEvent)
+                .where(
+                    FoundryCandidateEvent.candidate_id == candidate.id,
+                    FoundryCandidateEvent.candidate_version_id == version.id,
+                    FoundryCandidateEvent.event_type.in_(
+                        {
+                            "FORMAL_BUILD_REQUESTED",
+                            "FORMAL_BUILD_DISPATCHED",
+                            "FORMAL_BUILD_DISPATCH_FAILED",
+                        }
+                    ),
+                )
+                .order_by(
+                    FoundryCandidateEvent.created_at.asc(),
+                    FoundryCandidateEvent.id.asc(),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    matching = [
+        event
+        for event in events
+        if all(
+            (event.event_payload or {}).get(key) == value
+            for key, value in binding.items()
+        )
+    ]
+    requested = next(
+        (event for event in matching if event.event_type == "FORMAL_BUILD_REQUESTED"),
+        None,
+    )
+    if requested is None:
+        requested = await _append_event(
+            db,
+            candidate_id=candidate.id,
+            candidate_version_id=version.id,
+            event_type="FORMAL_BUILD_REQUESTED",
+            actor_kind="HUMAN_REVIEWER",
+            actor_user_id=actor_user_id,
+            payload={**binding, "source_binding_origin": "SERVER_DRAFT_RECEIPT"},
+        )
+        await db.commit()
+        await db.refresh(requested)
+    dispatched = any(
+        event.event_type == "FORMAL_BUILD_DISPATCHED" for event in matching
+    )
+    return binding, requested, dispatched, attestation
+
+
+async def record_formal_build_dispatch(
+    db: AsyncSession,
+    *,
+    binding: dict[str, str],
+    dispatched: bool,
+    failure_class: str | None = None,
+    retryable: bool = False,
+) -> tuple[FoundryCandidateEvent, bool]:
+    """Append a secret-free, idempotent protected-build dispatch outcome."""
+
+    try:
+        candidate_id = uuid.UUID(binding["candidate_id"])
+        version_id = uuid.UUID(binding["candidate_version_id"])
+    except (KeyError, ValueError) as exc:
+        raise FoundryCatalogError(
+            "formal_build_dispatch_binding_invalid",
+            "Formal build dispatch identifiers are invalid",
+            status_code=409,
+        ) from exc
+    version = await db.get(FoundryCandidateVersion, version_id)
+    if (
+        version is None
+        or version.candidate_id != candidate_id
+        or _formal_build_source_binding(version) != binding
+    ):
+        raise FoundryCatalogError(
+            "formal_build_dispatch_binding_invalid",
+            "Formal build dispatch no longer matches its immutable source binding",
+            status_code=409,
+        )
+    events = list(
+        (
+            await db.execute(
+                select(FoundryCandidateEvent).where(
+                    FoundryCandidateEvent.candidate_id == candidate_id,
+                    FoundryCandidateEvent.candidate_version_id == version_id,
+                    FoundryCandidateEvent.event_type.in_(
+                        {
+                            "FORMAL_BUILD_REQUESTED",
+                            "FORMAL_BUILD_DISPATCHED",
+                        }
+                    ),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    requested = any(
+        event.event_type == "FORMAL_BUILD_REQUESTED"
+        and all(
+            (event.event_payload or {}).get(key) == value
+            for key, value in binding.items()
+        )
+        for event in events
+    )
+    existing = next(
+        (
+            event
+            for event in events
+            if event.event_type == "FORMAL_BUILD_DISPATCHED"
+            and all(
+                (event.event_payload or {}).get(key) == value
+                for key, value in binding.items()
+            )
+        ),
+        None,
+    )
+    if not requested:
+        raise FoundryCatalogError(
+            "formal_build_request_missing",
+            "Formal build dispatch has no server-created request",
+            status_code=409,
+        )
+    if dispatched and existing is not None:
+        return existing, False
+    sanitized_failure = None
+    if not dispatched:
+        sanitized_failure = str(failure_class or "formal_build_dispatch_failed")
+        if not re.fullmatch(r"[a-z][a-z0-9_]{1,127}", sanitized_failure):
+            sanitized_failure = "formal_build_dispatch_failed"
+    event = await _append_event(
+        db,
+        candidate_id=candidate_id,
+        candidate_version_id=version_id,
+        event_type=(
+            "FORMAL_BUILD_DISPATCHED"
+            if dispatched
+            else "FORMAL_BUILD_DISPATCH_FAILED"
+        ),
+        actor_kind="CONTROL_PLANE",
+        actor_user_id=None,
+        payload={
+            **binding,
+            "failure_class": sanitized_failure,
+            "retryable": bool(retryable) if not dispatched else False,
+        },
+    )
+    await db.commit()
+    await db.refresh(event)
+    return event, True
 
 
 async def record_validation_result(
@@ -1652,6 +3218,7 @@ async def review_candidate_version(
         "REJECTED",
         "PROMOTED",
         "SUSPENDED",
+        "SUPERSEDED",
         "REVOKED",
     }:
         raise FoundryCatalogError(
@@ -1740,7 +3307,9 @@ def _review_records_for_registry(reviews: Iterable[FoundryReview]) -> list[dict[
     return [
         {
             "review_id": str(review.id),
-            "reviewer_id": str(review.reviewer_user_id or ""),
+            # Public release requests keep a stable candidate-local pseudonym,
+            # never the account UUID stored in the private review ledger.
+            "reviewer_id": review.reviewer_pseudonym,
             "reviewer_type": "human",
             "review_role": review.review_scope.lower(),
             "decision": review.decision,
@@ -1748,6 +3317,379 @@ def _review_records_for_registry(reviews: Iterable[FoundryReview]) -> list[dict[
         }
         for review in reviews
     ]
+
+
+_REGISTRY_RELEASE_REQUEST_FIELDS = frozenset(
+    {
+        "schema_version",
+        "request_id",
+        "request_kind",
+        "request_epoch",
+        "request_status",
+        "requested_at",
+        "requested_by_actor_hash",
+        "base_registry_epoch",
+        "base_registry_hash",
+        "previous_request_hash",
+        "new_operations",
+        "operation_sequence",
+        "operation_sequence_hash",
+        "entries",
+        "status_changes",
+        "context",
+        "runtime_registry_modified",
+        "signature_required",
+    }
+)
+_SHA256_TAGGED_RE = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+def _validate_registry_release_chain(
+    rows: Iterable[WorkflowRegistryRelease],
+    *,
+    base_epoch: str,
+    base_hash: str,
+) -> list[WorkflowRegistryRelease]:
+    """Validate and order the single append-only cumulative request chain."""
+
+    by_hash: dict[str, WorkflowRegistryRelease] = {}
+    manifests: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        manifest = dict(row.manifest or {})
+        if (
+            set(manifest) != _REGISTRY_RELEASE_REQUEST_FIELDS
+            or manifest.get("schema_version")
+            != "standard_astro_registry_release_request_v1"
+            or manifest.get("request_id") != str(row.id)
+            or manifest.get("request_epoch") != row.epoch
+            or manifest.get("request_status") != "PENDING_SIGNATURE"
+            or row.status != "PENDING_SIGNATURE"
+            or row.signature is not None
+            or row.key_id is not None
+            or row.public_key_fingerprint is not None
+            or manifest.get("runtime_registry_modified") is not False
+            or manifest.get("signature_required") is not True
+            or manifest.get("base_registry_epoch") != base_epoch
+            or manifest.get("base_registry_hash") != base_hash
+            or not _SHA256_TAGGED_RE.fullmatch(
+                str(manifest.get("requested_by_actor_hash") or "")
+            )
+            or not isinstance(manifest.get("new_operations"), list)
+            or not manifest["new_operations"]
+            or not isinstance(manifest.get("operation_sequence"), list)
+            or not manifest["operation_sequence"]
+            or manifest.get("operation_sequence_hash")
+            != "sha256:" + sha256_json(manifest["operation_sequence"])
+            or row.manifest_hash != "sha256:" + sha256_json(manifest)
+        ):
+            raise FoundryCatalogError(
+                "registry_release_chain_invalid",
+                "The immutable Registry release-request chain is invalid",
+                status_code=409,
+            )
+        if row.manifest_hash in by_hash:
+            raise FoundryCatalogError(
+                "registry_release_chain_duplicate",
+                "The Registry release-request chain contains a duplicate hash",
+                status_code=409,
+            )
+        predecessor = manifest.get("previous_request_hash")
+        if predecessor is not None and not _SHA256_TAGGED_RE.fullmatch(
+            str(predecessor)
+        ):
+            raise FoundryCatalogError(
+                "registry_release_chain_invalid",
+                "The Registry release-request predecessor is invalid",
+                status_code=409,
+            )
+        by_hash[row.manifest_hash] = row
+        manifests[row.manifest_hash] = manifest
+
+    if not by_hash:
+        return []
+    roots = [
+        request_hash
+        for request_hash, manifest in manifests.items()
+        if manifest.get("previous_request_hash") is None
+    ]
+    if len(roots) != 1:
+        raise FoundryCatalogError(
+            "registry_release_chain_forked",
+            "The Registry release-request chain must have exactly one root",
+            status_code=409,
+        )
+    children: dict[str, list[str]] = {}
+    for request_hash, manifest in manifests.items():
+        predecessor = manifest.get("previous_request_hash")
+        if predecessor is None:
+            continue
+        if predecessor not in by_hash:
+            raise FoundryCatalogError(
+                "registry_release_chain_predecessor_missing",
+                "A Registry release-request predecessor is missing",
+                status_code=409,
+            )
+        children.setdefault(str(predecessor), []).append(request_hash)
+    if any(len(items) != 1 for items in children.values()):
+        raise FoundryCatalogError(
+            "registry_release_chain_forked",
+            "The Registry release-request chain has more than one child",
+            status_code=409,
+        )
+
+    ordered: list[WorkflowRegistryRelease] = []
+    request_hash = roots[0]
+    previous_operations: list[dict[str, Any]] = []
+    while True:
+        row = by_hash[request_hash]
+        manifest = manifests[request_hash]
+        new_operations = list(manifest["new_operations"])
+        operation_sequence = list(manifest["operation_sequence"])
+        if sha256_json(operation_sequence) != sha256_json(
+            previous_operations + new_operations
+        ):
+            raise FoundryCatalogError(
+                "registry_release_chain_prefix_mismatch",
+                "A Registry request is not the exact cumulative successor",
+                status_code=409,
+            )
+        ordered.append(row)
+        previous_operations = operation_sequence
+        next_hashes = children.get(request_hash, [])
+        if not next_hashes:
+            break
+        request_hash = next_hashes[0]
+    if len(ordered) != len(by_hash):
+        raise FoundryCatalogError(
+            "registry_release_chain_forked",
+            "The Registry release-request chain contains an unreachable branch",
+            status_code=409,
+        )
+    return ordered
+
+
+async def registry_release_request_chain(
+    db: AsyncSession,
+    *,
+    lock: bool = False,
+) -> list[WorkflowRegistryRelease]:
+    """Return the verified fixed-base request chain from root through head."""
+
+    try:
+        from app.services.workflow_registry_v2 import builtin_registry_identity
+
+        base = builtin_registry_identity()
+        base_epoch = str(base["registry_epoch"])
+        base_hash = str(base["registry_hash"])
+        if not base_epoch or not _SHA256_TAGGED_RE.fullmatch(base_hash):
+            raise ValueError("invalid built-in registry binding")
+    except Exception as exc:
+        raise _registry_error(exc) from exc
+    statement = select(WorkflowRegistryRelease).order_by(
+        WorkflowRegistryRelease.created_at.asc(),
+        WorkflowRegistryRelease.id.asc(),
+    )
+    if lock:
+        statement = statement.with_for_update()
+    rows = list((await db.execute(statement)).scalars().all())
+    return _validate_registry_release_chain(
+        rows,
+        base_epoch=base_epoch,
+        base_hash=base_hash,
+    )
+
+
+async def _locked_registry_release_request_chain(
+    db: AsyncSession,
+) -> list[WorkflowRegistryRelease]:
+    """Serialize creation of cumulative Registry release requests."""
+
+    bind = db.get_bind()
+    if bind.dialect.name == "postgresql":
+        await db.execute(text("SELECT pg_advisory_xact_lock(734291105)"))
+    return await registry_release_request_chain(db, lock=True)
+
+
+def _requested_registry_states(
+    chain: list[WorkflowRegistryRelease],
+) -> dict[tuple[str, str], str]:
+    """Return the effective state at the immutable request-chain head."""
+
+    if not chain:
+        return {}
+    states: dict[tuple[str, str], str] = {}
+    operations = (chain[-1].manifest or {}).get("operation_sequence")
+    if not isinstance(operations, list):
+        raise FoundryCatalogError(
+            "registry_release_chain_invalid",
+            "The Registry release-request operation sequence is invalid",
+            status_code=409,
+        )
+    for operation in operations:
+        if not isinstance(operation, dict):
+            raise FoundryCatalogError(
+                "registry_release_chain_invalid",
+                "The Registry release-request operation is invalid",
+                status_code=409,
+            )
+        if operation.get("operation") == "UPSERT_ENTRY":
+            entry = operation.get("entry")
+            workflow = entry.get("workflow") if isinstance(entry, dict) else None
+            if not isinstance(workflow, dict):
+                raise FoundryCatalogError(
+                    "registry_release_chain_invalid",
+                    "The Registry release-request entry is invalid",
+                    status_code=409,
+                )
+            identity = (
+                str(workflow.get("workflow_id") or ""),
+                str(workflow.get("version") or ""),
+            )
+            state = str(workflow.get("state") or "")
+        elif operation.get("operation") == "SET_ENTRY_STATUS":
+            change = operation.get("status_change")
+            if not isinstance(change, dict):
+                raise FoundryCatalogError(
+                    "registry_release_chain_invalid",
+                    "The Registry release-request status change is invalid",
+                    status_code=409,
+                )
+            identity = (
+                str(change.get("workflow_id") or ""),
+                str(change.get("workflow_version") or ""),
+            )
+            state = str(change.get("requested_status") or "")
+        else:
+            raise FoundryCatalogError(
+                "registry_release_chain_invalid",
+                "The Registry release-request operation kind is invalid",
+                status_code=409,
+            )
+        if not all(identity) or state not in {
+            "REGISTERED",
+            "SUSPENDED",
+            "SUPERSEDED",
+            "REVOKED",
+        }:
+            raise FoundryCatalogError(
+                "registry_release_chain_invalid",
+                "The Registry release-request state binding is invalid",
+                status_code=409,
+            )
+        states[identity] = state
+    return states
+
+
+async def record_registry_release_dispatch(
+    db: AsyncSession,
+    *,
+    candidate_id: uuid.UUID,
+    candidate_version_id: uuid.UUID,
+    release_request_id: uuid.UUID,
+    release_request_hash: str,
+    dispatched: bool,
+    failure_class: str | None = None,
+    retryable: bool = False,
+) -> tuple[FoundryCandidateEvent, bool]:
+    """Append the post-commit protected release dispatch result."""
+
+    release = await db.get(WorkflowRegistryRelease, release_request_id)
+    candidate = await db.get(FoundryCandidate, candidate_id)
+    if (
+        release is None
+        or candidate is None
+        or release.manifest_hash != release_request_hash
+    ):
+        raise FoundryCatalogError(
+            "registry_release_dispatch_binding_missing",
+            "The Registry dispatch no longer matches its immutable request",
+            status_code=409,
+        )
+    prior = list(
+        (
+            await db.execute(
+                select(FoundryCandidateEvent)
+                .where(
+                    FoundryCandidateEvent.candidate_id == candidate_id,
+                    FoundryCandidateEvent.event_type
+                    == "REGISTRY_RELEASE_DISPATCHED",
+                )
+                .order_by(FoundryCandidateEvent.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    existing = next(
+        (
+            event
+            for event in prior
+            if (event.event_payload or {}).get("release_request_id")
+            == str(release_request_id)
+            and (event.event_payload or {}).get("release_request_hash")
+            == release_request_hash
+        ),
+        None,
+    )
+    if dispatched and existing is not None:
+        return existing, False
+    sanitized_failure = None
+    if not dispatched:
+        sanitized_failure = str(failure_class or "registry_dispatch_failed")
+        if not re.fullmatch(r"[a-z][a-z0-9_]{1,127}", sanitized_failure):
+            sanitized_failure = "registry_dispatch_failed"
+    event = await _append_event(
+        db,
+        candidate_id=candidate_id,
+        candidate_version_id=candidate_version_id,
+        event_type=(
+            "REGISTRY_RELEASE_DISPATCHED"
+            if dispatched
+            else "REGISTRY_RELEASE_DISPATCH_FAILED"
+        ),
+        actor_kind="CONTROL_PLANE",
+        actor_user_id=None,
+        payload={
+            "release_request_id": str(release_request_id),
+            "release_request_hash": release_request_hash,
+            "failure_class": sanitized_failure,
+            "retryable": bool(retryable) if not dispatched else False,
+        },
+    )
+    await db.commit()
+    await db.refresh(event)
+    return event, True
+
+
+async def registry_release_dispatch_succeeded(
+    db: AsyncSession,
+    *,
+    candidate_id: uuid.UUID,
+    release_request_id: uuid.UUID,
+    release_request_hash: str,
+) -> bool:
+    """Return whether this exact immutable request already reached GitHub."""
+
+    events = list(
+        (
+            await db.execute(
+                select(FoundryCandidateEvent).where(
+                    FoundryCandidateEvent.candidate_id == candidate_id,
+                    FoundryCandidateEvent.event_type
+                    == "REGISTRY_RELEASE_DISPATCHED",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return any(
+        (event.event_payload or {}).get("release_request_id")
+        == str(release_request_id)
+        and (event.event_payload or {}).get("release_request_hash")
+        == release_request_hash
+        for event in events
+    )
 
 
 async def _pending_registry_release_request(
@@ -1759,56 +3701,18 @@ async def _pending_registry_release_request(
     context: dict[str, Any],
     actor_user_id: uuid.UUID,
 ) -> WorkflowRegistryRelease:
-    bind = db.get_bind()
-    if bind.dialect.name == "postgresql":
-        # Serialize the global release-request chain across independent
-        # candidate transactions. The lock is released by the caller's commit.
-        await db.execute(text("SELECT pg_advisory_xact_lock(734291105)"))
+    chain = await _locked_registry_release_request_chain(db)
     try:
-        from app.services.workflow_registry_v2 import registry_snapshot
+        from app.services.workflow_registry_v2 import builtin_registry_identity
 
-        base = registry_snapshot()
-        base_epoch = str(base["epoch"])
+        base = builtin_registry_identity()
+        base_epoch = str(base["registry_epoch"])
         base_hash = str(base["registry_hash"])
-        if not base_epoch or not re.fullmatch(r"sha256:[0-9a-f]{64}", base_hash):
-            raise ValueError("invalid base registry binding")
     except Exception as exc:
         raise _registry_error(exc) from exc
-    pending_releases = list(
-        (
-            await db.execute(
-                select(WorkflowRegistryRelease).where(
-                    WorkflowRegistryRelease.status == "PENDING_SIGNATURE"
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    matching_releases = [
-        row
-        for row in pending_releases
-        if (row.manifest or {}).get("base_registry_epoch") == base_epoch
-        and (row.manifest or {}).get("base_registry_hash") == base_hash
-        and isinstance((row.manifest or {}).get("operation_sequence"), list)
-    ]
-    prior = (
-        max(
-            matching_releases,
-            key=lambda row: (
-                len((row.manifest or {}).get("operation_sequence") or []),
-                str(row.id),
-            ),
-        )
-        if matching_releases
-        else None
-    )
+    prior = chain[-1] if chain else None
     prior_manifest = dict(prior.manifest or {}) if prior is not None else {}
-    if (
-        prior_manifest.get("base_registry_epoch") == base_epoch
-        and prior_manifest.get("base_registry_hash") == base_hash
-        and isinstance(prior_manifest.get("operation_sequence"), list)
-    ):
+    if prior is not None:
         previous_operations = list(prior_manifest["operation_sequence"])
         previous_request_hash = prior.manifest_hash
     else:
@@ -1828,6 +3732,13 @@ async def _pending_registry_release_request(
     operation_sequence = previous_operations + new_operations
     request_id = uuid.uuid4()
     epoch = f"pending.{request_id.hex}"
+    actor_hash = "sha256:" + sha256_json(
+        {
+            "actor_user_id": str(actor_user_id),
+            "release_request_id": str(request_id),
+            "domain": "foundry_registry_release_request_v1",
+        }
+    )
     payload = {
         "schema_version": "standard_astro_registry_release_request_v1",
         "request_id": str(request_id),
@@ -1835,7 +3746,7 @@ async def _pending_registry_release_request(
         "request_epoch": epoch,
         "request_status": "PENDING_SIGNATURE",
         "requested_at": _utc_now().isoformat(),
-        "requested_by_user_id": str(actor_user_id),
+        "requested_by_actor_hash": actor_hash,
         "base_registry_epoch": base_epoch,
         "base_registry_hash": base_hash,
         "previous_request_hash": previous_request_hash,
@@ -1949,6 +3860,27 @@ async def register_candidate_version(
             "Registration requires a protected formal build for the exact approved version",
             status_code=409,
         )
+    try:
+        stored_release_audit_hash, stored_release_audit_receipts = (
+            _validate_formal_release_audit(
+                build_attestation.formal_release_audit_receipts,
+                source_tree_hash=build_attestation.source_tree_hash,
+                dependency_lock_hash=build_attestation.dependency_lock_hash,
+                formal_sbom_hash=build_attestation.formal_sbom_hash,
+            )
+        )
+    except FoundryCatalogError as exc:
+        raise FoundryCatalogError(
+            "formal_release_audit_required",
+            "Registration requires passed dependency, license, and secret-scan receipts",
+            status_code=409,
+        ) from exc
+    if stored_release_audit_hash != build_attestation.formal_release_audit_hash:
+        raise FoundryCatalogError(
+            "formal_release_audit_binding_mismatch",
+            "Formal release supply-chain receipt no longer matches its build record",
+            status_code=409,
+        )
     image_digest = build_attestation.formal_worker_image_digest
     if version.created_by_user_id == registrar_user_id:
         raise FoundryCatalogError(
@@ -1992,6 +3924,7 @@ async def register_candidate_version(
     try:
         from app.services.evidence_pack_v2 import jcs_canonicalize
         from app.services.workflow_registry_v2 import (
+            assert_registry_entry_static_compatible,
             build_registry_entry_from_approved_candidate,
         )
 
@@ -2012,28 +3945,88 @@ async def register_candidate_version(
                 "reviews": _review_records_for_registry(reviews),
             }
         )
+        # A signed release is configuration, not a plugin installer.  Reject
+        # Demo-only or newly generated entrypoints before a PENDING release is
+        # even created; startup repeats this exact static ToolSpec comparison.
+        assert_registry_entry_static_compatible(release_entry)
     except Exception as exc:
         raise _registry_error(exc) from exc
 
+    workflow = dict(release_entry["workflow"])
+    release_chain = await _locked_registry_release_request_chain(db)
+    requested_states = _requested_registry_states(release_chain)
+    prior_entries = list(
+        (
+            await db.execute(
+                select(WorkflowRegistryEntry)
+                .where(
+                    WorkflowRegistryEntry.workflow_id
+                    == str(workflow["workflow_id"]),
+                    WorkflowRegistryEntry.workflow_version
+                    != str(workflow["version"]),
+                )
+                .order_by(
+                    WorkflowRegistryEntry.registered_at.asc(),
+                    WorkflowRegistryEntry.id.asc(),
+                )
+                .with_for_update()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    superseded_entries = [
+        old_entry
+        for old_entry in prior_entries
+        if requested_states.get(
+            (old_entry.workflow_id, old_entry.workflow_version),
+            old_entry.status,
+        )
+        in {"REGISTERED", "SUSPENDED"}
+    ]
+    supersede_reason = (
+        f"superseded_by={workflow['workflow_id']}@{workflow['version']}"
+    )
+    supersede_changes = [
+        {
+            "registry_entry_id": str(old_entry.id),
+            "registry_entry_hash": old_entry.registry_entry_hash,
+            "workflow_id": old_entry.workflow_id,
+            "workflow_version": old_entry.workflow_version,
+            "requested_status": "SUPERSEDED",
+            "reason": supersede_reason,
+            "superseded_by_workflow_id": str(workflow["workflow_id"]),
+            "superseded_by_workflow_version": str(workflow["version"]),
+        }
+        for old_entry in superseded_entries
+    ]
     release = await _pending_registry_release_request(
         db,
-        request_kind="REGISTER_CANDIDATE",
+        request_kind=(
+            "REGISTER_CANDIDATE_AND_SUPERSEDE"
+            if supersede_changes
+            else "REGISTER_CANDIDATE"
+        ),
         entries=[release_entry],
-        status_changes=[],
+        status_changes=supersede_changes,
         context={
             "candidate_db_id": str(candidate.id),
             "candidate_version_db_id": str(version.id),
             "formal_build_attestation_id": str(build_attestation.id),
             "formal_build_attestation_receipt_sha256": build_attestation.receipt_hash,
+            "formal_build_attestation_artifact_sha256": (
+                build_attestation.attestation_artifact_hash
+            ),
             "formal_build_git_commit": build_attestation.git_commit,
             "formal_build_sbom_sha256": build_attestation.formal_sbom_hash,
             "formal_build_test_report_sha256": build_attestation.test_report_hash,
+            "formal_build_release_audit_sha256": stored_release_audit_hash,
+            "formal_build_release_audit_receipts": stored_release_audit_receipts,
             "formal_build_sigstore_bundle_sha256": build_attestation.sigstore_bundle_hash,
             "formal_build_provenance_sha256": build_attestation.provenance_hash,
         },
         actor_user_id=registrar_user_id,
     )
-    workflow = dict(release_entry["workflow"])
     entry = WorkflowRegistryEntry(
         workflow_id=str(workflow["workflow_id"]),
         workflow_version=str(workflow["version"]),
@@ -2052,6 +4045,25 @@ async def register_candidate_version(
     )
     db.add_all([entry, release])
     await db.flush()
+    for old_entry in superseded_entries:
+        await _append_event(
+            db,
+            candidate_id=old_entry.candidate_id,
+            candidate_version_id=old_entry.candidate_version_id,
+            event_type="REGISTRY_STATUS_CHANGE_REQUESTED",
+            actor_kind="HUMAN_REGISTRAR",
+            actor_user_id=registrar_user_id,
+            payload={
+                "reason": supersede_reason,
+                "registry_entry_hash": old_entry.registry_entry_hash,
+                "requested_status": "SUPERSEDED",
+                "superseded_by_workflow_id": str(workflow["workflow_id"]),
+                "superseded_by_workflow_version": str(workflow["version"]),
+                "release_request_id": str(release.id),
+                "release_request_hash": release.manifest_hash,
+                "runtime_registry_modified": False,
+            },
+        )
     await _append_event(
         db,
         candidate_id=candidate.id,
@@ -2113,6 +4125,27 @@ async def change_registered_candidate_status(
         raise FoundryCatalogError(
             "registry_entry_not_active",
             "Only an imported formal registry entry can request a status change",
+            status_code=409,
+        )
+    release_chain = await _locked_registry_release_request_chain(db)
+    requested_states = _requested_registry_states(release_chain)
+    effective_state = requested_states.get(
+        (entry.workflow_id, entry.workflow_version),
+        entry.status,
+    )
+    allowed_requested_transitions = {
+        "REGISTERED": {"SUSPENDED", "REVOKED"},
+        "SUSPENDED": {"REVOKED"},
+        "SUPERSEDED": set(),
+        "REVOKED": set(),
+    }
+    if target_status not in allowed_requested_transitions.get(
+        effective_state,
+        set(),
+    ):
+        raise FoundryCatalogError(
+            "registry_status_transition_pending",
+            "The request-chain head already makes this status transition invalid",
             status_code=409,
         )
     release = await _pending_registry_release_request(

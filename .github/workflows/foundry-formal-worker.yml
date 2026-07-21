@@ -1,0 +1,645 @@
+name: Protected Foundry formal Worker build
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_id:
+        description: Exact Foundry candidate UUID
+        required: true
+        type: string
+      candidate_version_id:
+        description: Exact immutable candidate-version UUID
+        required: true
+        type: string
+      candidate_version_hash:
+        description: Exact candidate-version SHA-256 hex digest
+        required: true
+        type: string
+      source_commit:
+        description: Approved 40-character Git commit containing the formal implementation
+        required: true
+        type: string
+      source_tree_sha256:
+        description: Canonical tracked-source manifest SHA-256 recorded on the approved candidate version
+        required: true
+        type: string
+
+# The workflow file itself must be dispatched from protected main. Configure
+# the `foundry-formal-worker` Environment to permit deployments only from main
+# and require a human reviewer. Candidate source is checked out separately.
+permissions:
+  contents: read
+
+concurrency:
+  group: foundry-formal-worker-${{ inputs.candidate_version_hash }}
+  cancel-in-progress: false
+
+jobs:
+  definition-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Require the protected workflow definition
+        env:
+          CANDIDATE_ID: ${{ inputs.candidate_id }}
+          CANDIDATE_VERSION_ID: ${{ inputs.candidate_version_id }}
+          CANDIDATE_VERSION_HASH: ${{ inputs.candidate_version_hash }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          SOURCE_TREE_SHA256: ${{ inputs.source_tree_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          [[ "$CANDIDATE_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
+          [[ "$CANDIDATE_VERSION_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
+          [[ "$CANDIDATE_VERSION_HASH" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SOURCE_TREE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+
+  validate-without-secrets:
+    needs: definition-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Check out trusted source-hash tooling from protected main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          path: release-tools
+          persist-credentials: false
+
+      - name: Check out the exact approved source without credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.source_commit }}
+          path: candidate-source
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Recompute immutable source and dependency bindings
+        shell: bash
+        env:
+          EXPECTED_COMMIT: ${{ inputs.source_commit }}
+          EXPECTED_TREE_SHA256: ${{ inputs.source_tree_sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p formal-validation
+          test "$(git -C candidate-source rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          python3 release-tools/backend/scripts/hash_foundry_source_tree.py \
+            --repo candidate-source \
+            --manifest formal-validation/source-manifest.json \
+            > formal-validation/source-receipt.json
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          receipt = json.loads(
+              Path("formal-validation/source-receipt.json").read_text()
+          )
+          actual = receipt["source_tree_sha256"]
+          if actual != os.environ["EXPECTED_TREE_SHA256"]:
+              raise SystemExit("approved source tree hash mismatch")
+          if receipt["git_commit"] != os.environ["EXPECTED_COMMIT"]:
+              raise SystemExit("approved source commit mismatch")
+          Path("formal-validation/source-tree.sha256").write_text(actual + "\n")
+          lock = Path("candidate-source/backend/requirements.lock").read_bytes()
+          Path("formal-validation/dependency-lock.sha256").write_text(
+              hashlib.sha256(lock).hexdigest() + "\n"
+          )
+          PY
+
+      - name: Build a secret-free validation image with the trusted Dockerfile
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build \
+            --file release-tools/backend/Dockerfile.worker \
+            --build-arg "TOOL_VERSION=$SOURCE_COMMIT" \
+            --tag standard-astro-formal-validation:ci \
+            candidate-source/backend
+
+      - name: Audit approved source and hash-locked dependency declarations
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p formal-validation/release-audit/static
+          chmod 0777 formal-validation/release-audit/static
+          docker run --rm \
+            --network none \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=67108864 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 64 \
+            --cpus 1 \
+            --memory 1g \
+            --user 10001:10001 \
+            --volume "$PWD/candidate-source:/candidate-source:ro" \
+            --volume "$PWD/formal-validation/source-manifest.json:/audit/source-manifest.json:ro" \
+            --volume "$PWD/release-tools/backend/scripts/audit_foundry_formal_release.py:/trusted/audit.py:ro" \
+            --volume "$PWD/release-tools/backend/foundry_policy/formal-release-policy-v1.json:/trusted/policy.json:ro" \
+            --volume "$PWD/formal-validation/release-audit/static:/audit-output" \
+            --entrypoint python \
+            standard-astro-formal-validation:ci \
+            /trusted/audit.py static \
+            --repo-root /candidate-source \
+            --source-manifest /audit/source-manifest.json \
+            --requirements-input /candidate-source/backend/requirements.txt \
+            --requirements-lock /candidate-source/backend/requirements.lock \
+            --policy /trusted/policy.json \
+            --output-dir /audit-output
+          test -f formal-validation/release-audit/static/dependency-lock-receipt.json
+          test -f formal-validation/release-audit/static/secret-scan-receipt.json
+          test -f formal-validation/release-audit/static/static-audit-receipt.json
+
+      - name: Run trusted formal gates around candidate code in isolation
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          CANDIDATE_VERSION_HASH: ${{ inputs.candidate_version_hash }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod 0777 formal-validation
+          started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          set +e
+          (
+            ulimit -f 32768
+            timeout 110m docker run --rm \
+            --network none \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=268435456 \
+            --tmpfs /worker-state:rw,noexec,nosuid,nodev,size=67108864 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 256 \
+            --cpus 4 \
+            --memory 6g \
+            --user 10001:10001 \
+            --volume "$PWD/release-tools/backend/tests:/app/tests:ro" \
+            --entrypoint python \
+            standard-astro-formal-validation:ci \
+            -m pytest \
+            -o addopts='' \
+            /app/tests/test_worker_agent.py \
+            /app/tests/test_worker_protocol.py \
+            /app/tests/test_worker_control_release.py \
+            /app/tests/test_worker_artifact_integrity.py \
+            /app/tests/test_union3_reproduction.py \
+            /app/tests/test_union3_research_loop.py \
+            /app/tests/test_workflow_registry_v2.py \
+            /app/tests/test_foundry_catalog.py \
+            /app/tests/test_foundry_catalog_migration.py \
+            /app/tests/test_foundry_demo_runner.py \
+            --tb=short
+          ) > formal-validation/pytest-output.log 2>&1
+          test_exit="$?"
+          set -e
+          completed_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          export TEST_EXIT="$test_exit" STARTED_AT="$started_at" COMPLETED_AT="$completed_at"
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          log = Path("formal-validation/pytest-output.log").read_bytes()
+          report = {
+              "schema_version": "standard_astro_formal_test_receipt_v1",
+              "candidate_version_hash": os.environ["CANDIDATE_VERSION_HASH"],
+              "source_commit": os.environ["SOURCE_COMMIT"],
+              "test_exit_code": int(os.environ["TEST_EXIT"]),
+              "tests_passed": int(os.environ["TEST_EXIT"]) == 0,
+              "pytest_output_sha256": hashlib.sha256(log).hexdigest(),
+              "pytest_output_bytes": len(log),
+              "started_at": os.environ["STARTED_AT"],
+              "completed_at": os.environ["COMPLETED_AT"],
+          }
+          Path("formal-validation/test-report.json").write_text(
+              json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n"
+          )
+          PY
+          if [[ "$test_exit" != 0 ]]; then
+            echo "Formal test container failed; inspect the bounded artifact log." >&2
+            exit "$test_exit"
+          fi
+
+      - name: Freeze the secret-free validation receipt
+        env:
+          CANDIDATE_ID: ${{ inputs.candidate_id }}
+          CANDIDATE_VERSION_ID: ${{ inputs.candidate_version_id }}
+          CANDIDATE_VERSION_HASH: ${{ inputs.candidate_version_hash }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import uuid
+          from pathlib import Path
+
+          candidate_id = str(uuid.UUID(os.environ["CANDIDATE_ID"]))
+          version_id = str(uuid.UUID(os.environ["CANDIDATE_VERSION_ID"]))
+          test_report = Path("formal-validation/test-report.json").read_bytes()
+          receipt = {
+              "candidate_id": candidate_id,
+              "candidate_version_id": version_id,
+              "candidate_version_hash": os.environ["CANDIDATE_VERSION_HASH"],
+              "source_commit": os.environ["SOURCE_COMMIT"],
+              "source_tree_sha256": Path(
+                  "formal-validation/source-tree.sha256"
+              ).read_text().strip(),
+              "dependency_lock_sha256": Path(
+                  "formal-validation/dependency-lock.sha256"
+              ).read_text().strip(),
+              "test_report_sha256": hashlib.sha256(test_report).hexdigest(),
+              "tests_passed": True,
+          }
+          Path("formal-validation/validation-receipt.json").write_text(
+              json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n"
+          )
+          PY
+
+      - name: Upload secret-free validation evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: foundry-formal-validation-${{ inputs.candidate_version_hash }}
+          path: formal-validation
+          if-no-files-found: error
+          retention-days: 30
+
+  build-multiarch-without-oidc:
+    needs: [definition-gate, validate-without-secrets]
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    environment: foundry-formal-worker
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.image.outputs.name }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Check out trusted source-hash tooling from protected main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          path: release-tools
+          persist-credentials: false
+
+      - name: Check out the exact approved source without credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.source_commit }}
+          path: candidate-source
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Download validation evidence
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: foundry-formal-validation-${{ inputs.candidate_version_hash }}
+          path: formal-validation
+
+      - name: Recheck source before the external image write
+        env:
+          EXPECTED_COMMIT: ${{ inputs.source_commit }}
+          EXPECTED_TREE_SHA256: ${{ inputs.source_tree_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C candidate-source rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          python3 release-tools/backend/scripts/hash_foundry_source_tree.py \
+            --repo candidate-source \
+            --manifest /tmp/source-manifest.json \
+            > /tmp/source-receipt.json
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          receipt = json.loads(
+              Path("formal-validation/validation-receipt.json").read_text()
+          )
+          source_receipt = json.loads(Path("/tmp/source-receipt.json").read_text())
+          source_hash = source_receipt["source_tree_sha256"]
+          lock_hash = hashlib.sha256(
+              Path("candidate-source/backend/requirements.lock").read_bytes()
+          ).hexdigest()
+          if source_hash != os.environ["EXPECTED_TREE_SHA256"]:
+              raise SystemExit("source tree changed after validation")
+          if receipt["source_tree_sha256"] != source_hash:
+              raise SystemExit("validation source receipt changed")
+          if receipt["dependency_lock_sha256"] != lock_hash:
+              raise SystemExit("validation dependency receipt changed")
+          if receipt["tests_passed"] is not True:
+              raise SystemExit("formal tests did not pass")
+          PY
+          rm -f /tmp/source-manifest.json /tmp/source-receipt.json
+
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: image
+        shell: bash
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}/science-worker" >> "$GITHUB_OUTPUT"
+
+      - id: build
+        name: Build the formal ARM64 and AMD64 image with SBOM and provenance
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: candidate-source/backend
+          file: release-tools/backend/Dockerfile.worker
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          build-args: |
+            TOOL_VERSION=${{ inputs.source_commit }}
+          tags: |
+            ${{ steps.image.outputs.name }}:formal-${{ inputs.candidate_version_hash }}
+            ${{ steps.image.outputs.name }}:source-${{ inputs.source_commit }}
+
+      - name: Run the built image once without network or host mounts
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker pull "$IMAGE@$DIGEST"
+          docker run --rm \
+            --network none \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=67108864 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 64 \
+            --cpus 1 \
+            --memory 1g \
+            --user 10001:10001 \
+            "$IMAGE@$DIGEST" --help
+
+      - name: Export BuildKit SBOM and provenance attestations
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          CANDIDATE_ID: ${{ inputs.candidate_id }}
+          CANDIDATE_VERSION_ID: ${{ inputs.candidate_version_id }}
+          CANDIDATE_VERSION_HASH: ${{ inputs.candidate_version_hash }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          SOURCE_TREE_SHA256: ${{ inputs.source_tree_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p formal-build-materials
+          docker buildx imagetools inspect "$IMAGE@$DIGEST" \
+            --format '{{ json .SBOM }}' > formal-build-materials/sbom.json
+          docker buildx imagetools inspect "$IMAGE@$DIGEST" \
+            --format '{{ json .Provenance }}' > formal-build-materials/provenance.json
+          python3 - <<'PY'
+          import json
+          import os
+          import uuid
+          from pathlib import Path
+
+          for name in ("sbom.json", "provenance.json"):
+              value = json.loads(Path("formal-build-materials", name).read_text())
+              if value in (None, {}, []):
+                  raise SystemExit(f"BuildKit did not publish {name}")
+          metadata = {
+              "candidate_id": str(uuid.UUID(os.environ["CANDIDATE_ID"])),
+              "candidate_version_id": str(
+                  uuid.UUID(os.environ["CANDIDATE_VERSION_ID"])
+              ),
+              "candidate_version_hash": os.environ["CANDIDATE_VERSION_HASH"],
+              "source_commit": os.environ["SOURCE_COMMIT"],
+              "source_tree_sha256": os.environ["SOURCE_TREE_SHA256"],
+              "formal_worker_image_digest": os.environ["DIGEST"],
+              "image": os.environ["IMAGE"],
+              "platforms": ["linux/amd64", "linux/arm64"],
+              "tests_passed": True,
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "workflow_ref": os.environ["GITHUB_WORKFLOW_REF"],
+              "workflow_sha": os.environ["GITHUB_WORKFLOW_SHA"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+          }
+          Path("formal-build-materials/build-metadata.json").write_text(
+              json.dumps(metadata, sort_keys=True, separators=(",", ":")) + "\n"
+          )
+          PY
+
+      - name: Audit installed dependencies and licenses on both image platforms
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          audit_root="formal-build-materials/release-audit"
+          mkdir -p "$audit_root/static" "$audit_root/linux-amd64" "$audit_root/linux-arm64"
+          cp formal-validation/release-audit/static/*.json "$audit_root/static/"
+          chmod 0777 "$audit_root/linux-amd64" "$audit_root/linux-arm64"
+          for binding in "linux/amd64:linux-amd64" "linux/arm64:linux-arm64"; do
+            platform="${binding%%:*}"
+            output_name="${binding##*:}"
+            docker run --rm \
+              --platform "$platform" \
+              --network none \
+              --read-only \
+              --tmpfs /tmp:rw,noexec,nosuid,nodev,size=67108864 \
+              --cap-drop ALL \
+              --security-opt no-new-privileges \
+              --pids-limit 64 \
+              --cpus 1 \
+              --memory 1g \
+              --user 10001:10001 \
+              --volume "$PWD/release-tools/backend/scripts/audit_foundry_formal_release.py:/trusted/audit.py:ro" \
+              --volume "$PWD/release-tools/backend/foundry_policy/formal-release-policy-v1.json:/trusted/policy.json:ro" \
+              --volume "$PWD/$audit_root/$output_name:/audit-output" \
+              --entrypoint python \
+              "$IMAGE@$DIGEST" \
+              /trusted/audit.py environment \
+              --requirements-lock /app/requirements.lock \
+              --policy /trusted/policy.json \
+              --platform "$platform" \
+              --output-dir /audit-output
+            test -f "$audit_root/$output_name/dependency-integrity-receipt.json"
+            test -f "$audit_root/$output_name/license-policy-receipt.json"
+            test -f "$audit_root/$output_name/environment-audit-receipt.json"
+          done
+          python3 release-tools/backend/scripts/audit_foundry_formal_release.py aggregate \
+            --static-dir "$audit_root/static" \
+            --amd64-dir "$audit_root/linux-amd64" \
+            --arm64-dir "$audit_root/linux-arm64" \
+            --sbom formal-build-materials/sbom.json \
+            --output "$audit_root/formal-release-audit-receipt.json"
+
+      - name: Upload immutable build materials
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: foundry-formal-build-${{ inputs.candidate_version_hash }}
+          path: formal-build-materials
+          if-no-files-found: error
+          retention-days: 30
+
+  sign-and-report-from-protected-host:
+    needs: [definition-gate, validate-without-secrets, build-multiarch-without-oidc]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: foundry-formal-worker
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+    steps:
+      - name: Check out trusted release tooling from protected main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          path: release-tools
+          persist-credentials: false
+
+      - name: Check out approved source only for a final byte hash
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.source_commit }}
+          path: candidate-source
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Download validation and build evidence
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          pattern: foundry-formal-*-${{ inputs.candidate_version_hash }}
+          path: downloaded
+          merge-multiple: false
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+
+      - name: Sign and verify the exact multi-architecture digest with GitHub OIDC
+        env:
+          IMAGE: ${{ needs.build-multiarch-without-oidc.outputs.image }}
+          DIGEST: ${{ needs.build-multiarch-without-oidc.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          mkdir -p formal-attestation
+          oidc_subject="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/foundry-formal-worker.yml@${GITHUB_REF}"
+          cosign sign --yes \
+            --bundle formal-attestation/sigstore.bundle.json \
+            "$IMAGE@$DIGEST"
+          cosign verify \
+            --bundle formal-attestation/sigstore.bundle.json \
+            --certificate-identity "$oidc_subject" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$IMAGE@$DIGEST" > formal-attestation/sigstore-verification.json
+          test -s formal-attestation/sigstore.bundle.json
+          test -s formal-attestation/sigstore-verification.json
+          printf '%s\n' "$oidc_subject" > formal-attestation/oidc-subject.txt
+
+      - name: Construct the canonical formal-build receipt
+        env:
+          CANDIDATE_ID: ${{ inputs.candidate_id }}
+          CANDIDATE_VERSION_ID: ${{ inputs.candidate_version_id }}
+          CANDIDATE_VERSION_HASH: ${{ inputs.candidate_version_hash }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          SOURCE_TREE_SHA256: ${{ inputs.source_tree_sha256 }}
+          IMAGE_DIGEST: ${{ needs.build-multiarch-without-oidc.outputs.digest }}
+          SUBJECT_IMAGE: ${{ needs.build-multiarch-without-oidc.outputs.image }}
+          ATTESTATION_KEY_ID: ${{ vars.FOUNDRY_FORMAL_BUILD_ATTESTATION_KEY_ID }}
+          FOUNDRY_FORMAL_BUILD_ATTESTATION_PRIVATE_KEY: ${{ secrets.FOUNDRY_FORMAL_BUILD_ATTESTATION_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          validation="downloaded/foundry-formal-validation-${CANDIDATE_VERSION_HASH}"
+          build="downloaded/foundry-formal-build-${CANDIDATE_VERSION_HASH}"
+          test -f "$validation/test-report.json"
+          test -f "$build/build-metadata.json"
+          python3 release-tools/backend/scripts/hash_foundry_source_tree.py \
+            --repo candidate-source \
+            --manifest formal-attestation/source-manifest.json \
+            > formal-attestation/source-receipt.json
+          built_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          oidc_subject="$(cat formal-attestation/oidc-subject.txt)"
+          python3 release-tools/backend/scripts/build_formal_worker_attestation.py \
+            --candidate-id "$CANDIDATE_ID" \
+            --candidate-version-id "$CANDIDATE_VERSION_ID" \
+            --candidate-version-hash "$CANDIDATE_VERSION_HASH" \
+            --source-receipt formal-attestation/source-receipt.json \
+            --source-manifest formal-attestation/source-manifest.json \
+            --source-tree-sha256 "$SOURCE_TREE_SHA256" \
+            --git-commit "$SOURCE_COMMIT" \
+            --dependency-lock candidate-source/backend/requirements.lock \
+            --sbom "$build/sbom.json" \
+            --test-report "$validation/test-report.json" \
+            --release-audit-dir "$build/release-audit" \
+            --formal-worker-image-digest "$IMAGE_DIGEST" \
+            --oidc-subject "$oidc_subject" \
+            --sigstore-bundle formal-attestation/sigstore.bundle.json \
+            --sigstore-verification formal-attestation/sigstore-verification.json \
+            --provenance "$build/provenance.json" \
+            --build-metadata "$build/build-metadata.json" \
+            --github-repository "$GITHUB_REPOSITORY" \
+            --github-workflow-ref "$GITHUB_WORKFLOW_REF" \
+            --github-workflow-sha "$GITHUB_WORKFLOW_SHA" \
+            --github-run-id "$GITHUB_RUN_ID" \
+            --github-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --subject-image "$SUBJECT_IMAGE" \
+            --signing-key-id "$ATTESTATION_KEY_ID" \
+            --built-at "$built_at" \
+            --output formal-attestation/formal-build-attestation.json
+          cp -R "$build/release-audit" formal-attestation/release-audit
+
+      # The signed Worker container has exited and no candidate code runs in
+      # this step. Only this host callback receives the dedicated secret.
+      - name: Append the formal build attestation to the control-center ledger
+        env:
+          CONTROL_PLANE_URL: ${{ vars.FOUNDRY_CONTROL_PLANE_URL }}
+          RESULT_SECRET: ${{ secrets.FOUNDRY_FORMAL_BUILD_RESULT_SECRET }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CONTROL_PLANE_URL"
+          test -n "$RESULT_SECRET"
+          callback="${CONTROL_PLANE_URL%/}/api/internal/foundry/formal-build-attestations"
+          curl --fail-with-body --silent --show-error \
+            --proto '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --connect-timeout 10 --max-time 60 \
+            -H "Authorization: Bearer $RESULT_SECRET" \
+            -H "Content-Type: application/json" \
+            --data-binary @formal-attestation/formal-build-attestation.json \
+            "$callback" > formal-attestation/callback-response.json
+
+      - name: Retain the public build receipt and signature bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: foundry-formal-attestation-${{ inputs.candidate_version_hash }}
+          path: formal-attestation
+          if-no-files-found: error
+          retention-days: 90

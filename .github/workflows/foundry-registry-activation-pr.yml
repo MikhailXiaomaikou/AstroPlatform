@@ -1,0 +1,136 @@
+name: Prepare public Foundry Registry activation PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_request_id:
+        description: Exact already-imported Registry release UUID
+        required: true
+        type: string
+      release_request_sha256:
+        description: Exact canonical hash of the release request
+        required: true
+        type: string
+
+# This environment has no Registry signing key. It can read one exact verified
+# public import and propose public activation files for normal protected review.
+permissions:
+  contents: read
+
+concurrency:
+  group: foundry-registry-activation-pr
+  cancel-in-progress: false
+
+jobs:
+  prepare-reviewed-public-bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: foundry-registry-activation-pr
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Validate protected-main inputs
+        env:
+          RELEASE_REQUEST_ID: ${{ inputs.release_request_id }}
+          RELEASE_REQUEST_SHA256: ${{ inputs.release_request_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          [[ "$RELEASE_REQUEST_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
+          [[ "$RELEASE_REQUEST_SHA256" =~ ^sha256:[0-9a-f]{64}$ ]]
+
+      - name: Check out protected main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Export the exact already-verified public import
+        env:
+          CONTROL_PLANE_URL: ${{ vars.FOUNDRY_CONTROL_PLANE_URL }}
+          ACTIVATION_SECRET: ${{ secrets.FOUNDRY_REGISTRY_ACTIVATION_RESULT_SECRET }}
+          RELEASE_REQUEST_ID: ${{ inputs.release_request_id }}
+          RELEASE_REQUEST_SHA256: ${{ inputs.release_request_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CONTROL_PLANE_URL"
+          test "${#ACTIVATION_SECRET}" -ge 32
+          mkdir -p activation-input
+          endpoint="${CONTROL_PLANE_URL%/}/api/internal/foundry/registry-activations/${RELEASE_REQUEST_ID}/bundle"
+          curl --fail-with-body --silent --show-error \
+            --proto '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --connect-timeout 10 --max-time 90 \
+            --get \
+            -H "Authorization: Bearer $ACTIVATION_SECRET" \
+            --data-urlencode "release_request_hash=$RELEASE_REQUEST_SHA256" \
+            --output activation-input/verified-activation-export.json \
+            "$endpoint"
+
+      - name: Independently verify and prepare public activation files
+        env:
+          PREPARED_FROM_GIT_COMMIT: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 backend/scripts/prepare_foundry_registry_activation.py prepare \
+            --export activation-input/verified-activation-export.json \
+            --output-dir backend/app/registry_releases \
+            --prepared-from-git-commit "$PREPARED_FROM_GIT_COMMIT" \
+            --render-blueprint render.yaml
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path("backend/app/registry_releases")
+          expected = {
+              "activation-manifest.json",
+              "active-signed-registry.json",
+              "trusted-registry-keyring.json",
+          }
+          files = {path.name for path in root.iterdir() if path.is_file()}
+          if files != expected:
+              raise SystemExit(f"unexpected activation files: {sorted(files)}")
+          for path in root.iterdir():
+              raw = path.read_bytes()
+              if b"PRIVATE KEY" in raw or b"private_key" in raw:
+                  raise SystemExit(f"private material marker in {path}")
+          PY
+          rm -rf activation-input
+
+      - name: Commit one immutable public activation proposal
+        env:
+          RELEASE_REQUEST_ID: ${{ inputs.release_request_id }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          canonical_id="$(python3 - <<'PY'
+          import os, uuid
+          print(uuid.UUID(os.environ["RELEASE_REQUEST_ID"]))
+          PY
+          )"
+          branch="foundry/registry-activation-${canonical_id}"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            echo "Activation branch already exists; refusing to overwrite it" >&2
+            exit 1
+          fi
+          git switch -c "$branch"
+          git config user.name "standard-astro-registry-bot"
+          git config user.email "standard-astro-registry-bot@users.noreply.github.com"
+          git add backend/app/registry_releases
+          git diff --cached --exit-code --quiet && {
+            echo "No new activation material was produced" >&2
+            exit 1
+          }
+          git commit -m "chore(registry): propose activation ${canonical_id}"
+          git push --set-upstream origin "$branch"
+          gh pr create \
+            --repo "$REPOSITORY" \
+            --base main \
+            --head "$branch" \
+            --title "Activate signed Workflow Registry ${canonical_id}" \
+            --body "Public signed snapshot and public keyring only. Import is not activation. Merge after reviewing the exact hashes; the protected exact-commit deploy workflow must still be run."

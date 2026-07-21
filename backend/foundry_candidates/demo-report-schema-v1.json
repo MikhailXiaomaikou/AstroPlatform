@@ -15,6 +15,7 @@
     "claim_eligible",
     "evidence_pack_allowed",
     "candidate_bundle_sha256",
+    "candidate_version_sha256",
     "workflow_spec_sha256",
     "dependency_lock_sha256",
     "runner_definition_sha256",
@@ -31,6 +32,7 @@
     "stderr_sha256",
     "stdout_bytes",
     "stderr_bytes",
+    "artifact_manifest",
     "resource_usage",
     "failure_class",
     "validation_summary",
@@ -52,6 +54,7 @@
     "claim_eligible": { "const": false },
     "evidence_pack_allowed": { "const": false },
     "candidate_bundle_sha256": { "$ref": "#/$defs/sha256" },
+    "candidate_version_sha256": { "$ref": "#/$defs/sha256" },
     "workflow_spec_sha256": { "$ref": "#/$defs/sha256" },
     "dependency_lock_sha256": { "$ref": "#/$defs/sha256" },
     "runner_definition_sha256": { "$ref": "#/$defs/sha256" },
@@ -68,6 +71,36 @@
     "stderr_sha256": { "$ref": "#/$defs/sha256" },
     "stdout_bytes": { "type": "integer", "minimum": 0 },
     "stderr_bytes": { "type": "integer", "minimum": 0 },
+    "artifact_manifest": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "kind", "sha256", "bytes"],
+          "properties": {
+            "path": { "const": "stdout.log" },
+            "kind": { "const": "STDOUT" },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "bytes": { "type": "integer", "minimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "kind", "sha256", "bytes"],
+          "properties": {
+            "path": { "const": "stderr.log" },
+            "kind": { "const": "STDERR" },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "bytes": { "type": "integer", "minimum": 0 }
+          }
+        }
+      ],
+      "items": false
+    },
     "resource_usage": { "type": "object" },
     "failure_class": { "type": ["string", "null"] },
     "validation_summary": { "type": "object" },

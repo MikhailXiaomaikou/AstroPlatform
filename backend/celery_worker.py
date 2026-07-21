@@ -14,6 +14,13 @@ from celery.signals import worker_ready
 from app.config import settings
 # Worker and Beat must fail boot on the same invalid Registry release as API.
 from app.services import workflow_registry_v2 as _workflow_registry_v2  # noqa: F401
+from app.services.foundry_registry_activation import (
+    assert_configured_registry_activation_bundle,
+)
+
+# A configured formal release must be the public bundle baked into this exact
+# image.  This executes before the worker can subscribe to verification work.
+assert_configured_registry_activation_bundle()
 
 logger = logging.getLogger(__name__)
 

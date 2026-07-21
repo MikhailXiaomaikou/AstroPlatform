@@ -46,6 +46,9 @@ async def get_config() -> dict:
         "foundry_candidate_catalog_enabled": (
             settings.foundry_candidate_catalog_enabled
         ),
+        "foundry_source_materialization_enabled": (
+            settings.foundry_source_materialization_enabled
+        ),
         "foundry_registration_enabled": settings.foundry_registration_enabled,
         "analytics_requires_consent": True,
         # These values are deliberately public: they identify who operates

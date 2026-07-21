@@ -5,7 +5,8 @@ IMAGE=${ASTRO_WORKER_IMAGE:-}
 COMMIT=${GIT_COMMIT:-}
 COMPOSE_FILE=${ASTRO_WORKER_COMPOSE_FILE:-deploy/compose.worker.yml}
 OIDC_ISSUER=https://token.actions.githubusercontent.com
-CERTIFICATE_IDENTITY='^https://github.com/MikhailXiaomaikou/Standard-Astro/.github/workflows/worker-image.yml@refs/tags/v[^/]+$'
+STABLE_CERTIFICATE_IDENTITY='^https://github.com/MikhailXiaomaikou/Standard-Astro/.github/workflows/worker-image.yml@refs/tags/v[^/]+$'
+FOUNDRY_CERTIFICATE_IDENTITY='^https://github.com/MikhailXiaomaikou/Standard-Astro/.github/workflows/foundry-formal-worker.yml@refs/heads/main$'
 
 require_full_commit() {
   value=$1
@@ -56,15 +57,19 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 2
 fi
 
-cosign verify "$IMAGE" \
-  --certificate-identity-regexp "$CERTIFICATE_IDENTITY" \
-  --certificate-oidc-issuer "$OIDC_ISSUER" >/dev/null
+if ! cosign verify "$IMAGE" \
+  --certificate-identity-regexp "$STABLE_CERTIFICATE_IDENTITY" \
+  --certificate-oidc-issuer "$OIDC_ISSUER" >/dev/null 2>&1; then
+  cosign verify "$IMAGE" \
+    --certificate-identity-regexp "$FOUNDRY_CERTIFICATE_IDENTITY" \
+    --certificate-oidc-issuer "$OIDC_ISSUER" >/dev/null
+fi
 
 export WORKER_IMAGE_DIGEST="sha256:$DIGEST"
 docker compose -f "$COMPOSE_FILE" pull science-worker
 
-# TOOL_VERSION is baked into the signed image by worker-image.yml. Never let a
-# host-provided GIT_COMMIT replace that attested code identity. An optional
+# TOOL_VERSION is baked into both allowlisted Worker build workflows. Never let
+# a host-provided GIT_COMMIT replace that attested code identity. An optional
 # GIT_COMMIT is only an expected-value cross-check for a release manifest.
 if ! IMAGE_ENV=$(docker image inspect "$IMAGE" --format '{{range .Config.Env}}{{println .}}{{end}}'); then
   echo "Could not inspect the pulled Worker image" >&2

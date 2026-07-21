@@ -18,6 +18,7 @@ from sqlalchemy import (
     UniqueConstraint,
     event,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -250,6 +251,25 @@ class FoundryCandidateEvent(Base):
 
     __table_args__ = (
         Index("idx_foundry_event_candidate_created", "candidate_id", "created_at"),
+        # One candidate event may have at most one direct successor.  The
+        # separate partial index for NULL also permits exactly one genesis
+        # event.  Together these constraints make a fork impossible even if a
+        # future caller bypasses the service-layer candidate row lock.
+        Index(
+            "uq_foundry_event_candidate_parent",
+            "candidate_id",
+            "previous_event_hash",
+            unique=True,
+            postgresql_where=text("previous_event_hash IS NOT NULL"),
+            sqlite_where=text("previous_event_hash IS NOT NULL"),
+        ),
+        Index(
+            "uq_foundry_event_candidate_genesis",
+            "candidate_id",
+            unique=True,
+            postgresql_where=text("previous_event_hash IS NULL"),
+            sqlite_where=text("previous_event_hash IS NULL"),
+        ),
     )
 
 
@@ -301,13 +321,29 @@ class FoundryFormalBuildAttestation(Base):
     dependency_lock_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     formal_sbom_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     test_report_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    formal_release_audit_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    formal_release_audit_receipts: Mapped[dict | None] = mapped_column(
+        JSONType(), nullable=True
+    )
     formal_worker_image_digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    github_repository: Mapped[str] = mapped_column(String(255), nullable=False)
+    github_workflow_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    github_workflow_sha: Mapped[str] = mapped_column(String(40), nullable=False)
     oidc_issuer: Mapped[str] = mapped_column(String(255), nullable=False)
     oidc_subject: Mapped[str] = mapped_column(Text, nullable=False)
+    attestation_signing_key_id: Mapped[str] = mapped_column(String(128), nullable=False)
     sigstore_bundle_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    sigstore_verification_record_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False
+    )
     provenance_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     build_metadata: Mapped[dict] = mapped_column(JSONType(), nullable=False, default=dict)
     receipt_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    attestation_artifact_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True
+    )
     built_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -384,6 +420,61 @@ class WorkflowRegistryRelease(Base):
     )
 
 
+class WorkflowRegistryReleaseImport(Base):
+    """Append-only receipt for a verified, deployment-ready signed release.
+
+    Importing a signature never changes the in-process registry.  A deployment
+    must still pin ``signed_snapshot`` as the configured release file and boot
+    a fresh process that verifies it before the first registry lookup.
+    """
+
+    __tablename__ = "workflow_registry_release_imports"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType(), primary_key=True, default=uuid.uuid4)
+    release_request_id: Mapped[uuid.UUID] = mapped_column(
+        UUIDType(),
+        ForeignKey("workflow_registry_releases.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    release_request_hash: Mapped[str] = mapped_column(String(71), nullable=False)
+    base_registry_epoch: Mapped[str] = mapped_column(String(128), nullable=False)
+    base_registry_hash: Mapped[str] = mapped_column(String(71), nullable=False)
+    registry_epoch: Mapped[str] = mapped_column(String(128), nullable=False)
+    registry_snapshot_hash: Mapped[str] = mapped_column(String(71), nullable=False)
+    signing_key_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    signing_public_key_fingerprint: Mapped[str] = mapped_column(String(71), nullable=False)
+    signed_snapshot: Mapped[dict] = mapped_column(JSONType(), nullable=False)
+    receipt_hash: Mapped[str] = mapped_column(String(71), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="SIGNED_READY_FOR_DEPLOYMENT", index=True
+    )
+    runtime_registry_modified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    imported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status = 'SIGNED_READY_FOR_DEPLOYMENT'",
+            name="ck_registry_import_deployment_ready_only",
+        ),
+        CheckConstraint(
+            "runtime_registry_modified IS FALSE",
+            name="ck_registry_import_no_runtime_mutation",
+        ),
+        UniqueConstraint(
+            "release_request_id", name="uq_registry_import_release_request"
+        ),
+        UniqueConstraint("registry_epoch", name="uq_registry_import_epoch"),
+        UniqueConstraint(
+            "registry_snapshot_hash", name="uq_registry_import_snapshot_hash"
+        ),
+        UniqueConstraint("receipt_hash", name="uq_registry_import_receipt_hash"),
+    )
+
+
 _IMMUTABLE_LEDGER_MODELS = (
     FoundryCandidateVersion,
     FoundryDemoRun,
@@ -391,6 +482,7 @@ _IMMUTABLE_LEDGER_MODELS = (
     FoundryReview,
     FoundryFormalBuildAttestation,
     WorkflowRegistryRelease,
+    WorkflowRegistryReleaseImport,
 )
 
 

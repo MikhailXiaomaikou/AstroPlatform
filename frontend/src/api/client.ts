@@ -251,6 +251,7 @@ export interface RuntimeConfig {
   foundry_ai_drafting_enabled?: boolean;
   foundry_auto_demo_enabled?: boolean;
   foundry_candidate_catalog_enabled?: boolean;
+  foundry_source_materialization_enabled?: boolean;
   foundry_registration_enabled?: boolean;
   analytics_requires_consent: boolean;
   privacy_notice?: {
@@ -2114,6 +2115,8 @@ export interface FoundryFormalBuildAttestation {
   dependency_lock_sha256: string;
   formal_sbom_sha256: string;
   test_report_sha256: string;
+  formal_release_audit_sha256?: string | null;
+  formal_release_audit_receipts?: Record<string, unknown>;
   git_commit: string;
   oidc_issuer: string;
   oidc_subject: string;
@@ -2123,6 +2126,27 @@ export interface FoundryFormalBuildAttestation {
   built_at: string;
   created_at: string;
   status: "VERIFIED_BUILD_RECEIPT";
+}
+
+export interface FoundryValidationRunSummary {
+  validation_run_id: string;
+  candidate_version_id: string;
+  candidate_version_hash: string;
+  status: string;
+  validation_summary: Record<string, unknown>;
+  failure_class: string | null;
+  created_at: string | null;
+}
+
+export interface FoundryReviewSummary {
+  id: string;
+  candidate_version_id: string;
+  candidate_version_hash: string;
+  reviewer_pseudonym: string;
+  review_scope: "ENGINEERING" | "SCIENTIFIC" | string;
+  decision: string;
+  comment: string;
+  created_at: string | null;
 }
 
 export interface FoundryCandidateSummary {
@@ -2135,6 +2159,8 @@ export interface FoundryCandidateSummary {
   current_version: FoundryCandidateVersion | null;
   versions?: FoundryCandidateVersion[];
   demo_runs?: FoundryDemoRun[];
+  validation_runs?: FoundryValidationRunSummary[];
+  reviews?: FoundryReviewSummary[];
   formal_build_attestations?: FoundryFormalBuildAttestation[];
   created_at: string | null;
   updated_at: string | null;
@@ -2168,6 +2194,61 @@ export async function listAdminFoundryRequests(): Promise<{
   >("/api/admin/foundry/requests");
   const items = Array.isArray(data) ? data : data.items;
   return { items, total: Array.isArray(data) ? data.length : (data.total ?? items.length) };
+}
+
+export interface FoundryRegistryEntrySummary {
+  id: string;
+  workflow_id: string;
+  workflow_version: string;
+  status: string;
+  risk_level: WorkflowRiskLevel;
+  candidate_id: string;
+  candidate_version_id: string;
+  candidate_version_hash: string;
+  registry_entry_hash: string;
+  worker_image_digest: string;
+  registered_at: string | null;
+  suspended_at: string | null;
+  revoked_at: string | null;
+  status_reason: string | null;
+}
+
+export interface FoundryRegistryReleaseSummary {
+  id: string;
+  epoch: string;
+  status: string;
+  manifest_hash: string;
+  key_id: string | null;
+  public_key_fingerprint: string | null;
+  created_at: string | null;
+  signed_import?: {
+    registry_epoch: string;
+    registry_snapshot_hash: string;
+    signing_key_id: string;
+    signing_public_key_fingerprint: string;
+    status: "SIGNED_READY_FOR_DEPLOYMENT";
+    runtime_registry_modified: false;
+    imported_at: string | null;
+  } | null;
+}
+
+export interface FoundryRuntimeRegistrySummary {
+  registry_epoch: string;
+  registry_hash: string;
+  release_kind: string;
+  signing_key_id: string | null;
+  entries: RegisteredWorkflowSummary[];
+}
+
+export interface FoundryRegistryConsole {
+  runtime: FoundryRuntimeRegistrySummary;
+  pending_entries: FoundryRegistryEntrySummary[];
+  releases: FoundryRegistryReleaseSummary[];
+}
+
+export async function getAdminFoundryRegistry(): Promise<FoundryRegistryConsole> {
+  const { data } = await api.get<FoundryRegistryConsole>("/api/admin/foundry/registry");
+  return data;
 }
 
 export async function triageAdminFoundryRequest(
@@ -2239,6 +2320,108 @@ export async function reviewAdminFoundryCandidate(
   const { data } = await api.post<FoundryCandidateSummary>(
     `/api/admin/foundry/candidates/${encodeURIComponent(candidateId)}/reviews`,
     payload,
+  );
+  return data;
+}
+
+export async function dispatchAdminFoundryFormalBuild(
+  candidateId: string,
+  candidateVersionId: string,
+  candidateVersionHash: string,
+): Promise<{
+  candidate_id: string;
+  candidate_version_id: string;
+  candidate_version_hash: string;
+  formal_build_request_id: string;
+  status: "DISPATCHED" | "VERIFIED_BUILD_RECEIPT";
+  build_attestation_id: string | null;
+  idempotent_replay: boolean;
+}> {
+  const { data } = await api.post(
+    `/api/admin/foundry/candidates/${encodeURIComponent(candidateId)}/formal-build`,
+    {
+      candidate_version_id: candidateVersionId,
+      candidate_version_hash: candidateVersionHash,
+    },
+  );
+  return data;
+}
+
+export interface FoundryMaterializationPullRequest {
+  materialization_attestation_id: string;
+  origin_candidate_version_id: string;
+  origin_candidate_version_hash: string;
+  pull_request_number: number;
+  pull_request_state: "OPEN" | "MERGED";
+  pull_request_url: string;
+  pull_request_head_commit: string;
+  auto_merge_performed: false;
+  receipt_sha256: string;
+  created_at: string;
+}
+
+export interface FoundryMaterializationFinalization {
+  materialization_receipt_id: string;
+  origin_candidate_version_id: string;
+  candidate_version_id: string;
+  merge_commit: string;
+  merge_source_tree_sha256: string;
+  validation_runner_image_digest: string;
+  validation_sbom_sha256: string;
+  demo_and_reviews_transferred: false;
+  receipt_sha256: string;
+  created_at: string;
+}
+
+export async function materializeAdminFoundryCandidate(
+  candidateId: string,
+  candidateVersionId: string,
+  candidateVersionHash: string,
+): Promise<{
+  status: "DISPATCHED" | "DRAFT_PR_ATTESTED";
+  materialization_request_id: string;
+  materialization_attestation_id: string | null;
+  pull_request_number?: number;
+  pull_request_url?: string;
+  auto_merge_performed?: false;
+  idempotent_replay: boolean;
+}> {
+  const { data } = await api.post(
+    `/api/admin/foundry/candidates/${encodeURIComponent(candidateId)}/materialize`,
+    {
+      candidate_version_id: candidateVersionId,
+      candidate_version_hash: candidateVersionHash,
+    },
+  );
+  return data;
+}
+
+export async function finalizeAdminFoundryMaterialization(
+  candidateId: string,
+  materializationAttestationId: string,
+): Promise<{
+  status: "DISPATCHED" | "FINALIZED_NEW_VERSION";
+  materialization_attestation_id?: string;
+  materialization_receipt_id?: string;
+  candidate_version_id?: string;
+  demo_and_reviews_transferred?: false;
+  idempotent_replay: boolean;
+}> {
+  const { data } = await api.post(
+    `/api/admin/foundry/candidates/${encodeURIComponent(candidateId)}/materialization-finalize`,
+    { materialization_attestation_id: materializationAttestationId },
+  );
+  return data;
+}
+
+export async function listAdminFoundryMaterializations(
+  candidateId: string,
+): Promise<{
+  pull_requests: FoundryMaterializationPullRequest[];
+  finalizations: FoundryMaterializationFinalization[];
+}> {
+  const { data } = await api.get(
+    `/api/admin/foundry/candidates/${encodeURIComponent(candidateId)}/materializations`,
   );
   return data;
 }

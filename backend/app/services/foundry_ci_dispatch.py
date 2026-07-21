@@ -16,10 +16,11 @@ import httpx
 
 
 _REPOSITORY: Final = re.compile(r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$")
-_REF: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
+_PROTECTED_WORKFLOW_REF: Final = "main"
 _WORKFLOW: Final = re.compile(r"^[A-Za-z0-9_.-]{1,128}\.ya?ml$")
 _CANDIDATE_KEY: Final = re.compile(r"^[a-z][a-z0-9_]{2,96}$")
 _SHA256: Final = re.compile(r"^[0-9a-f]{64}$")
+_GIT_SHA: Final = re.compile(r"^[0-9a-f]{40}$")
 
 
 class FoundryCIDispatchError(RuntimeError):
@@ -43,7 +44,7 @@ class FoundryCIDispatchConfig:
     def validate(self) -> None:
         if not _REPOSITORY.fullmatch(self.repository):
             raise FoundryCIDispatchError("foundry_ci_repository_invalid")
-        if not _REF.fullmatch(self.ref) or ".." in self.ref:
+        if self.ref != _PROTECTED_WORKFLOW_REF:
             raise FoundryCIDispatchError("foundry_ci_ref_invalid")
         for workflow in (self.validation_workflow, self.formal_build_workflow):
             if not _WORKFLOW.fullmatch(workflow):
@@ -134,12 +135,18 @@ async def dispatch_formal_worker_build(
     candidate_id: uuid.UUID | str,
     candidate_version_id: uuid.UUID | str,
     candidate_version_hash: str,
+    source_commit: str,
+    source_tree_sha256: str,
     client: httpx.AsyncClient | None = None,
 ) -> None:
     """Start a protected build for one exact, already-approved version."""
 
     if not _SHA256.fullmatch(str(candidate_version_hash)):
         raise FoundryCIDispatchError("candidate_version_hash_invalid")
+    if not _GIT_SHA.fullmatch(str(source_commit)):
+        raise FoundryCIDispatchError("source_commit_invalid")
+    if not _SHA256.fullmatch(str(source_tree_sha256)):
+        raise FoundryCIDispatchError("source_tree_sha256_invalid")
     await _dispatch(
         config,
         workflow=config.formal_build_workflow,
@@ -149,6 +156,8 @@ async def dispatch_formal_worker_build(
                 candidate_version_id, "candidate_version_id"
             ),
             "candidate_version_hash": str(candidate_version_hash),
+            "source_commit": str(source_commit),
+            "source_tree_sha256": str(source_tree_sha256),
         },
         client=client,
     )

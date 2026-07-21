@@ -247,3 +247,37 @@ async def test_prod_alias_enrollment_requires_full_worker_sha(
 
     assert exc_info.value.status_code == 422
     assert exc_info.value.detail == "worker_release_commit_invalid"
+
+
+@pytest.mark.asyncio
+async def test_prod_v2_enrollment_rejects_self_reported_unapproved_image(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _clear_release_environment(monkeypatch)
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setattr(settings, "local_science_worker_enabled", True)
+    approved_digest = "sha256:" + "1" * 64
+    observed_digest = "sha256:" + "2" * 64
+    monkeypatch.setattr(settings, "docker_image_digest", approved_digest)
+    request = EnrollNodeRequest(
+        enrollment_code="x" * 32,
+        name="Unapproved v2 node",
+        public_key="x" * 40,
+        protocol_version=worker_control.WORKER_PROTOCOL_VERSION,
+        capabilities={
+            "entrypoints": worker_control.list_static_worker_entrypoint_capabilities(
+                worker_image_digest=observed_digest
+            ),
+            "concurrency": 1,
+        },
+        release_manifest={
+            "git_commit": "a" * 40,
+            "image_digest": observed_digest,
+        },
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await worker_control.enroll_node(request, db=object())
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail == "worker_image_digest_mismatch"

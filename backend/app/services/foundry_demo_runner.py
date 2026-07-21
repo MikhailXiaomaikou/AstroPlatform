@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import importlib
 import io
 import json
 import os
@@ -267,6 +268,30 @@ def _run_desi_dr2_official_chain_summary(
     }
 
 
+def _run_generated_candidate_validation(
+    bundle: dict[str, Any],
+    *,
+    cache_root: str | Path | None,
+) -> dict[str, Any]:
+    """Load one candidate module only inside the isolated Validation image.
+
+    ``candidate_id`` is already constrained to lower-case identifier syntax.
+    The fixed namespace prevents a bundle from selecting an arbitrary module.
+    Formal Workers do not expose this entrypoint.
+    """
+
+    candidate_id = str(bundle["candidate_id"])
+    module_name = f"app.services.foundry_generated.{candidate_id}"
+    module = importlib.import_module(module_name)
+    entrypoint = getattr(module, "run_demo", None)
+    if not callable(entrypoint):
+        raise FoundryDemoContractError("generated_candidate_run_demo_missing")
+    result = entrypoint(bundle, cache_root=cache_root)
+    if not isinstance(result, dict):
+        raise FoundryDemoContractError("generated_candidate_result_not_object")
+    return result
+
+
 _ENTRYPOINTS: dict[
     str,
     Callable[..., dict[str, Any]],
@@ -274,6 +299,7 @@ _ENTRYPOINTS: dict[
     "desi_dr2_official_chain_summary_demo_v1": (
         _run_desi_dr2_official_chain_summary
     ),
+    "candidate_generated_python_demo_v1": _run_generated_candidate_validation,
 }
 
 
@@ -282,7 +308,9 @@ def run_candidate_demo(
     *,
     cache_root: str | Path | None = None,
     runner_image_digest: str | None = None,
+    candidate_version_sha256: str | None = None,
     started_at: datetime | None = None,
+    captured_streams: dict[str, bytes] | None = None,
 ) -> dict[str, Any]:
     """Run an allowlisted candidate and return an immutable DemoReport body."""
 
@@ -318,6 +346,11 @@ def run_candidate_demo(
     completed = _utc_now()
     stdout_bytes = stdout_buffer.get_bytes()
     stderr_bytes = stderr_buffer.get_bytes()
+    if captured_streams is not None:
+        captured_streams.clear()
+        captured_streams.update(
+            {"stdout.log": stdout_bytes, "stderr.log": stderr_bytes}
+        )
     usage = (
         _resource.getrusage(_resource.RUSAGE_SELF)
         if _resource is not None
@@ -344,6 +377,9 @@ def run_candidate_demo(
         "claim_eligible": False,
         "evidence_pack_allowed": False,
         "candidate_bundle_sha256": _sha256(normalized),
+        "candidate_version_sha256": str(
+            candidate_version_sha256 or _sha256(normalized)
+        ),
         "workflow_spec_sha256": _sha256(normalized["workflow_spec"]),
         "dependency_lock_sha256": normalized["dependency_lock_sha256"],
         "runner_definition_sha256": normalized["runner_definition_sha256"],
@@ -360,6 +396,20 @@ def run_candidate_demo(
         "stderr_sha256": _sha256_bytes(stderr_bytes),
         "stdout_bytes": len(stdout_bytes),
         "stderr_bytes": len(stderr_bytes),
+        "artifact_manifest": [
+            {
+                "path": "stdout.log",
+                "kind": "STDOUT",
+                "sha256": _sha256_bytes(stdout_bytes),
+                "bytes": len(stdout_bytes),
+            },
+            {
+                "path": "stderr.log",
+                "kind": "STDERR",
+                "sha256": _sha256_bytes(stderr_bytes),
+                "bytes": len(stderr_bytes),
+            },
+        ],
         "resource_usage": {
             "max_rss_kib_platform_value": (
                 int(usage.ru_maxrss) if usage is not None else None

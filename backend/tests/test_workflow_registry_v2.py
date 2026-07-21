@@ -30,8 +30,10 @@ from app.services.workflow_registry_v2 import (
     build_signed_registry_snapshot,
     get_formal_workflow,
     get_formal_workflow_spec,
+    get_static_execution_adapter_binding,
     get_worker_execution_binding,
     list_formal_workflows,
+    list_worker_execution_bindings,
     load_verified_registry_release,
     registry_snapshot,
     validate_candidate_registration,
@@ -340,6 +342,63 @@ def test_release_loader_merges_signed_composition_from_mapping_and_file(tmp_path
     assert from_file.to_dict() == loaded.to_dict()
 
 
+def test_signed_alias_is_static_adapter_compatible_and_image_filtered(monkeypatch):
+    candidate = _candidate_payload()
+    candidate["workflow"] = copy.deepcopy(candidate["workflow"])
+    candidate["workflow"]["workflow_id"] = "union3_registered_alias_v1"
+    candidate["workflow"]["version"] = "2.0.0"
+    candidate["workflow"]["display_name"] = "Union3 registered alias"
+    candidate["workflow"]["summary"] = "Same science, signed alias identity."
+    candidate["workflow_hash"] = "sha256:" + hashlib.sha256(
+        jcs_canonicalize(candidate["workflow"])
+    ).hexdigest()
+    image_digest = "sha256:" + "7" * 64
+    entry = validate_candidate_registration(
+        candidate["workflow"],
+        candidate["workflow_hash"],
+        image_digest,
+        candidate_id="candidate-alias-1",
+        candidate_version=1,
+        candidate_version_hash=candidate["candidate_hash"],
+        approved_candidate_version_hash=candidate["candidate_hash"],
+        tool_specs=candidate["tools"],
+        reviews=candidate["reviews"],
+    )
+    private_key, public_key = _signing_keys()
+    signed = build_signed_registry_snapshot(
+        [entry], private_key, "registry-alias-key", epoch="2026-07-21.alias"
+    )
+    for name in (
+        "_SNAPSHOT",
+        "_WORKFLOWS_BY_IDENTITY",
+        "_WORKFLOWS_BY_ID",
+        "_TOOLS_BY_ENTRYPOINT",
+        "_ACTIVE_RELEASE_TRUST",
+        "_REGISTRY_LOOKUP_STARTED",
+        "_REGISTRY_ACTIVATED",
+    ):
+        monkeypatch.setattr(registry_module, name, getattr(registry_module, name))
+    monkeypatch.setattr(registry_module, "_REGISTRY_LOOKUP_STARTED", False)
+    monkeypatch.setattr(registry_module, "_REGISTRY_ACTIVATED", False)
+    activate_verified_registry_release(signed, {"registry-alias-key": public_key})
+
+    adapter = get_static_execution_adapter_binding(
+        "union3_registered_alias_v1", "2.0.0"
+    )
+    assert adapter["canonical_workflow_id"] == UNION3_REPRODUCTION_WORKFLOW_ID
+    matching = list_worker_execution_bindings(worker_image_digest=image_digest)
+    assert {item["workflow_id"] for item in matching} == {
+        UNION3_REPRODUCTION_WORKFLOW_ID,
+        "union3_registered_alias_v1",
+    }
+    other = list_worker_execution_bindings(
+        worker_image_digest="sha256:" + "8" * 64
+    )
+    assert {item["workflow_id"] for item in other} == {
+        UNION3_REPRODUCTION_WORKFLOW_ID
+    }
+
+
 def test_activated_worker_binding_records_outer_registry_signature(
     monkeypatch,
 ):
@@ -418,25 +477,21 @@ def test_release_loader_rejects_unshipped_static_entrypoint():
     candidate["workflow_hash"] = "sha256:" + hashlib.sha256(
         jcs_canonicalize(candidate["workflow"])
     ).hexdigest()
-    entry = validate_candidate_registration(
-        candidate["workflow"],
-        candidate["workflow_hash"],
-        "sha256:" + "d" * 64,
-        candidate_id="candidate-unshipped-1",
-        candidate_version=1,
-        candidate_version_hash=candidate["candidate_hash"],
-        approved_candidate_version_hash=candidate["candidate_hash"],
-        tool_specs=candidate["tools"],
-        reviews=candidate["reviews"],
-    )
-    private_key, public_key = _signing_keys()
-    signed = build_signed_registry_snapshot([entry], private_key, "registry-key")
-
     with pytest.raises(
         WorkflowRegistryError,
-        match="registry_release_entrypoint_not_static",
+        match="workflow_execution_adapter_not_static",
     ):
-        load_verified_registry_release(signed, {"registry-key": public_key})
+        validate_candidate_registration(
+            candidate["workflow"],
+            candidate["workflow_hash"],
+            "sha256:" + "d" * 64,
+            candidate_id="candidate-unshipped-1",
+            candidate_version=1,
+            candidate_version_hash=candidate["candidate_hash"],
+            approved_candidate_version_hash=candidate["candidate_hash"],
+            tool_specs=candidate["tools"],
+            reviews=candidate["reviews"],
+        )
 
 
 def test_release_loader_rejects_conflicting_builtin_identity():
@@ -446,24 +501,21 @@ def test_release_loader_rejects_conflicting_builtin_identity():
     candidate["workflow_hash"] = "sha256:" + hashlib.sha256(
         jcs_canonicalize(candidate["workflow"])
     ).hexdigest()
-    entry = validate_candidate_registration(
-        candidate["workflow"],
-        candidate["workflow_hash"],
-        "sha256:" + "d" * 64,
-        candidate_id="candidate-conflict-1",
-        candidate_version=1,
-        candidate_version_hash=candidate["candidate_hash"],
-        approved_candidate_version_hash=candidate["candidate_hash"],
-        tool_specs=candidate["tools"],
-        reviews=candidate["reviews"],
-    )
-    private_key, public_key = _signing_keys()
-    signed = build_signed_registry_snapshot([entry], private_key, "registry-key")
     with pytest.raises(
         WorkflowRegistryError,
-        match="registry_release_workflow_conflict",
+        match="workflow_execution_adapter_not_static",
     ):
-        load_verified_registry_release(signed, {"registry-key": public_key})
+        validate_candidate_registration(
+            candidate["workflow"],
+            candidate["workflow_hash"],
+            "sha256:" + "d" * 64,
+            candidate_id="candidate-conflict-1",
+            candidate_version=1,
+            candidate_version_hash=candidate["candidate_hash"],
+            approved_candidate_version_hash=candidate["candidate_hash"],
+            tool_specs=candidate["tools"],
+            reviews=candidate["reviews"],
+        )
 
 
 def test_activation_applies_signed_revocation_and_blocks_execution(monkeypatch):

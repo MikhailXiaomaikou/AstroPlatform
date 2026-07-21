@@ -1,0 +1,306 @@
+name: Finalize merged Foundry candidate materialization
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: Exact protected PR attestation UUID
+        required: true
+        type: string
+      binding:
+        description: Canonical server-reconstructed PR/source binding
+        required: true
+        type: string
+
+concurrency:
+  group: foundry-materialization-final-${{ inputs.request_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # This job verifies the human merge and builds a new non-formal validation
+  # image. It has no callback or attestation private key and never runs the
+  # image or imports Candidate code.
+  verify-merge-and-build-without-secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Main-only Environment policy protects packages:write from branch copies
+    # of this workflow. This Environment contains no long-lived secret.
+    environment: foundry-materialization-build
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      packages: write
+    outputs:
+      unsigned_artifact_name: ${{ steps.names.outputs.unsigned_artifact_name }}
+    steps:
+      - name: Require the protected main workflow source
+        shell: bash
+        run: test "$GITHUB_REF" = "refs/heads/main"
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          path: control-source
+          persist-credentials: false
+          # The trusted verifier must have the complete protected-main history
+          # so ancestry is checked locally rather than accepted from PR JSON.
+          fetch-depth: 0
+
+      - name: Validate exact protected finalization binding
+        id: binding
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+          BINDING: ${{ inputs.binding }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          python control-source/backend/scripts/prepare_foundry_materialization.py emit-final \
+            --request-id "$REQUEST_ID" --binding "$BINDING" \
+            --repository "$GITHUB_REPOSITORY" --github-output "$GITHUB_OUTPUT"
+
+      - name: Read exact merged pull request identity
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.binding.outputs.pull_request_number }}
+          EXPECTED_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json number,state,baseRefName,headRefOid,headRepository,headRepositoryOwner,mergeCommit,mergedAt \
+            > pull-request.json
+          merge_commit="$(python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          pull_request = json.loads(Path("pull-request.json").read_text())
+          repository = pull_request.get("headRepository")
+          if isinstance(repository, dict):
+              head_repository = repository.get("nameWithOwner")
+              if not head_repository:
+                  owner = pull_request.get("headRepositoryOwner") or {}
+                  head_repository = f"{owner.get('login', '')}/{repository.get('name', '')}"
+          else:
+              head_repository = repository
+          assert pull_request.get("state") == "MERGED"
+          assert pull_request.get("baseRefName") == "main"
+          assert head_repository == os.environ["EXPECTED_REPOSITORY"]
+          print((pull_request.get("mergeCommit") or {}).get("oid") or "")
+          PY
+          )"
+          [[ "$merge_commit" =~ ^[0-9a-f]{40}$ ]]
+          echo "merge_commit=$merge_commit" >> "$GITHUB_OUTPUT"
+        id: pull_request
+
+      - name: Prove the merge commit is on protected origin/main
+        env:
+          MERGE_COMMIT: ${{ steps.pull_request.outputs.merge_commit }}
+        run: |
+          set -euo pipefail
+          test "$(git -C control-source rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C control-source rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"
+          git -C control-source merge-base --is-ancestor \
+            "$MERGE_COMMIT" refs/remotes/origin/main
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ steps.binding.outputs.base_commit }}
+          path: base-source
+          persist-credentials: false
+          fetch-depth: 1
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ steps.pull_request.outputs.merge_commit }}
+          path: merged-source
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Download and verify the exact original Draft artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARTIFACT_ID: ${{ steps.binding.outputs.artifact_id }}
+          ARTIFACT_WORKFLOW_RUN_ID: ${{ steps.binding.outputs.artifact_workflow_run_id }}
+          ARTIFACT_NAME: ${{ steps.binding.outputs.artifact_name }}
+          EXPECTED_SHA256: ${{ steps.binding.outputs.artifact_sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir foundry-materialization-artifact
+          curl --fail --silent --show-error \
+            --proto '=https' --tlsv1.2 --connect-timeout 10 --max-time 60 \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}" \
+            --output foundry-materialization-artifact/metadata.json
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          metadata = json.loads(Path("foundry-materialization-artifact/metadata.json").read_text())
+          assert metadata["id"] == int(os.environ["ARTIFACT_ID"])
+          assert metadata["name"] == os.environ["ARTIFACT_NAME"]
+          assert metadata["expired"] is False
+          assert metadata["workflow_run"]["id"] == int(os.environ["ARTIFACT_WORKFLOW_RUN_ID"])
+          assert metadata["digest"] == "sha256:" + os.environ["EXPECTED_SHA256"]
+          PY
+          curl --fail --silent --show-error --location \
+            --proto '=https' --tlsv1.2 --connect-timeout 10 --max-time 120 \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" \
+            --output foundry-materialization-artifact/artifact.zip
+          test "$(sha256sum foundry-materialization-artifact/artifact.zip | cut -d' ' -f1)" = "$EXPECTED_SHA256"
+
+      - name: Rebuild provenance and compare merged Candidate module bytes
+        env:
+          BINDING: ${{ inputs.binding }}
+          MERGE_COMMIT: ${{ steps.pull_request.outputs.merge_commit }}
+          EXPECTED_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python control-source/backend/scripts/prepare_foundry_materialization.py verify-final \
+            --binding "$BINDING" --pull-request-json pull-request.json \
+            --merge-commit "$MERGE_COMMIT" \
+            --expected-repository "$EXPECTED_REPOSITORY" \
+            --protected-main-repo control-source \
+            --protected-main-commit "$GITHUB_SHA" \
+            --artifact-zip foundry-materialization-artifact/artifact.zip \
+            --extracted-dir foundry-materialization-artifact/extracted \
+            --base-repo base-source --merged-repo merged-source \
+            --sbom-output validation-source-sbom.json \
+            --output verified-merge.json
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push fresh non-formal validation image without running it
+        id: image
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+          MERGE_COMMIT: ${{ steps.pull_request.outputs.merge_commit }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}/foundry-candidate:materialized-${REQUEST_ID}"
+          docker build --pull \
+            --build-arg TOOL_VERSION="$MERGE_COMMIT" \
+            --file merged-source/backend/Dockerfile.foundry-demo \
+            --tag "$image" merged-source/backend
+          docker push "$image"
+          digest="$(docker image inspect --format '{{index .RepoDigests 0}}' "$image")"
+          digest="${digest##*@}"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Freeze unsigned final receipt payload
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          python control-source/backend/scripts/prepare_foundry_materialization.py make-final-payload \
+            --verified verified-merge.json --receipt-id "$REQUEST_ID" \
+            --validation-runner-image-digest "$IMAGE_DIGEST" \
+            --repository "$GITHUB_REPOSITORY" --workflow-ref "$GITHUB_WORKFLOW_REF" \
+            --workflow-sha "$GITHUB_WORKFLOW_SHA" --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --finalized-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --output materialization-final-payload.json
+
+      - name: Name unsigned artifact
+        id: names
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+        run: echo "unsigned_artifact_name=foundry-materialization-final-${REQUEST_ID}" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.names.outputs.unsigned_artifact_name }}
+          path: |
+            materialization-final-payload.json
+            validation-source-sbom.json
+          if-no-files-found: error
+          retention-days: 30
+
+  sign-receipt:
+    needs: verify-merge-and-build-without-secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: foundry-materialization-attestation
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      signed_artifact_name: ${{ steps.names.outputs.signed_artifact_name }}
+    steps:
+      - name: Require the protected main workflow source
+        shell: bash
+        run: test "$GITHUB_REF" = "refs/heads/main"
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: ${{ needs.verify-merge-and-build-without-secrets.outputs.unsigned_artifact_name }}
+          path: unsigned
+      - name: Sign with dedicated materialization key
+        env:
+          PRIVATE_KEY: ${{ secrets.FOUNDRY_MATERIALIZATION_ATTESTATION_PRIVATE_KEY }}
+          KEY_ID: ${{ vars.FOUNDRY_MATERIALIZATION_ATTESTATION_KEY_ID }}
+        run: |
+          set -euo pipefail
+          python backend/scripts/sign_foundry_materialization_receipt.py \
+            --payload unsigned/materialization-final-payload.json \
+            --private-key "$PRIVATE_KEY" --key-id "$KEY_ID" \
+            --output materialization-final-attestation.json
+      - name: Name signed artifact
+        id: names
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+        run: echo "signed_artifact_name=foundry-materialization-final-attestation-${REQUEST_ID}" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.names.outputs.signed_artifact_name }}
+          path: materialization-final-attestation.json
+          if-no-files-found: error
+          retention-days: 30
+
+  callback-only:
+    needs: sign-receipt
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: foundry-materialization-callback
+    permissions:
+      actions: read
+      contents: none
+    steps:
+      - name: Require the protected main workflow source
+        shell: bash
+        run: test "$GITHUB_REF" = "refs/heads/main"
+
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: ${{ needs.sign-receipt.outputs.signed_artifact_name }}
+          path: signed
+      - name: Append independently verifiable merged-source receipt
+        env:
+          CONTROL_PLANE_URL: ${{ vars.FOUNDRY_CONTROL_PLANE_URL }}
+          CALLBACK_SECRET: ${{ secrets.FOUNDRY_MATERIALIZATION_RESULT_SECRET }}
+        run: |
+          set -euo pipefail
+          test -f signed/materialization-final-attestation.json
+          test ! -L signed/materialization-final-attestation.json
+          test "$(wc -c < signed/materialization-final-attestation.json)" -le 131072
+          curl --fail --silent --show-error --output /dev/null \
+            --proto '=https' --tlsv1.2 --retry 3 --retry-all-errors \
+            --connect-timeout 10 --max-time 60 \
+            -H "Authorization: Bearer $CALLBACK_SECRET" \
+            -H "Content-Type: application/json" \
+            --data-binary @signed/materialization-final-attestation.json \
+            "${CONTROL_PLANE_URL%/}/api/internal/foundry/materialization/final-receipts"

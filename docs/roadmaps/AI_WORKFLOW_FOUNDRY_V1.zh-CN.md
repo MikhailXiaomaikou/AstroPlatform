@@ -66,7 +66,11 @@ start_registered_workflow
 
 它们只读取 Formal Registry。调用只传 `workflow_id`、`workspace_id`、`source_id` 和 `candidate_id`；服务器重新绑定版本、数据 pins、参数和阈值。
 
-Worker v2 信封增加 `workflow_version`、`registry_epoch`、`registry_entry_hash`、`entrypoint_id` 和 `worker_image_digest`。本地 Worker 只执行正式签名工作流，候选 Demo 只在一次性 Validation Runner 运行。Worker capability 由其镜像内的签名 RegistrySnapshot 生成；不匹配时返回 `worker_upgrade_required`。
+Worker v2 信封增加 `workflow_version`、`registry_epoch`、`registry_entry_hash`、`entrypoint_id` 和 `worker_image_digest`。本地 Worker 只执行正式签名工作流，候选 Demo 只在一次性 Validation Runner 运行。Worker 只广告镜像内静态调度表已有的 `entrypoint_id`、ToolSpec hash 和镜像 digest；控制中心再把这些能力与已签名 Registry entry 精确匹配。不匹配时返回 `worker_upgrade_required`。
+
+本版对 AI 新写科学代码采用明确的失败关闭边界：`SCIENCE_CODE` 可以生成、运行候选 Demo 并长期记录，但如果它的主执行器或独立复算器尚未进入经过代码审查的 Worker 静态 ToolSpec 表，注册接口返回 `registry_release_entrypoint_not_static`，不会创建待签名正式版本。当前可免改前端、Worker、模型 manifest 和顶层 dispatcher 注册的，只是与已发布科学合同、ToolSpec DAG、数据 pins、阈值及静态入口完全一致的签名工作流别名。跨科学合同或真正的多节点 ToolSpec 组合仍需新增受审的静态 composition profile、调度与 Finalizer；全新算法还需把 executor 和 verifier 随签名 Worker 镜像发布。本版没有把“任意组合”或“任意 AI Python 代码自动变成正式执行器”伪装成已完成能力。
+
+AI 补丁进入仓库也采用失败关闭流程：服务端根据精确 Candidate version 重建请求，受保护的 CI 只能把 allowlist 中的单个生成模块放进 Draft PR，不能执行候选代码或自动合并。人类合并后，第二条受保护流程重新核对 artifact、patch、PR、merge commit 和 source tree，构建新的非正式验证镜像，并创建全新的 Candidate version。旧 Demo 和旧审核一律不转移，新版本必须重新验证和审核。
 
 Draft Job 可以调用 AI 但不执行候选代码。Validation Job 可以执行候选代码但没有 AI、生产 DB、Redis、S3、用户数据或签名密钥。Runner 必须非 root、只读根、默认无网络、不挂载 Home/Docker socket，并限制 CPU、内存、进程、时间与输出。候选 CI 不得使用 `pull_request_target`。
 
@@ -117,7 +121,7 @@ Research Workspace 改为服务端 Workflow Catalog，显示结构化 CAPABILITY
 第4–7天 72 小时观察后才开启正式注册
 ```
 
-功能开关按 Registry shadow → Gap tracking → Candidate Catalog → AI drafting → 自动记录 Demo → 人工注册的顺序启用：
+功能开关按 Registry shadow → Gap tracking → Candidate Catalog → AI drafting → 自动记录 Demo → 人工审核的源码落盘 → 人工注册的顺序启用：
 
 ```text
 WORKFLOW_REGISTRY_V2_ENABLED=false
@@ -125,13 +129,14 @@ FOUNDRY_GAP_TRACKING_ENABLED=false
 FOUNDRY_AI_DRAFTING_ENABLED=false
 FOUNDRY_AUTO_DEMO_ENABLED=false
 FOUNDRY_CANDIDATE_CATALOG_ENABLED=false
+FOUNDRY_SOURCE_MATERIALIZATION_ENABLED=false
 FOUNDRY_REGISTRATION_ENABLED=false
 ```
 
 ## 验收
 
 - Union3 迁移后科学结果不变，DESI DR2 进入统一 Registry。
-- 新组合工作流不需要手工修改前端、Worker、模型 manifest 或主 dispatcher。
+- 与已发布静态科学合同完全一致的签名工作流别名，不需要手工修改前端、Worker、模型 manifest 或主 dispatcher；真正的多节点组合执行列为 v1.1 独立验收项，不能用别名测试冒充。
 - 48 小时内完成一个可在服务重启后恢复的 `DEMO_RECORDED` 候选。
 - Candidate version、Demo Run、event 和 review 都不可覆盖。
 - 修改代码、依赖、数据、fixture 或阈值后，旧验证和审核不能复用。
@@ -141,4 +146,3 @@ FOUNDRY_REGISTRATION_ENABLED=false
 - 被暂停或撤销的工作流不能获得新 lease 或通过 Finalizer。
 - 完成 `CAPABILITY_GAP → 请求 → AI Candidate → DEMO_RECORDED → 人审 → REGISTERED → Audit revision → 本地 Worker → 独立复算 → 结果审核 → SUPPORTED` 的真实闭环。
 - `unsupported scientific escape`、`unsigned registration`、`AI self-approval`、`candidate-to-formal bypass` 和 `sandbox escape` 均为 0。
-

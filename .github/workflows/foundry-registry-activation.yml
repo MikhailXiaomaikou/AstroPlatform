@@ -1,0 +1,326 @@
+name: Activate Foundry Registry on exact Render commit
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_request_id:
+        description: Exact imported Registry release UUID
+        required: true
+        type: string
+      release_request_sha256:
+        description: Exact canonical release request hash
+        required: true
+        type: string
+      activation_commit:
+        description: Exact 40-character protected-main commit containing the bundle
+        required: true
+        type: string
+
+# Configure required human reviewers on this environment. The Render API key
+# can deploy exact commits but has no Registry signing authority.
+permissions:
+  contents: read
+
+concurrency:
+  group: foundry-registry-production-activation
+  cancel-in-progress: false
+
+jobs:
+  deploy-exact-commit-and-record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: foundry-registry-activation
+    permissions:
+      contents: read
+    steps:
+      - name: Validate exact activation inputs
+        env:
+          RELEASE_REQUEST_ID: ${{ inputs.release_request_id }}
+          RELEASE_REQUEST_SHA256: ${{ inputs.release_request_sha256 }}
+          ACTIVATION_COMMIT: ${{ inputs.activation_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          [[ "$RELEASE_REQUEST_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
+          [[ "$RELEASE_REQUEST_SHA256" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$ACTIVATION_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Check out the exact protected-main activation commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.activation_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Reject rollback and verify packaged public material
+        id: bundle
+        env:
+          RELEASE_REQUEST_ID: ${{ inputs.release_request_id }}
+          RELEASE_REQUEST_SHA256: ${{ inputs.release_request_sha256 }}
+          ACTIVATION_COMMIT: ${{ inputs.activation_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$ACTIVATION_COMMIT"
+          test "$(git rev-parse origin/main)" = "$ACTIVATION_COMMIT"
+          python3 backend/scripts/prepare_foundry_registry_activation.py verify \
+            --output-dir backend/app/registry_releases \
+            --release-request-id "$RELEASE_REQUEST_ID" \
+            --release-request-sha256 "$RELEASE_REQUEST_SHA256" \
+            --github-output "$GITHUB_OUTPUT"
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path("render.yaml").read_text(encoding="utf-8")
+          for service in (
+              "standard-astro-backend",
+              "standard-astro-celery-worker",
+              "standard-astro-celery-beat",
+          ):
+              marker = f"    name: {service}\n"
+              start = text.index(marker)
+              end = text.find("\n  - type:", start)
+              block = text[start:] if end < 0 else text[start:end]
+              if "    autoDeployTrigger: off\n" not in block:
+                  raise SystemExit(f"auto deploy is not off for {service}")
+          PY
+
+      - name: Reject stale import before creating any Render deploy
+        env:
+          CONTROL_PLANE_URL: ${{ vars.FOUNDRY_CONTROL_PLANE_URL }}
+          ACTIVATION_SECRET: ${{ secrets.FOUNDRY_REGISTRY_ACTIVATION_RESULT_SECRET }}
+          RELEASE_REQUEST_ID: ${{ inputs.release_request_id }}
+          RELEASE_REQUEST_SHA256: ${{ inputs.release_request_sha256 }}
+          REGISTRY_SNAPSHOT_SHA256: ${{ steps.bundle.outputs.registry_snapshot_sha256 }}
+          ACTIVATION_COMMIT: ${{ inputs.activation_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CONTROL_PLANE_URL"
+          test "${#ACTIVATION_SECRET}" -ge 32
+          endpoint="${CONTROL_PLANE_URL%/}/api/internal/foundry/registry-activations/${RELEASE_REQUEST_ID}/preflight"
+          curl --fail-with-body --silent --show-error \
+            --proto '=https' --tlsv1.2 \
+            --connect-timeout 10 --max-time 90 \
+            --get \
+            -H "Authorization: Bearer $ACTIVATION_SECRET" \
+            --data-urlencode "release_request_hash=$RELEASE_REQUEST_SHA256" \
+            --data-urlencode "registry_snapshot_hash=$REGISTRY_SNAPSHOT_SHA256" \
+            --data-urlencode "target_git_commit=$ACTIVATION_COMMIT" \
+            --output activation-preflight.json \
+            "$endpoint"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          body = json.loads(Path("activation-preflight.json").read_text())
+          if body.get("status") != "DEPLOY_APPROVED" or body.get("deployment_required") is not True:
+              raise SystemExit("Registry activation deploy was not preflight-approved")
+          PY
+
+      - name: Start exact-commit Render deploys
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          BACKEND_SERVICE_ID: ${{ vars.RENDER_BACKEND_SERVICE_ID }}
+          CONTROL_WORKER_SERVICE_ID: ${{ vars.RENDER_CONTROL_WORKER_SERVICE_ID }}
+          BEAT_SERVICE_ID: ${{ vars.RENDER_BEAT_SERVICE_ID }}
+          ACTIVATION_COMMIT: ${{ inputs.activation_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$RENDER_API_KEY"
+          mkdir -p render-deploys
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path("render-deploys/request.json").write_text(
+              json.dumps(
+                  {"commitId": os.environ["ACTIVATION_COMMIT"], "clearCache": "do_not_clear"},
+                  separators=(",", ":"),
+              ),
+              encoding="utf-8",
+          )
+          PY
+          deploy() {
+            role="$1"
+            service_id="$2"
+            [[ "$service_id" =~ ^[A-Za-z0-9_-]{3,128}$ ]]
+            code="$(curl --silent --show-error \
+              --proto '=https' --tlsv1.2 \
+              --connect-timeout 10 --max-time 90 \
+              --output "render-deploys/${role}.json" \
+              --write-out '%{http_code}' \
+              -X POST \
+              -H "Authorization: Bearer $RENDER_API_KEY" \
+              -H 'Content-Type: application/json' \
+              --data-binary @render-deploys/request.json \
+              "https://api.render.com/v1/services/${service_id}/deploys")"
+            [[ "$code" = "201" || "$code" = "202" ]]
+            ROLE="$role" SERVICE_ID="$service_id" python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          role = os.environ["ROLE"]
+          body = json.loads(Path(f"render-deploys/{role}.json").read_text())
+          deploy_id = str(body.get("id") or "")
+          if re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", deploy_id) is None:
+              raise SystemExit(f"Render did not return a bounded deploy id for {role}")
+          Path(f"render-deploys/{role}.id").write_text(deploy_id, encoding="ascii")
+          Path(f"render-deploys/{role}.service").write_text(os.environ["SERVICE_ID"], encoding="ascii")
+          PY
+          }
+          deploy backend "$BACKEND_SERVICE_ID"
+          deploy control_worker "$CONTROL_WORKER_SERVICE_ID"
+          deploy beat "$BEAT_SERVICE_ID"
+
+      - name: Poll exact Render deploy IDs and verify deployed commits
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          ACTIVATION_COMMIT: ${{ inputs.activation_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for role in backend control_worker beat; do
+            service_id="$(cat "render-deploys/${role}.service")"
+            deploy_id="$(cat "render-deploys/${role}.id")"
+            complete=false
+            for _attempt in $(seq 1 80); do
+              code="$(curl --silent --show-error \
+                --proto '=https' --tlsv1.2 \
+                --connect-timeout 10 --max-time 60 \
+                --output "render-deploys/${role}-status.json" \
+                --write-out '%{http_code}' \
+                -H "Authorization: Bearer $RENDER_API_KEY" \
+                "https://api.render.com/v1/services/${service_id}/deploys/${deploy_id}")"
+              test "$code" = "200"
+              ROLE="$role" ACTIVATION_COMMIT="$ACTIVATION_COMMIT" python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          role = os.environ["ROLE"]
+          body = json.loads(Path(f"render-deploys/{role}-status.json").read_text())
+          commit = str((body.get("commit") or {}).get("id") or "").lower()
+          if commit != os.environ["ACTIVATION_COMMIT"]:
+              raise SystemExit(f"Render deployed the wrong commit for {role}: {commit}")
+          status = str(body.get("status") or "")
+          failures = {"build_failed", "update_failed", "canceled", "deactivated"}
+          if status in failures:
+              raise SystemExit(f"Render deploy failed for {role}: {status}")
+          Path(f"render-deploys/{role}.state").write_text(status, encoding="ascii")
+          PY
+              state="$(cat "render-deploys/${role}.state")"
+              if [[ "$state" = "live" ]]; then
+                complete=true
+                break
+              fi
+              sleep 15
+            done
+            test "$complete" = true
+          done
+
+      - name: Wait for new-process Registry and control-role readiness
+        env:
+          CONTROL_PLANE_URL: ${{ vars.FOUNDRY_CONTROL_PLANE_URL }}
+          ACTIVATION_SECRET: ${{ secrets.FOUNDRY_REGISTRY_ACTIVATION_RESULT_SECRET }}
+          RELEASE_REQUEST_ID: ${{ inputs.release_request_id }}
+          RELEASE_REQUEST_SHA256: ${{ inputs.release_request_sha256 }}
+          ACTIVATION_COMMIT: ${{ inputs.activation_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CONTROL_PLANE_URL"
+          test "${#ACTIVATION_SECRET}" -ge 32
+          endpoint="${CONTROL_PLANE_URL%/}/api/internal/foundry/registry-activations/${RELEASE_REQUEST_ID}/status"
+          ready=false
+          for _attempt in $(seq 1 80); do
+            code="$(curl --silent --show-error \
+              --proto '=https' --tlsv1.2 \
+              --connect-timeout 10 --max-time 60 \
+              --get \
+              -H "Authorization: Bearer $ACTIVATION_SECRET" \
+              --data-urlencode "release_request_hash=$RELEASE_REQUEST_SHA256" \
+              --data-urlencode "target_git_commit=$ACTIVATION_COMMIT" \
+              --output activation-status.json \
+              --write-out '%{http_code}' \
+              "$endpoint")"
+            if [[ "$code" = "200" ]]; then
+              python3 - <<'PY'
+          import json
+          from pathlib import Path
+          body = json.loads(Path("activation-status.json").read_text())
+          if body.get("status") != "ACTIVATION_READY" or body.get("runtime_hot_switched") is not False:
+              raise SystemExit("control plane returned a non-ready activation")
+          PY
+              ready=true
+              break
+            fi
+            [[ "$code" = "404" || "$code" = "409" || "$code" = "503" ]]
+            sleep 15
+          done
+          test "$ready" = true
+
+      - name: Append the deployment activation receipt
+        env:
+          CONTROL_PLANE_URL: ${{ vars.FOUNDRY_CONTROL_PLANE_URL }}
+          ACTIVATION_SECRET: ${{ secrets.FOUNDRY_REGISTRY_ACTIVATION_RESULT_SECRET }}
+          RELEASE_REQUEST_ID: ${{ inputs.release_request_id }}
+          RELEASE_REQUEST_SHA256: ${{ inputs.release_request_sha256 }}
+          ACTIVATION_COMMIT: ${{ inputs.activation_commit }}
+          ACTIVATION_MANIFEST_SHA256: ${{ steps.bundle.outputs.activation_manifest_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+
+          deployments = []
+          for role in ("backend", "control_worker", "beat"):
+              service_id = Path(f"render-deploys/{role}.service").read_text().strip()
+              deploy_id = Path(f"render-deploys/{role}.id").read_text().strip()
+              deployments.append(
+                  {
+                      "role": role,
+                      "service_id_sha256": "sha256:" + hashlib.sha256(service_id.encode()).hexdigest(),
+                      "deploy_id": deploy_id,
+                      "git_commit": os.environ["ACTIVATION_COMMIT"],
+                  }
+              )
+          body = {
+              "release_request_sha256": os.environ["RELEASE_REQUEST_SHA256"],
+              "target_git_commit": os.environ["ACTIVATION_COMMIT"],
+              "activation_manifest_sha256": os.environ["ACTIVATION_MANIFEST_SHA256"],
+              "deployment_provider": "render_api_exact_commit",
+              "deployments": deployments,
+              "runtime_hot_switched": False,
+          }
+          Path("activation-confirmation.json").write_text(
+              json.dumps(body, separators=(",", ":")), encoding="utf-8"
+          )
+          PY
+          endpoint="${CONTROL_PLANE_URL%/}/api/internal/foundry/registry-activations/${RELEASE_REQUEST_ID}/confirm"
+          curl --fail-with-body --silent --show-error \
+            --proto '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --connect-timeout 10 --max-time 90 \
+            -H "Authorization: Bearer $ACTIVATION_SECRET" \
+            -H 'Content-Type: application/json' \
+            --data-binary @activation-confirmation.json \
+            --output activation-receipt.json \
+            "$endpoint"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          receipt = json.loads(Path("activation-receipt.json").read_text())
+          if receipt.get("status") != "ACTIVE" or receipt.get("runtime_hot_switched") is not False:
+              raise SystemExit("activation receipt was not accepted as boot-only ACTIVE")
+          PY
+
+      - name: Retain public deployment receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: foundry-registry-activation-${{ inputs.release_request_id }}-${{ github.run_attempt }}
+          path: |
+            activation-preflight.json
+            activation-status.json
+            activation-receipt.json
+          if-no-files-found: error
+          retention-days: 90

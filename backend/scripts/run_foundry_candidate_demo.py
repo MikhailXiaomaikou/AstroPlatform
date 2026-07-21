@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -24,12 +25,37 @@ def _candidate_path(key: str) -> Path:
     return path
 
 
+def _write_exclusive(path: Path, payload: bytes) -> None:
+    """Create one regular, host-readable artifact without following links.
+
+    The container runs as uid 10002 while the GitHub host uses a different
+    uid.  A 0600 bind-mounted file cannot be inspected or uploaded by the
+    post-container host steps, so publish only the completed immutable file as
+    0644 after its bytes have been flushed.  Candidate-created paths still
+    fail closed through O_EXCL/O_NOFOLLOW.
+    """
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb", closefd=False) as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+            os.fchmod(handle.fileno(), 0o644)
+    finally:
+        os.close(descriptor)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--candidate", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--chain-root")
     parser.add_argument("--runner-image-digest")
+    parser.add_argument("--candidate-version-sha256")
     args = parser.parse_args()
 
     sys.path.insert(0, str(_BACKEND_ROOT))
@@ -39,16 +65,25 @@ def main() -> int:
     )
 
     bundle = load_candidate_bundle(_candidate_path(args.candidate))
+    captured_streams: dict[str, bytes] = {}
     report = run_candidate_demo(
         bundle,
         cache_root=args.chain_root,
         runner_image_digest=args.runner_image_digest,
+        candidate_version_sha256=args.candidate_version_sha256,
+        captured_streams=captured_streams,
     )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-        encoding="utf-8",
+    for artifact in report["artifact_manifest"]:
+        artifact_path = output.parent / artifact["path"]
+        _write_exclusive(artifact_path, captured_streams[artifact["path"]])
+    _write_exclusive(
+        output,
+        (
+            json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2)
+            + "\n"
+        ).encode("utf-8"),
     )
     print(json.dumps({
         "candidate_id": report["candidate_id"],

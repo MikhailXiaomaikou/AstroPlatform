@@ -24,6 +24,14 @@ from app.models.foundry_records import (
     FoundryValidationRun,
     WorkflowRegistryEntry,
     WorkflowRegistryRelease,
+    WorkflowRegistryReleaseImport,
+)
+from app.models.foundry_materialization_records import (
+    FoundryMaterializationAttestation,
+    FoundryMaterializationReceipt,
+)
+from app.models.foundry_activation_records import (
+    WorkflowRegistryActivationReceipt,
 )
 from app.models.worker_records import (
     ScienceExecutionAttempt,
@@ -57,6 +65,10 @@ __all__ = [
     "FoundryValidationRun",
     "WorkflowRegistryEntry",
     "WorkflowRegistryRelease",
+    "WorkflowRegistryReleaseImport",
+    "FoundryMaterializationAttestation",
+    "FoundryMaterializationReceipt",
+    "WorkflowRegistryActivationReceipt",
     "ResearchWorkspace",
     "SourceDocument",
     "SourceExtraction",

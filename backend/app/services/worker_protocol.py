@@ -23,11 +23,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import SessionTransaction
 
 from app.cache import get_redis
+from app.config import settings
 from app.models.claim_audit_records import ClaimAudit
 from app.models.research_records import ResearchJob
 from app.models.schemas import User
@@ -67,6 +68,66 @@ def _registered_local_workflows() -> frozenset[str]:
         for item in list_formal_workflows()
         if item["local_worker_executable"]
     )
+
+
+def _node_advertises_binding(
+    node: WorkerNode,
+    binding: Mapping[str, Any],
+    *,
+    worker_image_digest: str,
+) -> bool:
+    """Match a signed workflow to code physically present in one Worker image."""
+
+    capabilities = node.capabilities or {}
+    entrypoints = capabilities.get("entrypoints")
+    if isinstance(entrypoints, list):
+        expected = {
+            "entrypoint_id": binding["entrypoint_id"],
+            "tool_spec_hash": binding["tool_spec_hash"],
+            "worker_image_digest": worker_image_digest,
+        }
+        return any(
+            isinstance(item, Mapping) and dict(item) == expected
+            for item in entrypoints
+        )
+
+    # Transitional compatibility for already-enrolled protocol-v2 nodes. Old
+    # capability receipts are still exact Registry bindings, but they cannot
+    # discover aliases signed after enrollment and are never treated as a
+    # generic entrypoint capability.
+    workflows = capabilities.get("workflows")
+    return isinstance(workflows, list) and any(
+        isinstance(item, Mapping)
+        and all(
+            item.get(key)
+            == (
+                worker_image_digest
+                if key == "worker_image_digest"
+                else binding[key]
+            )
+            for key in (
+                "workflow_id",
+                "workflow_version",
+                "registry_epoch",
+                "registry_entry_hash",
+                "entrypoint_id",
+                "worker_image_digest",
+            )
+        )
+        for item in workflows
+    )
+
+
+def _approved_worker_image_digest(binding: Mapping[str, Any]) -> str | None:
+    """Resolve Registry trust, using the configured digest only for built-ins."""
+
+    approved = str(binding.get("approved_worker_image_digest") or "").strip().lower()
+    if approved:
+        return approved
+    if binding.get("binding_kind") == "release_configured_builtin":
+        configured = str(settings.docker_image_digest or "").strip().lower()
+        return configured or None
+    return None
 
 __all__ = [
     "WORKER_PROTOCOL_VERSION",
@@ -440,6 +501,26 @@ async def lease_next_task(
     if node.status != "ACTIVE":
         raise WorkerProtocolError("worker_not_accepting_tasks", status_code=409)
     registered_local_workflows = _registered_local_workflows()
+    effective_image_digest = str(
+        image_digest
+        or (node.release_manifest or {}).get("image_digest")
+        or "unknown"
+    ).strip().lower()
+    advertised_workflow_ids = registered_local_workflows
+    if node.protocol_version == WORKER_PROTOCOL_VERSION:
+        advertised_workflow_ids = frozenset(
+            workflow_id
+            for workflow_id in registered_local_workflows
+            if _node_advertises_binding(
+                node,
+                get_worker_execution_binding(workflow_id),
+                worker_image_digest=effective_image_digest,
+            )
+        )
+    registered_entrypoints = frozenset(
+        get_worker_execution_binding(workflow_id)["entrypoint_id"]
+        for workflow_id in registered_local_workflows
+    )
     queued_jobs = list(
         (
             await db.execute(
@@ -448,29 +529,67 @@ async def lease_next_task(
                     ResearchJob.user_id == node.user_id,
                     ResearchJob.status == "QUEUED",
                     ResearchJob.background_backend == "https_worker",
-                    ResearchJob.tool_name.in_(registered_local_workflows),
+                    or_(
+                        ResearchJob.workflow_key.in_(advertised_workflow_ids),
+                        ResearchJob.tool_name.in_(
+                            advertised_workflow_ids | registered_entrypoints
+                        ),
+                    ),
                 )
                 .order_by(ResearchJob.created_at.asc())
                 .with_for_update(skip_locked=True)
-                .limit(20)
             )
         )
         .scalars()
         .all()
     )
-    job = next(
-        (
-            candidate
-            for candidate in queued_jobs
-            if str(
-                (candidate.capability_requirements or {}).get("protocol_version")
-                or (candidate.args or {}).get("worker_protocol_version")
-                or LEGACY_WORKER_PROTOCOL_VERSION
+    job: ResearchJob | None = None
+    workflow_binding: dict[str, Any] | None = None
+    workflow_key = ""
+    for candidate in queued_jobs:
+        required_protocol = str(
+            (candidate.capability_requirements or {}).get("protocol_version")
+            or (candidate.args or {}).get("worker_protocol_version")
+            or LEGACY_WORKER_PROTOCOL_VERSION
+        )
+        if required_protocol != node.protocol_version:
+            continue
+        candidate_args = dict(candidate.args or {})
+        candidate_workflow_key = str(
+            candidate.workflow_key
+            or candidate_args.get("workflow_key")
+            or candidate.tool_name
+        )
+        if candidate_workflow_key not in advertised_workflow_ids:
+            continue
+        try:
+            candidate_binding = get_worker_execution_binding(candidate_workflow_key)
+        except WorkflowRegistryError:
+            continue
+        approved_digest = _approved_worker_image_digest(candidate_binding)
+        if (
+            candidate_binding.get("binding_kind")
+            != "release_configured_builtin"
+            and approved_digest is None
+        ):
+            continue
+        if approved_digest and not hmac.compare_digest(
+            str(approved_digest), effective_image_digest
+        ):
+            continue
+        if (
+            node.protocol_version == WORKER_PROTOCOL_VERSION
+            and not _node_advertises_binding(
+                node,
+                candidate_binding,
+                worker_image_digest=effective_image_digest,
             )
-            == node.protocol_version
-        ),
-        None,
-    )
+        ):
+            continue
+        job = candidate
+        workflow_binding = candidate_binding
+        workflow_key = candidate_workflow_key
+        break
     if job is None:
         required_protocols = {
             str(
@@ -488,11 +607,11 @@ async def lease_next_task(
         return None
 
     args = dict(job.args or {})
-    workflow_key = str(args.get("workflow_key") or job.tool_name)
     if workflow_key not in registered_local_workflows:
         raise WorkerProtocolError("workflow_not_registered", status_code=422)
     try:
-        workflow_binding = get_worker_execution_binding(workflow_key)
+        if workflow_binding is None:
+            raise WorkflowRegistryError("workflow_not_registered")
         assert_workflow_executable(
             workflow_key,
             workflow_binding["workflow_version"],
@@ -501,12 +620,15 @@ async def lease_next_task(
         )
     except WorkflowRegistryError as exc:
         raise WorkerProtocolError(exc.code, status_code=409) from exc
-    effective_image_digest = str(
-        image_digest
-        or (node.release_manifest or {}).get("image_digest")
-        or "unknown"
-    ).strip().lower()
-    approved_image_digest = workflow_binding.get("approved_worker_image_digest")
+    approved_image_digest = _approved_worker_image_digest(workflow_binding)
+    if (
+        workflow_binding.get("binding_kind") != "release_configured_builtin"
+        and approved_image_digest is None
+    ):
+        raise WorkerProtocolError(
+            "worker_image_approval_missing_for_workflow",
+            status_code=409,
+        )
     if approved_image_digest and not hmac.compare_digest(
         str(approved_image_digest), effective_image_digest
     ):
@@ -520,26 +642,10 @@ async def lease_next_task(
             workflow_binding,
             runner_image_digest=effective_image_digest,
         )
-        advertised = (node.capabilities or {}).get("workflows")
-        if not isinstance(advertised, list) or not any(
-            isinstance(item, Mapping)
-            and all(
-                item.get(key)
-                == (
-                    effective_image_digest
-                    if key == "worker_image_digest"
-                    else workflow_binding[key]
-                )
-                for key in (
-                    "workflow_id",
-                    "workflow_version",
-                    "registry_epoch",
-                    "registry_entry_hash",
-                    "entrypoint_id",
-                    "worker_image_digest",
-                )
-            )
-            for item in advertised
+        if not _node_advertises_binding(
+            node,
+            workflow_binding,
+            worker_image_digest=effective_image_digest,
         ):
             raise WorkerProtocolError(
                 "worker_capability_registry_mismatch", status_code=409
@@ -626,6 +732,10 @@ async def lease_next_task(
                 "registry_epoch": workflow_binding["registry_epoch"],
                 "registry_entry_hash": workflow_binding["registry_entry_hash"],
                 "entrypoint_id": workflow_binding["entrypoint_id"],
+                "execution_adapter_id": workflow_binding[
+                    "execution_adapter_id"
+                ],
+                "tool_spec_hash": workflow_binding["tool_spec_hash"],
                 "worker_image_digest": effective_image_digest,
             }
         )
@@ -712,6 +822,97 @@ def require_live_lease(
         raise WorkerProtocolError("worker_lease_expired", status_code=409)
 
 
+async def _require_attempt_registry_binding(
+    db: AsyncSession,
+    *,
+    attempt: ScienceExecutionAttempt,
+    job: ResearchJob,
+    audit: ClaimAudit | None,
+    now: datetime,
+) -> None:
+    """Cancel an active lease when its persisted formal binding is no longer valid.
+
+    Protocol-v2 attempts copy the formal Registry identity into dedicated
+    PostgreSQL columns when the lease is issued.  Rechecking those columns on
+    every result-bearing request prevents an already leased Worker from
+    completing after the workflow is suspended, superseded, revoked, removed,
+    or replaced by a different Registry epoch/hash.
+
+    Legacy protocol-v1 rows predate this binding and keep their existing
+    behavior.  A partially populated v2 binding is never treated as legacy.
+    The parent job/Audit are cancelled before returning the stable 409 that
+    existing Workers already interpret as a server cancellation; this makes
+    their subsequent ``cancel-ack`` both safe and idempotent with the control
+    decision.
+    """
+
+    persisted_binding = {
+        "workflow_id": attempt.workflow_id,
+        "workflow_version": attempt.workflow_version,
+        "registry_epoch": attempt.registry_epoch,
+        "registry_entry_hash": attempt.registry_entry_hash,
+    }
+    is_v2_attempt = (
+        str((attempt.task_envelope or {}).get("protocol_version") or "")
+        == WORKER_PROTOCOL_VERSION
+    )
+    if (
+        all(value is None for value in persisted_binding.values())
+        and not is_v2_attempt
+    ):
+        return
+
+    registry_error = "workflow_registry_binding_incomplete"
+    if all(
+        isinstance(value, str) and value
+        for value in persisted_binding.values()
+    ):
+        try:
+            assert_workflow_executable(
+                str(persisted_binding["workflow_id"]),
+                str(persisted_binding["workflow_version"]),
+                registry_epoch=str(persisted_binding["registry_epoch"]),
+                registry_entry_hash=str(
+                    persisted_binding["registry_entry_hash"]
+                ),
+            )
+            return
+        except WorkflowRegistryError as exc:
+            registry_error = exc.code
+
+    cancellation_error = "workflow_registry_execution_cancelled"
+    attempt.error_class = cancellation_error
+    attempt.error = (
+        "The formal workflow binding became non-executable before result "
+        f"acceptance ({registry_error})"
+    )
+    diagnostics = dict(attempt.diagnostics or {})
+    diagnostics["registry_cancellation"] = {
+        "code": registry_error,
+        "checked_at": now.isoformat(),
+    }
+    attempt.diagnostics = diagnostics
+
+    if job.status in {"QUEUED", "RUNNING"}:
+        job.status = "CANCELLED"
+        job.error_class = cancellation_error
+        job.error = attempt.error
+        job.completed_at = now
+    if audit is not None and audit.lifecycle_status in {"QUEUED", "RUNNING"}:
+        audit.lifecycle_status = "CANCELLED"
+        audit.scientific_verdict = None
+        audit.machine_support_eligible = False
+        audit.reproduction_ready = False
+        audit.publication_ready = False
+        audit.progress_stage = cancellation_error
+        audit.error_class = cancellation_error
+        audit.error = attempt.error
+        audit.completed_at = now
+
+    await db.commit()
+    raise WorkerProtocolError("science_job_cancelled", status_code=409)
+
+
 def _validated_worker_result_hash(
     result: Mapping[str, Any],
     claimed_result_hash: str | None,
@@ -737,6 +938,7 @@ async def lock_active_attempt_state(
 ) -> tuple[ScienceExecutionAttempt, ResearchJob, ClaimAudit | None]:
     """Lock Audit, job, and attempt and require one live owner-bound lease."""
 
+    checked_at = now or _utcnow()
     observed = await get_worker_attempt(
         db,
         node=node,
@@ -756,9 +958,16 @@ async def lock_active_attempt_state(
         .with_for_update()
     )
     attempt = await get_worker_attempt(db, node=node, attempt_id=attempt_id)
-    require_live_lease(attempt, lease_id=lease_id, now=now)
+    require_live_lease(attempt, lease_id=lease_id, now=checked_at)
     if job is None:
         raise WorkerProtocolError("science_job_not_found", status_code=409)
+    await _require_attempt_registry_binding(
+        db,
+        attempt=attempt,
+        job=job,
+        audit=audit,
+        now=checked_at,
+    )
     if job.status == "CANCELLED":
         raise WorkerProtocolError("science_job_cancelled", status_code=409)
     if job.status != "RUNNING" or job.current_attempt_id != attempt.id:
@@ -837,6 +1046,13 @@ async def prepare_attempt_completion(
     require_live_lease(attempt, lease_id=lease_id, now=checked_at)
     if job is None:
         raise WorkerProtocolError("science_job_not_found", status_code=409)
+    await _require_attempt_registry_binding(
+        db,
+        attempt=attempt,
+        job=job,
+        audit=audit,
+        now=checked_at,
+    )
     if job.status == "CANCELLED":
         raise WorkerProtocolError("science_job_cancelled", status_code=409)
     if job.status != "RUNNING" or job.current_attempt_id != attempt.id:
@@ -961,6 +1177,18 @@ async def heartbeat_attempt(
     job = await db.get(ResearchJob, attempt.job_id)
     if job is None:
         raise WorkerProtocolError("science_job_not_found", status_code=409)
+    audit = None
+    if attempt.audit_id is not None:
+        audit = await db.get(ClaimAudit, attempt.audit_id)
+        if audit is None or audit.user_id != node.user_id:
+            raise WorkerProtocolError("invalid_audit_binding", status_code=409)
+    await _require_attempt_registry_binding(
+        db,
+        attempt=attempt,
+        job=job,
+        audit=audit,
+        now=checked_at,
+    )
     if job.current_attempt_id != attempt.id:
         raise WorkerProtocolError("stale_worker_lease", status_code=409)
 
@@ -1025,6 +1253,14 @@ async def complete_attempt(
             lease_id=lease_id,
             result=result,
             claimed_result_hash=claimed_result_hash,
+            now=completed_at,
+        )
+    if prepared.attempt.status != "SUCCEEDED" and prepared.job is not None:
+        await _require_attempt_registry_binding(
+            db,
+            attempt=prepared.attempt,
+            job=prepared.job,
+            audit=prepared.audit,
             now=completed_at,
         )
     attempt, job, audit, result_hash = _validate_prepared_attempt_completion(

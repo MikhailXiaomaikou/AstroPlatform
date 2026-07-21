@@ -153,6 +153,11 @@ class _LeaseHeartbeat:
                     },
                     timeout=15.0,
                 )
+                cancellation_action = _server_cancellation_action(response)
+                if cancellation_action is not None:
+                    with self._state_lock:
+                        self._action = cancellation_action
+                    return
                 if response.status_code >= 400:
                     error_type = (
                         _RetryableWorkerError
@@ -198,16 +203,15 @@ def _server_cancellation_action(response: httpx.Response) -> str | None:
 
 
 def _run_registered_workflow(envelope: dict) -> dict:
-    if envelope.get("workflow_key") != "union3_flat_lcdm_sn_only_v1":
-        raise WorkerClientError("Only the registered Union3 workflow is executable")
     entrypoint_id = str(
         envelope.get("entrypoint_id") or UNION3_PRIMARY_ENTRYPOINT_ID
     )
-    if entrypoint_id != UNION3_PRIMARY_ENTRYPOINT_ID:
-        raise WorkerClientError("Task requested an unregistered entrypoint")
-    from app.services.union3_reproduction import run_union3_primary_reproduction
+    if entrypoint_id == UNION3_PRIMARY_ENTRYPOINT_ID:
+        from app.services.union3_reproduction import run_union3_primary_reproduction
 
-    result = run_union3_primary_reproduction()
+        result = run_union3_primary_reproduction()
+    else:
+        raise WorkerClientError("Task requested an unregistered static entrypoint")
     if result.get("publication_ready") is not False:
         raise WorkerClientError(
             "Registered workflow violated publication-readiness policy"

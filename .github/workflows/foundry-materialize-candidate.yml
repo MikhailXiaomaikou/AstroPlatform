@@ -1,0 +1,288 @@
+name: Protected Foundry candidate source materialization
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: Immutable materialization request event UUID
+        required: true
+        type: string
+      binding:
+        description: Canonical server-reconstructed Draft/source binding
+        required: true
+        type: string
+
+concurrency:
+  group: foundry-materialize-${{ inputs.request_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # This job can write a deterministic branch and draft PR. It has no AI,
+  # callback, database, Registry, Worker, Evidence, or attestation key.
+  prepare-draft-pr-without-secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Main-only Environment policy protects the contents/pull-request write
+    # token even though this job receives no long-lived secret.
+    environment: foundry-materialization-pr
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    outputs:
+      unsigned_artifact_name: ${{ steps.names.outputs.unsigned_artifact_name }}
+    steps:
+      - name: Require the protected main workflow source
+        shell: bash
+        run: test "$GITHUB_REF" = "refs/heads/main"
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          path: control-source
+          persist-credentials: false
+
+      - name: Validate the protected-main request binding
+        id: binding
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+          BINDING: ${{ inputs.binding }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          python control-source/backend/scripts/prepare_foundry_materialization.py emit-pr \
+            --request-id "$REQUEST_ID" \
+            --binding "$BINDING" \
+            --repository "$GITHUB_REPOSITORY" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Check out exact immutable Draft base
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ steps.binding.outputs.base_commit }}
+          path: candidate-source
+          persist-credentials: true
+          fetch-depth: 1
+
+      - name: Download and verify exact repository artifact id
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARTIFACT_ID: ${{ steps.binding.outputs.artifact_id }}
+          ARTIFACT_WORKFLOW_RUN_ID: ${{ steps.binding.outputs.artifact_workflow_run_id }}
+          ARTIFACT_NAME: ${{ steps.binding.outputs.artifact_name }}
+          EXPECTED_SHA256: ${{ steps.binding.outputs.artifact_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir foundry-materialization-artifact
+          curl --fail --silent --show-error \
+            --proto '=https' --tlsv1.2 --connect-timeout 10 --max-time 60 \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}" \
+            --output foundry-materialization-artifact/metadata.json
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          metadata = json.loads(Path("foundry-materialization-artifact/metadata.json").read_text())
+          assert metadata["id"] == int(os.environ["ARTIFACT_ID"])
+          assert metadata["name"] == os.environ["ARTIFACT_NAME"]
+          assert metadata["expired"] is False
+          assert metadata["workflow_run"]["id"] == int(os.environ["ARTIFACT_WORKFLOW_RUN_ID"])
+          assert metadata["digest"] == "sha256:" + os.environ["EXPECTED_SHA256"]
+          PY
+          curl --fail --silent --show-error --location \
+            --proto '=https' --tlsv1.2 --connect-timeout 10 --max-time 120 \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" \
+            --output foundry-materialization-artifact/artifact.zip
+          test "$(sha256sum foundry-materialization-artifact/artifact.zip | cut -d' ' -f1)" = "$EXPECTED_SHA256"
+
+      - name: Replay only the allowlisted patch without executing Candidate code
+        env:
+          BINDING: ${{ inputs.binding }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python control-source/backend/scripts/prepare_foundry_materialization.py prepare-pr \
+            --binding "$BINDING" \
+            --artifact-zip foundry-materialization-artifact/artifact.zip \
+            --extracted-dir foundry-materialization-artifact/extracted \
+            --source-repo candidate-source \
+            --output prepared-pr.json
+
+      - name: Create or recover deterministic branch
+        id: branch
+        env:
+          BRANCH_NAME: ${{ steps.binding.outputs.branch_name }}
+          CANDIDATE_MODULE_PATH: ${{ steps.binding.outputs.candidate_module_path }}
+          ORIGIN_VERSION_HASH: ${{ fromJSON(inputs.binding).origin_candidate_version_hash }}
+          GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z"
+          GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z"
+        shell: bash
+        working-directory: candidate-source
+        run: |
+          set -euo pipefail
+          git config user.name "standard-astro-foundry"
+          git config user.email "foundry@users.noreply.github.com"
+          git switch -c "$BRANCH_NAME"
+          git add -- "$CANDIDATE_MODULE_PATH"
+          python - "$CANDIDATE_MODULE_PATH" <<'PY'
+          import subprocess, sys
+          expected = sys.argv[1].encode()
+          changed = [item for item in subprocess.check_output(
+              ["git", "diff", "--cached", "--name-only", "-z"]
+          ).split(b"\0") if item]
+          assert changed == [expected], "materialization_staged_path_mismatch"
+          PY
+          git -c core.hooksPath=/dev/null commit \
+            --message "foundry: materialize reviewed candidate ${ORIGIN_VERSION_HASH}"
+          head_commit="$(git rev-parse HEAD)"
+          existing="$(git ls-remote --heads origin "refs/heads/${BRANCH_NAME}" | cut -f1)"
+          if [[ -n "$existing" && "$existing" != "$head_commit" ]]; then
+            echo "materialization_branch_conflict" >&2
+            exit 1
+          fi
+          if [[ -z "$existing" ]]; then
+            git push origin "HEAD:refs/heads/${BRANCH_NAME}"
+          fi
+          echo "head_commit=$head_commit" >> "$GITHUB_OUTPUT"
+
+      - name: Open or recover a draft PR; never merge it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH_NAME: ${{ steps.binding.outputs.branch_name }}
+          ORIGIN_VERSION_HASH: ${{ fromJSON(inputs.binding).origin_candidate_version_hash }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          number="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH_NAME" --state all --json number,state,isDraft,headRefOid --jq 'if length == 1 then .[0].number else empty end')"
+          if [[ -z "$number" ]]; then
+            gh pr create --repo "$GITHUB_REPOSITORY" --draft \
+              --head "$BRANCH_NAME" --base main \
+              --title "Foundry candidate materialization ${ORIGIN_VERSION_HASH:0:12}" \
+              --body "Protected materialization of one reviewed non-formal Candidate patch. This PR does not register a workflow and was not auto-merged."
+            number="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH_NAME" --state open --json number --jq '.[0].number')"
+          fi
+          gh pr view "$number" --repo "$GITHUB_REPOSITORY" \
+            --json number,url,state,isDraft,headRefName,headRefOid \
+            > pull-request.json
+
+      - name: Freeze unsigned protected-workflow payload
+        env:
+          HEAD_COMMIT: ${{ steps.branch.outputs.head_commit }}
+          REQUEST_ID: ${{ inputs.request_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python control-source/backend/scripts/prepare_foundry_materialization.py make-pr-payload \
+            --prepared prepared-pr.json \
+            --pull-request-json pull-request.json \
+            --attestation-id "$REQUEST_ID" \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow-ref "$GITHUB_WORKFLOW_REF" \
+            --workflow-sha "$GITHUB_WORKFLOW_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --head-commit "$HEAD_COMMIT" \
+            --opened-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --output materialization-pr-payload.json
+
+      - name: Name the bounded unsigned artifact
+        id: names
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+        run: echo "unsigned_artifact_name=foundry-materialization-pr-${REQUEST_ID}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.names.outputs.unsigned_artifact_name }}
+          path: materialization-pr-payload.json
+          if-no-files-found: error
+          retention-days: 30
+
+  # This protected job sees only the bounded unsigned JSON and the dedicated
+  # materialization key. It cannot push, edit PRs, or read Draft artifacts.
+  sign-receipt:
+    needs: prepare-draft-pr-without-secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: foundry-materialization-attestation
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      signed_artifact_name: ${{ steps.names.outputs.signed_artifact_name }}
+    steps:
+      - name: Require the protected main workflow source
+        shell: bash
+        run: test "$GITHUB_REF" = "refs/heads/main"
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: ${{ needs.prepare-draft-pr-without-secrets.outputs.unsigned_artifact_name }}
+          path: unsigned
+      - name: Sign with the materialization-only key
+        env:
+          PRIVATE_KEY: ${{ secrets.FOUNDRY_MATERIALIZATION_ATTESTATION_PRIVATE_KEY }}
+          KEY_ID: ${{ vars.FOUNDRY_MATERIALIZATION_ATTESTATION_KEY_ID }}
+        run: |
+          set -euo pipefail
+          python backend/scripts/sign_foundry_materialization_receipt.py \
+            --payload unsigned/materialization-pr-payload.json \
+            --private-key "$PRIVATE_KEY" --key-id "$KEY_ID" \
+            --output materialization-pr-attestation.json
+      - name: Name signed artifact
+        id: names
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+        run: echo "signed_artifact_name=foundry-materialization-pr-attestation-${REQUEST_ID}" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.names.outputs.signed_artifact_name }}
+          path: materialization-pr-attestation.json
+          if-no-files-found: error
+          retention-days: 30
+
+  callback-only:
+    needs: sign-receipt
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: foundry-materialization-callback
+    permissions:
+      actions: read
+      contents: none
+    steps:
+      - name: Require the protected main workflow source
+        shell: bash
+        run: test "$GITHUB_REF" = "refs/heads/main"
+
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: ${{ needs.sign-receipt.outputs.signed_artifact_name }}
+          path: signed
+      - name: Append independently verifiable PR receipt
+        env:
+          CONTROL_PLANE_URL: ${{ vars.FOUNDRY_CONTROL_PLANE_URL }}
+          CALLBACK_SECRET: ${{ secrets.FOUNDRY_MATERIALIZATION_RESULT_SECRET }}
+        run: |
+          set -euo pipefail
+          test -f signed/materialization-pr-attestation.json
+          test ! -L signed/materialization-pr-attestation.json
+          test "$(wc -c < signed/materialization-pr-attestation.json)" -le 131072
+          curl --fail --silent --show-error --output /dev/null \
+            --proto '=https' --tlsv1.2 --retry 3 --retry-all-errors \
+            --connect-timeout 10 --max-time 60 \
+            -H "Authorization: Bearer $CALLBACK_SECRET" \
+            -H "Content-Type: application/json" \
+            --data-binary @signed/materialization-pr-attestation.json \
+            "${CONTROL_PLANE_URL%/}/api/internal/foundry/materialization/pr-attestations"

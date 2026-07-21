@@ -479,6 +479,11 @@ def test_local_worker_requires_digest_pin_cosign_and_hardened_container():
     assert "cosign verify" in preflight
     assert "MikhailXiaomaikou/Standard-Astro" in preflight
     assert "refs/tags/v" in preflight
+    assert (
+        "foundry-formal-worker.yml@refs/heads/main$" in preflight
+    )
+    assert "worker-image.yml@refs/heads/main" not in preflight
+    assert ".github/workflows/.+@refs/heads/main" not in preflight
     assert "docker image inspect" in preflight
     assert "Worker image TOOL_VERSION" in preflight
     assert "docker compose" in preflight

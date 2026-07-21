@@ -31,15 +31,10 @@ from app.services.worker_contract import (
     normalize_release_commit,
     release_commits_compatible,
 )
-from app.services.registered_workflows import (
-    UNION3_REPRODUCTION_WORKFLOW_ID,
-    get_registered_dataset_pins,
-)
 from app.services.workflow_registry_v2 import (
     WorkflowRegistryError,
-    assert_workflow_executable,
-    get_worker_execution_binding,
-    list_worker_execution_bindings,
+    get_static_execution_adapter_contract,
+    list_static_worker_entrypoint_capabilities,
 )
 
 
@@ -223,7 +218,7 @@ def enroll(
             "public_key": public_text,
             "protocol_version": WORKER_PROTOCOL_VERSION,
             "capabilities": {
-                "workflows": list_worker_execution_bindings(
+                "entrypoints": list_static_worker_entrypoint_capabilities(
                     worker_image_digest=(
                         os.getenv("WORKER_IMAGE_DIGEST") or "unknown"
                     )
@@ -343,7 +338,12 @@ def verify_task_envelope(
     if envelope.get("protocol_version") != config.protocol_version:
         raise WorkerClientError("Task envelope protocol version is unsupported")
     workflow_id = str(envelope.get("workflow_key") or "")
-    if workflow_id != UNION3_REPRODUCTION_WORKFLOW_ID:
+    if not workflow_id or len(workflow_id) > 128:
+        raise WorkerClientError("Task requested an invalid workflow identity")
+    if (
+        config.protocol_version == LEGACY_WORKER_PROTOCOL_VERSION
+        and workflow_id != "union3_flat_lcdm_sn_only_v1"
+    ):
         raise WorkerClientError("Task requested an unregistered workflow")
     legacy_required_keys = {
         "protocol_version",
@@ -370,6 +370,8 @@ def verify_task_envelope(
             "registry_epoch",
             "registry_entry_hash",
             "entrypoint_id",
+            "execution_adapter_id",
+            "tool_spec_hash",
             "worker_image_digest",
         }
     )
@@ -382,17 +384,28 @@ def verify_task_envelope(
         raise WorkerClientError("Task envelope shape is not registered")
     if config.protocol_version != LEGACY_WORKER_PROTOCOL_VERSION:
         try:
-            binding = get_worker_execution_binding(workflow_id)
-            assert_workflow_executable(
-                workflow_id,
-                str(envelope.get("workflow_version") or ""),
-                registry_epoch=str(envelope.get("registry_epoch") or ""),
-                registry_entry_hash=str(envelope.get("registry_entry_hash") or ""),
+            adapter = get_static_execution_adapter_contract(
+                str(envelope.get("execution_adapter_id") or "")
             )
         except WorkflowRegistryError as exc:
             raise WorkerClientError(exc.code) from exc
-        if envelope.get("entrypoint_id") != binding["entrypoint_id"]:
-            raise WorkerClientError("Task entrypoint is not registered")
+        if (
+            envelope.get("entrypoint_id") != adapter["primary_entrypoint_id"]
+            or envelope.get("tool_spec_hash") != adapter["tool_spec_hash"]
+        ):
+            raise WorkerClientError("Task entrypoint is not image-static")
+        for key in ("registry_entry_hash", "tool_spec_hash"):
+            digest = str(envelope.get(key) or "")
+            if (
+                not digest.startswith("sha256:")
+                or len(digest) != 71
+                or any(char not in "0123456789abcdef" for char in digest[7:])
+            ):
+                raise WorkerClientError("Task Registry binding is invalid")
+        if not str(envelope.get("workflow_version") or "") or not str(
+            envelope.get("registry_epoch") or ""
+        ):
+            raise WorkerClientError("Task Registry binding is invalid")
     try:
         uuid.UUID(str(envelope["attempt_id"]))
         lease_id = str(envelope["lease_id"])
@@ -418,7 +431,11 @@ def verify_task_envelope(
     if lease_expires_at <= checked_at or deadline <= lease_expires_at:
         raise WorkerClientError("Task lease is expired or internally inconsistent")
 
-    expected_pins = get_registered_dataset_pins(UNION3_REPRODUCTION_WORKFLOW_ID)
+    if config.protocol_version == LEGACY_WORKER_PROTOCOL_VERSION:
+        adapter = get_static_execution_adapter_contract(
+            "union3_profile_chi_square_v1"
+        )
+    expected_pins = adapter["dataset_pins"]
     if envelope.get("dataset_pins") != expected_pins:
         raise WorkerClientError("Task requested unregistered dataset pins")
     limits = envelope.get("resource_limits")
