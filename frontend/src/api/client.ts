@@ -2020,6 +2020,16 @@ export interface CapabilityRequestSummary {
   updated_at: string | null;
 }
 
+export interface FoundrySelfAccess {
+  can_administer: boolean;
+  can_review: boolean;
+}
+
+export async function getFoundrySelfAccess(): Promise<FoundrySelfAccess> {
+  const { data } = await api.get<FoundrySelfAccess>("/api/research/foundry-access");
+  return data;
+}
+
 export async function createCapabilityRequest(
   auditId: string,
   gapId: string,

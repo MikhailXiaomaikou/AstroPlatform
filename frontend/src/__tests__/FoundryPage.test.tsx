@@ -9,6 +9,7 @@ const api = vi.hoisted(() => ({
   getAdminFoundryCandidate: vi.fn(),
   getAdminFoundryRegistry: vi.fn(),
   getFoundryCandidate: vi.fn(),
+  getFoundrySelfAccess: vi.fn(),
   getRuntimeConfig: vi.fn(),
   listAdminFoundryRequests: vi.fn(),
   listAdminFoundryMaterializations: vi.fn(),
@@ -164,6 +165,10 @@ describe("Workflow Foundry page", () => {
       foundry_registration_enabled: true,
       foundry_source_materialization_enabled: true,
     });
+    api.getFoundrySelfAccess.mockResolvedValue({
+      can_administer: true,
+      can_review: true,
+    });
     api.listCapabilityRequests.mockResolvedValue({ items: [request], total: 1 });
     api.getFoundryCandidate.mockResolvedValue(candidate);
     api.listFoundryDemoRuns.mockResolvedValue({ items: [demo], total: 1 });
@@ -212,6 +217,10 @@ describe("Workflow Foundry page", () => {
   });
 
   it("shows only owned requests and marks every recorded Demo as non-formal", async () => {
+    api.getFoundrySelfAccess.mockResolvedValue({
+      can_administer: false,
+      can_review: false,
+    });
     renderPage();
 
     expect(await screen.findByText("AI Workflow Foundry")).toBeInTheDocument();
@@ -222,9 +231,14 @@ describe("Workflow Foundry page", () => {
     expect(screen.getByText("NON_FORMAL_DEMO")).toBeInTheDocument();
     expect(screen.queryByText("Foundry Console")).not.toBeInTheDocument();
     expect(api.getFoundryCandidate).toHaveBeenCalledWith(candidate.id);
+    expect(api.listAdminFoundryRequests).not.toHaveBeenCalled();
   });
 
-  it("switches the candidate boundary and catalog headings to Chinese", async () => {
+  it("switches languages without probing admin endpoints for a normal user", async () => {
+    api.getFoundrySelfAccess.mockResolvedValue({
+      can_administer: false,
+      can_review: false,
+    });
     renderPage(true);
     await screen.findByText("AI Workflow Foundry");
     fireEvent.click(screen.getByRole("button", { name: "switch-zh" }));
@@ -232,6 +246,38 @@ describe("Workflow Foundry page", () => {
     expect(await screen.findByText("AI 科研工作流工厂")).toBeInTheDocument();
     expect(screen.getAllByText("候选 · 非正式").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("候选目录")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(api.getFoundrySelfAccess.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+    expect(api.listAdminFoundryRequests).not.toHaveBeenCalled();
+  });
+
+  it("shows admin actions but hides reviewer-only actions for an admin-only account", async () => {
+    api.getFoundrySelfAccess.mockResolvedValue({
+      can_administer: true,
+      can_review: false,
+    });
+    api.listAdminFoundryRequests.mockResolvedValue({ items: [request], total: 1 });
+    renderPage();
+
+    expect(await screen.findByText("Foundry Console")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start isolated validation" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Review note or required reason")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve exact version" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Build signed formal Worker" })).not.toBeInTheDocument();
+    expect(api.listAdminFoundryMaterializations).not.toHaveBeenCalled();
+  });
+
+  it("does not call admin listing endpoints for a reviewer without admin access", async () => {
+    api.getFoundrySelfAccess.mockResolvedValue({
+      can_administer: false,
+      can_review: true,
+    });
+    renderPage();
+
+    expect(await screen.findByText("AI Workflow Foundry")).toBeInTheDocument();
+    expect(screen.queryByText("Foundry Console")).not.toBeInTheDocument();
+    expect(api.listAdminFoundryRequests).not.toHaveBeenCalled();
   });
 
   it("lets a reviewer queue validation only for the exact immutable version", async () => {
