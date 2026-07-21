@@ -114,6 +114,13 @@ def test_public_wrapper_replays_current_checkout_with_new_identity(
     assert report["candidate_version_sha256"] == candidate_version_sha256(
         **envelope_kwargs
     )
+    expected_runner_digest = "sha256:" + hashlib.sha256(
+        canonical_json(identity["runner_descriptor"])
+    ).hexdigest()
+    assert identity["runner_image_digest"] == expected_runner_digest
+    assert report["runner_image_digest"] == expected_runner_digest
+    assert report["candidate_bundle_sha256"] == envelope["candidate_bundle_sha256"]
+    assert report["workflow_spec_sha256"] == envelope["workflow_spec_sha256"]
     assert envelope["code_tree_sha256"] == source_tree_sha256
     assert envelope["patch_sha256"] == hashlib.sha256(b"").hexdigest()
     assert identity["historical_demo_version_reused"] is False
@@ -131,6 +138,27 @@ def test_public_wrapper_replays_current_checkout_with_new_identity(
         ).hexdigest()
         == report["environment_sha256"]
     )
+
+
+def test_public_wrapper_rejects_dirty_checkout(
+    clean_replay_repo: Path,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "dirty-replay"
+    marker = clean_replay_repo / "untracked-replay-marker.txt"
+    marker.write_text("dirty checkout\n", encoding="utf-8")
+    try:
+        completed = _run(
+            [str(clean_replay_repo / _WRAPPER_RELATIVE), str(output)],
+            cwd=clean_replay_repo,
+            env=_replay_environment(clean_replay_repo),
+        )
+    finally:
+        marker.unlink()
+
+    assert completed.returncode != 0
+    assert "source_checkout_not_clean" in completed.stderr
+    assert not output.exists()
 
 
 def test_public_wrapper_fails_for_configured_invalid_mirror(
