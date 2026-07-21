@@ -65,8 +65,14 @@ A guided screen-share or recorded walkthrough is available if local execution
 is inconvenient. Windows Docker Desktop support is part of the test scope but
 has not yet completed the same end-to-end verification.
 
+The public [18-second Candidate Demo](../demo/foundry-candidate/README.md)
+shows one real fail-closed run and includes sanitized receipts and SHA-256
+checksums.
+
 如果不方便本地运行，可以选择引导式屏幕共享或录像 walkthrough。Windows Docker
 Desktop 属于测试范围，但尚未完成与 macOS/Linux 相同等级的端到端验证。
+公开的 [18 秒候选演示](../demo/foundry-candidate/README.md)展示了一次真实的安全失败
+运行，并附带脱敏收据和 SHA-256 校验值。
 
 ## Feedback we need / 最需要的反馈
 

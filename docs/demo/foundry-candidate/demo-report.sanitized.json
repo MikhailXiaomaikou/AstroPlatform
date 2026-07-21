@@ -1,0 +1,202 @@
+{
+  "artifact_manifest": [
+    {
+      "bytes": 0,
+      "kind": "STDOUT",
+      "path": "stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 0,
+      "kind": "STDERR",
+      "path": "stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "candidate_bundle_sha256": "1206466dc33c8c9f043ada93e7d800783549741089f48e3baa62b896014440eb",
+  "candidate_id": "desi_dr2_official_chain_summary_candidate",
+  "candidate_version": 1,
+  "candidate_version_sha256": "f4e8fa65deeb0b8662770fe436035596a89085ac33ef53cfb8e974d191268868",
+  "claim_eligible": false,
+  "completed_at": "2026-07-21T16:00:26.371908Z",
+  "demo_report_sha256": "e23225d0a7808c326166bd270885eb1bbb86f720e39a6225c41836734fdb51f1",
+  "demo_run_id": "290a0653-e040-4863-844e-1077cfedb2b0",
+  "dependency_lock_sha256": "1ad3021413d90076bfca5105f360cc53c2a716b59b2f828cc95e64715771529d",
+  "duration_ms": 0,
+  "environment": {
+    "entrypoint_id": "desi_dr2_official_chain_summary_demo_v1",
+    "platform_machine": "arm64",
+    "platform_system": "Darwin",
+    "python_implementation": "CPython",
+    "python_version": "3.14.5",
+    "tool_version": "f9b637b1f7cf31e3ecad150abe50a7b0b674019f"
+  },
+  "environment_sha256": "d86f38c40c1f80c6e58a3bd7aafbb5c16f3d9eac005c024e48d1c07ebba309ea",
+  "evidence_class": "NON_FORMAL_DEMO",
+  "evidence_pack_allowed": false,
+  "failure_class": "official_chain_mirror_unavailable",
+  "fixture_hashes": [],
+  "generation": {
+    "generated_code_executed_by_draft_job": false,
+    "kind": "bootstrap_declarative_candidate",
+    "model": "codex",
+    "prompt_or_claim_stored": false
+  },
+  "limitations": [
+    "This is a non-formal candidate Demo and cannot support a scientific claim.",
+    "Without an operator-provided byte-pinned official chain mirror, the Demo records PARTIAL and exposes no posterior intervals.",
+    "Published external posterior chains are context, not reusable likelihood factors.",
+    "Formal registration requires an independent verifier and human scientific review."
+  ],
+  "publication_ready": false,
+  "resource_usage": {
+    "max_rss_kib_platform_value": 362741760,
+    "stderr_observed_bytes": 0,
+    "stderr_truncated": false,
+    "stdout_observed_bytes": 0,
+    "stdout_truncated": false,
+    "stream_capture_limit_bytes": 1048576,
+    "system_cpu_seconds": 0.298458,
+    "user_cpu_seconds": 1.773078
+  },
+  "result": {
+    "analysis_status": "DARK_ENERGY_EVIDENCE_MATRIX_PARTIAL",
+    "matrix": [
+      {
+        "analysis_contract": {
+          "burn_in_rule": "released Cobaya chains; checkpoint burn_in must equal 0",
+          "chain_format": "Cobaya ASCII: header, weight, minuslogpost, parameters",
+          "parameter_map": {
+            "H0": "H0",
+            "omegam": "omegam",
+            "w0": "w",
+            "wa": "wa"
+          },
+          "release": "DR2 BAO cosmology chains v1.0",
+          "weight_column": "weight"
+        },
+        "analysis_id": "desi_dr2_w0wa_cdm_union3_default_cmb",
+        "bao_dataset_key": "desi_dr2_bao",
+        "cell_id": "desi_dr2:w0wa_cdm:union3:default_cmb",
+        "claim_scope": "published_external_chain_context",
+        "data_components": [
+          "desi-bao-all",
+          "union3",
+          "planck2018-lowl-TT-clik",
+          "planck2018-lowl-EE-clik",
+          "planck-NPIPE-highl-CamSpec-TTTEEE",
+          "planck-act-dr6-lensing"
+        ],
+        "diagnostics": null,
+        "evidence_tier": "withheld",
+        "execution_source": "published_external",
+        "license": {
+          "name": "CC-BY-4.0",
+          "url": "https://data.desi.lbl.gov/doc/acknowledgments/"
+        },
+        "model": "w0wa_cdm",
+        "official_sn_component": "union3",
+        "overlap_groups": [
+          "desi_dr2_bao:all",
+          "cmb:planck_pr3_pr4_act_dr6",
+          "sn:union3"
+        ],
+        "paper_arxiv": "2503.14738",
+        "paper_doi": "10.1103/tr6y-kpc6",
+        "parameter_intervals": {},
+        "publication_ready": false,
+        "source_url": "https://data.desi.lbl.gov/public/papers/y3/bao-cosmo-params/cobaya/base_w_wa/desi-bao-all_union3_planck2018-lowl-TT-clik_planck2018-lowl-EE-clik_planck-NPIPE-highl-CamSpec-TTTEEE_planck-act-dr6-lensing/",
+        "status": "WITHHELD",
+        "supernova_selection": "union3",
+        "support_artifacts": [
+          {
+            "relative_path": "cobaya/base_w_wa/desi-bao-all_union3_planck2018-lowl-TT-clik_planck2018-lowl-EE-clik_planck-NPIPE-highl-CamSpec-TTTEEE_planck-act-dr6-lensing/chain.updated.yaml",
+            "role": "config",
+            "sha256": "2fc4c5ccca64f718992409b28e54f367603056073b9ca3d2781ed0e18a9ec3cd",
+            "url": "https://data.desi.lbl.gov/public/papers/y3/bao-cosmo-params/cobaya/base_w_wa/desi-bao-all_union3_planck2018-lowl-TT-clik_planck2018-lowl-EE-clik_planck-NPIPE-highl-CamSpec-TTTEEE_planck-act-dr6-lensing/chain.updated.yaml"
+          },
+          {
+            "relative_path": "cobaya/base_w_wa/desi-bao-all_union3_planck2018-lowl-TT-clik_planck2018-lowl-EE-clik_planck-NPIPE-highl-CamSpec-TTTEEE_planck-act-dr6-lensing/chain.checkpoint",
+            "role": "checkpoint",
+            "sha256": "fa4a3634368730592370908635265ad3aba753c5bf8c02e61fe7d34af83fab53",
+            "url": "https://data.desi.lbl.gov/public/papers/y3/bao-cosmo-params/cobaya/base_w_wa/desi-bao-all_union3_planck2018-lowl-TT-clik_planck2018-lowl-EE-clik_planck-NPIPE-highl-CamSpec-TTTEEE_planck-act-dr6-lensing/chain.checkpoint"
+          },
+          {
+            "relative_path": "cobaya/base_w_wa/desi-bao-all_union3_planck2018-lowl-TT-clik_planck2018-lowl-EE-clik_planck-NPIPE-highl-CamSpec-TTTEEE_planck-act-dr6-lensing/chain.1.txt",
+            "role": "chain",
+            "sha256": "f95d091203f615e1654ea9f4fea332db08fa66c59a5fe188b4915e67e1d73b11",
+            "url": "https://data.desi.lbl.gov/public/papers/y3/bao-cosmo-params/cobaya/base_w_wa/desi-bao-all_union3_planck2018-lowl-TT-clik_planck2018-lowl-EE-clik_planck-NPIPE-highl-CamSpec-TTTEEE_planck-act-dr6-lensing/chain.1.txt"
+          },
+          {
+            "relative_path": "cobaya/base_w_wa/desi-bao-all_union3_planck2018-lowl-TT-clik_planck2018-lowl-EE-clik_planck-NPIPE-highl-CamSpec-TTTEEE_planck-act-dr6-lensing/chain.2.txt",
+            "role": "chain",
+            "sha256": "23aac58326257d207b8ee3699d21ed908e46238e42041d8c2ccf12fd85c8b839",
+            "url": "https://data.desi.lbl.gov/public/papers/y3/bao-cosmo-params/cobaya/base_w_wa/desi-bao-all_union3_planck2018-lowl-TT-clik_planck2018-lowl-EE-clik_planck-NPIPE-highl-CamSpec-TTTEEE_planck-act-dr6-lensing/chain.2.txt"
+          },
+          {
+            "relative_path": "cobaya/base_w_wa/desi-bao-all_union3_planck2018-lowl-TT-clik_planck2018-lowl-EE-clik_planck-NPIPE-highl-CamSpec-TTTEEE_planck-act-dr6-lensing/chain.3.txt",
+            "role": "chain",
+            "sha256": "9e0998c5685e7552b94fd45e985dd137604f34692bebbc6fb922a1588669ab6a",
+            "url": "https://data.desi.lbl.gov/public/papers/y3/bao-cosmo-params/cobaya/base_w_wa/desi-bao-all_union3_planck2018-lowl-TT-clik_planck2018-lowl-EE-clik_planck-NPIPE-highl-CamSpec-TTTEEE_planck-act-dr6-lensing/chain.3.txt"
+          },
+          {
+            "relative_path": "cobaya/base_w_wa/desi-bao-all_union3_planck2018-lowl-TT-clik_planck2018-lowl-EE-clik_planck-NPIPE-highl-CamSpec-TTTEEE_planck-act-dr6-lensing/chain.4.txt",
+            "role": "chain",
+            "sha256": "7710ababc2ab0c7fb5f3f67c8b790409703bce18707a2f99a1cd3fea531b4c20",
+            "url": "https://data.desi.lbl.gov/public/papers/y3/bao-cosmo-params/cobaya/base_w_wa/desi-bao-all_union3_planck2018-lowl-TT-clik_planck2018-lowl-EE-clik_planck-NPIPE-highl-CamSpec-TTTEEE_planck-act-dr6-lensing/chain.4.txt"
+          },
+          {
+            "relative_path": "cobaya/base_w_wa/desi-bao-all_union3_planck2018-lowl-TT-clik_planck2018-lowl-EE-clik_planck-NPIPE-highl-CamSpec-TTTEEE_planck-act-dr6-lensing/chain.margestats",
+            "role": "reference_summary",
+            "sha256": "60f7a661abb62b4b3033c6ec70efec8b2a36e94ed4bbf2ce262c7e6af168b888",
+            "url": "https://data.desi.lbl.gov/public/papers/y3/bao-cosmo-params/cobaya/base_w_wa/desi-bao-all_union3_planck2018-lowl-TT-clik_planck2018-lowl-EE-clik_planck-NPIPE-highl-CamSpec-TTTEEE_planck-act-dr6-lensing/chain.margestats"
+          }
+        ],
+        "two_dimensional_contours": {},
+        "warnings": [
+          "Published posterior samples are context/evidence, not a likelihood factor. The SN component name follows the official DESI release."
+        ],
+        "withheld_reasons": [
+          "official_chain_cache_not_configured"
+        ]
+      }
+    ],
+    "official_ready_cells": 0,
+    "official_withheld_cells": 1,
+    "parameter_intervals_are_non_formal": true,
+    "provenance": {
+      "cosmology_analysis_registry": {
+        "analysis_ids": [
+          "desi_dr2_w0wa_cdm_union3_default_cmb"
+        ],
+        "manifest_sha256": "df78872aa8b2d3473a9e8de78f498180efd7cbcbeb18211ce4787fac52067ee5",
+        "manifest_url": "https://data.desi.lbl.gov/public/papers/y3/bao-cosmo-params/dr2_vac_dr2_bao-cosmo-params_v1.0.sha256sum",
+        "registry_version": "2026-07-17"
+      }
+    }
+  },
+  "runner_definition_sha256": "fe0f2e2d45f21eedd18da24c6706ebc1c99dc4d286f51d59f407a2806b7b3caf",
+  "runner_image_digest": "sha256:12a937d0522207449e2f3016142e1e7c82ac8abcd6fba6a19a3be372c7ed2f88",
+  "schema_version": 1,
+  "source_pins": [
+    {
+      "key": "desi_dr2_bao_cosmology_chains_v1_manifest",
+      "sha256": "df78872aa8b2d3473a9e8de78f498180efd7cbcbeb18211ce4787fac52067ee5",
+      "url": "https://data.desi.lbl.gov/public/papers/y3/bao-cosmo-params/dr2_vac_dr2_bao-cosmo-params_v1.0.sha256sum"
+    }
+  ],
+  "started_at": "2026-07-21T16:00:26.371776Z",
+  "status": "PARTIAL",
+  "stderr_bytes": 0,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_bytes": 0,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "validation_summary": {
+    "numeric_claim_gate": "NON_FORMAL_DEMO",
+    "official_mirror_verified": false,
+    "ready_cells": 0,
+    "registry_integrity": true,
+    "withheld_cells": 1
+  },
+  "workflow_spec_sha256": "65581b0d72af19313b066a0e7fdaf8f6f569a526e9d086b256424fe016a69869"
+}

@@ -1,5 +1,22 @@
 # Claim Audit demo / 主张审计演示
 
+## Workflow Foundry candidate / 工作流工厂候选
+
+[![Foundry Candidate Demo poster](./foundry-candidate/poster-foundry-candidate-zh.png)](./foundry-candidate/standard-astro-foundry-local-demo.mp4)
+
+The [18-second Foundry Candidate walkthrough](./foundry-candidate/README.md)
+records a real disposable local run from `CAPABILITY_GAP` to
+`DEMO_RECORDED`. It deliberately ends `PARTIAL / NON_FORMAL_DEMO` because a
+byte-pinned DESI DR2 chain mirror was not supplied. No posterior interval,
+`SUPPORTED` verdict, or formal Evidence Pack was produced.
+
+[18 秒工作流工厂候选演示](./foundry-candidate/README.md)记录了一次真实、隔离的
+本地运行：从 `CAPABILITY_GAP` 到 `DEMO_RECORDED`。由于没有提供逐字节固定的
+DESI DR2 chain 镜像，它严格停在 `PARTIAL / NON_FORMAL_DEMO`，没有输出后验
+区间、`SUPPORTED` 或正式 Evidence Pack。
+
+## Claim Audit / 主张审计
+
 [![Standard Astro Claim Audit demo poster](./poster.png)](./standard-astro-claim-audit-demo.mp4)
 
 点击封面播放 32 秒 MP4。这是用一次真实本地运行的界面截图制作的分镜演示，不是连续录屏，也没有伪造“成功”结果。<br>

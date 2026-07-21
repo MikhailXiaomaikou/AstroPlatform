@@ -1,0 +1,72 @@
+{
+  "acceptance": {
+    "candidate_status_is_demo_recorded": true,
+    "cannot_emit_evidence_pack": true,
+    "cannot_publish": true,
+    "cannot_support_claim": true,
+    "demo_is_non_formal": true,
+    "event_chain_ends_in_demo_recorded": true
+  },
+  "candidate": {
+    "candidate_key": "desi_dr2_official_chain_summary_candidate",
+    "candidate_version_hash": "f4e8fa65deeb0b8662770fe436035596a89085ac33ef53cfb8e974d191268868",
+    "status": "DEMO_RECORDED",
+    "version_number": 1,
+    "workflow_id": "desi_dr2_official_chain_summary_v1",
+    "workflow_spec_hash": "65581b0d72af19313b066a0e7fdaf8f6f569a526e9d086b256424fe016a69869",
+    "workflow_version": "1.0.0-candidate.1"
+  },
+  "demo": {
+    "claim_eligible": false,
+    "evidence_class": "NON_FORMAL_DEMO",
+    "evidence_pack_allowed": false,
+    "failure_class": "official_chain_mirror_unavailable",
+    "publication_ready": false,
+    "status": "PARTIAL"
+  },
+  "event_chain": [
+    {
+      "event_hash": "46ef97a58426b2f1c9c5c703fe845b14c369af415ed4e85d42acc8957033f80e",
+      "event_type": "CANDIDATE_CREATED",
+      "previous_event_hash": null
+    },
+    {
+      "event_hash": "cfe6801cf98ef1150171e77c9fcf1758cf68c91e18f3b65378fd47717d8d8805",
+      "event_type": "CAPABILITY_REQUEST_LINKED",
+      "previous_event_hash": "46ef97a58426b2f1c9c5c703fe845b14c369af415ed4e85d42acc8957033f80e"
+    },
+    {
+      "event_hash": "b422d78b00184a2646ab467a1a5fa08b4102b4b087ab4fd74a49c566a0c8d53d",
+      "event_type": "CANDIDATE_VERSION_CREATED",
+      "previous_event_hash": "cfe6801cf98ef1150171e77c9fcf1758cf68c91e18f3b65378fd47717d8d8805"
+    },
+    {
+      "event_hash": "decf198219960f71dce6b777444edccf5e962d63acdf1cbb06b2e5c58600016c",
+      "event_type": "REQUEST_TRIAGED",
+      "previous_event_hash": "b422d78b00184a2646ab467a1a5fa08b4102b4b087ab4fd74a49c566a0c8d53d"
+    },
+    {
+      "event_hash": "79833a9a390eb4d65863a4f00362f3b5ec303e9e49c428ef3ddf85d9a53c2a73",
+      "event_type": "VALIDATION_QUEUED",
+      "previous_event_hash": "decf198219960f71dce6b777444edccf5e962d63acdf1cbb06b2e5c58600016c"
+    },
+    {
+      "event_hash": "900d64ad166b32aaa26a2a1f21680584502afbef65bf244c819656751e31eea5",
+      "event_type": "VALIDATION_DISPATCHED",
+      "previous_event_hash": "79833a9a390eb4d65863a4f00362f3b5ec303e9e49c428ef3ddf85d9a53c2a73"
+    },
+    {
+      "event_hash": "46e13270462347d11414bcdf9e19c5be0fef1e465c30d47f47589fe2d7a751fe",
+      "event_type": "DEMO_RECORDED",
+      "previous_event_hash": "900d64ad166b32aaa26a2a1f21680584502afbef65bf244c819656751e31eea5"
+    }
+  ],
+  "git_commit": "f9b637b1f7cf31e3ecad150abe50a7b0b674019f",
+  "local_runner_descriptor": {
+    "mode": "local_python_without_container",
+    "python": "3.14.5",
+    "warning": "This is not a signed OCI image digest and cannot be promoted."
+  },
+  "scope": "disposable_local_non_production_demo",
+  "scientific_verdict_at_entry": "CAPABILITY_GAP"
+}
