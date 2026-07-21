@@ -234,6 +234,7 @@ async def test_prod_alias_enrollment_requires_full_worker_sha(
         enrollment_code="x" * 32,
         name="Invalid production node",
         public_key="x" * 40,
+        protocol_version="1",
         capabilities={
             "workflows": [UNION3_REPRODUCTION_WORKFLOW_ID],
             "concurrency": 1,

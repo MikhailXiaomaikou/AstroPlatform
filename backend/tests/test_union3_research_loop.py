@@ -45,6 +45,8 @@ from app.services.worker_protocol import (
     lease_next_task,
     sign_task_envelope,
 )
+from app.services.worker_contract import WORKER_PROTOCOL_VERSION
+from app.services.workflow_registry_v2 import list_worker_execution_bindings
 from tests.union3_source_test_support import registered_union3_snapshot
 
 
@@ -154,10 +156,15 @@ async def _completed_primary_attempt(db_session, monkeypatch):
         name="Union3 test worker",
         public_key=_raw_public_key(worker_key),
         public_key_fingerprint="sha256:" + uuid.uuid4().hex * 2,
-        protocol_version="1",
+        protocol_version=WORKER_PROTOCOL_VERSION,
         status="ACTIVE",
-        capabilities={},
-        release_manifest={},
+        capabilities={
+            "workflows": list_worker_execution_bindings(
+                worker_image_digest="sha256:" + "2" * 64
+            ),
+            "concurrency": 1,
+        },
+        release_manifest={"image_digest": "sha256:" + "2" * 64},
     )
     db_session.add(node)
     await db_session.commit()
@@ -176,7 +183,7 @@ async def _completed_primary_attempt(db_session, monkeypatch):
         "protocol_version": attempt.task_envelope["protocol_version"],
         "workflow_key": attempt.task_envelope["workflow_key"],
         "git_commit": attempt.task_envelope["git_commit"],
-        "image_digest": attempt.task_envelope["image_digest"],
+        "image_digest": attempt.task_envelope["worker_image_digest"],
         "python_version": "3.14.0-test",
         "platform_system": "test",
         "platform_machine": "test-machine",
@@ -584,7 +591,7 @@ async def test_registered_retry_requeues_same_immutable_job_with_new_attempt_bud
         private_key=_raw_private_key(Ed25519PrivateKey.generate()),
         key_id="worker-task-v1",
         release_commit="3" * 40,
-        image_digest="sha256:" + "4" * 64,
+        image_digest="sha256:" + "2" * 64,
     )
     assert next_attempt is not None
     assert next_attempt.attempt_number == 2

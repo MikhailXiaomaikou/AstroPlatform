@@ -30,6 +30,8 @@ from app.models.worker_records import (
 )
 from app.services.worker_contract import (
     DEVELOPMENT_RELEASE_COMMIT,
+    LEGACY_WORKER_PROTOCOL_VERSION,
+    SUPPORTED_WORKER_PROTOCOL_VERSIONS,
     UNRESOLVED_RELEASE_COMMITS,
 )
 from app.services.worker_protocol import (
@@ -45,6 +47,10 @@ from app.services.worker_protocol import (
     lock_active_attempt_state,
     prepare_attempt_completion,
     verify_worker_request,
+)
+from app.services.workflow_registry_v2 import (
+    WorkflowRegistryError,
+    list_worker_execution_bindings,
 )
 from app.storage import (
     StorageIntegrityError,
@@ -218,11 +224,9 @@ async def create_enrollment(
 @router.post("/nodes/enroll", status_code=status.HTTP_201_CREATED)
 async def enroll_node(req: EnrollNodeRequest, db: AsyncSession = Depends(get_db)):
     _require_enabled()
+    if req.protocol_version not in SUPPORTED_WORKER_PROTOCOL_VERSIONS:
+        raise HTTPException(status_code=426, detail="worker_upgrade_required")
     advertised_workflows = req.capabilities.get("workflows")
-    if advertised_workflows != ["union3_flat_lcdm_sn_only_v1"]:
-        raise HTTPException(
-            status_code=422, detail="worker_capabilities_not_registered"
-        )
     if req.capabilities.get("concurrency") != 1:
         raise HTTPException(status_code=422, detail="worker_concurrency_must_be_one")
     required_digest = str(settings.docker_image_digest or "").strip().lower()
@@ -230,6 +234,25 @@ async def enroll_node(req: EnrollNodeRequest, db: AsyncSession = Depends(get_db)
         str(req.release_manifest.get("image_digest") or "").strip().lower()
     )
     observed_commit = str(req.release_manifest.get("git_commit") or "").strip().lower()
+    if req.protocol_version == LEGACY_WORKER_PROTOCOL_VERSION:
+        if advertised_workflows != ["union3_flat_lcdm_sn_only_v1"]:
+            raise HTTPException(
+                status_code=422, detail="worker_capabilities_not_registered"
+            )
+    else:
+        try:
+            expected_workflows = list_worker_execution_bindings(
+                worker_image_digest=observed_digest or "unknown"
+            )
+        except WorkflowRegistryError as exc:
+            raise HTTPException(status_code=422, detail=exc.code) from exc
+        if (
+            set(req.capabilities) != {"workflows", "concurrency"}
+            or advertised_workflows != expected_workflows
+        ):
+            raise HTTPException(
+                status_code=422, detail="worker_capabilities_not_registered"
+            )
     if required_digest and observed_digest != required_digest:
         raise HTTPException(status_code=422, detail="worker_image_digest_mismatch")
     if _is_production():

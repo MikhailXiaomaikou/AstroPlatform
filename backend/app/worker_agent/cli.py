@@ -17,6 +17,7 @@ import httpx
 
 from app.services.worker_contract import canonical_result_hash
 from app.services.union3_profile_plot import render_union3_profile_svg
+from app.services.workflow_registry_v2 import UNION3_PRIMARY_ENTRYPOINT_ID
 from app.worker_agent.client import (
     WorkerClientError,
     config_path,
@@ -199,6 +200,11 @@ def _server_cancellation_action(response: httpx.Response) -> str | None:
 def _run_registered_workflow(envelope: dict) -> dict:
     if envelope.get("workflow_key") != "union3_flat_lcdm_sn_only_v1":
         raise WorkerClientError("Only the registered Union3 workflow is executable")
+    entrypoint_id = str(
+        envelope.get("entrypoint_id") or UNION3_PRIMARY_ENTRYPOINT_ID
+    )
+    if entrypoint_id != UNION3_PRIMARY_ENTRYPOINT_ID:
+        raise WorkerClientError("Task requested an unregistered entrypoint")
     from app.services.union3_reproduction import run_union3_primary_reproduction
 
     result = run_union3_primary_reproduction()
@@ -314,7 +320,7 @@ def _science_artifacts(result: dict, envelope: dict) -> dict[str, tuple[bytes, s
         "protocol_version": envelope["protocol_version"],
         "workflow_key": envelope["workflow_key"],
         "git_commit": envelope["git_commit"],
-        "image_digest": envelope["image_digest"],
+        "image_digest": envelope.get("worker_image_digest", envelope.get("image_digest")),
         "python_version": platform.python_version(),
         "platform_system": platform.system(),
         "platform_machine": platform.machine(),

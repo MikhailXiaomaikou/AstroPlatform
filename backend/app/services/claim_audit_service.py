@@ -33,6 +33,13 @@ from app.services.server_evidence import (
     verify_scientific_attestation,
     verify_research_job_attestation,
 )
+from app.services.workflow_registry_v2 import (
+    DESI_DR2_MATRIX_WORKFLOW_ID,
+    WorkflowRegistryError,
+    assert_workflow_executable,
+    bind_formal_registry_record,
+    get_formal_workflow_spec,
+)
 
 
 CLAIM_AUDIT_SCHEMA_VERSION = 1
@@ -531,13 +538,30 @@ async def _execute_registered_workflow(
             ),
         }]
 
-    workflow_key = "desi_dr2_dark_energy_matrix_v1"
-    tool_name = "run_dark_energy_evidence_matrix"
-    tool_args = {
-        "model": "w0wa_cdm",
-        "supernova_sets": ["pantheon_plus", "union3", "des_sn5yr"],
-        "include_desi_dr1_reference": False,
-    }
+    workflow_key = DESI_DR2_MATRIX_WORKFLOW_ID
+    try:
+        registry_binding = assert_workflow_executable(workflow_key)
+    except WorkflowRegistryError as exc:
+        if exc.code not in {
+            "workflow_suspended",
+            "workflow_superseded",
+            "workflow_revoked",
+        }:
+            raise
+        return [], [
+            {
+                "gap_code": exc.code,
+                "workflow_id": workflow_key,
+                "next_action": (
+                    "Wait for an independently verified signed registry release; "
+                    "this workflow cannot execute formally yet."
+                ),
+            }
+        ]
+    workflow_spec = get_formal_workflow_spec(workflow_key)
+    bind_formal_registry_record(audit, registry_binding)
+    tool_name = workflow_spec.primary_entrypoint_id
+    tool_args = dict(workflow_spec.science_contract["tool_arguments"])
     prior_job_ids = list(audit.child_job_ids or [])
     if prior_job_ids:
         trusted, _missing = await _trusted_tool_results(
@@ -570,6 +594,7 @@ async def _execute_registered_workflow(
             user_id=owner_id,
             session_id=audit.session_id,
             tool_name=tool_name,
+            workflow_key=workflow_key,
             inputs_hash=_sha256(_canonical_json(tool_args)),
             args=tool_args,
             args_replayable=True,
@@ -580,12 +605,38 @@ async def _execute_registered_workflow(
             result=None,
             attestation=None,
             background_backend="claim_audit",
+            capability_requirements={
+                "workflow_version": registry_binding["workflow_version"],
+                "registry_epoch": registry_binding["registry_epoch"],
+                "registry_entry_hash": registry_binding["registry_entry_hash"],
+                "entrypoint_id": workflow_spec.primary_entrypoint_id,
+            },
             created_at=now,
             started_at=now,
             completed_at=None,
         )
         db.add(existing)
+        bind_formal_registry_record(existing, registry_binding)
     else:
+        expected_capability_requirements = {
+            "workflow_version": registry_binding["workflow_version"],
+            "registry_epoch": registry_binding["registry_epoch"],
+            "registry_entry_hash": registry_binding["registry_entry_hash"],
+            "entrypoint_id": workflow_spec.primary_entrypoint_id,
+        }
+        if (
+            existing.workflow_key not in {None, workflow_key}
+            or existing.tool_name != tool_name
+            or existing.args != tool_args
+            or existing.capability_requirements
+            not in ({}, expected_capability_requirements)
+        ):
+            raise RegisteredScientificIntegrityError(
+                "Registered workflow job binding changed"
+            )
+        existing.workflow_key = workflow_key
+        existing.capability_requirements = expected_capability_requirements
+        bind_formal_registry_record(existing, registry_binding)
         existing.status = "running"
         existing.progress = 0.05
         existing.progress_message = "Retrying the registered DESI DR2 workflow"

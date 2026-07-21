@@ -14,11 +14,12 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from app.services.worker_contract import canonical_json
+from app.services.worker_contract import WORKER_PROTOCOL_VERSION, canonical_json
 from app.services.registered_workflows import (
     UNION3_REPRODUCTION_WORKFLOW_ID,
     get_registered_dataset_pins,
 )
+from app.services.workflow_registry_v2 import get_worker_execution_binding
 from app.worker_agent.cli import build_parser
 from app.worker_agent import cli as worker_cli
 from app.worker_agent.client import (
@@ -355,6 +356,55 @@ def test_worker_accepts_only_signed_registered_task_envelope():
     }
     with pytest.raises(WorkerClientError, match="dataset pins"):
         verify_task_envelope(config, wrong_pins, now=now)
+
+
+def test_v2_worker_rejects_stale_registry_binding():
+    control_key = Ed25519PrivateKey.generate()
+    legacy_config = _config(control_key)
+    config = replace(legacy_config, protocol_version=WORKER_PROTOCOL_VERSION)
+    binding = get_worker_execution_binding(UNION3_REPRODUCTION_WORKFLOW_ID)
+    now = datetime.now(timezone.utc)
+    envelope = {
+        "protocol_version": WORKER_PROTOCOL_VERSION,
+        "job_id": "job-v2",
+        "audit_id": "audit-v2",
+        "attempt_id": str(uuid.uuid4()),
+        "lease_id": "a" * 64,
+        "workflow_key": UNION3_REPRODUCTION_WORKFLOW_ID,
+        "workflow_version": binding["workflow_version"],
+        "registry_epoch": binding["registry_epoch"],
+        "registry_entry_hash": binding["registry_entry_hash"],
+        "entrypoint_id": binding["entrypoint_id"],
+        "normalized_inputs": {},
+        "input_sha256": "b" * 64,
+        "dataset_pins": get_registered_dataset_pins(
+            UNION3_REPRODUCTION_WORKFLOW_ID
+        ),
+        "worker_image_digest": "unknown",
+        "git_commit": "c" * 40,
+        "resource_limits": {"cpu": 2, "memory_mb": 6144, "concurrency": 1},
+        "deadline": (now + timedelta(minutes=30)).isoformat(),
+        "lease_expires_at": (now + timedelta(minutes=2)).isoformat(),
+    }
+
+    def signed(value):
+        return {
+            **value,
+            "server_signature": {
+                "algorithm": "ed25519",
+                "key_id": "control-current",
+                "value": base64.b64encode(
+                    control_key.sign(canonical_json(value))
+                ).decode("ascii"),
+            },
+        }
+
+    verify_task_envelope(config, signed(envelope), now=now)
+    stale = {**envelope, "registry_entry_hash": "sha256:" + "0" * 64}
+    with pytest.raises(
+        WorkerClientError, match="workflow_registry_entry_hash_mismatch"
+    ):
+        verify_task_envelope(config, signed(stale), now=now)
 
 
 def test_cli_surface_is_narrow_and_has_no_arbitrary_exec_command():

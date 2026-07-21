@@ -36,6 +36,10 @@ from app.services.worker_protocol import (
     reconcile_expired_attempts,
     verify_worker_request,
 )
+from app.services.workflow_registry_v2 import (
+    get_worker_execution_binding,
+    list_worker_execution_bindings,
+)
 
 
 class _FakeRedis:
@@ -87,13 +91,13 @@ def _signed_headers(
         nonce=nonce,
         body_sha256=hashlib.sha256(body).hexdigest(),
         worker_id=str(node.id),
-        protocol_version=WORKER_PROTOCOL_VERSION,
+        protocol_version=node.protocol_version,
     )
     return {
         "x-standard-astro-worker-id": str(node.id),
         "x-standard-astro-worker-timestamp": timestamp_text,
         "x-standard-astro-worker-nonce": nonce,
-        "x-standard-astro-worker-protocol": WORKER_PROTOCOL_VERSION,
+        "x-standard-astro-worker-protocol": node.protocol_version,
         "x-standard-astro-worker-signature": base64.b64encode(
             private.sign(message)
         ).decode("ascii"),
@@ -362,6 +366,111 @@ async def test_task_envelope_is_owner_bound_signed_and_contains_no_credentials(
             allow_nan=False,
         ).encode("utf-8"),
     )
+
+
+@pytest.mark.asyncio
+async def test_v2_task_envelope_is_bound_to_compiled_registry(db_session):
+    owner = await _user(db_session, username="v2-worker-owner")
+    _private, public = _worker_keypair()
+    _token, code = await create_enrollment_token(db_session, user_id=owner.id)
+    image_digest = "sha256:" + "2" * 64
+    node = await enroll_worker_node(
+        db_session,
+        enrollment_code=code,
+        name="V2 node",
+        public_key=public,
+        protocol_version=WORKER_PROTOCOL_VERSION,
+        capabilities={
+            "workflows": list_worker_execution_bindings(
+                worker_image_digest=image_digest
+            ),
+            "concurrency": 1,
+        },
+        release_manifest={
+            "git_commit": "1" * 40,
+            "image_digest": image_digest,
+        },
+    )
+    binding = get_worker_execution_binding("union3_flat_lcdm_sn_only_v1")
+    job = ResearchJob(
+        job_id="v2-owner-job",
+        user_id=owner.id,
+        tool_name="union3_flat_lcdm_sn_only_v1",
+        workflow_key="union3_flat_lcdm_sn_only_v1",
+        inputs_hash="a" * 64,
+        args={
+            "workflow_key": "union3_flat_lcdm_sn_only_v1",
+            "worker_protocol_version": WORKER_PROTOCOL_VERSION,
+            "dataset_pins": [],
+        },
+        status="QUEUED",
+        background_backend="https_worker",
+        capability_requirements={"protocol_version": WORKER_PROTOCOL_VERSION},
+        created_at=datetime.now(timezone.utc),
+    )
+    db_session.add(job)
+    await db_session.commit()
+
+    attempt = await lease_next_task(
+        db_session,
+        node=node,
+        private_key=_private_seed(Ed25519PrivateKey.generate()),
+        key_id="control-v2",
+        release_commit="1" * 40,
+        image_digest=image_digest,
+    )
+    assert attempt is not None
+    envelope = attempt.task_envelope
+    assert envelope["protocol_version"] == WORKER_PROTOCOL_VERSION
+    assert envelope["workflow_version"] == binding["workflow_version"]
+    assert envelope["registry_epoch"] == binding["registry_epoch"]
+    assert envelope["registry_entry_hash"] == binding["registry_entry_hash"]
+    assert envelope["entrypoint_id"] == binding["entrypoint_id"]
+    assert envelope["worker_image_digest"] == image_digest
+    assert "image_digest" not in envelope
+
+
+@pytest.mark.asyncio
+async def test_v1_node_gets_stable_upgrade_required_for_v2_job(db_session):
+    owner = await _user(db_session, username="legacy-worker-owner")
+    _private, public = _worker_keypair()
+    _token, code = await create_enrollment_token(db_session, user_id=owner.id)
+    node = await enroll_worker_node(
+        db_session,
+        enrollment_code=code,
+        name="Legacy node",
+        public_key=public,
+        protocol_version="1",
+    )
+    db_session.add(
+        ResearchJob(
+            job_id="requires-v2",
+            user_id=owner.id,
+            tool_name="union3_flat_lcdm_sn_only_v1",
+            inputs_hash="a" * 64,
+            args={
+                "workflow_key": "union3_flat_lcdm_sn_only_v1",
+                "worker_protocol_version": WORKER_PROTOCOL_VERSION,
+            },
+            status="QUEUED",
+            background_backend="https_worker",
+            capability_requirements={"protocol_version": WORKER_PROTOCOL_VERSION},
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(WorkerProtocolError) as error:
+        await lease_next_task(
+            db_session,
+            node=node,
+            private_key=_private_seed(Ed25519PrivateKey.generate()),
+            key_id="control-v2",
+            release_commit="1" * 40,
+            image_digest="sha256:" + "2" * 64,
+        )
+    assert error.value.code == "worker_upgrade_required"
+    assert error.value.status_code == 426
 
 
 @pytest.mark.asyncio

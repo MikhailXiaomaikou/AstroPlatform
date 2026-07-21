@@ -78,9 +78,16 @@ from app.services.union3_reader import (
     build_union3_source_document_hash,
 )
 from app.services.worker_contract import (
+    LEGACY_WORKER_PROTOCOL_VERSION,
     WORKER_PROTOCOL_VERSION,
     canonical_json,
     canonical_result_hash,
+)
+from app.services.workflow_registry_v2 import (
+    WorkflowRegistryError,
+    assert_workflow_executable,
+    bind_formal_registry_record,
+    get_worker_execution_binding,
 )
 from app.storage import (
     delete_fits_all_versions,
@@ -329,8 +336,16 @@ def _primary_job_args(
     extraction: SourceExtraction,
     candidate: dict[str, Any],
 ) -> dict[str, Any]:
+    workflow_binding = get_worker_execution_binding(
+        UNION3_REPRODUCTION_WORKFLOW_ID
+    )
     return {
         "workflow_key": UNION3_REPRODUCTION_WORKFLOW_ID,
+        "worker_protocol_version": WORKER_PROTOCOL_VERSION,
+        "workflow_version": workflow_binding["workflow_version"],
+        "registry_epoch": workflow_binding["registry_epoch"],
+        "registry_entry_hash": workflow_binding["registry_entry_hash"],
+        "entrypoint_id": workflow_binding["entrypoint_id"],
         "audit_id": str(audit_id),
         "normalized_inputs": {
             "candidate_id": str(candidate["candidate_id"]),
@@ -636,13 +651,22 @@ def _validate_source_extraction_binding(
 
 
 def _primary_inputs_hash(args: dict[str, Any]) -> str:
-    return _request_hash(
-        {
-            "workflow_key": args.get("workflow_key"),
-            "normalized_inputs": args.get("normalized_inputs"),
-            "dataset_pins": args.get("dataset_pins"),
-        }
-    )
+    binding = {
+        "workflow_key": args.get("workflow_key"),
+        "normalized_inputs": args.get("normalized_inputs"),
+        "dataset_pins": args.get("dataset_pins"),
+    }
+    if args.get("worker_protocol_version") is not None:
+        binding.update(
+            {
+                "worker_protocol_version": args.get("worker_protocol_version"),
+                "workflow_version": args.get("workflow_version"),
+                "registry_epoch": args.get("registry_epoch"),
+                "registry_entry_hash": args.get("registry_entry_hash"),
+                "entrypoint_id": args.get("entrypoint_id"),
+            }
+        )
+    return _request_hash(binding)
 
 
 def _validate_audit_primary_binding(
@@ -663,12 +687,44 @@ def _validate_audit_primary_binding(
             supersedes_audit_id=audit.supersedes_audit_id,
         )
     )
-    expected_args = _primary_job_args(
+    current_expected_args = _primary_job_args(
         audit_id=audit.id,
         source=source,
         extraction=extraction,
         candidate=candidate,
     )
+    job_protocol = str(
+        (primary_job.capability_requirements or {}).get("protocol_version")
+        or (primary_job.args or {}).get("worker_protocol_version")
+        or LEGACY_WORKER_PROTOCOL_VERSION
+    )
+    if job_protocol == LEGACY_WORKER_PROTOCOL_VERSION:
+        expected_args = {
+            key: value
+            for key, value in current_expected_args.items()
+            if key
+            not in {
+                "worker_protocol_version",
+                "workflow_version",
+                "registry_epoch",
+                "registry_entry_hash",
+                "entrypoint_id",
+            }
+        }
+        expected_capability_requirements = {
+            "cpu_cores_min": 2,
+            "memory_mb_min": 6144,
+            "gpu_required": False,
+            "protocol_version": LEGACY_WORKER_PROTOCOL_VERSION,
+        }
+    else:
+        expected_args = current_expected_args
+        expected_capability_requirements = {
+            "cpu_cores_min": 2,
+            "memory_mb_min": 6144,
+            "gpu_required": False,
+            "protocol_version": WORKER_PROTOCOL_VERSION,
+        }
     expected_job_id = f"union3-primary-{audit.id.hex}"
     expected_atomic_claim = _expected_atomic_claim(candidate)
     if (
@@ -704,13 +760,7 @@ def _validate_audit_primary_binding(
         or primary_job.args_replayable is not True
         or primary_job.args != expected_args
         or primary_job.inputs_hash != _primary_inputs_hash(expected_args)
-        or primary_job.capability_requirements
-        != {
-            "cpu_cores_min": 2,
-            "memory_mb_min": 6144,
-            "gpu_required": False,
-            "protocol_version": "1",
-        }
+        or primary_job.capability_requirements != expected_capability_requirements
     ):
         raise Union3ResearchLoopError(
             "primary_job_immutable_binding_mismatch",
@@ -774,13 +824,32 @@ def _validate_attempt_envelope(
         "normalized_inputs",
         "input_sha256",
         "dataset_pins",
-        "image_digest",
         "git_commit",
         "resource_limits",
         "deadline",
         "lease_expires_at",
         "server_signature",
     }
+    protocol_version = str(
+        envelope.get("protocol_version") if isinstance(envelope, dict) else ""
+    )
+    if protocol_version == LEGACY_WORKER_PROTOCOL_VERSION:
+        expected_keys.add("image_digest")
+    elif protocol_version == WORKER_PROTOCOL_VERSION:
+        expected_keys.update(
+            {
+                "workflow_version",
+                "registry_epoch",
+                "registry_entry_hash",
+                "entrypoint_id",
+                "worker_image_digest",
+            }
+        )
+    else:
+        raise Union3ResearchLoopError(
+            "worker_task_envelope_invalid",
+            "The signed Worker task envelope uses an unsupported protocol",
+        )
     if not isinstance(envelope, dict) or set(envelope) != expected_keys:
         raise Union3ResearchLoopError(
             "worker_task_envelope_invalid", "The signed Worker task envelope is invalid"
@@ -814,10 +883,12 @@ def _validate_attempt_envelope(
             "The Worker task envelope signature cannot be verified",
         ) from exc
 
-    image_digest = str(envelope.get("image_digest") or "").lower()
+    image_digest = str(
+        envelope.get("worker_image_digest") or envelope.get("image_digest") or ""
+    ).lower()
     git_commit = str(envelope.get("git_commit") or "").lower()
     static_expected = {
-        "protocol_version": WORKER_PROTOCOL_VERSION,
+        "protocol_version": protocol_version,
         "job_id": primary_job.job_id,
         "audit_id": str(attempt.audit_id),
         "attempt_id": str(attempt.id),
@@ -828,6 +899,15 @@ def _validate_attempt_envelope(
         "dataset_pins": expected_args["dataset_pins"],
         "resource_limits": expected_args["resource_limits"],
     }
+    if protocol_version == WORKER_PROTOCOL_VERSION:
+        static_expected.update(
+            {
+                "workflow_version": expected_args["workflow_version"],
+                "registry_epoch": expected_args["registry_epoch"],
+                "registry_entry_hash": expected_args["registry_entry_hash"],
+                "entrypoint_id": expected_args["entrypoint_id"],
+            }
+        )
     if (
         attempt.input_hash != primary_job.inputs_hash
         or any(envelope.get(key) != value for key, value in static_expected.items())
@@ -860,6 +940,81 @@ def _validate_attempt_envelope(
             "The Worker task times do not match the durable lease",
         )
     return "sha256:" + _canonical_digest(envelope)
+
+
+def _validated_registry_binding(
+    *,
+    audit: ClaimAudit,
+    primary_job: ResearchJob,
+    attempt: ScienceExecutionAttempt,
+) -> dict[str, Any]:
+    """Bind final evidence to the currently trusted formal-registry entry."""
+
+    envelope = attempt.task_envelope
+    protocol_version = str(envelope.get("protocol_version") or "")
+    try:
+        if protocol_version == WORKER_PROTOCOL_VERSION:
+            assert_workflow_executable(
+                UNION3_REPRODUCTION_WORKFLOW_ID,
+                str(envelope.get("workflow_version") or ""),
+                registry_epoch=str(envelope.get("registry_epoch") or ""),
+                registry_entry_hash=str(envelope.get("registry_entry_hash") or ""),
+            )
+            binding = get_worker_execution_binding(
+                UNION3_REPRODUCTION_WORKFLOW_ID,
+                str(envelope.get("workflow_version") or ""),
+            )
+            if envelope.get("entrypoint_id") != binding["entrypoint_id"]:
+                raise WorkflowRegistryError("workflow_entrypoint_mismatch")
+        else:
+            binding = get_worker_execution_binding(
+                UNION3_REPRODUCTION_WORKFLOW_ID
+            )
+    except WorkflowRegistryError as exc:
+        raise Union3ResearchLoopError(
+            exc.code,
+            "The formal workflow is revoked, inactive, or no longer matches the run",
+        ) from exc
+
+    runner_image_digest = str(
+        envelope.get("worker_image_digest") or envelope.get("image_digest") or ""
+    )
+    approved_digest = binding.get("approved_worker_image_digest")
+    if approved_digest and approved_digest != runner_image_digest:
+        raise Union3ResearchLoopError(
+            "worker_image_not_approved_for_workflow",
+            "The Worker image is not the image approved by the formal registry",
+        )
+    receipt = {
+        "workflow_id": UNION3_REPRODUCTION_WORKFLOW_ID,
+        "workflow_version": binding["workflow_version"],
+        "registry_epoch": binding["registry_epoch"],
+        "registry_entry_hash": binding["registry_entry_hash"],
+        "entrypoint_id": binding["entrypoint_id"],
+        "runner_image_digest": runner_image_digest,
+        "candidate_id": binding.get("candidate_id"),
+        "candidate_version": binding.get("candidate_version"),
+        "candidate_version_hash": binding.get("candidate_version_hash"),
+        "approval_attestation_hash": binding.get("approval_attestation_hash"),
+        "build_attestation_hash": binding.get("build_attestation_hash"),
+    }
+    for record in (audit, primary_job, attempt):
+        for field_name, expected in receipt.items():
+            if not hasattr(record, field_name):
+                continue
+            observed = getattr(record, field_name)
+            if protocol_version == WORKER_PROTOCOL_VERSION:
+                if observed != expected:
+                    raise Union3ResearchLoopError(
+                        "workflow_registry_record_binding_mismatch",
+                        "A durable record no longer matches the signed registry binding",
+                    )
+            elif observed is not None and observed != expected:
+                raise Union3ResearchLoopError(
+                    "workflow_registry_record_binding_mismatch",
+                    "A legacy durable record conflicts with the current registry binding",
+                )
+    return receipt
 
 
 def _verifier_args(
@@ -1123,10 +1278,15 @@ async def create_union3_reproduction_audit(
             "cpu_cores_min": 2,
             "memory_mb_min": 6144,
             "gpu_required": False,
-            "protocol_version": "1",
+            "protocol_version": WORKER_PROTOCOL_VERSION,
         },
         created_at=_utcnow(),
     )
+    workflow_binding = get_worker_execution_binding(
+        UNION3_REPRODUCTION_WORKFLOW_ID
+    )
+    bind_formal_registry_record(audit, workflow_binding)
+    bind_formal_registry_record(job, workflow_binding)
     audit.child_job_ids = [job_id]
     audit.evidence_graph = {**audit.evidence_graph, "primary_job_id": job_id}
     db.add_all([audit, job])
@@ -1418,6 +1578,11 @@ async def verify_union3_attempt(
         primary_job=primary_job,
         expected_args=expected_args,
     )
+    registry_binding = _validated_registry_binding(
+        audit=audit,
+        primary_job=primary_job,
+        attempt=attempt,
+    )
     artifact_evidence = await _load_verified_science_artifacts(db, attempt=attempt)
     try:
         verification = await asyncio.to_thread(
@@ -1513,6 +1678,7 @@ async def verify_union3_attempt(
             != artifact_evidence["binding_hash"]
             or graph.get("primary_artifacts") != artifact_evidence["artifacts"]
             or graph.get("primary_environment") != artifact_evidence["environment"]
+            or graph.get("workflow_registry_binding") != registry_binding
             or graph.get("independent_verification_job_id") != verifier_job_id
             or graph.get("independent_verification_inputs_hash") != verifier_inputs_hash
             or graph.get("machine_support_eligible") is not eligible
@@ -1568,6 +1734,7 @@ async def verify_union3_attempt(
             "primary_artifact_binding_hash": artifact_evidence["binding_hash"],
             "primary_artifacts": artifact_evidence["artifacts"],
             "primary_environment": artifact_evidence["environment"],
+            "workflow_registry_binding": registry_binding,
             "independent_verification_job_id": verifier_job_id,
             "independent_verification_inputs_hash": verifier_inputs_hash,
             "machine_support_eligible": eligible,
@@ -1700,6 +1867,11 @@ async def _load_finalization_bindings(
         primary_job=primary_job,
         expected_args=expected_primary_args,
     )
+    registry_binding = _validated_registry_binding(
+        audit=audit,
+        primary_job=primary_job,
+        attempt=attempt,
+    )
     artifact_evidence = await _load_verified_science_artifacts(db, attempt=attempt)
     expected_verifier_args = _verifier_args(
         audit=audit,
@@ -1740,6 +1912,7 @@ async def _load_finalization_bindings(
         != artifact_evidence["binding_hash"]
         or graph.get("primary_artifacts") != artifact_evidence["artifacts"]
         or graph.get("primary_environment") != artifact_evidence["environment"]
+        or graph.get("workflow_registry_binding") != registry_binding
         or graph.get("independent_verification_job_id") != verifier_job.job_id
         or graph.get("independent_verification_inputs_hash") != verifier_job.inputs_hash
         or graph.get("machine_support_eligible") is not True
@@ -1887,10 +2060,12 @@ def _validate_worker_environment(
     envelope = attempt.task_envelope
     expected = {
         "schema_version": "standard_astro_worker_environment_v1",
-        "protocol_version": WORKER_PROTOCOL_VERSION,
+        "protocol_version": str(envelope.get("protocol_version") or ""),
         "workflow_key": UNION3_REPRODUCTION_WORKFLOW_ID,
         "git_commit": str(envelope.get("git_commit") or ""),
-        "image_digest": str(envelope.get("image_digest") or ""),
+        "image_digest": str(
+            envelope.get("worker_image_digest") or envelope.get("image_digest") or ""
+        ),
         "mcmc": "not_applicable",
     }
     if any(environment.get(key) != value for key, value in expected.items()):
@@ -2064,6 +2239,11 @@ def _pack_files(
     finalized_at: datetime,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     workflow = get_registered_workflow(UNION3_REPRODUCTION_WORKFLOW_ID)
+    registry_binding = _validated_registry_binding(
+        audit=audit,
+        primary_job=primary_job,
+        attempt=attempt,
+    )
     chosen_review = reviews[0]
     anchors = list(extraction.extraction_payload.get("anchors") or [])
     payloads = artifact_evidence["payloads"]
@@ -2119,6 +2299,7 @@ def _pack_files(
         ),
         "provenance.json": {
             "workflow": workflow,
+            "workflow_registry_binding": registry_binding,
             "software_release": str(
                 os.getenv("STANDARD_ASTRO_RELEASE") or "unreleased"
             ),
@@ -2135,7 +2316,11 @@ def _pack_files(
             "primary_task_envelope_hash": str(
                 (audit.evidence_graph or {}).get("primary_task_envelope_hash")
             ),
-            "worker_image_digest": str(attempt.task_envelope["image_digest"]),
+            "worker_image_digest": str(
+                attempt.task_envelope.get("worker_image_digest")
+                or attempt.task_envelope.get("image_digest")
+                or ""
+            ),
             "worker_git_commit": str(attempt.task_envelope["git_commit"]),
             "independent_verification_job_id": verifier_job.job_id,
             "independent_verification_inputs_hash": verifier_job.inputs_hash,
@@ -2200,6 +2385,11 @@ def _pack_files(
         "software_release": str(os.getenv("STANDARD_ASTRO_RELEASE") or "unreleased"),
         "git_commit": _release_commit(),
         "workflow_key": UNION3_REPRODUCTION_WORKFLOW_ID,
+        "workflow_version": registry_binding["workflow_version"],
+        "registry_epoch": registry_binding["registry_epoch"],
+        "registry_entry_hash": registry_binding["registry_entry_hash"],
+        "entrypoint_id": registry_binding["entrypoint_id"],
+        "runner_image_digest": registry_binding["runner_image_digest"],
         "input_hashes": {
             "source_document": source.source_document_hash,
             "source_extraction": extraction.extraction_payload_hash,
@@ -2317,6 +2507,11 @@ async def _validate_finalized_pack(
     reviews: list[ClaimAuditReview],
 ) -> None:
     latest_review = reviews[0]
+    registry_binding = _validated_registry_binding(
+        audit=audit,
+        primary_job=primary_job,
+        attempt=attempt,
+    )
     pack_hash = str(pack.pack_hash or "")
     expected_artifact_ref = (
         f"evidence-packs/v2/{audit.user_id}/{audit.id}/"
@@ -2370,6 +2565,13 @@ async def _validate_finalized_pack(
         or manifest.get("owner") != str(audit.user_id)
         or manifest.get("workspace_id") != str(audit.workspace_id)
         or manifest.get("workflow_key") != UNION3_REPRODUCTION_WORKFLOW_ID
+        or manifest.get("workflow_version") != registry_binding["workflow_version"]
+        or manifest.get("registry_epoch") != registry_binding["registry_epoch"]
+        or manifest.get("registry_entry_hash")
+        != registry_binding["registry_entry_hash"]
+        or manifest.get("entrypoint_id") != registry_binding["entrypoint_id"]
+        or manifest.get("runner_image_digest")
+        != registry_binding["runner_image_digest"]
         or manifest.get("scientific_verdict") != "SUPPORTED"
         or manifest.get("claim_scope") != "reproduction_of_published_constraint"
         or manifest.get("reproduction_ready") is not True

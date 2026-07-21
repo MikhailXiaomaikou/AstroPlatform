@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import hmac
 import secrets
 import uuid
 from collections.abc import Mapping
@@ -36,10 +37,19 @@ from app.models.worker_records import (
     WorkerNode,
 )
 from app.services.worker_contract import (
+    LEGACY_WORKER_PROTOCOL_VERSION,
+    SUPPORTED_WORKER_PROTOCOL_VERSIONS,
     WORKER_PROTOCOL_VERSION,
     canonical_json as _canonical_json,
     canonical_result_hash,
     canonical_worker_request,
+)
+from app.services.workflow_registry_v2 import (
+    WorkflowRegistryError,
+    assert_workflow_executable,
+    bind_formal_registry_record,
+    get_worker_execution_binding,
+    list_formal_workflows,
 )
 
 WORKER_CLOCK_SKEW_SECONDS = 5 * 60
@@ -51,7 +61,12 @@ WORKER_MAX_ATTEMPTS = 3
 WORKER_MAX_NODES_PER_USER = 3
 WORKER_RESULT_MAX_BYTES = 2 * 1024 * 1024
 
-REGISTERED_LOCAL_WORKFLOWS = frozenset({"union3_flat_lcdm_sn_only_v1"})
+def _registered_local_workflows() -> frozenset[str]:
+    return frozenset(
+        item["workflow_id"]
+        for item in list_formal_workflows()
+        if item["local_worker_executable"]
+    )
 
 __all__ = [
     "WORKER_PROTOCOL_VERSION",
@@ -211,8 +226,8 @@ async def enroll_worker_node(
     """Atomically consume an enrollment code and register one node."""
 
     enrolled_at = now or _utcnow()
-    if protocol_version != WORKER_PROTOCOL_VERSION:
-        raise WorkerProtocolError("unsupported_worker_protocol", status_code=422)
+    if protocol_version not in SUPPORTED_WORKER_PROTOCOL_VERSIONS:
+        raise WorkerProtocolError("worker_upgrade_required", status_code=426)
     clean_name = name.strip()
     if not clean_name or len(clean_name) > 160:
         raise WorkerProtocolError("invalid_worker_name", status_code=422)
@@ -307,8 +322,8 @@ async def verify_worker_request(
     signature_text = str(headers.get("x-standard-astro-worker-signature", "")).strip()
     if not all((worker_id_text, timestamp, nonce, protocol_version, signature_text)):
         raise WorkerProtocolError("missing_worker_signature", status_code=401)
-    if protocol_version != WORKER_PROTOCOL_VERSION:
-        raise WorkerProtocolError("unsupported_worker_protocol", status_code=426)
+    if protocol_version not in SUPPORTED_WORKER_PROTOCOL_VERSIONS:
+        raise WorkerProtocolError("worker_upgrade_required", status_code=426)
     if not 16 <= len(nonce) <= 128 or any(ch.isspace() for ch in nonce):
         raise WorkerProtocolError("invalid_worker_nonce", status_code=401)
 
@@ -424,27 +439,111 @@ async def lease_next_task(
     leased_at = now or _utcnow()
     if node.status != "ACTIVE":
         raise WorkerProtocolError("worker_not_accepting_tasks", status_code=409)
-    job = (
-        await db.execute(
-            select(ResearchJob)
-            .where(
-                ResearchJob.user_id == node.user_id,
-                ResearchJob.status == "QUEUED",
-                ResearchJob.background_backend == "https_worker",
-                ResearchJob.tool_name.in_(REGISTERED_LOCAL_WORKFLOWS),
+    registered_local_workflows = _registered_local_workflows()
+    queued_jobs = list(
+        (
+            await db.execute(
+                select(ResearchJob)
+                .where(
+                    ResearchJob.user_id == node.user_id,
+                    ResearchJob.status == "QUEUED",
+                    ResearchJob.background_backend == "https_worker",
+                    ResearchJob.tool_name.in_(registered_local_workflows),
+                )
+                .order_by(ResearchJob.created_at.asc())
+                .with_for_update(skip_locked=True)
+                .limit(20)
             )
-            .order_by(ResearchJob.created_at.asc())
-            .with_for_update(skip_locked=True)
-            .limit(1)
         )
-    ).scalar_one_or_none()
+        .scalars()
+        .all()
+    )
+    job = next(
+        (
+            candidate
+            for candidate in queued_jobs
+            if str(
+                (candidate.capability_requirements or {}).get("protocol_version")
+                or (candidate.args or {}).get("worker_protocol_version")
+                or LEGACY_WORKER_PROTOCOL_VERSION
+            )
+            == node.protocol_version
+        ),
+        None,
+    )
     if job is None:
+        required_protocols = {
+            str(
+                (candidate.capability_requirements or {}).get("protocol_version")
+                or (candidate.args or {}).get("worker_protocol_version")
+                or LEGACY_WORKER_PROTOCOL_VERSION
+            )
+            for candidate in queued_jobs
+        }
+        if (
+            node.protocol_version == LEGACY_WORKER_PROTOCOL_VERSION
+            and WORKER_PROTOCOL_VERSION in required_protocols
+        ):
+            raise WorkerProtocolError("worker_upgrade_required", status_code=426)
         return None
 
     args = dict(job.args or {})
     workflow_key = str(args.get("workflow_key") or job.tool_name)
-    if workflow_key not in REGISTERED_LOCAL_WORKFLOWS:
+    if workflow_key not in registered_local_workflows:
         raise WorkerProtocolError("workflow_not_registered", status_code=422)
+    try:
+        workflow_binding = get_worker_execution_binding(workflow_key)
+        assert_workflow_executable(
+            workflow_key,
+            workflow_binding["workflow_version"],
+            registry_epoch=workflow_binding["registry_epoch"],
+            registry_entry_hash=workflow_binding["registry_entry_hash"],
+        )
+    except WorkflowRegistryError as exc:
+        raise WorkerProtocolError(exc.code, status_code=409) from exc
+    effective_image_digest = str(
+        image_digest
+        or (node.release_manifest or {}).get("image_digest")
+        or "unknown"
+    ).strip().lower()
+    approved_image_digest = workflow_binding.get("approved_worker_image_digest")
+    if approved_image_digest and not hmac.compare_digest(
+        str(approved_image_digest), effective_image_digest
+    ):
+        raise WorkerProtocolError(
+            "worker_image_not_approved_for_workflow",
+            status_code=409,
+        )
+    if node.protocol_version == WORKER_PROTOCOL_VERSION:
+        bind_formal_registry_record(
+            job,
+            workflow_binding,
+            runner_image_digest=effective_image_digest,
+        )
+        advertised = (node.capabilities or {}).get("workflows")
+        if not isinstance(advertised, list) or not any(
+            isinstance(item, Mapping)
+            and all(
+                item.get(key)
+                == (
+                    effective_image_digest
+                    if key == "worker_image_digest"
+                    else workflow_binding[key]
+                )
+                for key in (
+                    "workflow_id",
+                    "workflow_version",
+                    "registry_epoch",
+                    "registry_entry_hash",
+                    "entrypoint_id",
+                    "worker_image_digest",
+                )
+            )
+            for item in advertised
+        ):
+            raise WorkerProtocolError(
+                "worker_capability_registry_mismatch", status_code=409
+            )
     audit_id_value = args.get("audit_id")
     try:
         audit_id = uuid.UUID(str(audit_id_value)) if audit_id_value else None
@@ -461,6 +560,12 @@ async def lease_next_task(
             raise WorkerProtocolError("invalid_audit_binding", status_code=409)
         if audit.lifecycle_status not in {"QUEUED", "RUNNING"}:
             raise WorkerProtocolError("audit_not_leaseable", status_code=409)
+        if node.protocol_version == WORKER_PROTOCOL_VERSION:
+            bind_formal_registry_record(
+                audit,
+                workflow_binding,
+                runner_image_digest=effective_image_digest,
+            )
 
     attempt_count = await db.scalar(
         select(func.count(ScienceExecutionAttempt.id)).where(
@@ -497,7 +602,7 @@ async def lease_next_task(
         seconds=int(args.get("deadline_seconds") or 30 * 60)
     )
     unsigned_envelope = {
-        "protocol_version": WORKER_PROTOCOL_VERSION,
+        "protocol_version": node.protocol_version,
         "job_id": job.job_id,
         "audit_id": str(audit_id) if audit_id else None,
         "attempt_id": str(attempt_id),
@@ -513,6 +618,17 @@ async def lease_next_task(
         "deadline": deadline.isoformat(),
         "lease_expires_at": lease_expires_at.isoformat(),
     }
+    if node.protocol_version == WORKER_PROTOCOL_VERSION:
+        unsigned_envelope.pop("image_digest")
+        unsigned_envelope.update(
+            {
+                "workflow_version": workflow_binding["workflow_version"],
+                "registry_epoch": workflow_binding["registry_epoch"],
+                "registry_entry_hash": workflow_binding["registry_entry_hash"],
+                "entrypoint_id": workflow_binding["entrypoint_id"],
+                "worker_image_digest": effective_image_digest,
+            }
+        )
     envelope = sign_task_envelope(
         unsigned_envelope,
         private_key=private_key,
@@ -532,6 +648,12 @@ async def lease_next_task(
         task_envelope=envelope,
         last_heartbeat_at=leased_at,
     )
+    if node.protocol_version == WORKER_PROTOCOL_VERSION:
+        bind_formal_registry_record(
+            attempt,
+            workflow_binding,
+            runner_image_digest=effective_image_digest,
+        )
     db.add(attempt)
     job.status = "RUNNING"
     # Bind the durable job to the one lease whose result may be verified.
