@@ -63,7 +63,8 @@ From any clean Standard Astro checkout with backend dependencies installed:
 在已安装后端依赖的 Standard Astro 仓库中运行：
 
 ```bash
-./run-candidate-demo.sh /tmp/standard-astro-foundry-replay
+./docs/demo/foundry-candidate/run-candidate-demo.sh \
+  /tmp/standard-astro-foundry-replay
 ```
 
 The script looks for `backend/venv`, then `backend/.venv`, and finally
