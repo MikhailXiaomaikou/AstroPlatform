@@ -818,7 +818,7 @@ const translations: Record<string, Record<Lang, string>> = {
   "common.next":       { en: "Next",              zh: "下一页",        fr: "Suivant",          es: "Siguiente" },
 
   // ── Journal edition: Home page ─────────────────────────────────────────
-  "home.eyebrow":  { en: "Observational cosmology focus · open platform · peer-review ready", zh: "观测宇宙学专向 · 开放平台 · 默认符合同行评审标准", fr: "Axé cosmologie observationnelle · plateforme ouverte · prête pour l'évaluation par les pairs", es: "Enfoque en cosmología observacional · plataforma abierta · lista para revisión por pares" },
+  "home.eyebrow":  { en: "Observational cosmology focus · open research alpha · provenance first", zh: "观测宇宙学专向 · 开放研究 Alpha · 来源记录优先", fr: "Axé cosmologie observationnelle · alpha de recherche ouverte · traçabilité d'abord", es: "Enfoque en cosmología observacional · alfa de investigación abierta · procedencia primero" },
   "home.title":    { en: "An AI co-author for observational cosmology.", zh: "面向观测宇宙学的 AI 科研助手。", fr: "Un co-auteur IA pour la cosmologie observationnelle.", es: "Un co-autor IA para la cosmología observacional." },
   "home.subtitle": { en: "A research environment that refuses to fabricate.", zh: "拒绝编造的研究环境。", fr: "Un environnement de recherche qui refuse de fabriquer.", es: "Un entorno de investigación que se niega a fabricar." },
   "home.lead":     { en: "Work through source-pinned observational cosmology in one auditable conversation. Ask for a DESI BAO regression, a calibrated Pantheon+ likelihood, a Planck scope audit, or a four-chain diagnostic review — every result carries its data identity, environment and evidence tier, and preliminary work stays labelled preliminary.",
