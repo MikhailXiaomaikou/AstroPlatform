@@ -66,6 +66,7 @@ const ClaimAuditPage = lazy(() => import("./pages/ClaimAudit/ClaimAuditPage"));
 const PrivacyPage = lazy(() => import("./pages/Privacy/PrivacyPage"));
 const ResearchPage = lazy(() => import("./pages/Research/ResearchPage"));
 const ResearchWorkspacePage = lazy(() => import("./pages/Research/ResearchWorkspacePage"));
+const FoundryPage = lazy(() => import("./pages/Foundry/FoundryPage"));
 
 function useTheme() {
   // Journal edition: default to light. We use a new key (astro_theme_v2) so
@@ -118,15 +119,19 @@ function LangSwitch() {
   );
 }
 
-function ResearchNavLink({ onNavigate }: { onNavigate: () => void }) {
+function ResearchNavLinks({ onNavigate }: { onNavigate: () => void }) {
   const { t } = useI18n();
   const [enabled, setEnabled] = useState(false);
+  const [foundryEnabled, setFoundryEnabled] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     void getRuntimeConfig()
       .then((config) => {
-        if (!cancelled) setEnabled(config.research_workspace_enabled === true);
+        if (!cancelled) {
+          setEnabled(config.research_workspace_enabled === true);
+          setFoundryEnabled(config.foundry_candidate_catalog_enabled === true);
+        }
       })
       .catch(() => {
         if (!cancelled) setEnabled(false);
@@ -137,7 +142,12 @@ function ResearchNavLink({ onNavigate }: { onNavigate: () => void }) {
   }, []);
 
   if (!enabled) return null;
-  return <NavLink to="/research" onClick={onNavigate}>{t("nav.research")}</NavLink>;
+  return (
+    <>
+      <NavLink to="/research" onClick={onNavigate}>{t("nav.research")}</NavLink>
+      {foundryEnabled && <NavLink to="/foundry" onClick={onNavigate}>{t("nav.foundry")}</NavLink>}
+    </>
+  );
 }
 
 function NavBar() {
@@ -178,7 +188,7 @@ function NavBar() {
           <NavLink to="/"          end onClick={() => setMenuOpen(false)}>{t("nav.home")}</NavLink>
           <NavLink to="/chat"          onClick={() => setMenuOpen(false)}>{t("nav.ai_assistant")}</NavLink>
           <NavLink to="/claim-audit"   onClick={() => setMenuOpen(false)}>{t("nav.claim_audit")}</NavLink>
-          <ResearchNavLink onNavigate={() => setMenuOpen(false)} />
+          <ResearchNavLinks onNavigate={() => setMenuOpen(false)} />
           {BOT_CONSOLE_ENABLED && (
             <NavLink to="/bot" onClick={() => setMenuOpen(false)}>{t("nav.research_bot")}</NavLink>
           )}
@@ -422,6 +432,7 @@ function App() {
                 <Route path="/papers/public/:token" element={<PapersPage />} />
                 <Route path="/research" element={<ResearchPage />} />
                 <Route path="/research/workspaces/:workspaceId" element={<ResearchWorkspacePage />} />
+                <Route path="/foundry" element={<FoundryPage />} />
                 <Route path="/settings" element={<Navigate to="/account" replace />} />
                 <Route path="/shared/:token" element={<SharedSessionPage />} />
                 <Route path="/observations" element={<ObservationsPage />} />

@@ -539,6 +539,104 @@ async def test_server_owned_ready_job_can_support_exact_current_run_value(
         assert rejected_body["normalized_claims"][0]["parse_coverage"] == expected_coverage
 
 
+async def test_generic_audit_cannot_finalize_an_r3_registered_run(
+    app_client,
+    db_session,
+    monkeypatch,
+    tmp_path,
+):
+    from app.services.workflow_registry_v2 import (
+        UNION3_REPRODUCTION_WORKFLOW_ID,
+        get_worker_execution_binding,
+    )
+
+    _enable_claim_audit(monkeypatch, tmp_path)
+    headers = await _register(app_client, "audit-r3-result-gate")
+    profile = await app_client.get("/api/auth/me", headers=headers)
+    owner_id = uuid.UUID(profile.json()["id"])
+    binding = get_worker_execution_binding(UNION3_REPRODUCTION_WORKFLOW_ID)
+    now = datetime.now(timezone.utc)
+    job = ResearchJob(
+        job_id="formal-r3-generic-audit-job",
+        user_id=owner_id,
+        tool_name=binding["entrypoint_id"],
+        workflow_key=binding["workflow_id"],
+        workflow_id=binding["workflow_id"],
+        workflow_version=binding["workflow_version"],
+        registry_epoch=binding["registry_epoch"],
+        registry_entry_hash=binding["registry_entry_hash"],
+        entrypoint_id=binding["entrypoint_id"],
+        runner_image_digest=binding["approved_worker_image_digest"],
+        inputs_hash="7" * 64,
+        args={},
+        args_replayable=True,
+        status="completed",
+        result={
+            "success": True,
+            "analysis_status": "COMPLETED",
+            "publication_ready": True,
+            "__do_not_claim__": False,
+            "parameters": {"H0": {"median": 70.0, "hdi_94": [69.0, 71.0]}},
+            "datasets_used": [{"key": "union3", "version": "v1"}],
+        },
+        background_backend="https_worker",
+        created_at=now,
+        started_at=now,
+        completed_at=now,
+        updated_at=now,
+    )
+    formal_binding = {
+        "workflow_id": job.workflow_id,
+        "workflow_version": job.workflow_version,
+        "registry_epoch": job.registry_epoch,
+        "registry_entry_hash": job.registry_entry_hash,
+        "entrypoint_id": job.entrypoint_id,
+        "runner_image_digest": job.runner_image_digest,
+    }
+    job.attestation = build_research_job_attestation(
+        job_id=job.job_id,
+        owner_id=job.user_id,
+        session_id=job.session_id,
+        tool_name=job.tool_name,
+        inputs_hash=job.inputs_hash,
+        args=job.args,
+        args_replayable=job.args_replayable,
+        result=job.result,
+        background_backend=job.background_backend,
+        completed_at=job.completed_at,
+        formal_workflow_binding=formal_binding,
+    )
+    db_session.add(job)
+    await db_session.commit()
+
+    response = await app_client.post(
+        "/api/research/claim-audits",
+        json={
+            "claim_text": "H0 = 70 km/s/Mpc",
+            "source": {"kind": "doi", "value": "10.0000/r3-result-gate"},
+            "evidence_input_refs": [job.job_id],
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["scientific_verdict"] == "WITHHELD"
+    assert body["normalized_claims"][0]["supporting_evidence_ids"] == []
+    assert body["normalized_claims"][0]["withheld_reason"] == (
+        "independent_recomputation_and_human_result_review_required"
+    )
+    downloaded = await app_client.get(
+        body["evidence_pack"]["download_url"], headers=headers
+    )
+    with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        formal = manifest["tool_records"][0]["formal_workflow_binding"]
+        assert formal["workflow_id"] == UNION3_REPRODUCTION_WORKFLOW_ID
+        assert formal["risk_level"] == "R3"
+        assert formal["result_finalizer_required"] is True
+
+
 async def test_more_than_32_claim_units_is_rejected_before_execution(
     app_client,
     monkeypatch,
@@ -900,22 +998,10 @@ async def test_execute_registered_runs_fixed_desi_dr2_workflow_and_reports_missi
     body = response.json()
     assert body["lifecycle_status"] == "COMPLETED"
     assert body["scientific_verdict"] == "CAPABILITY_GAP"
-    assert body["capability_gaps"][0]["gap_code"] == "registered_data_unavailable"
-    assert len(body["child_job_ids"]) == 1
-    assert body["child_job_ids"] == body["evidence_record_ids"]
-    assert calls == [(
-        "run_dark_energy_evidence_matrix",
-        {
-            "model": "w0wa_cdm",
-            "supernova_sets": ["pantheon_plus", "union3", "des_sn5yr"],
-            "include_desi_dr1_reference": False,
-        },
-    )]
-    child = await db_session.get(ResearchJob, body["child_job_ids"][0])
-    assert child is not None
-    assert child.status == "completed"
-    assert child.attestation
-    assert child.args["include_desi_dr1_reference"] is False
+    assert body["capability_gaps"][0]["gap_code"] == "workflow_suspended"
+    assert body["child_job_ids"] == []
+    assert body["evidence_record_ids"] == []
+    assert calls == []
 
 
 async def test_execute_registered_without_exact_registry_selection_fails_closed(
@@ -941,7 +1027,7 @@ async def test_execute_registered_without_exact_registry_selection_fails_closed(
     assert body["child_job_ids"] == []
 
 
-async def test_ready_desi_workflow_pack_keeps_official_bytes_and_diagnostics(
+async def test_suspended_desi_workflow_cannot_enter_formal_pack(
     app_client,
     db_session,
     monkeypatch,
@@ -1012,67 +1098,9 @@ async def test_ready_desi_workflow_pack_keeps_official_bytes_and_diagnostics(
     assert response.status_code == 201, response.text
     body = response.json()
     assert body["lifecycle_status"] == "COMPLETED"
-    assert body["scientific_verdict"] == "WITHHELD"
-    download = await app_client.get(
-        body["evidence_pack"]["download_url"], headers=headers
-    )
-    with zipfile.ZipFile(io.BytesIO(download.content)) as archive:
-        pack_files = {name: archive.read(name) for name in archive.namelist()}
-        manifest = json.loads(archive.read("manifest.json"))
-        provenance = json.loads(archive.read("provenance.json"))
-        workflows = manifest["registered_workflows"]
-        assert workflows == provenance["registered_workflows"]
-        assert len(workflows) == 1
-        records = {record["job_id"]: record for record in manifest["tool_records"]}
-        assert records[ordinary.job_id]["tool"] == "run_cosmology_likelihood_chain"
-        assert records[ordinary.job_id]["analysis_status"] == "COMPLETED"
-        assert records[ordinary.job_id]["arguments"]["model"] == "lcdm"
-        matrix_job_id = body["child_job_ids"][0]
-        assert records[matrix_job_id]["tool"] == "run_dark_energy_evidence_matrix"
-        assert records[matrix_job_id]["analysis_status"] == "DARK_ENERGY_EVIDENCE_MATRIX_READY"
-        workflow = workflows[0]
-        assert workflow["registry"]["manifest_sha256"] == "f" * 64
-        assert workflow["seed_status"] == "upstream_not_published"
-        assert workflow["random_seed"] is None
-        assert workflow["tension_lab"]["status"] == "correlated_tension_withheld"
-        assert workflow["tension_lab"]["comparisons"][0]["tension_sigma"] is None
-        assert len(workflow["cells"]) == 3
-        for cell in workflow["cells"]:
-            assert cell["analysis_contract"]["weight_column"] == "weight"
-            assert len(cell["support_artifacts"]) == 7
-            assert all(
-                len(artifact["sha256"]) == 64
-                for artifact in cell["support_artifacts"]
-            )
-            assert cell["diagnostics"]["checkpoint"]["converged"] is True
-            assert (
-                cell["diagnostics"]["official_reference_acceptance"]["status"]
-                == "PASSED"
-            )
-            assert cell["contour_summaries"][0]["grid_hash"].startswith("sha256:")
-        report_head = archive.read("report.md").decode("utf-8").splitlines()[:10]
-        assert report_head[0] == "# Claim Audit — WITHHELD"
-        assert any("NOT CITABLE" in line for line in report_head)
-    changed_provenance = json.loads(pack_files["provenance.json"])
-    changed_provenance["registered_workflows"][0]["cells"][0]["diagnostics"][
-        "checkpoint"
-    ]["rminus1_last"] = 0.5
-    pack_files["provenance.json"] = json.dumps(
-        changed_provenance,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    from app.services.claim_audit_service import _build_zip
-
-    tampered = await app_client.post(
-        "/api/research/evidence-packs/verify",
-        files={"file": ("tampered-desi.zip", _build_zip(pack_files), "application/zip")},
-        headers=headers,
-    )
-    assert tampered.json() == {
-        "valid": False,
-        "reason": "hash_mismatch:provenance.json",
-    }
+    assert body["scientific_verdict"] == "CAPABILITY_GAP"
+    assert body["capability_gaps"][0]["gap_code"] == "workflow_suspended"
+    assert body["child_job_ids"] == []
 
 
 async def test_retry_reuses_signed_child_and_preserves_capability_gap(
@@ -1116,7 +1144,7 @@ async def test_retry_reuses_signed_child_and_preserves_capability_gap(
     )
     first = created.json()
     assert first["lifecycle_status"] == "FAILED_RETRYABLE"
-    assert dispatch_calls == 1
+    assert dispatch_calls == 0
     retried = await app_client.post(
         f"/api/research/claim-audits/{first['audit_id']}/retry",
         headers=headers,
@@ -1125,11 +1153,11 @@ async def test_retry_reuses_signed_child_and_preserves_capability_gap(
     body = retried.json()
     assert body["lifecycle_status"] == "COMPLETED"
     assert body["scientific_verdict"] == "CAPABILITY_GAP"
-    assert body["capability_gaps"][0]["gap_code"] == "registered_data_unavailable"
-    assert dispatch_calls == 1
+    assert body["capability_gaps"][0]["gap_code"] == "workflow_suspended"
+    assert dispatch_calls == 0
 
 
-async def test_registered_timeout_is_retryable_but_checksum_failure_is_final(
+async def test_suspended_registered_workflow_does_not_dispatch_provider(
     app_client,
     monkeypatch,
     tmp_path,
@@ -1153,46 +1181,11 @@ async def test_registered_timeout_is_retryable_but_checksum_failure_is_final(
         },
         headers=headers,
     )
-    assert timeout_response.json()["lifecycle_status"] == "FAILED_RETRYABLE"
-    assert timeout_response.json()["can_retry"] is True
-
-    async def checksum_failed(*_args, **_kwargs):
-        return {
-            "success": True,
-            "publication_ready": False,
-            "__do_not_claim__": True,
-            "official_ready_cells": 0,
-            "matrix_size": 1,
-            "matrix": [{
-                "cell_id": "desi_dr2:w0wa_cdm:pantheon_plus:default_cmb",
-                "status": "WITHHELD",
-                "withheld_reasons": ["official_chain_sha256_mismatch:chain.1.txt"],
-            }],
-        }
-
-    monkeypatch.setattr(ai_tools_cosmology, "dispatch_cosmology", checksum_failed)
-    integrity_response = await app_client.post(
-        "/api/research/claim-audits",
-        json={
-            "claim_text": "Run the registered DR2 matrix again.",
-            "source": {"kind": "doi", "value": "10.0000/checksum"},
-            "mode": "execute_registered",
-            "dataset_hints": ["desi_dr2_bao"],
-        },
-        headers=headers,
+    assert timeout_response.json()["lifecycle_status"] == "COMPLETED"
+    assert timeout_response.json()["scientific_verdict"] == "CAPABILITY_GAP"
+    assert timeout_response.json()["capability_gaps"][0]["gap_code"] == (
+        "workflow_suspended"
     )
-    integrity_body = integrity_response.json()
-    assert integrity_body["lifecycle_status"] == "FAILED_FINAL"
-    assert integrity_body["error_class"] == "RegisteredScientificIntegrityError"
-    assert integrity_body["evidence_pack"] is None
-    assert integrity_body["can_retry"] is False
-
-    retry_final = await app_client.post(
-        f"/api/research/claim-audits/{integrity_body['audit_id']}/retry",
-        headers=headers,
-    )
-    assert retry_final.status_code == 409
-    assert retry_final.json()["detail"] == "Only retryable failed audits can be retried"
 
 
 async def test_queued_audit_must_be_cancelled_before_delete(

@@ -30,6 +30,16 @@ from app.api.health import router as health_router
 from app.api.integration import router as integration_router
 from app.api.jobs import router as jobs_router
 from app.api.claim_audits import router as claim_audits_router
+from app.api.foundry import (
+    admin_router as foundry_admin_router,
+    internal_router as foundry_internal_router,
+    research_router as foundry_research_router,
+)
+from app.api.foundry_activation import router as foundry_activation_router
+from app.api.foundry_materialization import (
+    admin_router as foundry_materialization_admin_router,
+    internal_router as foundry_materialization_internal_router,
+)
 from app.api.public_evidence import router as public_evidence_router
 from app.api.research_workspaces import router as research_workspaces_router
 from app.api.worker_control import router as worker_control_router
@@ -60,11 +70,15 @@ from app.api.provenance import router as provenance_router
 from app.cors import get_cors_origins
 from app.config import settings
 from app.logging_config import CorrelationIdMiddleware
-from app.models.database import engine, Base
+from app.models.database import engine, Base, async_session
 from app.rate_limit import limiter
 from app.middleware.event_tracking import EventTrackingMiddleware
+from app.middleware.request_body_limit import RequestBodyLimitMiddleware
 from app.services.event_collector import event_collector, periodic_flush
 from app.services.provenance_v2.registry_loader import check_freshness
+# Importing this module is a production boot gate: if a fixed signed Registry
+# release is configured but invalid, API startup fails before serving traffic.
+from app.services import workflow_registry_v2 as _workflow_registry_v2  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -343,6 +357,52 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Skipping create_all in production; use `alembic upgrade head`")
 
+    # A protected import records only a deployment-ready signed file.  Status
+    # rows are projected after (and only after) a fresh process has booted that
+    # exact verified file. This keeps callback traffic from hot-activating or
+    # prematurely promoting a candidate.
+    from app.services.foundry_registry_activation import (
+        RegistryActivationError,
+        assert_persisted_activation_not_rollback,
+        assert_configured_registry_activation_bundle,
+    )
+    from app.services.foundry_registry_import import (
+        RegistryReleaseImportError,
+        reconcile_active_registry_projection,
+    )
+    try:
+        activation_bundle = assert_configured_registry_activation_bundle()
+        if activation_bundle is not None:
+            logger.info(
+                "Workflow Registry activation bundle verified: %s",
+                activation_bundle.manifest_hash,
+            )
+        async with async_session() as registry_db:
+            if activation_bundle is not None:
+                rollback_gate = await assert_persisted_activation_not_rollback(
+                    registry_db,
+                    packaged=activation_bundle,
+                )
+                logger.info(
+                    "Workflow Registry persisted activation gate: %s",
+                    rollback_gate,
+                )
+            registry_reconciliation = await reconcile_active_registry_projection(
+                registry_db,
+                trusted_public_keys=(
+                    settings.workflow_registry_verification_keyring
+                ),
+            )
+        logger.info(
+            "Workflow Registry startup reconciliation: %s",
+            registry_reconciliation,
+        )
+    except (RegistryActivationError, RegistryReleaseImportError) as exc:
+        logger.error("Workflow Registry startup reconciliation failed: %s", exc.code)
+        raise RuntimeError(
+            f"Workflow Registry startup reconciliation failed: {exc.code}"
+        ) from exc
+
     # R18: lightkurve/MAST occasionally leaves behind partial FITS cache files;
     # subsequent downloads of the same target keep hitting the corrupted file.
     # On startup, do one limited scan and delete only the FITS files that astropy
@@ -523,25 +583,13 @@ app.add_middleware(
 app.add_middleware(EventTrackingMiddleware)
 app.add_middleware(CorrelationIdMiddleware)
 
-# ── Security response headers ──
-MAX_REQUEST_BODY = 1_048_576  # 1 MB for non-upload endpoints
+# Count actual ASGI body bytes before dispatch.  This is deliberately installed
+# inside the security-header middleware so its 413 responses receive the same
+# browser protections as every other response.  Foundry Demo and Registry
+# callbacks have exact 4 MiB / 10 MiB caps; no broad internal prefix is exempt.
+app.add_middleware(RequestBodyLimitMiddleware)
 
-# Endpoints that legitimately accept >1 MB request bodies. The default
-# 1 MB cap protects /api/chat / /api/adql / etc. from oversized payloads,
-# but chat export packages an entire transcript (text + actions +
-# embedded figure metadata) and often crosses 1 MB on long sessions.
-# Bug reproducer: M5 export → frontend reports "network error" because
-# the middleware 413'd the POST before it reached the export handler.
-_LARGE_BODY_PREFIXES = (
-    "/api/data/fits/upload",   # FITS uploads have their own MAX_UPLOAD_SIZE
-    "/api/data/upload",        # generic uploads
-    "/api/export/",            # chat -> markdown / notebook / latex / bibtex
-    "/api/integration/jupyter/export",  # notebook bundles
-    "/api/workspace/batch-upload",  # workspace bulk upload
-    "/api/paper/",             # AI-drafted paper assembly with figures
-    "/api/research/",          # full research report bundles
-    "/api/public/evidence-packs/verify",  # streams with its own 25 MB hard cap
-)
+# ── Security response headers ──
 
 
 # T5 (PART T): null origin (file:// / data: URLs) is restricted to the admin
@@ -576,21 +624,6 @@ async def security_headers(request, call_next):
                     )
                 },
             )
-
-    # --- request body size gate (skip large-body endpoints) ---
-    path = request.url.path
-    if not any(path.startswith(p) for p in _LARGE_BODY_PREFIXES):
-        content_length = request.headers.get("content-length")
-        if content_length is not None:
-            try:
-                if int(content_length) > MAX_REQUEST_BODY:
-                    from starlette.responses import JSONResponse
-                    return JSONResponse(
-                        status_code=413,
-                        content={"detail": "Request body too large"},
-                    )
-            except ValueError:
-                pass  # malformed header — let downstream handle it
 
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -668,6 +701,12 @@ app.include_router(inference_router)
 app.include_router(integration_router)
 app.include_router(jobs_router)
 app.include_router(claim_audits_router)
+app.include_router(foundry_research_router)
+app.include_router(foundry_admin_router)
+app.include_router(foundry_internal_router)
+app.include_router(foundry_activation_router)
+app.include_router(foundry_materialization_admin_router)
+app.include_router(foundry_materialization_internal_router)
 app.include_router(public_evidence_router)
 app.include_router(research_workspaces_router)
 app.include_router(worker_control_router)

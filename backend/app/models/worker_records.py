@@ -109,6 +109,15 @@ class ScienceExecutionAttempt(Base):
         DateTime(timezone=True), nullable=False, index=True
     )
     input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Copied from the server-signed task envelope at lease time.  Keeping the
+    # binding in columns makes stale/revoked executions queryable even when an
+    # envelope schema is retired later.
+    workflow_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    workflow_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    registry_epoch: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    registry_entry_hash: Mapped[str | None] = mapped_column(String(71), nullable=True)
+    entrypoint_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    runner_image_digest: Mapped[str | None] = mapped_column(String(71), nullable=True)
     task_envelope: Mapped[dict] = mapped_column(JSONType(), nullable=False)
     result_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     result: Mapped[dict | None] = mapped_column(JSONType(), nullable=True)

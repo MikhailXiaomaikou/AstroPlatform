@@ -149,6 +149,18 @@ jobs:
           docker build --pull
           --build-arg TOOL_VERSION="$GITHUB_SHA"
           -t standard-astro-backend:ci backend
+      - name: Build local science Worker image
+        run: >-
+          docker build --pull
+          --build-arg TOOL_VERSION="$GITHUB_SHA"
+          --file backend/Dockerfile.worker
+          -t standard-astro-science-worker:ci backend
+      - name: Build isolated Foundry Demo image
+        run: >-
+          docker build --pull
+          --build-arg TOOL_VERSION="$GITHUB_SHA"
+          --file backend/Dockerfile.foundry-demo
+          -t standard-astro-foundry-demo:ci backend
       - name: Build frontend image
         run: >-
           docker build --pull

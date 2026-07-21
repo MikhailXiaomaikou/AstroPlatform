@@ -36,6 +36,7 @@ from app.services.claim_audit_service import (
     verify_pack_bytes,
 )
 from app.services.server_evidence import verify_research_job_attestation
+from app.services.foundry_catalog import serialize_capability_gaps
 from app.services.event_collector import event_collector
 from app.services.evidence_pack_v2 import (
     jcs_canonicalize,
@@ -94,7 +95,9 @@ def _serialize(audit: ClaimAudit, pack: EvidencePack | None = None) -> dict:
         "evidence_input_refs": list(audit.evidence_input_refs or []),
         "dataset_hints": list(audit.dataset_hints or []),
         "normalized_claims": list(audit.normalized_claims or []),
-        "capability_gaps": list(audit.capability_gaps or []),
+        "capability_gaps": serialize_capability_gaps(
+            audit.id, audit.capability_gaps or []
+        ),
         "evidence_record_ids": list(audit.evidence_record_ids or []),
         "child_job_ids": list(audit.child_job_ids or []),
         "evidence_graph": audit.evidence_graph,

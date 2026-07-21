@@ -13,6 +13,26 @@ from app.models.claim_audit_records import (
     PrivacyPreference,
 )
 from app.models.research_records import ProvenanceRecord, ResearchJob
+from app.models.foundry_records import (
+    CapabilityRequest,
+    FoundryCandidate,
+    FoundryCandidateEvent,
+    FoundryCandidateVersion,
+    FoundryDemoRun,
+    FoundryFormalBuildAttestation,
+    FoundryReview,
+    FoundryValidationRun,
+    WorkflowRegistryEntry,
+    WorkflowRegistryRelease,
+    WorkflowRegistryReleaseImport,
+)
+from app.models.foundry_materialization_records import (
+    FoundryMaterializationAttestation,
+    FoundryMaterializationReceipt,
+)
+from app.models.foundry_activation_records import (
+    WorkflowRegistryActivationReceipt,
+)
 from app.models.worker_records import (
     ScienceExecutionAttempt,
     WorkerArtifactIssuance,
@@ -35,6 +55,20 @@ __all__ = [
     "PrivacyPreference",
     "ProvenanceRecord",
     "ResearchJob",
+    "CapabilityRequest",
+    "FoundryCandidate",
+    "FoundryCandidateEvent",
+    "FoundryCandidateVersion",
+    "FoundryDemoRun",
+    "FoundryFormalBuildAttestation",
+    "FoundryReview",
+    "FoundryValidationRun",
+    "WorkflowRegistryEntry",
+    "WorkflowRegistryRelease",
+    "WorkflowRegistryReleaseImport",
+    "FoundryMaterializationAttestation",
+    "FoundryMaterializationReceipt",
+    "WorkflowRegistryActivationReceipt",
     "ResearchWorkspace",
     "SourceDocument",
     "SourceExtraction",

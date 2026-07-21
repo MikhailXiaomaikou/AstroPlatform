@@ -62,6 +62,17 @@ class ClaimAudit(Base):
     atomic_claim: Mapped[dict | None] = mapped_column(JSONType(), nullable=True)
     claim_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     risk_level: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Formal-workflow identity is stored in first-class columns as well as in
+    # the immutable evidence graph.  This lets operators revoke or audit one
+    # exact registry release without interpreting user-controlled JSON.
+    workflow_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
+    workflow_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    registry_epoch: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    registry_entry_hash: Mapped[str | None] = mapped_column(String(71), nullable=True)
+    entrypoint_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    runner_image_digest: Mapped[str | None] = mapped_column(String(71), nullable=True)
     review_status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="NOT_SUBMITTED", index=True
     )

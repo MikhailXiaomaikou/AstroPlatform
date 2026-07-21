@@ -224,6 +224,67 @@ class Settings(BaseSettings):
     union3_reproduction_enabled: bool = False
     evidence_pack_v2_enabled: bool = False
     local_science_worker_enabled: bool = False
+    workflow_registry_v2_enabled: bool = False
+    foundry_gap_tracking_enabled: bool = False
+    foundry_ai_drafting_enabled: bool = False
+    foundry_auto_demo_enabled: bool = False
+    foundry_candidate_catalog_enabled: bool = False
+    foundry_source_materialization_enabled: bool = False
+    foundry_registration_enabled: bool = False
+    # AI drafting and candidate execution are separate trust domains.  The
+    # draft callback is used only by a host-side CI ingestion step after the
+    # AI process has exited; it must never be an inference-provider key.
+    foundry_draft_result_secret: str = ""
+    foundry_draft_dispatch_backend: str = "disabled"
+    foundry_draft_github_token: str = ""
+    foundry_draft_github_repository: str = ""
+    foundry_draft_github_workflow: str = "foundry-candidate-draft.yml"
+    foundry_draft_github_ref: str = "main"
+    foundry_validation_result_secret: str = ""
+    foundry_validation_dispatch_backend: str = "disabled"
+    foundry_validation_github_token: str = ""
+    foundry_validation_github_repository: str = ""
+    foundry_validation_github_workflow: str = "foundry-candidate-demo.yml"
+    foundry_validation_github_ref: str = "main"
+    # Source materialization has its own protected-workflow trust domain. Only
+    # the public Ed25519 keys and a narrow callback bearer exist on Render.
+    foundry_materialization_result_secret: str = ""
+    foundry_materialization_attestation_verification_keys: str = ""
+    foundry_materialization_dispatch_backend: str = "disabled"
+    foundry_materialization_github_token: str = ""
+    foundry_materialization_github_repository: str = ""
+    foundry_materialization_github_workflow: str = "foundry-materialize-candidate.yml"
+    foundry_materialization_finalize_github_workflow: str = "foundry-finalize-materialization.yml"
+    foundry_materialization_github_ref: str = "main"
+    # Success and failure callbacks are deliberately separate.  The failure
+    # credential lives in an automatic, main-only Environment and can only
+    # close an attempt; it cannot submit a formal build attestation.
+    foundry_formal_build_result_secret: str = ""
+    foundry_formal_build_failure_result_secret: str = ""
+    foundry_formal_build_oidc_subject: str = ""
+    # Dedicated public verification keys for protected formal-build receipts.
+    # The matching private key exists only in the protected GitHub Environment
+    # and is never the formal Registry signing key.
+    foundry_formal_build_attestation_verification_keys: str = ""
+    foundry_formal_build_dispatch_backend: str = "disabled"
+    foundry_formal_build_github_token: str = ""
+    foundry_formal_build_github_repository: str = ""
+    foundry_formal_build_github_workflow: str = "foundry-formal-worker.yml"
+    foundry_formal_build_github_ref: str = "main"
+    # Narrow callback credential used only after the offline Registry signer.
+    # This is not the Ed25519 signing key and cannot activate a live process.
+    foundry_registry_import_result_secret: str = ""
+    # Read-only credential used only to fetch one exact, hash-bound pending
+    # release request. It is separate from both signer and import credentials.
+    foundry_registry_export_secret: str = ""
+    # Protected deployment workflow credential. It can export an already
+    # verified public import and append an activation receipt, but cannot sign.
+    foundry_registry_activation_result_secret: str = ""
+    foundry_registry_dispatch_backend: str = "disabled"
+    foundry_registry_github_token: str = ""
+    foundry_registry_github_repository: str = ""
+    foundry_registry_github_workflow: str = "foundry-registry-release.yml"
+    foundry_registry_github_ref: str = "main"
     claim_audit_execution_mode: str = (
         "celery" if _ENV == "production" else "inline"
     )
@@ -260,6 +321,13 @@ class Settings(BaseSettings):
     evidence_v2_signing_key_id: str = ""
     evidence_v2_signing_public_key: str = ""
     evidence_v2_verification_keys: str = ""
+
+    # Formal workflow registry releases use a third Ed25519 trust domain.
+    # Candidate-generation and Demo services never receive this private seed.
+    workflow_registry_signing_private_key: str = ""
+    workflow_registry_signing_key_id: str = ""
+    workflow_registry_signing_public_key: str = ""
+    workflow_registry_verification_keys: str = ""
 
     # Docker image digest for reproducibility
     docker_image_digest: str = ""
@@ -892,6 +960,608 @@ class Settings(BaseSettings):
                     "key as retired or revoked"
                 )
 
+        if self.app_role == "api" and str(
+            self.workflow_registry_signing_private_key or ""
+        ).strip():
+            raise ValueError(
+                "APP_ROLE=api must not receive WORKFLOW_REGISTRY_SIGNING_PRIVATE_KEY; "
+                "formal releases are signed by an offline protected release job"
+            )
+        configured_registry_public_key = str(
+            self.workflow_registry_signing_public_key or ""
+        ).strip()
+        if configured_registry_public_key:
+            _decode_ed25519_key(
+                "WORKFLOW_REGISTRY_SIGNING_PUBLIC_KEY",
+                configured_registry_public_key,
+            )
+            if configured_registry_public_key in {
+                str(self.worker_task_signing_public_key or "").strip(),
+                str(self.evidence_v2_signing_public_key or "").strip(),
+            }:
+                raise ValueError(
+                    "WORKFLOW_REGISTRY_SIGNING_PUBLIC_KEY must not reuse Worker "
+                    "or Evidence trust roots"
+                )
+        registry_key_id = str(self.workflow_registry_signing_key_id or "").strip()
+        if registry_key_id and any(ch.isspace() for ch in registry_key_id):
+            raise ValueError(
+                "WORKFLOW_REGISTRY_SIGNING_KEY_ID must contain no whitespace"
+            )
+        current_registry_key = (
+            self.workflow_registry_verification_keyring.get(registry_key_id)
+            if registry_key_id
+            else None
+        )
+        if (
+            current_registry_key
+            and configured_registry_public_key
+            and current_registry_key != configured_registry_public_key
+        ):
+            raise ValueError(
+                "WORKFLOW_REGISTRY_VERIFICATION_KEYS contains the current key id "
+                "with a different public key"
+            )
+
+        if (
+            _ENV == "production"
+            and self.app_role != "migration"
+            and self.workflow_registry_v2_enabled
+        ):
+            release_path = str(
+                os.getenv("WORKFLOW_REGISTRY_RELEASE_PATH") or ""
+            ).strip()
+            keyring_json = str(
+                os.getenv("WORKFLOW_REGISTRY_TRUSTED_KEYRING_JSON") or ""
+            ).strip()
+            keyring_path = str(
+                os.getenv("WORKFLOW_REGISTRY_TRUSTED_KEYRING_PATH") or ""
+            ).strip()
+            packaged_activation = (
+                Path(__file__).resolve().parent
+                / "registry_releases"
+                / "activation-manifest.json"
+            ).is_file()
+            explicit_activation_invalid = bool(release_path) and (
+                bool(keyring_json) == bool(keyring_path)
+            )
+            partial_explicit_activation = any(
+                (release_path, keyring_json, keyring_path)
+            ) and not release_path
+            if (
+                explicit_activation_invalid
+                or partial_explicit_activation
+                or (not release_path and not packaged_activation)
+            ):
+                raise ValueError(
+                    "WORKFLOW_REGISTRY_V2_ENABLED requires either a protected "
+                    "repository-baked activation bundle or one fixed signed "
+                    "WORKFLOW_REGISTRY_RELEASE_PATH with exactly one trusted "
+                    "Registry keyring source in production"
+                )
+
+        # Only an offline/non-API release process may validate private signing
+        # material. Candidate Catalog and normal API processes never read it.
+        if self.app_role != "api" and str(
+            self.workflow_registry_signing_private_key or ""
+        ).strip():
+            registry_seed = _decode_ed25519_key(
+                "WORKFLOW_REGISTRY_SIGNING_PRIVATE_KEY",
+                self.workflow_registry_signing_private_key,
+            )
+            self.workflow_registry_signing_key_id = str(
+                self.workflow_registry_signing_key_id or ""
+            ).strip()
+            if not self.workflow_registry_signing_key_id or any(
+                ch.isspace() for ch in self.workflow_registry_signing_key_id
+            ):
+                raise ValueError(
+                    "WORKFLOW_REGISTRY_SIGNING_KEY_ID must be non-empty and "
+                    "contain no whitespace"
+                )
+            if any(
+                _secret_reuses_ed25519_seed(registry_seed, secret)
+                for secret in (
+                    self.jwt_secret,
+                    self.deletion_tombstone_key,
+                    self.evidence_signing_key,
+                    self.worker_task_signing_private_key,
+                    self.evidence_v2_signing_private_key,
+                )
+            ):
+                raise ValueError(
+                    "WORKFLOW_REGISTRY_SIGNING_PRIVATE_KEY must be independent "
+                    "from login, deletion, Evidence, and Worker keys"
+                )
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+                Ed25519PrivateKey,
+            )
+
+            derived_registry_public_key = base64.b64encode(
+                Ed25519PrivateKey.from_private_bytes(registry_seed)
+                .public_key()
+                .public_bytes(
+                    encoding=serialization.Encoding.Raw,
+                    format=serialization.PublicFormat.Raw,
+                )
+            ).decode("ascii")
+            if configured_registry_public_key:
+                if configured_registry_public_key != derived_registry_public_key:
+                    raise ValueError(
+                        "WORKFLOW_REGISTRY_SIGNING_PUBLIC_KEY does not match the "
+                        "private signing seed"
+                    )
+            self.workflow_registry_signing_public_key = derived_registry_public_key
+            current_registry_key = self.workflow_registry_verification_keyring.get(
+                self.workflow_registry_signing_key_id
+            )
+            if (
+                current_registry_key
+                and current_registry_key != derived_registry_public_key
+            ):
+                raise ValueError(
+                    "WORKFLOW_REGISTRY_VERIFICATION_KEYS contains the current key "
+                    "id with a different public key"
+                )
+
+        self.foundry_draft_dispatch_backend = str(
+            self.foundry_draft_dispatch_backend or "disabled"
+        ).strip().lower()
+        if self.foundry_draft_dispatch_backend not in {
+            "disabled",
+            "github_actions",
+        }:
+            raise ValueError(
+                "FOUNDRY_DRAFT_DISPATCH_BACKEND must be disabled or github_actions"
+            )
+        if (
+            self.app_role == "api"
+            and _ENV == "production"
+            and self.foundry_ai_drafting_enabled
+        ):
+            if len(self.foundry_draft_result_secret) < 32:
+                raise ValueError(
+                    "FOUNDRY_DRAFT_RESULT_SECRET must contain at least 32 "
+                    "characters when AI drafting is enabled"
+                )
+            if (
+                self.foundry_draft_dispatch_backend != "github_actions"
+                or len(self.foundry_draft_github_token) < 32
+                or self.foundry_draft_github_repository.count("/") != 1
+                or str(self.foundry_draft_github_ref or "").strip() != "main"
+                or not re.fullmatch(
+                    r"[A-Za-z0-9_.-]+\.ya?ml",
+                    str(self.foundry_draft_github_workflow or ""),
+                )
+            ):
+                raise ValueError(
+                    "AI drafting requires a narrow GitHub Actions dispatch "
+                    "configuration fixed to the protected main branch"
+                )
+        if self.foundry_draft_result_secret and any(
+            self.foundry_draft_result_secret == str(secret or "")
+            for secret in (
+                self.jwt_secret,
+                self.admin_secret,
+                self.platform_deepseek_api_key,
+                self.foundry_validation_result_secret,
+                self.worker_task_signing_private_key,
+                self.evidence_v2_signing_private_key,
+                self.workflow_registry_signing_private_key,
+            )
+            if secret
+        ):
+            raise ValueError(
+                "FOUNDRY_DRAFT_RESULT_SECRET must be independent from AI, "
+                "admin, Demo, Worker, Evidence, and Registry credentials"
+            )
+        if self.foundry_draft_github_token and any(
+            self.foundry_draft_github_token == str(secret or "")
+            for secret in (
+                self.jwt_secret,
+                self.admin_secret,
+                self.platform_deepseek_api_key,
+                self.foundry_draft_result_secret,
+                self.foundry_validation_result_secret,
+                self.worker_task_signing_private_key,
+                self.evidence_v2_signing_private_key,
+                self.workflow_registry_signing_private_key,
+            )
+            if secret
+        ):
+            raise ValueError(
+                "FOUNDRY_DRAFT_GITHUB_TOKEN must be independent from AI, "
+                "admin, callback, Worker, Evidence, and Registry credentials"
+            )
+
+        if (
+            self.app_role == "api"
+            and _ENV == "production"
+            and self.foundry_auto_demo_enabled
+            and len(self.foundry_validation_result_secret) < 32
+        ):
+            raise ValueError(
+                "FOUNDRY_VALIDATION_RESULT_SECRET must contain at least 32 "
+                "characters when automatic Demo ingestion is enabled"
+            )
+        self.foundry_validation_dispatch_backend = str(
+            self.foundry_validation_dispatch_backend or "disabled"
+        ).strip().lower()
+        if self.foundry_validation_dispatch_backend not in {
+            "disabled",
+            "github_actions",
+        }:
+            raise ValueError(
+                "FOUNDRY_VALIDATION_DISPATCH_BACKEND must be disabled or github_actions"
+            )
+        if self.app_role == "api" and _ENV == "production" and self.foundry_auto_demo_enabled:
+            if (
+                self.foundry_validation_dispatch_backend != "github_actions"
+                or len(self.foundry_validation_github_token) < 32
+                or self.foundry_validation_github_repository.count("/") != 1
+                or str(self.foundry_validation_github_ref or "").strip()
+                != "main"
+                or not re.fullmatch(
+                    r"[A-Za-z0-9_.-]+\.ya?ml",
+                    str(self.foundry_validation_github_workflow or ""),
+                )
+            ):
+                raise ValueError(
+                    "Automatic Demo requires a narrow GitHub Actions dispatch "
+                    "configuration fixed to the protected main branch"
+                )
+        if self.foundry_validation_result_secret and any(
+            self.foundry_validation_result_secret == str(secret or "")
+            for secret in (
+                self.jwt_secret,
+                self.admin_secret,
+                self.foundry_draft_result_secret,
+                self.foundry_draft_github_token,
+                self.platform_deepseek_api_key,
+                self.worker_task_signing_private_key,
+                self.evidence_v2_signing_private_key,
+                self.workflow_registry_signing_private_key,
+            )
+            if secret
+        ):
+            raise ValueError(
+                "FOUNDRY_VALIDATION_RESULT_SECRET must be independent from AI, "
+                "admin, Worker, Evidence, and Registry credentials"
+            )
+        if self.foundry_validation_github_token and any(
+            self.foundry_validation_github_token == str(secret or "")
+            for secret in (
+                self.jwt_secret,
+                self.admin_secret,
+                self.foundry_draft_result_secret,
+                self.foundry_draft_github_token,
+                self.foundry_validation_result_secret,
+                self.platform_deepseek_api_key,
+                self.worker_task_signing_private_key,
+                self.evidence_v2_signing_private_key,
+                self.workflow_registry_signing_private_key,
+            )
+            if secret
+        ):
+            raise ValueError(
+                "FOUNDRY_VALIDATION_GITHUB_TOKEN must be independent from AI, "
+                "admin, callback, Worker, Evidence, and Registry credentials"
+            )
+        self.foundry_materialization_dispatch_backend = str(
+            self.foundry_materialization_dispatch_backend or "disabled"
+        ).strip().lower()
+        if self.foundry_materialization_dispatch_backend not in {
+            "disabled",
+            "github_actions",
+        }:
+            raise ValueError(
+                "FOUNDRY_MATERIALIZATION_DISPATCH_BACKEND must be disabled or github_actions"
+            )
+        if (
+            self.app_role == "api"
+            and _ENV == "production"
+            and self.foundry_source_materialization_enabled
+            and (
+                len(self.foundry_materialization_result_secret) < 32
+                or not self.foundry_materialization_attestation_verification_keyring
+                or self.foundry_materialization_dispatch_backend != "github_actions"
+                or len(self.foundry_materialization_github_token) < 32
+                or self.foundry_materialization_github_repository.count("/") != 1
+                or self.foundry_materialization_github_ref != "main"
+                or not re.fullmatch(
+                    r"[A-Za-z0-9_.-]+\.ya?ml",
+                    str(self.foundry_materialization_github_workflow or ""),
+                )
+                or not re.fullmatch(
+                    r"[A-Za-z0-9_.-]+\.ya?ml",
+                    str(self.foundry_materialization_finalize_github_workflow or ""),
+                )
+            )
+        ):
+            raise ValueError(
+                "Foundry source materialization requires a dedicated callback secret, "
+                "public attestation keyring, and narrow protected-main GitHub dispatch"
+            )
+        if self.foundry_materialization_result_secret and any(
+            self.foundry_materialization_result_secret == str(secret or "")
+            for secret in (
+                self.jwt_secret,
+                self.admin_secret,
+                self.foundry_draft_result_secret,
+                self.foundry_validation_result_secret,
+                self.foundry_formal_build_result_secret,
+                self.foundry_formal_build_failure_result_secret,
+                self.foundry_registry_export_secret,
+                self.foundry_registry_import_result_secret,
+                self.platform_deepseek_api_key,
+                self.worker_task_signing_private_key,
+                self.evidence_v2_signing_private_key,
+                self.workflow_registry_signing_private_key,
+            )
+            if secret
+        ):
+            raise ValueError(
+                "FOUNDRY_MATERIALIZATION_RESULT_SECRET must be independent from "
+                "AI, admin, Demo, formal-build, Worker, Evidence, and Registry credentials"
+            )
+        if self.foundry_materialization_github_token and any(
+            self.foundry_materialization_github_token == str(secret or "")
+            for secret in (
+                self.jwt_secret,
+                self.admin_secret,
+                self.foundry_draft_result_secret,
+                self.foundry_validation_result_secret,
+                self.foundry_materialization_result_secret,
+                self.foundry_formal_build_result_secret,
+                self.foundry_formal_build_failure_result_secret,
+                self.foundry_registry_export_secret,
+                self.foundry_registry_import_result_secret,
+                self.platform_deepseek_api_key,
+                self.worker_task_signing_private_key,
+                self.evidence_v2_signing_private_key,
+                self.workflow_registry_signing_private_key,
+            )
+            if secret
+        ):
+            raise ValueError(
+                "FOUNDRY_MATERIALIZATION_GITHUB_TOKEN must be independent from "
+                "callbacks, AI, Worker, Evidence, and Registry credentials"
+            )
+        self.foundry_formal_build_dispatch_backend = str(
+            self.foundry_formal_build_dispatch_backend or "disabled"
+        ).strip().lower()
+        if self.foundry_formal_build_dispatch_backend not in {
+            "disabled",
+            "github_actions",
+        }:
+            raise ValueError(
+                "FOUNDRY_FORMAL_BUILD_DISPATCH_BACKEND must be disabled or "
+                "github_actions"
+            )
+        self.foundry_registry_dispatch_backend = str(
+            self.foundry_registry_dispatch_backend or "disabled"
+        ).strip().lower()
+        if self.foundry_registry_dispatch_backend not in {
+            "disabled",
+            "github_actions",
+        }:
+            raise ValueError(
+                "FOUNDRY_REGISTRY_DISPATCH_BACKEND must be disabled or "
+                "github_actions"
+            )
+        if (
+            self.app_role == "api"
+            and _ENV == "production"
+            and self.foundry_registration_enabled
+            and (
+                len(self.foundry_formal_build_result_secret) < 32
+                or len(self.foundry_formal_build_failure_result_secret) < 32
+                or len(self.foundry_registry_import_result_secret) < 32
+                or len(self.foundry_registry_export_secret) < 32
+                or len(self.foundry_registry_activation_result_secret) < 32
+                or not str(self.foundry_formal_build_oidc_subject or "").strip()
+                or not self.foundry_formal_build_attestation_verification_keyring
+                or not self.workflow_registry_verification_keyring
+                or self.foundry_formal_build_dispatch_backend != "github_actions"
+                or len(self.foundry_formal_build_github_token) < 32
+                or self.foundry_formal_build_github_repository.count("/") != 1
+                or str(self.foundry_formal_build_github_ref or "").strip()
+                != "main"
+                or not re.fullmatch(
+                    r"[A-Za-z0-9_.-]+\.ya?ml",
+                    str(self.foundry_formal_build_github_workflow or ""),
+                )
+                or self.foundry_registry_dispatch_backend != "github_actions"
+                or len(self.foundry_registry_github_token) < 32
+                or self.foundry_registry_github_repository.count("/") != 1
+                or str(self.foundry_registry_github_ref or "").strip() != "main"
+                or not re.fullmatch(
+                    r"[A-Za-z0-9_.-]+\.ya?ml",
+                    str(self.foundry_registry_github_workflow or ""),
+                )
+            )
+        ):
+            raise ValueError(
+                "Foundry registration requires dedicated 32-character formal-build "
+                "success, formal-build failure, Registry-export, Registry-import, "
+                "and Registry-activation callback secrets, an exact "
+                "formal-build OIDC subject, public formal-build attestation and "
+                "Registry verification keyrings, and narrow formal-build and "
+                "Registry GitHub Actions dispatches fixed to protected main"
+            )
+        if self.foundry_formal_build_github_token and any(
+            self.foundry_formal_build_github_token == str(secret or "")
+            for secret in (
+                self.jwt_secret,
+                self.admin_secret,
+                self.foundry_draft_result_secret,
+                self.foundry_draft_github_token,
+                self.foundry_validation_result_secret,
+                self.foundry_validation_github_token,
+                self.foundry_formal_build_result_secret,
+                self.foundry_formal_build_failure_result_secret,
+                self.foundry_registry_export_secret,
+                self.foundry_registry_import_result_secret,
+                self.foundry_registry_github_token,
+                self.platform_deepseek_api_key,
+                self.worker_task_signing_private_key,
+                self.evidence_v2_signing_private_key,
+                self.workflow_registry_signing_private_key,
+            )
+            if secret
+        ):
+            raise ValueError(
+                "FOUNDRY_FORMAL_BUILD_GITHUB_TOKEN must be independent from AI, "
+                "admin, callback, Worker, Evidence, and Registry credentials"
+            )
+        if self.foundry_formal_build_result_secret and any(
+            self.foundry_formal_build_result_secret == str(secret or "")
+            for secret in (
+                self.jwt_secret,
+                self.admin_secret,
+                self.foundry_draft_result_secret,
+                self.foundry_draft_github_token,
+                self.foundry_validation_result_secret,
+                self.foundry_validation_github_token,
+                self.foundry_formal_build_failure_result_secret,
+                self.platform_deepseek_api_key,
+                self.worker_task_signing_private_key,
+                self.evidence_v2_signing_private_key,
+                self.workflow_registry_signing_private_key,
+            )
+            if secret
+        ):
+            raise ValueError(
+                "FOUNDRY_FORMAL_BUILD_RESULT_SECRET must be independent from "
+                "AI, admin, Demo, Worker, Evidence, and Registry credentials"
+            )
+        if self.foundry_formal_build_failure_result_secret and any(
+            self.foundry_formal_build_failure_result_secret
+            == str(secret or "")
+            for secret in (
+                self.jwt_secret,
+                self.admin_secret,
+                self.foundry_draft_result_secret,
+                self.foundry_draft_github_token,
+                self.foundry_validation_result_secret,
+                self.foundry_validation_github_token,
+                self.foundry_materialization_result_secret,
+                self.foundry_formal_build_result_secret,
+                self.foundry_formal_build_github_token,
+                self.foundry_registry_export_secret,
+                self.foundry_registry_import_result_secret,
+                self.foundry_registry_activation_result_secret,
+                self.foundry_registry_github_token,
+                self.platform_deepseek_api_key,
+                self.worker_task_signing_private_key,
+                self.evidence_v2_signing_private_key,
+                self.workflow_registry_signing_private_key,
+            )
+            if secret
+        ):
+            raise ValueError(
+                "FOUNDRY_FORMAL_BUILD_FAILURE_RESULT_SECRET must be independent "
+                "from success, AI, admin, Demo, Worker, Evidence, and Registry "
+                "credentials"
+            )
+        if self.foundry_registry_import_result_secret and any(
+            self.foundry_registry_import_result_secret == str(secret or "")
+            for secret in (
+                self.jwt_secret,
+                self.admin_secret,
+                self.foundry_validation_result_secret,
+                self.foundry_validation_github_token,
+                self.foundry_formal_build_result_secret,
+                self.foundry_formal_build_failure_result_secret,
+                self.foundry_registry_export_secret,
+                self.platform_deepseek_api_key,
+                self.worker_task_signing_private_key,
+                self.evidence_v2_signing_private_key,
+                self.workflow_registry_signing_private_key,
+            )
+            if secret
+        ):
+            raise ValueError(
+                "FOUNDRY_REGISTRY_IMPORT_RESULT_SECRET must be independent from "
+                "AI, admin, Demo, formal-build, Worker, Evidence, and Registry "
+                "credentials"
+            )
+        if self.foundry_registry_export_secret and any(
+            self.foundry_registry_export_secret == str(secret or "")
+            for secret in (
+                self.jwt_secret,
+                self.admin_secret,
+                self.foundry_draft_result_secret,
+                self.foundry_draft_github_token,
+                self.foundry_validation_result_secret,
+                self.foundry_validation_github_token,
+                self.foundry_formal_build_result_secret,
+                self.foundry_formal_build_failure_result_secret,
+                self.foundry_registry_import_result_secret,
+                self.platform_deepseek_api_key,
+                self.worker_task_signing_private_key,
+                self.evidence_v2_signing_private_key,
+                self.workflow_registry_signing_private_key,
+            )
+            if secret
+        ):
+            raise ValueError(
+                "FOUNDRY_REGISTRY_EXPORT_SECRET must be independent from AI, "
+                "admin, Demo, formal-build, import, Worker, Evidence, and "
+                "Registry credentials"
+            )
+        if self.foundry_registry_activation_result_secret and any(
+            self.foundry_registry_activation_result_secret == str(secret or "")
+            for secret in (
+                self.jwt_secret,
+                self.admin_secret,
+                self.foundry_draft_result_secret,
+                self.foundry_draft_github_token,
+                self.foundry_validation_result_secret,
+                self.foundry_validation_github_token,
+                self.foundry_formal_build_result_secret,
+                self.foundry_formal_build_failure_result_secret,
+                self.foundry_registry_export_secret,
+                self.foundry_registry_import_result_secret,
+                self.foundry_registry_github_token,
+                self.platform_deepseek_api_key,
+                self.worker_task_signing_private_key,
+                self.evidence_v2_signing_private_key,
+                self.workflow_registry_signing_private_key,
+            )
+            if secret
+        ):
+            raise ValueError(
+                "FOUNDRY_REGISTRY_ACTIVATION_RESULT_SECRET must be independent "
+                "from AI, admin, Demo, formal-build, import/export, Worker, "
+                "Evidence, Registry, and GitHub credentials"
+            )
+        if self.foundry_registry_github_token and any(
+            self.foundry_registry_github_token == str(secret or "")
+            for secret in (
+                self.jwt_secret,
+                self.admin_secret,
+                self.foundry_draft_result_secret,
+                self.foundry_draft_github_token,
+                self.foundry_validation_result_secret,
+                self.foundry_validation_github_token,
+                self.foundry_formal_build_result_secret,
+                self.foundry_formal_build_failure_result_secret,
+                self.foundry_registry_export_secret,
+                self.foundry_registry_import_result_secret,
+                self.platform_deepseek_api_key,
+                self.worker_task_signing_private_key,
+                self.evidence_v2_signing_private_key,
+                self.workflow_registry_signing_private_key,
+            )
+            if secret
+        ):
+            raise ValueError(
+                "FOUNDRY_REGISTRY_GITHUB_TOKEN must be independent from AI, "
+                "admin, callback, Worker, Evidence, and Registry credentials"
+            )
+
     @property
     def deletion_tombstone_verification_keyring(self) -> dict[str, str]:
         """Parse retired deletion-ledger keys used only for verification."""
@@ -1044,6 +1714,118 @@ class Settings(BaseSettings):
                 "not_before": not_before,
                 "not_after": not_after,
             }
+        return normalized
+
+    @property
+    def workflow_registry_verification_keyring(self) -> dict[str, str]:
+        """Parse registry release verification keys without private material."""
+
+        raw = str(self.workflow_registry_verification_keys or "").strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "WORKFLOW_REGISTRY_VERIFICATION_KEYS must map key ids to base64 "
+                "Ed25519 public keys"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                "WORKFLOW_REGISTRY_VERIFICATION_KEYS must be a JSON object"
+            )
+        normalized: dict[str, str] = {}
+        for raw_key_id, raw_public_key in parsed.items():
+            key_id = str(raw_key_id or "").strip()
+            public_key = str(raw_public_key or "").strip()
+            if not key_id or any(ch.isspace() for ch in key_id):
+                raise ValueError(
+                    "WORKFLOW_REGISTRY_VERIFICATION_KEYS requires non-empty, "
+                    "whitespace-free key ids"
+                )
+            _decode_ed25519_key(
+                f"WORKFLOW_REGISTRY_VERIFICATION_KEYS[{key_id}]", public_key
+            )
+            normalized[key_id] = public_key
+        return normalized
+
+    @property
+    def foundry_formal_build_attestation_verification_keyring(self) -> dict[str, str]:
+        """Parse dedicated formal-build receipt verification keys.
+
+        This trust domain is deliberately separate from the Registry signer,
+        Worker task signer, Evidence signer, and callback bearer secret.
+        """
+
+        raw = str(
+            self.foundry_formal_build_attestation_verification_keys or ""
+        ).strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "FOUNDRY_FORMAL_BUILD_ATTESTATION_VERIFICATION_KEYS must map "
+                "key ids to base64 Ed25519 public keys"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                "FOUNDRY_FORMAL_BUILD_ATTESTATION_VERIFICATION_KEYS must be a "
+                "JSON object"
+            )
+        normalized: dict[str, str] = {}
+        for raw_key_id, raw_public_key in parsed.items():
+            key_id = str(raw_key_id or "").strip()
+            public_key = str(raw_public_key or "").strip()
+            if not key_id or any(ch.isspace() for ch in key_id):
+                raise ValueError(
+                    "FOUNDRY_FORMAL_BUILD_ATTESTATION_VERIFICATION_KEYS requires "
+                    "non-empty, whitespace-free key ids"
+                )
+            _decode_ed25519_key(
+                "FOUNDRY_FORMAL_BUILD_ATTESTATION_VERIFICATION_KEYS"
+                f"[{key_id}]",
+                public_key,
+            )
+            normalized[key_id] = public_key
+        return normalized
+
+    @property
+    def foundry_materialization_attestation_verification_keyring(self) -> dict[str, str]:
+        """Parse public keys for the source-materialization trust domain."""
+
+        raw = str(
+            self.foundry_materialization_attestation_verification_keys or ""
+        ).strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "FOUNDRY_MATERIALIZATION_ATTESTATION_VERIFICATION_KEYS must map "
+                "key ids to base64 Ed25519 public keys"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                "FOUNDRY_MATERIALIZATION_ATTESTATION_VERIFICATION_KEYS must be a JSON object"
+            )
+        normalized: dict[str, str] = {}
+        for raw_key_id, raw_public_key in parsed.items():
+            key_id = str(raw_key_id or "").strip()
+            public_key = str(raw_public_key or "").strip()
+            if not key_id or any(ch.isspace() for ch in key_id):
+                raise ValueError(
+                    "FOUNDRY_MATERIALIZATION_ATTESTATION_VERIFICATION_KEYS requires "
+                    "non-empty, whitespace-free key ids"
+                )
+            _decode_ed25519_key(
+                "FOUNDRY_MATERIALIZATION_ATTESTATION_VERIFICATION_KEYS"
+                f"[{key_id}]",
+                public_key,
+            )
+            normalized[key_id] = public_key
         return normalized
 
     @property

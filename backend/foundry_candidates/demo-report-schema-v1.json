@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://standard-astro.example/schemas/foundry-demo-report-v1.json",
+  "title": "Standard Astro non-formal Foundry DemoReport",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "candidate_version",
+    "demo_run_id",
+    "status",
+    "evidence_class",
+    "publication_ready",
+    "claim_eligible",
+    "evidence_pack_allowed",
+    "candidate_bundle_sha256",
+    "candidate_version_sha256",
+    "workflow_spec_sha256",
+    "dependency_lock_sha256",
+    "runner_definition_sha256",
+    "runner_image_digest",
+    "environment",
+    "environment_sha256",
+    "generation",
+    "source_pins",
+    "fixture_hashes",
+    "started_at",
+    "completed_at",
+    "duration_ms",
+    "stdout_sha256",
+    "stderr_sha256",
+    "stdout_bytes",
+    "stderr_bytes",
+    "artifact_manifest",
+    "resource_usage",
+    "failure_class",
+    "validation_summary",
+    "limitations",
+    "result",
+    "demo_report_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "candidate_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{2,96}$"
+    },
+    "candidate_version": { "type": "integer", "minimum": 1 },
+    "demo_run_id": { "type": "string", "format": "uuid" },
+    "status": { "enum": ["PASSED", "PARTIAL", "FAILED"] },
+    "evidence_class": { "const": "NON_FORMAL_DEMO" },
+    "publication_ready": { "const": false },
+    "claim_eligible": { "const": false },
+    "evidence_pack_allowed": { "const": false },
+    "candidate_bundle_sha256": { "$ref": "#/$defs/sha256" },
+    "candidate_version_sha256": { "$ref": "#/$defs/sha256" },
+    "workflow_spec_sha256": { "$ref": "#/$defs/sha256" },
+    "dependency_lock_sha256": { "$ref": "#/$defs/sha256" },
+    "runner_definition_sha256": { "$ref": "#/$defs/sha256" },
+    "runner_image_digest": { "type": "string", "minLength": 1 },
+    "environment": { "type": "object" },
+    "environment_sha256": { "$ref": "#/$defs/sha256" },
+    "generation": { "type": "object" },
+    "source_pins": { "type": "array", "items": { "type": "object" } },
+    "fixture_hashes": { "type": "array", "items": { "type": "object" } },
+    "started_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": "string", "format": "date-time" },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "stdout_sha256": { "$ref": "#/$defs/sha256" },
+    "stderr_sha256": { "$ref": "#/$defs/sha256" },
+    "stdout_bytes": { "type": "integer", "minimum": 0 },
+    "stderr_bytes": { "type": "integer", "minimum": 0 },
+    "artifact_manifest": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "kind", "sha256", "bytes"],
+          "properties": {
+            "path": { "const": "stdout.log" },
+            "kind": { "const": "STDOUT" },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "bytes": { "type": "integer", "minimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "kind", "sha256", "bytes"],
+          "properties": {
+            "path": { "const": "stderr.log" },
+            "kind": { "const": "STDERR" },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "bytes": { "type": "integer", "minimum": 0 }
+          }
+        }
+      ],
+      "items": false
+    },
+    "resource_usage": { "type": "object" },
+    "failure_class": { "type": ["string", "null"] },
+    "validation_summary": { "type": "object" },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" }
+    },
+    "result": { "type": "object" },
+    "demo_report_sha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

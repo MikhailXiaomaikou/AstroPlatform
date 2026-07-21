@@ -584,6 +584,12 @@ _REFERENCE_TOOLS = {
     "build_tool_ontology", "build_tool_gap_matrix",
     "rank_tool_implementation_queue", "build_paper_mining_candidate_pool",
     "run_paper_tool_mining_loop",
+    # Formal-registry control-plane tools expose a catalog or queue an Audit;
+    # neither returns a scientific measurement.  Keep them in the reference
+    # class so a successful queue operation cannot be mistaken for completed
+    # scientific computation.  Their own payloads additionally set
+    # publication_ready=false and __do_not_claim__=true.
+    "discover_registered_workflows", "start_registered_workflow",
 }
 # Introspection helper for tests / CI: full known tool set.
 ALL_KNOWN_TOOLS = _DATA_TOOLS | _COMPUTE_TOOLS | _REFERENCE_TOOLS

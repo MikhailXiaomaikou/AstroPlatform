@@ -1,0 +1,389 @@
+name: Non-formal Foundry candidate demo
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_key:
+        description: Candidate key (without .json)
+        required: true
+        default: desi_dr2_official_chain_summary_v1
+        type: string
+      validation_run_id:
+        description: Durable Foundry validation-run UUID to receive this DemoReport
+        required: false
+        type: string
+      version_binding:
+        description: Canonical server-issued JSON for every durable Candidate version
+        required: false
+        type: string
+      draft_binding:
+        description: Canonical server-issued JSON for an AI-created exact version
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  packages: read
+
+concurrency:
+  # A durable validation run is already the server's single exact attempt.
+  # Scope concurrency to that attempt so independent immutable versions do
+  # not spend their one-hour callback lease waiting behind each other.
+  group: foundry-candidate-demo-${{ inputs.validation_run_id || inputs.candidate_key }}
+  cancel-in-progress: false
+
+jobs:
+  isolated-demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    # Both callback credentials and the packages:read token are available only
+    # after this Environment's deployment-branch policy accepts main.
+    environment: foundry-candidate-validation
+    steps:
+      - name: Require the protected main workflow source
+        shell: bash
+        run: test "$GITHUB_REF" = "refs/heads/main" && test "$GITHUB_RUN_ATTEMPT" = "1"
+
+      # Control code comes from the pinned validation workflow ref. Candidate
+      # code is downloaded and handled separately; it cannot replace these host
+      # verification scripts.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          path: control-source
+          persist-credentials: false
+
+      - name: Validate key and exact Draft binding
+        id: binding
+        env:
+          CANDIDATE: ${{ inputs.candidate_key }}
+          VALIDATION_RUN_ID: ${{ inputs.validation_run_id }}
+          VERSION_BINDING: ${{ inputs.version_binding }}
+          DRAFT_BINDING: ${{ inputs.draft_binding }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE" =~ ^[a-z][a-z0-9_]{2,96}$ ]]
+          if [[ -n "$VALIDATION_RUN_ID" ]]; then
+            [[ "$VALIDATION_RUN_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
+            test -n "$VERSION_BINDING"
+            python control-source/backend/scripts/prepare_foundry_candidate_validation.py emit-version-outputs \
+              --version-binding-json "$VERSION_BINDING" \
+              --candidate-key "$CANDIDATE" \
+              --github-output "$GITHUB_OUTPUT"
+            echo "durable=true" >> "$GITHUB_OUTPUT"
+          else
+            test -z "$VERSION_BINDING"
+            echo "durable=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [[ -n "$DRAFT_BINDING" ]]; then
+            test -n "$VERSION_BINDING"
+            python control-source/backend/scripts/prepare_foundry_candidate_validation.py emit-outputs \
+              --binding-json "$DRAFT_BINDING" \
+              --version-binding-json "$VERSION_BINDING" \
+              --expected-repository "$GITHUB_REPOSITORY" \
+              --github-output "$GITHUB_OUTPUT"
+            echo "ai_draft=true" >> "$GITHUB_OUTPUT"
+          else
+            test -f "control-source/backend/foundry_candidates/$CANDIDATE.json"
+            echo "ai_draft=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out the exact Draft base commit without credentials
+        if: ${{ steps.binding.outputs.ai_draft == 'true' }}
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ steps.binding.outputs.base_commit }}
+          path: candidate-source
+          persist-credentials: false
+          fetch-depth: 1
+
+      # GitHub sees only its own repository and a numeric, server-bound
+      # artifact id. No arbitrary URL or source parameter is accepted.
+      - name: Download and hash the exact immutable Draft artifact
+        if: ${{ steps.binding.outputs.ai_draft == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARTIFACT_ID: ${{ steps.binding.outputs.artifact_id }}
+          ARTIFACT_WORKFLOW_RUN_ID: ${{ steps.binding.outputs.artifact_workflow_run_id }}
+          ARTIFACT_NAME: ${{ steps.binding.outputs.artifact_name }}
+          EXPECTED_SHA256: ${{ steps.binding.outputs.artifact_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p foundry-draft-download
+          curl --fail --silent --show-error \
+            --proto '=https' --tlsv1.2 \
+            --connect-timeout 10 --max-time 60 \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}" \
+            --output foundry-draft-download/metadata.json
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          data = json.loads(Path("foundry-draft-download/metadata.json").read_text())
+          assert data["id"] == int(os.environ["ARTIFACT_ID"])
+          assert data["name"] == os.environ["ARTIFACT_NAME"]
+          assert data["expired"] is False
+          assert data["workflow_run"]["id"] == int(os.environ["ARTIFACT_WORKFLOW_RUN_ID"])
+          assert data["digest"] == "sha256:" + os.environ["EXPECTED_SHA256"]
+          PY
+          curl --fail --silent --show-error --location \
+            --proto '=https' --tlsv1.2 \
+            --connect-timeout 10 --max-time 120 \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" \
+            --output foundry-draft-download/artifact.zip
+          actual="$(sha256sum foundry-draft-download/artifact.zip | cut -d' ' -f1)"
+          test "$actual" = "$EXPECTED_SHA256"
+
+      # This host step applies the patch only to a disposable checkout and
+      # recomputes every binding. It never imports or executes generated code.
+      - name: Replay and verify the Draft without executing it
+        if: ${{ steps.binding.outputs.ai_draft == 'true' }}
+        env:
+          CANDIDATE: ${{ inputs.candidate_key }}
+          DRAFT_BINDING: ${{ inputs.draft_binding }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p foundry-validation-input
+          python control-source/backend/scripts/prepare_foundry_candidate_validation.py prepare \
+            --binding-json "$DRAFT_BINDING" \
+            --candidate-key "$CANDIDATE" \
+            --artifact-zip foundry-draft-download/artifact.zip \
+            --extracted-dir foundry-draft-download/extracted \
+            --source-repo candidate-source \
+            --output-candidate "foundry-validation-input/${CANDIDATE}.json" \
+            --output-receipt foundry-validation-input/receipt.json
+
+      - name: Log in for the digest-bound Candidate image
+        if: ${{ steps.binding.outputs.durable == 'true' }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull the exact Candidate image
+        if: ${{ steps.binding.outputs.durable == 'true' }}
+        env:
+          RUNNER_IMAGE_DIGEST: ${{ steps.binding.outputs.runner_image_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}/foundry-candidate@${RUNNER_IMAGE_DIGEST}"
+          docker pull "$image"
+          docker tag "$image" standard-astro-foundry-demo:ci
+
+      - name: Build legacy repository-pinned Candidate image
+        if: ${{ steps.binding.outputs.durable == 'false' }}
+        run: >-
+          docker build --pull
+          --build-arg TOOL_VERSION="$GITHUB_SHA"
+          --file control-source/backend/Dockerfile.foundry-demo
+          --tag standard-astro-foundry-demo:ci
+          control-source/backend
+
+      # The candidate finally executes here: no network, no credentials,
+      # read-only root, non-root uid, bounded CPU/memory/processes/output.
+      - name: Run candidate in the isolated Validation container
+        env:
+          CANDIDATE: ${{ inputs.candidate_key }}
+          AI_DRAFT: ${{ steps.binding.outputs.ai_draft }}
+          DURABLE: ${{ steps.binding.outputs.durable }}
+          CANDIDATE_VERSION_SHA256: ${{ steps.binding.outputs.candidate_version_hash }}
+          RUNNER_IMAGE_DIGEST: ${{ steps.binding.outputs.runner_image_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p foundry-output
+          chmod 0777 foundry-output
+          runner_digest="$(docker image inspect --format '{{.Id}}' standard-astro-foundry-demo:ci)"
+          candidate_mount=()
+          version_args=()
+          if [[ "$DURABLE" = "true" ]]; then
+            runner_digest="$RUNNER_IMAGE_DIGEST"
+            version_args=(--candidate-version-sha256 "$CANDIDATE_VERSION_SHA256")
+          fi
+          if [[ "$AI_DRAFT" = "true" ]]; then
+            candidate_mount=(--volume "$PWD/foundry-validation-input/${CANDIDATE}.json:/app/foundry_candidates/${CANDIDATE}.json:ro")
+          fi
+          docker run --rm \
+            --network none \
+            --read-only \
+            --log-driver none \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=67108864 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 64 \
+            --cpus 2 \
+            --memory 6g \
+            --ulimit fsize=67108864:67108864 \
+            --user 10002:10002 \
+            --volume "$PWD/foundry-output:/out:rw" \
+            "${candidate_mount[@]}" \
+            standard-astro-foundry-demo:ci \
+            --candidate "$CANDIDATE" \
+            --output /out/demo-report.json \
+            --runner-image-digest "$runner_digest" \
+            "${version_args[@]}"
+
+      - name: Enforce the non-formal report contract
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import stat
+          from pathlib import Path
+
+          output = Path("foundry-output")
+          entries = sorted(output.iterdir(), key=lambda entry: entry.name)
+          assert [entry.name for entry in entries] == [
+              "demo-report.json", "stderr.log", "stdout.log"
+          ]
+          report_path = output / "demo-report.json"
+          mode = report_path.lstat().st_mode
+          assert stat.S_ISREG(mode) and not report_path.is_symlink()
+          assert 0 < report_path.stat().st_size <= 4 * 1024 * 1024
+          report = json.loads(report_path.read_text())
+          assert report["status"] in {"PASSED", "PARTIAL", "FAILED"}
+          assert report["evidence_class"] == "NON_FORMAL_DEMO"
+          assert report["publication_ready"] is False
+          assert report["claim_eligible"] is False
+          assert report["evidence_pack_allowed"] is False
+          assert report.get("scientific_verdict") != "SUPPORTED"
+          assert len(report["candidate_bundle_sha256"]) == 64
+          assert len(report["candidate_version_sha256"]) == 64
+          assert len(report["demo_report_sha256"]) == 64
+          for artifact in report["artifact_manifest"]:
+              path = output / artifact["path"]
+              mode = path.lstat().st_mode
+              assert stat.S_ISREG(mode) and not path.is_symlink()
+              payload = path.read_bytes()
+              assert len(payload) == artifact["bytes"]
+              assert hashlib.sha256(payload).hexdigest() == artifact["sha256"]
+          PY
+
+      # The untrusted container is gone before this secret-bearing host step.
+      - name: Append DemoReport to the durable Candidate ledger
+        if: ${{ inputs.validation_run_id != '' }}
+        env:
+          CALLBACK_URL: ${{ secrets.FOUNDRY_VALIDATION_CALLBACK_URL }}
+          RESULT_SECRET: ${{ secrets.FOUNDRY_VALIDATION_RESULT_SECRET }}
+          VALIDATION_RUN_ID: ${{ inputs.validation_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CALLBACK_URL"
+          test -n "$RESULT_SECRET"
+          callback="${CALLBACK_URL%/}/api/internal/foundry/validation-runs/${VALIDATION_RUN_ID}/demo-report"
+          curl --fail --silent --show-error --output /dev/null \
+            --proto '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --connect-timeout 10 --max-time 60 \
+            -H "Authorization: Bearer $RESULT_SECRET" \
+            -H "Content-Type: application/json" \
+            --data-binary @foundry-output/demo-report.json \
+            "$callback"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ always() }}
+        with:
+          name: foundry-demo-${{ inputs.candidate_key }}-${{ github.sha }}
+          path: |
+            foundry-output/demo-report.json
+            foundry-output/stdout.log
+            foundry-output/stderr.log
+            foundry-validation-input/receipt.json
+          if-no-files-found: error
+          retention-days: 30
+
+  report-failed-validation:
+    needs: isolated-demo
+    if: ${{ always() && github.run_attempt == 1 && inputs.validation_run_id != '' && needs.isolated-demo.result != 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: foundry-candidate-validation
+    permissions:
+      contents: none
+    steps:
+      - name: Append the exact failed attempt to the durable Candidate ledger
+        env:
+          CALLBACK_URL: ${{ secrets.FOUNDRY_VALIDATION_CALLBACK_URL }}
+          RESULT_SECRET: ${{ secrets.FOUNDRY_VALIDATION_RESULT_SECRET }}
+          VALIDATION_RUN_ID: ${{ inputs.validation_run_id }}
+          VERSION_BINDING: ${{ inputs.version_binding }}
+          WORKFLOW_CONCLUSION: ${{ needs.isolated-demo.result }}
+          GITHUB_WORKFLOW_REF_VALUE: ${{ github.workflow_ref }}
+          GITHUB_WORKFLOW_SHA_VALUE: ${{ github.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_RUN_ATTEMPT" = "1"
+          test -n "$CALLBACK_URL"
+          test -n "$RESULT_SECRET"
+          export GITHUB_WORKFLOW_REF_VALUE GITHUB_WORKFLOW_SHA_VALUE
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import uuid
+          from pathlib import Path
+
+          binding = json.loads(os.environ["VERSION_BINDING"])
+          assert set(binding) == {
+              "candidate_id",
+              "candidate_version_id",
+              "candidate_key",
+              "candidate_version_number",
+              "candidate_version_hash",
+              "candidate_bundle_hash",
+              "validation_runner_image_digest",
+          }
+          run_id = str(uuid.UUID(os.environ["VALIDATION_RUN_ID"]))
+          candidate_id = str(uuid.UUID(binding["candidate_id"]))
+          version_id = str(uuid.UUID(binding["candidate_version_id"]))
+          version_number = int(binding["candidate_version_number"])
+          assert version_number >= 1
+          assert re.fullmatch(r"[0-9a-f]{64}", binding["candidate_version_hash"])
+          conclusion = os.environ["WORKFLOW_CONCLUSION"]
+          assert conclusion in {"failure", "cancelled", "skipped"}
+          report = {
+              "schema_version": 1,
+              "validation_run_id": run_id,
+              "candidate_id": candidate_id,
+              "candidate_version_id": version_id,
+              "candidate_version_number": version_number,
+              "candidate_version_hash": binding["candidate_version_hash"],
+              "status": "FAILED",
+              "failure_class": "validation_workflow_failed",
+              "failed_stage": "isolated_demo",
+              "workflow_conclusion": conclusion,
+              "github_repository": os.environ["GITHUB_REPOSITORY"],
+              "github_workflow_ref": os.environ["GITHUB_WORKFLOW_REF_VALUE"],
+              "github_workflow_sha": os.environ["GITHUB_WORKFLOW_SHA_VALUE"],
+              "github_run_id": os.environ["GITHUB_RUN_ID"],
+              "github_run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+          }
+          Path("foundry-validation-failure.json").write_text(
+              json.dumps(report, sort_keys=True, separators=(",", ":")),
+              encoding="utf-8",
+          )
+          PY
+          callback="${CALLBACK_URL%/}/api/internal/foundry/validation-runs/${VALIDATION_RUN_ID}/failure"
+          curl --fail --silent --show-error --output /dev/null \
+            --proto '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --connect-timeout 10 --max-time 60 \
+            -H "Authorization: Bearer $RESULT_SECRET" \
+            -H "Content-Type: application/json" \
+            --data-binary @foundry-validation-failure.json \
+            "$callback"

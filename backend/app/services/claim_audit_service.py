@@ -33,6 +33,13 @@ from app.services.server_evidence import (
     verify_scientific_attestation,
     verify_research_job_attestation,
 )
+from app.services.workflow_registry_v2 import (
+    DESI_DR2_MATRIX_WORKFLOW_ID,
+    WorkflowRegistryError,
+    assert_workflow_executable,
+    bind_formal_registry_record,
+    get_formal_workflow_spec,
+)
 
 
 CLAIM_AUDIT_SCHEMA_VERSION = 1
@@ -318,6 +325,31 @@ async def _trusted_tool_results(
                 missing.append(job_id)
             continue
         persisted_result = row.result
+        raw_workflow_id = str(
+            getattr(row, "workflow_id", None) or ""
+        ).strip()
+        attested_formal_binding = (
+            {
+                "workflow_id": raw_workflow_id,
+                "workflow_version": str(
+                    getattr(row, "workflow_version", None) or ""
+                ).strip(),
+                "registry_epoch": str(
+                    getattr(row, "registry_epoch", None) or ""
+                ).strip(),
+                "registry_entry_hash": str(
+                    getattr(row, "registry_entry_hash", None) or ""
+                ).strip(),
+                "entrypoint_id": str(
+                    getattr(row, "entrypoint_id", None) or ""
+                ).strip(),
+                "runner_image_digest": getattr(
+                    row, "runner_image_digest", None
+                ),
+            }
+            if raw_workflow_id
+            else None
+        )
         if not verify_research_job_attestation(
             row.attestation,
             job_id=row.job_id,
@@ -330,6 +362,7 @@ async def _trusted_tool_results(
             result=persisted_result,
             background_backend=row.background_backend,
             completed_at=row.completed_at,
+            formal_workflow_binding=attested_formal_binding,
         ):
             missing.append(job_id)
             continue
@@ -337,6 +370,68 @@ async def _trusted_tool_results(
         if result is None:
             missing.append(job_id)
             continue
+        formal_binding: dict[str, Any] | None = None
+        workflow_id = raw_workflow_id
+        if workflow_id:
+            workflow_version = str(
+                getattr(row, "workflow_version", None) or ""
+            ).strip()
+            registry_epoch = str(
+                getattr(row, "registry_epoch", None) or ""
+            ).strip()
+            registry_entry_hash = str(
+                getattr(row, "registry_entry_hash", None) or ""
+            ).strip()
+            entrypoint_id = str(
+                getattr(row, "entrypoint_id", None) or ""
+            ).strip()
+            if not all(
+                (
+                    workflow_version,
+                    registry_epoch,
+                    registry_entry_hash,
+                    entrypoint_id,
+                )
+            ):
+                missing.append(job_id)
+                continue
+            try:
+                registry_record = assert_workflow_executable(
+                    workflow_id,
+                    workflow_version,
+                    registry_epoch=registry_epoch,
+                    registry_entry_hash=registry_entry_hash,
+                )
+                workflow_spec = get_formal_workflow_spec(
+                    workflow_id,
+                    workflow_version,
+                )
+            except WorkflowRegistryError:
+                missing.append(job_id)
+                continue
+            if (
+                entrypoint_id != workflow_spec.primary_entrypoint_id
+                or row.tool_name != entrypoint_id
+            ):
+                missing.append(job_id)
+                continue
+            formal_binding = {
+                "workflow_id": workflow_id,
+                "workflow_version": workflow_version,
+                "risk_level": workflow_spec.risk_level,
+                "registry_epoch": registry_epoch,
+                "registry_entry_hash": registry_entry_hash,
+                "entrypoint_id": entrypoint_id,
+                "runner_image_digest": getattr(
+                    row, "runner_image_digest", None
+                ),
+                "registry_state": registry_record["state"],
+                # A generic Claim Audit has no authority to satisfy this. A
+                # dedicated deterministic finalizer (currently Union3 only)
+                # must verify the independent receipt and human result review.
+                "result_finalizer_required": workflow_spec.risk_level
+                in {"R2", "R3"},
+            }
         tool_results.append(
             {
                 "id": row.job_id,
@@ -344,6 +439,7 @@ async def _trusted_tool_results(
                 "input": row.args if row.args_replayable else {},
                 "arguments_redacted": not row.args_replayable,
                 "result": result,
+                "formal_workflow_binding": formal_binding,
             }
         )
     return tool_results, missing
@@ -531,13 +627,30 @@ async def _execute_registered_workflow(
             ),
         }]
 
-    workflow_key = "desi_dr2_dark_energy_matrix_v1"
-    tool_name = "run_dark_energy_evidence_matrix"
-    tool_args = {
-        "model": "w0wa_cdm",
-        "supernova_sets": ["pantheon_plus", "union3", "des_sn5yr"],
-        "include_desi_dr1_reference": False,
-    }
+    workflow_key = DESI_DR2_MATRIX_WORKFLOW_ID
+    try:
+        registry_binding = assert_workflow_executable(workflow_key)
+    except WorkflowRegistryError as exc:
+        if exc.code not in {
+            "workflow_suspended",
+            "workflow_superseded",
+            "workflow_revoked",
+        }:
+            raise
+        return [], [
+            {
+                "gap_code": exc.code,
+                "workflow_id": workflow_key,
+                "next_action": (
+                    "Wait for an independently verified signed registry release; "
+                    "this workflow cannot execute formally yet."
+                ),
+            }
+        ]
+    workflow_spec = get_formal_workflow_spec(workflow_key)
+    bind_formal_registry_record(audit, registry_binding)
+    tool_name = workflow_spec.primary_entrypoint_id
+    tool_args = dict(workflow_spec.science_contract["tool_arguments"])
     prior_job_ids = list(audit.child_job_ids or [])
     if prior_job_ids:
         trusted, _missing = await _trusted_tool_results(
@@ -570,6 +683,7 @@ async def _execute_registered_workflow(
             user_id=owner_id,
             session_id=audit.session_id,
             tool_name=tool_name,
+            workflow_key=workflow_key,
             inputs_hash=_sha256(_canonical_json(tool_args)),
             args=tool_args,
             args_replayable=True,
@@ -580,12 +694,38 @@ async def _execute_registered_workflow(
             result=None,
             attestation=None,
             background_backend="claim_audit",
+            capability_requirements={
+                "workflow_version": registry_binding["workflow_version"],
+                "registry_epoch": registry_binding["registry_epoch"],
+                "registry_entry_hash": registry_binding["registry_entry_hash"],
+                "entrypoint_id": workflow_spec.primary_entrypoint_id,
+            },
             created_at=now,
             started_at=now,
             completed_at=None,
         )
         db.add(existing)
+        bind_formal_registry_record(existing, registry_binding)
     else:
+        expected_capability_requirements = {
+            "workflow_version": registry_binding["workflow_version"],
+            "registry_epoch": registry_binding["registry_epoch"],
+            "registry_entry_hash": registry_binding["registry_entry_hash"],
+            "entrypoint_id": workflow_spec.primary_entrypoint_id,
+        }
+        if (
+            existing.workflow_key not in {None, workflow_key}
+            or existing.tool_name != tool_name
+            or existing.args != tool_args
+            or existing.capability_requirements
+            not in ({}, expected_capability_requirements)
+        ):
+            raise RegisteredScientificIntegrityError(
+                "Registered workflow job binding changed"
+            )
+        existing.workflow_key = workflow_key
+        existing.capability_requirements = expected_capability_requirements
+        bind_formal_registry_record(existing, registry_binding)
         existing.status = "running"
         existing.progress = 0.05
         existing.progress_message = "Retrying the registered DESI DR2 workflow"
@@ -706,6 +846,14 @@ async def _execute_registered_workflow(
         result=child.result,
         background_backend=child.background_backend,
         completed_at=child.completed_at,
+        formal_workflow_binding={
+            "workflow_id": child.workflow_id,
+            "workflow_version": child.workflow_version,
+            "registry_epoch": child.registry_epoch,
+            "registry_entry_hash": child.registry_entry_hash,
+            "entrypoint_id": child.entrypoint_id,
+            "runner_image_digest": child.runner_image_digest,
+        },
     )
     await db.commit()
     return [job_id], classified_gaps
@@ -883,6 +1031,13 @@ def _pack_files(
         for item in tool_results
         if (snapshot := _registered_workflow_snapshot(item)) is not None
     ]
+    formal_workflow_bindings = [
+        dict(binding)
+        for item in tool_results
+        if isinstance(
+            binding := item.get("formal_workflow_binding"), dict
+        )
+    ]
     provenance = {
         "audit_id": str(audit.id),
         "source": {
@@ -897,6 +1052,7 @@ def _pack_files(
         "fact_check_report": audit.fact_check_report or {},
         "reproducibility_manifest": report.get("reproducibility_manifest") or [],
         "registered_workflows": registered_workflows,
+        "formal_workflow_bindings": formal_workflow_bindings,
     }
     generated_bibtex = str(report.get("bibtex") or "").strip()
     source_bibtex = _source_citation_bibtex(audit)
@@ -980,6 +1136,9 @@ def _pack_files(
                 "random_seed": reproducibility.get("random_seed"),
                 "tool_version": reproducibility.get("tool_version"),
                 "scientific_outputs": scientific_outputs,
+                "formal_workflow_binding": item.get(
+                    "formal_workflow_binding"
+                ),
             }
         )
     content_root = scientific_content_hash(file_hashes)
@@ -1379,6 +1538,12 @@ async def process_claim_audit(
         )
 
         claim_texts = normalize_claims(audit.claim_text)
+        formal_result_review_pending = any(
+            isinstance(binding := item.get("formal_workflow_binding"), dict)
+            and binding.get("risk_level") in {"R2", "R3"}
+            and binding.get("result_finalizer_required") is True
+            for item in tool_results
+        )
         graph_result = build_evidence_graph(
             tool_results=tool_results,
             final_reply=audit.claim_text,
@@ -1419,6 +1584,11 @@ async def process_claim_audit(
             claim_supported = claim_supported and bool(
                 claim_graph_result.get("has_support_path")
             ) and claim_graph_result.get("publication_ready") is True
+            # Workflow approval and one scientific result's approval are
+            # different decisions. Generic Audit cannot turn an R2/R3 run into
+            # SUPPORTED; the workflow's dedicated finalizer must verify this
+            # run's independent computation and human scientific review.
+            claim_supported = claim_supported and not formal_result_review_pending
             if gaps:
                 claim_verdict = "CAPABILITY_GAP"
             elif claim_supported:
@@ -1449,6 +1619,11 @@ async def process_claim_audit(
                         "complete" if full_text_covered else "unparsed_residual"
                     ),
                     "supporting_evidence_ids": supporting_ids,
+                    "withheld_reason": (
+                        "independent_recomputation_and_human_result_review_required"
+                        if formal_result_review_pending
+                        else None
+                    ),
                 }
             )
             claim_graphs[claim_id] = claim_graph
@@ -1476,6 +1651,12 @@ async def process_claim_audit(
             list(report.get("datasets") or []),
             datasets,
         )
+        if formal_result_review_pending:
+            report.setdefault("limitations", []).append(
+                "R2/R3 formal workflow results remain WITHHELD until a dedicated "
+                "deterministic finalizer verifies an independent recomputation "
+                "and a human scientific result review."
+            )
 
         # Scientific work runs without a row lock.  Re-lock only for the short
         # immutable-pack transaction and reload the status so a cancellation

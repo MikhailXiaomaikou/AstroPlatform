@@ -601,6 +601,44 @@ async def health_deep():
     else:
         result["components"]["evidence_v2_key"] = "not_required"
 
+    if settings.workflow_registry_v2_enabled:
+        try:
+            from app.services.workflow_registry_v2 import active_registry_identity
+
+            registry_identity = active_registry_identity()
+            signed_release = (
+                registry_identity.get("release_kind")
+                == "signed_registry_release"
+                and bool(registry_identity.get("signature_key_id"))
+                and bool(registry_identity.get("signed_payload_sha256"))
+            )
+            registry_ok = registry_identity.get("status") == "ACTIVE" and (
+                signed_release or not production
+            )
+            result["components"]["workflow_registry"] = (
+                "ok"
+                if registry_ok
+                else "unsigned_builtin" if not signed_release else "inactive"
+            )
+            # These are public integrity identifiers, never signing material.
+            result["workflow_registry"] = {
+                "epoch": registry_identity.get("registry_epoch"),
+                "registry_hash": registry_identity.get("registry_hash"),
+                "release_kind": registry_identity.get("release_kind"),
+                "signature_key_id": registry_identity.get("signature_key_id"),
+                "signed_payload_sha256": registry_identity.get(
+                    "signed_payload_sha256"
+                ),
+            }
+            if not registry_ok:
+                result["ok"] = False
+        except Exception as exc:
+            logger.warning("health/deep: Workflow Registry probe failed: %s", exc)
+            result["components"]["workflow_registry"] = "unavailable"
+            result["ok"] = False
+    else:
+        result["components"]["workflow_registry"] = "not_required"
+
     if settings.local_science_worker_enabled:
         online_nodes = await _probe_worker_registry()
         result["online_science_workers"] = max(0, online_nodes)

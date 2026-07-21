@@ -223,10 +223,11 @@ def research_job_attestation_payload(
     result: Any,
     background_backend: str,
     completed_at: datetime | str | None,
+    formal_workflow_binding: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return the exact immutable fields covered by a research-job HMAC."""
 
-    return {
+    payload = {
         "job_id": str(job_id),
         "owner_id": str(owner_id),
         "session_id": str(session_id) if session_id is not None else None,
@@ -238,6 +239,14 @@ def research_job_attestation_payload(
         "background_backend": str(background_backend),
         "completed_at": _utc_timestamp_identity(completed_at),
     }
+    # Keep legacy/non-formal attestations byte-compatible by adding this field
+    # only for a formally registered run.  A registry identity can therefore
+    # not be attached to an already-signed generic result after completion.
+    if formal_workflow_binding is not None:
+        payload["formal_workflow_binding_hash"] = scientific_content_hash(
+            formal_workflow_binding
+        )
+    return payload
 
 
 def build_research_job_attestation(**kwargs: Any) -> dict[str, Any]:

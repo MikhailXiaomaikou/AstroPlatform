@@ -39,6 +39,17 @@ async def get_config() -> dict:
         "union3_reproduction_enabled": settings.union3_reproduction_enabled,
         "evidence_pack_v2_enabled": settings.evidence_pack_v2_enabled,
         "local_science_worker_enabled": settings.local_science_worker_enabled,
+        "workflow_registry_v2_enabled": settings.workflow_registry_v2_enabled,
+        "foundry_gap_tracking_enabled": settings.foundry_gap_tracking_enabled,
+        "foundry_ai_drafting_enabled": settings.foundry_ai_drafting_enabled,
+        "foundry_auto_demo_enabled": settings.foundry_auto_demo_enabled,
+        "foundry_candidate_catalog_enabled": (
+            settings.foundry_candidate_catalog_enabled
+        ),
+        "foundry_source_materialization_enabled": (
+            settings.foundry_source_materialization_enabled
+        ),
+        "foundry_registration_enabled": settings.foundry_registration_enabled,
         "analytics_requires_consent": True,
         # These values are deliberately public: they identify who operates
         # the hosted service and where users can exercise privacy rights.

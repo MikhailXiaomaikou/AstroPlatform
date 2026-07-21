@@ -6,11 +6,11 @@ status: active
 prompt_file: prompt.md
 
 # Tools loaded for this module = core (via core/infrastructure.yaml)
-#                              + cosmology-specific (26)
+#                              + cosmology-specific (28)
 #                              + overlap (14, shared with N+1 modules)
-# Total: 18 + 26 + 14 = 58 visible tools.
+# Total: 18 + 28 + 14 = 60 visible tools.
 tools:
-  # ── cosmology-specific (26) ──
+  # ── cosmology-specific (28) ──
   - assess_bao_bin_anomaly
   - audit_published_constraint
   - build_cosmology_likelihood
@@ -37,6 +37,10 @@ tools:
   - run_dark_energy_evidence_matrix
   - run_nested_sampler
   - run_research_matrix
+  # Stable signed-workflow entry points. New formal compositions remain data
+  # in the Registry and do not add another model tool name.
+  - discover_registered_workflows
+  - start_registered_workflow
   # spot_check_literature_value removed (2026-05-20): real cosmology H0/sigma8/S8 tensions
   # were being flagged as paper fabrication at +/- 3sigma; false positives outweighed the value.
   # extract_paper_measurements_with_llm folded into fit_line_lfr (2026-05-20): fit_line_lfr now

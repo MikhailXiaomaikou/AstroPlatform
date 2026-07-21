@@ -12,6 +12,15 @@ from celery.schedules import crontab
 from celery.signals import worker_ready
 
 from app.config import settings
+# Worker and Beat must fail boot on the same invalid Registry release as API.
+from app.services import workflow_registry_v2 as _workflow_registry_v2  # noqa: F401
+from app.services.foundry_registry_activation import (
+    assert_configured_registry_activation_bundle,
+)
+
+# A configured formal release must be the public bundle baked into this exact
+# image.  This executes before the worker can subscribe to verification work.
+assert_configured_registry_activation_bundle()
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +221,7 @@ celery_app.conf.include = [
     "app.services.alert_tasks",
     "app.tasks.ai_tools_tasks",
     "app.tasks.claim_audit_tasks",
+    "app.tasks.foundry_tasks",
     "app.tasks.privacy_tasks",
     "app.tasks.postgres_backup_tasks",
     "app.tasks.union3_source_tasks",
@@ -238,6 +248,11 @@ def _build_beat_schedule() -> dict[str, dict[str, object]]:
         "reconcile-stale-claim-audits": {
             "task": "claim_audit.reconcile_stale",
             "schedule": 300.0,
+        },
+        "reconcile-stale-foundry-validations": {
+            "task": "maintenance.reconcile_foundry_validations",
+            "schedule": 300.0,
+            "options": {"queue": "maintenance"},
         },
         "reconcile-union3-research-loop": {
             "task": "union3.reconcile",

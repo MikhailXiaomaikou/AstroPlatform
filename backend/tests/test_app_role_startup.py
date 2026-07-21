@@ -32,6 +32,8 @@ _ROLE_KEYS = {
     "EVIDENCE_V2_SIGNING_PUBLIC_KEY",
     "EVIDENCE_V2_VERIFICATION_KEYS",
     "FERNET_KEY",
+    "FOUNDRY_FORMAL_BUILD_FAILURE_RESULT_SECRET",
+    "FOUNDRY_FORMAL_BUILD_RESULT_SECRET",
     "GIT_COMMIT",
     "JWT_SECRET",
     "LOCAL_SCIENCE_WORKER_ENABLED",
@@ -354,6 +356,20 @@ def test_evidence_v2_key_is_dark_and_independent_until_enabled(tmp_path):
     # Once enabled on the API, reusing the legacy HMAC secret fails closed.
     env["EVIDENCE_SIGNING_KEY"] = evidence_v2_private_key
     rejected = _boot(env)
+    assert rejected.returncode != 0
+    assert "must be independent" in rejected.stderr
+
+
+def test_formal_build_success_and_failure_callback_secrets_are_independent(
+    tmp_path,
+):
+    env = _api_env(tmp_path)
+    shared = "formal-callback-secret-that-must-not-be-reused"
+    env["FOUNDRY_FORMAL_BUILD_RESULT_SECRET"] = shared
+    env["FOUNDRY_FORMAL_BUILD_FAILURE_RESULT_SECRET"] = shared
+
+    rejected = _boot(env)
+
     assert rejected.returncode != 0
     assert "must be independent" in rejected.stderr
 

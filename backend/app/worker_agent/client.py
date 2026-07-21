@@ -24,15 +24,17 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 
 from app.services.worker_contract import (
+    LEGACY_WORKER_PROTOCOL_VERSION,
     WORKER_PROTOCOL_VERSION,
     canonical_json,
     canonical_worker_request,
     normalize_release_commit,
     release_commits_compatible,
 )
-from app.services.registered_workflows import (
-    UNION3_REPRODUCTION_WORKFLOW_ID,
-    get_registered_dataset_pins,
+from app.services.workflow_registry_v2 import (
+    WorkflowRegistryError,
+    get_static_execution_adapter_contract,
+    list_static_worker_entrypoint_capabilities,
 )
 
 
@@ -216,7 +218,11 @@ def enroll(
             "public_key": public_text,
             "protocol_version": WORKER_PROTOCOL_VERSION,
             "capabilities": {
-                "workflows": ["union3_flat_lcdm_sn_only_v1"],
+                "entrypoints": list_static_worker_entrypoint_capabilities(
+                    worker_image_digest=(
+                        os.getenv("WORKER_IMAGE_DIGEST") or "unknown"
+                    )
+                ),
                 "concurrency": 1,
             },
             "release_manifest": {
@@ -331,9 +337,15 @@ def verify_task_envelope(
         raise WorkerClientError("Task envelope signature is invalid") from exc
     if envelope.get("protocol_version") != config.protocol_version:
         raise WorkerClientError("Task envelope protocol version is unsupported")
-    if envelope.get("workflow_key") != "union3_flat_lcdm_sn_only_v1":
+    workflow_id = str(envelope.get("workflow_key") or "")
+    if not workflow_id or len(workflow_id) > 128:
+        raise WorkerClientError("Task requested an invalid workflow identity")
+    if (
+        config.protocol_version == LEGACY_WORKER_PROTOCOL_VERSION
+        and workflow_id != "union3_flat_lcdm_sn_only_v1"
+    ):
         raise WorkerClientError("Task requested an unregistered workflow")
-    required_keys = {
+    legacy_required_keys = {
         "protocol_version",
         "job_id",
         "audit_id",
@@ -350,8 +362,50 @@ def verify_task_envelope(
         "lease_expires_at",
         "server_signature",
     }
+    v2_required_keys = (
+        legacy_required_keys
+        - {"image_digest"}
+        | {
+            "workflow_version",
+            "registry_epoch",
+            "registry_entry_hash",
+            "entrypoint_id",
+            "execution_adapter_id",
+            "tool_spec_hash",
+            "worker_image_digest",
+        }
+    )
+    required_keys = (
+        legacy_required_keys
+        if config.protocol_version == LEGACY_WORKER_PROTOCOL_VERSION
+        else v2_required_keys
+    )
     if set(envelope) != required_keys:
         raise WorkerClientError("Task envelope shape is not registered")
+    if config.protocol_version != LEGACY_WORKER_PROTOCOL_VERSION:
+        try:
+            adapter = get_static_execution_adapter_contract(
+                str(envelope.get("execution_adapter_id") or "")
+            )
+        except WorkflowRegistryError as exc:
+            raise WorkerClientError(exc.code) from exc
+        if (
+            envelope.get("entrypoint_id") != adapter["primary_entrypoint_id"]
+            or envelope.get("tool_spec_hash") != adapter["tool_spec_hash"]
+        ):
+            raise WorkerClientError("Task entrypoint is not image-static")
+        for key in ("registry_entry_hash", "tool_spec_hash"):
+            digest = str(envelope.get(key) or "")
+            if (
+                not digest.startswith("sha256:")
+                or len(digest) != 71
+                or any(char not in "0123456789abcdef" for char in digest[7:])
+            ):
+                raise WorkerClientError("Task Registry binding is invalid")
+        if not str(envelope.get("workflow_version") or "") or not str(
+            envelope.get("registry_epoch") or ""
+        ):
+            raise WorkerClientError("Task Registry binding is invalid")
     try:
         uuid.UUID(str(envelope["attempt_id"]))
         lease_id = str(envelope["lease_id"])
@@ -377,23 +431,35 @@ def verify_task_envelope(
     if lease_expires_at <= checked_at or deadline <= lease_expires_at:
         raise WorkerClientError("Task lease is expired or internally inconsistent")
 
-    expected_pins = get_registered_dataset_pins(UNION3_REPRODUCTION_WORKFLOW_ID)
+    if config.protocol_version == LEGACY_WORKER_PROTOCOL_VERSION:
+        adapter = get_static_execution_adapter_contract(
+            "union3_profile_chi_square_v1"
+        )
+    expected_pins = adapter["dataset_pins"]
     if envelope.get("dataset_pins") != expected_pins:
         raise WorkerClientError("Task requested unregistered dataset pins")
     limits = envelope.get("resource_limits")
     if limits != {"cpu": 2, "memory_mb": 6144, "concurrency": 1}:
         raise WorkerClientError("Task requested unregistered resource limits")
-    required_digest = str(envelope.get("image_digest") or "")
+    required_digest = str(
+        envelope.get(
+            "image_digest"
+            if config.protocol_version == LEGACY_WORKER_PROTOCOL_VERSION
+            else "worker_image_digest"
+        )
+        or ""
+    )
     local_digest = str(os.getenv("WORKER_IMAGE_DIGEST") or "")
     required_commit = normalize_release_commit(envelope.get("git_commit"))
     local_commit = normalize_release_commit(
         os.getenv("TOOL_VERSION") or os.getenv("GIT_COMMIT")
     )
-    if local_digest and not required_digest:
+    unresolved_digest = required_digest in {"", "unknown"}
+    if local_digest and unresolved_digest:
         raise WorkerClientError("Task omitted the pinned signed worker image digest")
-    if required_digest and not local_digest:
+    if not unresolved_digest and not local_digest:
         raise WorkerClientError("Worker image digest is unavailable locally")
-    if local_digest and required_digest and local_digest != required_digest:
+    if local_digest and not unresolved_digest and local_digest != required_digest:
         raise WorkerClientError("Task requires a different signed worker image digest")
     if local_digest and not local_commit:
         raise WorkerClientError("Worker release commit is unavailable locally")

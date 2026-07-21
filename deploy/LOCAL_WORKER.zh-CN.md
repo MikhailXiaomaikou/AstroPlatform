@@ -30,4 +30,4 @@ Worker 的代码身份。若另有官方 release manifest，可选设置
 ./deploy/start-signed-worker.sh status
 ```
 
-脚本只信任 `MikhailXiaomaikou/Standard-Astro` 仓库中 `worker-image.yml` 在 `v*` 标签上的 OIDC 身份。分支构建、未签名镜像、浮动 tag、错误 commit、镜像内外 commit 不一致或错误 digest 都会在容器启动前被拒绝。
+脚本只信任 `MikhailXiaomaikou/Standard-Astro` 仓库中的两个明确 OIDC 身份：`worker-image.yml` 的 `v*` 正式标签，以及受保护 `main` 上的 `foundry-formal-worker.yml`。其他分支或工作流、未签名镜像、浮动 tag、错误 commit、镜像内外 commit 不一致或错误 digest 都会在容器启动前被拒绝。

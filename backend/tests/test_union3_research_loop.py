@@ -45,6 +45,8 @@ from app.services.worker_protocol import (
     lease_next_task,
     sign_task_envelope,
 )
+from app.services.worker_contract import WORKER_PROTOCOL_VERSION
+from app.services.workflow_registry_v2 import list_worker_execution_bindings
 from tests.union3_source_test_support import registered_union3_snapshot
 
 
@@ -78,6 +80,92 @@ def _user(username: str) -> User:
         password_hash="not-used",
         subscription_tier="solo",
     )
+
+
+@pytest.mark.asyncio
+async def test_union3_compatible_alias_starts_with_alias_registry_binding(
+    db_session,
+    monkeypatch,
+):
+    owner = _user("union3-alias-owner")
+    db_session.add(owner)
+    await db_session.commit()
+    workspace = await create_workspace(
+        db_session, user_id=owner.id, title="Union3 signed alias"
+    )
+    source, extraction = await ingest_union3_source(
+        db_session,
+        user_id=owner.id,
+        workspace_id=workspace.id,
+        source_profile_key=UNION3_SOURCE_PROFILE_KEY,
+        identifier=UNION3_ARXIV_ID,
+        trusted_snapshot=registered_union3_snapshot(
+            FIXTURE.read_text(encoding="utf-8")
+        ),
+    )
+    candidate = extraction.extraction_payload["candidates"][0]
+    alias_id = "union3_signed_alias_v1"
+    canonical_binding = research_loop.get_worker_execution_binding(
+        "union3_flat_lcdm_sn_only_v1"
+    )
+    alias_binding = {
+        **canonical_binding,
+        "workflow_id": alias_id,
+        "workflow_version": "2.0.0",
+        "registry_epoch": "signed-alias-release",
+        "registry_entry_hash": "sha256:" + "9" * 64,
+        "approved_worker_image_digest": "sha256:" + "2" * 64,
+    }
+    monkeypatch.setattr(
+        research_loop,
+        "assert_workflow_executable",
+        lambda workflow_id: alias_binding if workflow_id == alias_id else None,
+    )
+    monkeypatch.setattr(
+        research_loop,
+        "get_static_execution_adapter_binding",
+        lambda workflow_id, version=None: {
+            "execution_adapter_id": "union3_profile_chi_square_v1",
+            "canonical_workflow_id": "union3_flat_lcdm_sn_only_v1",
+            "primary_entrypoint_id": canonical_binding["entrypoint_id"],
+            "independent_verifier_entrypoint_id": canonical_binding[
+                "independent_verifier_entrypoint_id"
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        research_loop,
+        "get_worker_execution_binding",
+        lambda workflow_id, version=None: (
+            alias_binding
+            if workflow_id == alias_id
+            else canonical_binding
+        ),
+    )
+    canonical_pins = research_loop.get_registered_dataset_pins(
+        "union3_flat_lcdm_sn_only_v1"
+    )
+    monkeypatch.setattr(
+        research_loop,
+        "get_registered_dataset_pins",
+        lambda workflow_id: canonical_pins,
+    )
+
+    audit, job = await create_union3_reproduction_audit(
+        db_session,
+        user_id=owner.id,
+        workspace_id=workspace.id,
+        source_document_id=source.id,
+        candidate_id=candidate["candidate_id"],
+        workflow_key=alias_id,
+    )
+
+    assert audit.workflow_id == alias_id
+    assert job.workflow_id == alias_id
+    assert job.workflow_key == alias_id
+    assert job.args["workflow_key"] == alias_id
+    assert job.tool_name == canonical_binding["entrypoint_id"]
+    assert job.registry_entry_hash == alias_binding["registry_entry_hash"]
 
 
 async def _completed_primary_attempt(db_session, monkeypatch):
@@ -154,10 +242,15 @@ async def _completed_primary_attempt(db_session, monkeypatch):
         name="Union3 test worker",
         public_key=_raw_public_key(worker_key),
         public_key_fingerprint="sha256:" + uuid.uuid4().hex * 2,
-        protocol_version="1",
+        protocol_version=WORKER_PROTOCOL_VERSION,
         status="ACTIVE",
-        capabilities={},
-        release_manifest={},
+        capabilities={
+            "workflows": list_worker_execution_bindings(
+                worker_image_digest="sha256:" + "2" * 64
+            ),
+            "concurrency": 1,
+        },
+        release_manifest={"image_digest": "sha256:" + "2" * 64},
     )
     db_session.add(node)
     await db_session.commit()
@@ -176,7 +269,7 @@ async def _completed_primary_attempt(db_session, monkeypatch):
         "protocol_version": attempt.task_envelope["protocol_version"],
         "workflow_key": attempt.task_envelope["workflow_key"],
         "git_commit": attempt.task_envelope["git_commit"],
-        "image_digest": attempt.task_envelope["image_digest"],
+        "image_digest": attempt.task_envelope["worker_image_digest"],
         "python_version": "3.14.0-test",
         "platform_system": "test",
         "platform_machine": "test-machine",
@@ -584,7 +677,7 @@ async def test_registered_retry_requeues_same_immutable_job_with_new_attempt_bud
         private_key=_raw_private_key(Ed25519PrivateKey.generate()),
         key_id="worker-task-v1",
         release_commit="3" * 40,
-        image_digest="sha256:" + "4" * 64,
+        image_digest="sha256:" + "2" * 64,
     )
     assert next_attempt is not None
     assert next_attempt.attempt_number == 2

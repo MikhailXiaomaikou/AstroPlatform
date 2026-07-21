@@ -52,8 +52,9 @@ def _data_paths() -> tuple[Path, Path]:
 def test_registered_workflow_is_fixed_and_defensively_copied():
     assert list_registered_workflows() == (UNION3_REPRODUCTION_WORKFLOW_ID,)
     workflow = get_registered_workflow(UNION3_REPRODUCTION_WORKFLOW_ID)
-    assert workflow["primary_executor"].endswith("run_union3_primary_reproduction")
-    assert workflow["independent_verifier"].endswith("verify_union3_primary_result")
+    assert workflow["primary_executor"] == "union3.primary_reproduction.v1"
+    assert workflow["independent_verifier"] == "union3.independent_verification.v1"
+    assert not workflow["primary_executor"].startswith("app.")
     assert workflow["method"]["omega_m_min"] == "0.05"
     assert workflow["method"]["omega_m_max"] == "0.80"
     assert workflow["method"]["grid_step"] == "0.0005"
