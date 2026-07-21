@@ -35,6 +35,10 @@ from app.services.foundry_catalog import (
     sha256_json,
     start_validation_run,
 )
+from app.services.foundry_validation_dispatch import (
+    FoundryValidationDispatchError,
+    dispatch_candidate_validation,
+)
 
 
 VALIDATION_IMAGE = "sha256:" + "a" * 64
@@ -303,6 +307,97 @@ async def test_ai_admin_secret_cannot_review_or_register(
         },
     )
     assert register.status_code == 403
+
+
+async def test_validate_dispatch_records_success_and_retryable_failure(
+    app_client, db_session, monkeypatch
+):
+    monkeypatch.setattr(settings, "admin_secret", "validation-admin")
+    monkeypatch.setattr(settings, "foundry_auto_demo_enabled", True)
+    candidate, version, _run, _demo, _report = await _candidate_with_demo(
+        db_session, suffix="dispatch_ok"
+    )
+
+    async def _success(**_kwargs):
+        return None
+
+    monkeypatch.setattr("app.api.foundry.dispatch_candidate_validation", _success)
+    response = await app_client.post(
+        f"/api/admin/foundry/candidates/{candidate.id}/validate",
+        headers={"X-Admin-Secret": "validation-admin"},
+        json={
+            "candidate_version_id": str(version.id),
+            "candidate_version_hash": version.version_hash,
+        },
+    )
+    assert response.status_code == 202, response.text
+    assert response.json()["status"] == "DISPATCHED"
+    assert response.json()["retryable"] is False
+
+    failed_candidate, failed_version, *_ = await _candidate_with_demo(
+        db_session, suffix="dispatch_fail"
+    )
+
+    async def _failure(**_kwargs):
+        raise FoundryValidationDispatchError("validation_dispatch_timeout")
+
+    monkeypatch.setattr("app.api.foundry.dispatch_candidate_validation", _failure)
+    failed = await app_client.post(
+        f"/api/admin/foundry/candidates/{failed_candidate.id}/validate",
+        headers={"X-Admin-Secret": "validation-admin"},
+        json={
+            "candidate_version_id": str(failed_version.id),
+            "candidate_version_hash": failed_version.version_hash,
+        },
+    )
+    assert failed.status_code == 202, failed.text
+    assert failed.json()["status"] == "DISPATCH_FAILED"
+    assert failed.json()["retryable"] is True
+    assert failed.json()["failure_class"] == "validation_dispatch_timeout"
+
+
+async def test_github_dispatch_sends_only_opaque_validation_identifiers(monkeypatch):
+    captured = {}
+
+    class _Response:
+        status_code = 204
+
+    class _Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, *, headers, json):
+            captured.update({"url": url, "headers": headers, "json": json})
+            return _Response()
+
+    run_id = uuid.uuid4()
+    monkeypatch.setattr(settings, "foundry_validation_dispatch_backend", "github_actions")
+    monkeypatch.setattr(settings, "foundry_validation_github_repository", "standard-astro/platform")
+    monkeypatch.setattr(settings, "foundry_validation_github_workflow", "foundry-demo.yml")
+    monkeypatch.setattr(settings, "foundry_validation_github_ref", "f" * 40)
+    monkeypatch.setattr(settings, "foundry_validation_github_token", "github-" + "t" * 40)
+    monkeypatch.setattr("app.services.foundry_validation_dispatch.httpx.AsyncClient", _Client)
+    await dispatch_candidate_validation(
+        validation_run_id=run_id,
+        candidate_key="desi_dr2_candidate_dispatch",
+    )
+    assert captured["json"] == {
+        "ref": "f" * 40,
+        "inputs": {
+            "candidate_key": "desi_dr2_candidate_dispatch",
+            "validation_run_id": str(run_id),
+        },
+    }
+    assert set(captured["json"]["inputs"]) == {
+        "candidate_key",
+        "validation_run_id",
+    }
 
 
 def _formal_build_report(candidate, version, *, built_at: datetime) -> dict:

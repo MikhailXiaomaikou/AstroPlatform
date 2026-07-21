@@ -41,6 +41,11 @@ from app.services.foundry_catalog import (
     triage_capability_request,
     record_demo_report,
     record_formal_build_attestation,
+    record_validation_dispatch,
+)
+from app.services.foundry_validation_dispatch import (
+    FoundryValidationDispatchError,
+    dispatch_candidate_validation,
 )
 
 
@@ -675,12 +680,49 @@ async def admin_validate_foundry_candidate(
         )
     except FoundryCatalogError as exc:
         _raise_foundry_error(exc)
+    version = await db.get(FoundryCandidateVersion, row.candidate_version_id)
+    failure_class = None
+    should_dispatch = row.status == "QUEUED"
+    if not should_dispatch:
+        return {
+            "validation_run_id": str(row.id),
+            "status": row.status,
+            "candidate_id": str(row.candidate_id),
+            "candidate_version_id": str(row.candidate_version_id),
+            "candidate_version_hash": row.candidate_version_hash,
+            "retryable": False,
+            "failure_class": row.failure_class,
+            "created_at": row.created_at.isoformat(),
+        }
+    if version is None:
+        failure_class = "validation_dispatch_internal_error"
+    else:
+        try:
+            await dispatch_candidate_validation(
+                validation_run_id=row.id,
+                candidate_key=version.candidate_key,
+            )
+        except FoundryValidationDispatchError as exc:
+            failure_class = exc.failure_class
+        except Exception:
+            failure_class = "validation_dispatch_internal_error"
+    try:
+        row = await record_validation_dispatch(
+            db,
+            validation_run_id=row.id,
+            dispatched=failure_class is None,
+            failure_class=failure_class,
+        )
+    except FoundryCatalogError as exc:
+        _raise_foundry_error(exc)
     return {
         "validation_run_id": str(row.id),
         "status": row.status,
         "candidate_id": str(row.candidate_id),
         "candidate_version_id": str(row.candidate_version_id),
         "candidate_version_hash": row.candidate_version_hash,
+        "retryable": row.status == "DISPATCH_FAILED",
+        "failure_class": row.failure_class,
         "created_at": row.created_at.isoformat(),
     }
 

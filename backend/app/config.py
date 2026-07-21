@@ -231,6 +231,11 @@ class Settings(BaseSettings):
     foundry_candidate_catalog_enabled: bool = False
     foundry_registration_enabled: bool = False
     foundry_validation_result_secret: str = ""
+    foundry_validation_dispatch_backend: str = "disabled"
+    foundry_validation_github_token: str = ""
+    foundry_validation_github_repository: str = ""
+    foundry_validation_github_workflow: str = "foundry-candidate-demo.yml"
+    foundry_validation_github_ref: str = ""
     foundry_formal_build_result_secret: str = ""
     foundry_formal_build_oidc_subject: str = ""
     claim_audit_execution_mode: str = (
@@ -1026,6 +1031,34 @@ class Settings(BaseSettings):
                 "FOUNDRY_VALIDATION_RESULT_SECRET must contain at least 32 "
                 "characters when automatic Demo ingestion is enabled"
             )
+        self.foundry_validation_dispatch_backend = str(
+            self.foundry_validation_dispatch_backend or "disabled"
+        ).strip().lower()
+        if self.foundry_validation_dispatch_backend not in {
+            "disabled",
+            "github_actions",
+        }:
+            raise ValueError(
+                "FOUNDRY_VALIDATION_DISPATCH_BACKEND must be disabled or github_actions"
+            )
+        if self.app_role == "api" and _ENV == "production" and self.foundry_auto_demo_enabled:
+            if (
+                self.foundry_validation_dispatch_backend != "github_actions"
+                or len(self.foundry_validation_github_token) < 32
+                or self.foundry_validation_github_repository.count("/") != 1
+                or not re.fullmatch(
+                    r"[0-9a-f]{40}",
+                    str(self.foundry_validation_github_ref or "").lower(),
+                )
+                or not re.fullmatch(
+                    r"[A-Za-z0-9_.-]+\.ya?ml",
+                    str(self.foundry_validation_github_workflow or ""),
+                )
+            ):
+                raise ValueError(
+                    "Automatic Demo requires a narrow GitHub Actions dispatch "
+                    "configuration pinned to a 40-character Git ref"
+                )
         if self.foundry_validation_result_secret and any(
             self.foundry_validation_result_secret == str(secret or "")
             for secret in (
@@ -1041,6 +1074,23 @@ class Settings(BaseSettings):
             raise ValueError(
                 "FOUNDRY_VALIDATION_RESULT_SECRET must be independent from AI, "
                 "admin, Worker, Evidence, and Registry credentials"
+            )
+        if self.foundry_validation_github_token and any(
+            self.foundry_validation_github_token == str(secret or "")
+            for secret in (
+                self.jwt_secret,
+                self.admin_secret,
+                self.foundry_validation_result_secret,
+                self.platform_deepseek_api_key,
+                self.worker_task_signing_private_key,
+                self.evidence_v2_signing_private_key,
+                self.workflow_registry_signing_private_key,
+            )
+            if secret
+        ):
+            raise ValueError(
+                "FOUNDRY_VALIDATION_GITHUB_TOKEN must be independent from AI, "
+                "admin, callback, Worker, Evidence, and Registry credentials"
             )
         if (
             self.app_role == "api"
@@ -1062,6 +1112,7 @@ class Settings(BaseSettings):
                 self.jwt_secret,
                 self.admin_secret,
                 self.foundry_validation_result_secret,
+                self.foundry_validation_github_token,
                 self.platform_deepseek_api_key,
                 self.worker_task_signing_private_key,
                 self.evidence_v2_signing_private_key,

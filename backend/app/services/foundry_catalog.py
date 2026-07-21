@@ -881,7 +881,7 @@ async def start_validation_run(
     active = await db.scalar(
         select(FoundryValidationRun).where(
             FoundryValidationRun.candidate_version_id == version.id,
-            FoundryValidationRun.status.in_({"QUEUED", "RUNNING"}),
+            FoundryValidationRun.status.in_({"QUEUED", "DISPATCHED", "RUNNING"}),
         )
     )
     if active is not None:
@@ -907,6 +907,54 @@ async def start_validation_run(
         payload={
             "validation_run_id": str(run.id),
             "candidate_version_hash": version.version_hash,
+        },
+    )
+    await db.commit()
+    await db.refresh(run)
+    return run
+
+
+async def record_validation_dispatch(
+    db: AsyncSession,
+    *,
+    validation_run_id: uuid.UUID,
+    dispatched: bool,
+    failure_class: str | None = None,
+) -> FoundryValidationRun:
+    """Record the post-commit CI dispatch outcome; never leave a fake QUEUED run."""
+
+    run = await db.scalar(
+        select(FoundryValidationRun)
+        .where(FoundryValidationRun.id == validation_run_id)
+        .with_for_update()
+    )
+    if run is None:
+        raise FoundryCatalogError(
+            "validation_run_not_found", "Validation run not found", status_code=404
+        )
+    if run.status != "QUEUED":
+        return run
+    candidate = await db.scalar(
+        select(FoundryCandidate)
+        .where(FoundryCandidate.id == run.candidate_id)
+        .with_for_update()
+    )
+    run.status = "DISPATCHED" if dispatched else "DISPATCH_FAILED"
+    run.failure_class = None if dispatched else str(failure_class or "dispatch_failed")[:255]
+    if candidate is not None and not dispatched:
+        candidate.status = "BUILDING"
+    await _append_event(
+        db,
+        candidate_id=run.candidate_id,
+        candidate_version_id=run.candidate_version_id,
+        event_type=("VALIDATION_DISPATCHED" if dispatched else "VALIDATION_DISPATCH_FAILED"),
+        actor_kind="CONTROL_PLANE",
+        actor_user_id=None,
+        payload={
+            "validation_run_id": str(run.id),
+            "status": run.status,
+            "failure_class": run.failure_class,
+            "retryable": not dispatched,
         },
     )
     await db.commit()
