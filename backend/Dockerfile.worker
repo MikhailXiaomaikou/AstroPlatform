@@ -11,6 +11,22 @@ ENV TOOL_VERSION=${TOOL_VERSION} \
 
 WORKDIR /app
 
+# The hash-locked science environment includes packages (notably ultranest)
+# that publish source distributions for some supported architectures.  Keep
+# the local Worker build portable across linux/amd64 and linux/arm64 by
+# providing the same core scientific compiler stack used by the control
+# image.  Runtime execution remains non-root and read-only in Compose.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    gfortran \
+    libgsl-dev \
+    libfftw3-dev \
+    liblapack-dev \
+    libblas-dev \
+    make \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt requirements.lock ./
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 

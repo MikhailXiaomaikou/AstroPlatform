@@ -9,6 +9,21 @@ ENV TOOL_VERSION=${TOOL_VERSION} \
 
 WORKDIR /app
 
+# Candidate validation uses the same hash-locked scientific environment as
+# formal Workers.  Some dependencies ship source distributions on supported
+# architectures, so the isolated image needs an explicit compiler stack at
+# build time instead of depending on a runner-specific preinstalled toolchain.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    gfortran \
+    libgsl-dev \
+    libfftw3-dev \
+    liblapack-dev \
+    libblas-dev \
+    make \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt requirements.lock ./
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
