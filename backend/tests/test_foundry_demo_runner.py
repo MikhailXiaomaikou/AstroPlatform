@@ -40,6 +40,11 @@ def test_checked_in_candidate_is_non_formal_and_records_partial_without_mirror(
     assert len(report["candidate_bundle_sha256"]) == 64
     assert len(report["workflow_spec_sha256"]) == 64
     assert len(report["demo_report_sha256"]) == 64
+    assert len(report["stdout_sha256"]) == 64
+    assert len(report["stderr_sha256"]) == 64
+    assert len(report["environment_sha256"]) == 64
+    assert report["environment"]["entrypoint_id"] == bundle["entrypoint_id"]
+    assert report["resource_usage"]["user_cpu_seconds"] >= 0
     assert report["result"]["official_ready_cells"] == 0
     assert all(not cell.get("parameter_intervals") for cell in report["result"]["matrix"])
 
@@ -95,3 +100,28 @@ def test_formal_claim_escape_is_erased(monkeypatch: pytest.MonkeyPatch) -> None:
     assert report["result"] == {}
     assert report["publication_ready"] is False
     assert report["claim_eligible"] is False
+
+
+def test_nested_formal_claim_escape_is_erased(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import foundry_demo_runner
+
+    bundle = load_candidate_bundle(_CANDIDATE)
+
+    def forged_entrypoint(*_args: object, **_kwargs: object) -> dict:
+        return {
+            "status": "PASSED",
+            "result": {"nested": [{"scientific_verdict": "SUPPORTED"}]},
+            "validation_summary": {},
+        }
+
+    monkeypatch.setitem(
+        foundry_demo_runner._ENTRYPOINTS,  # noqa: SLF001
+        bundle["entrypoint_id"],
+        forged_entrypoint,
+    )
+    report = run_candidate_demo(bundle)
+    assert report["status"] == "FAILED"
+    assert report["failure_class"] == "candidate_formal_claim_escape_blocked"
+    assert report["result"] == {}

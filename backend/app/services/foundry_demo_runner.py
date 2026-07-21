@@ -7,10 +7,14 @@ non-formal contract that cannot support a Claim Audit or Evidence Pack.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import os
+import platform
 import re
+import resource
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,6 +47,34 @@ def _canonical_json(value: Any) -> bytes:
 
 def _sha256(value: Any) -> str:
     return hashlib.sha256(_canonical_json(value)).hexdigest()
+
+
+def _sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def _contains_formal_claim_escape(value: Any) -> bool:
+    """Detect formal-evidence fields at any depth in candidate output."""
+
+    if isinstance(value, list):
+        return any(_contains_formal_claim_escape(item) for item in value)
+    if not isinstance(value, dict):
+        return False
+    for raw_key, item in value.items():
+        key = str(raw_key).strip().lower()
+        if key in {"publication_ready", "claim_eligible"} and item is True:
+            return True
+        if key == "scientific_verdict" and str(item).upper() == "SUPPORTED":
+            return True
+        if key in {
+            "evidence_pack",
+            "evidence_pack_id",
+            "formal_evidence_pack",
+        } and item:
+            return True
+        if _contains_formal_claim_escape(item):
+            return True
+    return False
 
 
 def _utc_now() -> datetime:
@@ -215,26 +247,45 @@ def run_candidate_demo(
     started = started_at or _utc_now()
     demo_run_id = str(uuid.uuid4())
     entrypoint = _ENTRYPOINTS[normalized["entrypoint_id"]]
-    try:
-        outcome = entrypoint(normalized, cache_root=cache_root)
-    except Exception as exc:  # fail closed; never expose a Python traceback
-        outcome = {
-            "status": "FAILED",
-            "failure_class": exc.__class__.__name__,
-            "result": {},
-            "validation_summary": {"runner_exception": True},
-        }
+    stdout_buffer = io.StringIO()
+    stderr_buffer = io.StringIO()
+    with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(
+        stderr_buffer
+    ):
+        try:
+            outcome = entrypoint(normalized, cache_root=cache_root)
+        except Exception as exc:  # fail closed; never expose a Python traceback
+            outcome = {
+                "status": "FAILED",
+                "failure_class": exc.__class__.__name__,
+                "result": {},
+                "validation_summary": {"runner_exception": True},
+            }
     status = str(outcome.get("status") or "FAILED").upper()
     if status not in DEMO_STATUSES:
         raise FoundryDemoContractError("candidate_demo_status_invalid")
     result = outcome.get("result") if isinstance(outcome.get("result"), dict) else {}
-    forbidden_supported = str(result.get("scientific_verdict") or "").upper() == "SUPPORTED"
-    if result.get("publication_ready") is True or forbidden_supported:
+    if _contains_formal_claim_escape(result) or _contains_formal_claim_escape(
+        outcome.get("validation_summary")
+    ):
         status = "FAILED"
         result = {}
         outcome["failure_class"] = "candidate_formal_claim_escape_blocked"
         outcome["validation_summary"] = {"formal_claim_escape_blocked": True}
     completed = _utc_now()
+    stdout_bytes = stdout_buffer.getvalue().encode("utf-8")
+    stderr_bytes = stderr_buffer.getvalue().encode("utf-8")
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    environment = {
+        "python_version": platform.python_version(),
+        "python_implementation": platform.python_implementation(),
+        "platform_system": platform.system(),
+        "platform_machine": platform.machine(),
+        "tool_version": str(
+            os.getenv("TOOL_VERSION") or os.getenv("GIT_COMMIT") or "unknown"
+        ),
+        "entrypoint_id": normalized["entrypoint_id"],
+    }
     report = {
         "schema_version": 1,
         "candidate_id": normalized["candidate_id"],
@@ -250,12 +301,23 @@ def run_candidate_demo(
         "dependency_lock_sha256": normalized["dependency_lock_sha256"],
         "runner_definition_sha256": normalized["runner_definition_sha256"],
         "runner_image_digest": str(runner_image_digest or "unavailable"),
+        "environment": environment,
+        "environment_sha256": _sha256(environment),
         "generation": normalized["generation"],
         "source_pins": normalized["source_pins"],
         "fixture_hashes": normalized["fixture_hashes"],
         "started_at": _iso(started),
         "completed_at": _iso(completed),
         "duration_ms": max(0, int((completed - started).total_seconds() * 1000)),
+        "stdout_sha256": _sha256_bytes(stdout_bytes),
+        "stderr_sha256": _sha256_bytes(stderr_bytes),
+        "stdout_bytes": len(stdout_bytes),
+        "stderr_bytes": len(stderr_bytes),
+        "resource_usage": {
+            "max_rss_kib_platform_value": int(usage.ru_maxrss),
+            "user_cpu_seconds": round(float(usage.ru_utime), 6),
+            "system_cpu_seconds": round(float(usage.ru_stime), 6),
+        },
         "failure_class": outcome.get("failure_class"),
         "validation_summary": outcome.get("validation_summary") or {},
         "limitations": list(normalized["limitations"]),
