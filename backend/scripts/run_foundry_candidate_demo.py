@@ -91,7 +91,11 @@ def main() -> int:
         "status": report["status"],
         "demo_report_sha256": report["demo_report_sha256"],
     }, sort_keys=True))
-    return 0 if report["status"] in {"PASSED", "PARTIAL"} else 1
+    # A contract-valid FAILED report is a completed validation outcome, not a
+    # runner infrastructure failure.  Returning success lets the host validate
+    # and append that immutable report to the Candidate ledger; the report's
+    # own status remains FAILED and can never become formal evidence.
+    return 0
 
 
 if __name__ == "__main__":

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import runpy
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -45,6 +47,58 @@ def test_demo_artifacts_are_host_readable_and_never_overwritten(
     assert stat.S_IMODE(output.stat().st_mode) == 0o644
     with pytest.raises(FileExistsError):
         write_exclusive(output, b"replacement")
+
+
+def test_cli_records_contract_valid_failed_report_before_host_callback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from app.services import foundry_demo_runner
+
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "run_foundry_candidate_demo.py"
+    )
+    failed_report = {
+        "candidate_id": "failed_candidate",
+        "demo_run_id": "00000000-0000-0000-0000-000000000001",
+        "status": "FAILED",
+        "demo_report_sha256": "a" * 64,
+        "artifact_manifest": [],
+    }
+    monkeypatch.setattr(foundry_demo_runner, "load_candidate_bundle", lambda _path: {})
+    monkeypatch.setattr(
+        foundry_demo_runner,
+        "run_candidate_demo",
+        lambda *_args, **_kwargs: failed_report,
+    )
+    output = tmp_path / "demo-report.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(script),
+            "--candidate",
+            "failed_candidate",
+            "--output",
+            str(output),
+        ],
+    )
+
+    exit_code = runpy.run_path(str(script))["main"]()
+
+    assert exit_code == 0
+    assert json.loads(output.read_text(encoding="utf-8"))["status"] == "FAILED"
+
+
+def test_checked_in_candidate_binds_current_demo_runner_definition() -> None:
+    bundle = load_candidate_bundle(_CANDIDATE)
+    dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile.foundry-demo"
+
+    assert bundle["runner_definition_sha256"] == hashlib.sha256(
+        dockerfile.read_bytes()
+    ).hexdigest()
 
 
 def test_checked_in_candidate_is_non_formal_and_records_partial_without_mirror(

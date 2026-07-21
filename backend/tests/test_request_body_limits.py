@@ -12,13 +12,17 @@ from app.middleware.request_body_limit import (
     DEFAULT_MAX_REQUEST_BODY,
     FOUNDRY_DEMO_REPORT_MAX_REQUEST_BODY,
     FOUNDRY_REGISTRY_IMPORT_MAX_REQUEST_BODY,
+    RESEARCH_EVIDENCE_PACK_VERIFY_MAX_REQUEST_BODY,
     RequestBodyLimitMiddleware,
     request_body_limit_for_path,
 )
+from app.services.evidence_pack_v2 import EVIDENCE_PACK_V2_MAX_ARCHIVE_BYTES
 
 
 DEMO_PATH = f"/api/internal/foundry/validation-runs/{uuid.uuid4()}/demo-report"
 REGISTRY_IMPORT_PATH = "/api/internal/foundry/registry-releases/import"
+RESEARCH_EVIDENCE_VERIFY_PATH = "/api/research/evidence-packs/verify"
+PUBLIC_EVIDENCE_VERIFY_PATH = "/api/public/evidence-packs/verify"
 
 
 async def _invoke_streamed(
@@ -102,6 +106,35 @@ def test_only_exact_foundry_callback_paths_receive_larger_caps() -> None:
         request_body_limit_for_path(DEMO_PATH + "/extra")
         == DEFAULT_MAX_REQUEST_BODY
     )
+
+
+def test_research_json_routes_keep_default_limit_except_exact_pack_verifier() -> None:
+    assert (
+        request_body_limit_for_path("/api/research/capability-requests")
+        == DEFAULT_MAX_REQUEST_BODY
+    )
+    assert (
+        request_body_limit_for_path("/api/research/workspaces")
+        == DEFAULT_MAX_REQUEST_BODY
+    )
+    assert (
+        request_body_limit_for_path(RESEARCH_EVIDENCE_VERIFY_PATH)
+        == RESEARCH_EVIDENCE_PACK_VERIFY_MAX_REQUEST_BODY
+    )
+    assert (
+        request_body_limit_for_path(PUBLIC_EVIDENCE_VERIFY_PATH)
+        == EVIDENCE_PACK_V2_MAX_ARCHIVE_BYTES
+    )
+
+
+async def test_chunked_foundry_user_json_is_rejected_at_default_limit() -> None:
+    status, called, observed = await _invoke_streamed(
+        "/api/research/claim-audits/00000000-0000-0000-0000-000000000000/capability-requests",
+        [b"x" * DEFAULT_MAX_REQUEST_BODY, b"x"],
+    )
+    assert status == 413
+    assert called is False
+    assert observed == 0
 
 
 @pytest.mark.parametrize(

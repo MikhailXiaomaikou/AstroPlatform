@@ -15,10 +15,13 @@ from typing import Any
 
 from starlette.responses import JSONResponse
 
+from app.services.evidence_pack_v2 import EVIDENCE_PACK_V2_MAX_ARCHIVE_BYTES
+
 
 DEFAULT_MAX_REQUEST_BODY = 1_048_576  # 1 MiB
 FOUNDRY_DEMO_REPORT_MAX_REQUEST_BODY = 4 * 1_048_576
 FOUNDRY_REGISTRY_IMPORT_MAX_REQUEST_BODY = 10 * 1_048_576
+RESEARCH_EVIDENCE_PACK_VERIFY_MAX_REQUEST_BODY = 32 * 1_048_576
 
 _FOUNDRY_DEMO_REPORT_PATH_RE = re.compile(
     r"^/api/internal/foundry/validation-runs/"
@@ -26,6 +29,8 @@ _FOUNDRY_DEMO_REPORT_PATH_RE = re.compile(
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/demo-report$"
 )
 _FOUNDRY_REGISTRY_IMPORT_PATH = "/api/internal/foundry/registry-releases/import"
+_RESEARCH_EVIDENCE_PACK_VERIFY_PATH = "/api/research/evidence-packs/verify"
+_PUBLIC_EVIDENCE_PACK_VERIFY_PATH = "/api/public/evidence-packs/verify"
 
 # These existing upload/export routes deliberately retain their own endpoint
 # limits.  Do not add ``/api/internal/foundry`` here: the two Foundry callbacks
@@ -38,8 +43,6 @@ _LARGE_BODY_PREFIXES = (
     "/api/integration/jupyter/export",
     "/api/workspace/batch-upload",
     "/api/paper/",
-    "/api/research/",
-    "/api/public/evidence-packs/verify",
 )
 
 
@@ -50,6 +53,10 @@ def request_body_limit_for_path(path: str) -> int | None:
         return FOUNDRY_DEMO_REPORT_MAX_REQUEST_BODY
     if path == _FOUNDRY_REGISTRY_IMPORT_PATH:
         return FOUNDRY_REGISTRY_IMPORT_MAX_REQUEST_BODY
+    if path == _RESEARCH_EVIDENCE_PACK_VERIFY_PATH:
+        return RESEARCH_EVIDENCE_PACK_VERIFY_MAX_REQUEST_BODY
+    if path == _PUBLIC_EVIDENCE_PACK_VERIFY_PATH:
+        return EVIDENCE_PACK_V2_MAX_ARCHIVE_BYTES
     if any(path.startswith(prefix) for prefix in _LARGE_BODY_PREFIXES):
         return None
     return DEFAULT_MAX_REQUEST_BODY
@@ -156,6 +163,7 @@ __all__ = [
     "DEFAULT_MAX_REQUEST_BODY",
     "FOUNDRY_DEMO_REPORT_MAX_REQUEST_BODY",
     "FOUNDRY_REGISTRY_IMPORT_MAX_REQUEST_BODY",
+    "RESEARCH_EVIDENCE_PACK_VERIFY_MAX_REQUEST_BODY",
     "RequestBodyLimitMiddleware",
     "request_body_limit_for_path",
 ]
