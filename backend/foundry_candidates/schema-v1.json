@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://standard-astro.example/schemas/foundry-candidate-v1.json",
+  "title": "Standard Astro non-formal Foundry candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "candidate_version",
+    "proposed_workflow_id",
+    "entrypoint_id",
+    "risk_level",
+    "workflow_spec",
+    "source_pins",
+    "fixture_hashes",
+    "dependency_lock_sha256",
+    "runner_definition_sha256",
+    "generation",
+    "limitations",
+    "output_policy"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "candidate_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{2,96}$"
+    },
+    "candidate_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "proposed_workflow_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{2,96}$"
+    },
+    "entrypoint_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{2,96}$"
+    },
+    "risk_level": {
+      "enum": [
+        "R0",
+        "R1",
+        "R2",
+        "R3"
+      ]
+    },
+    "workflow_spec": {
+      "type": "object"
+    },
+    "source_pins": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object"
+      }
+    },
+    "fixture_hashes": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "dependency_lock_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "runner_definition_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "generation": {
+      "type": "object"
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "output_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_class",
+        "publication_ready",
+        "claim_eligible",
+        "evidence_pack_allowed"
+      ],
+      "properties": {
+        "evidence_class": {
+          "const": "NON_FORMAL_DEMO"
+        },
+        "publication_ready": {
+          "const": false
+        },
+        "claim_eligible": {
+          "const": false
+        },
+        "evidence_pack_allowed": {
+          "const": false
+        }
+      }
+    }
+  }
+}

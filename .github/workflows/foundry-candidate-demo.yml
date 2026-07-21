@@ -1,0 +1,86 @@
+name: Non-formal Foundry candidate demo
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate:
+        description: Repository-pinned candidate key (without .json)
+        required: true
+        default: desi_dr2_official_chain_summary_v1
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Validate candidate key
+        env:
+          CANDIDATE: ${{ inputs.candidate }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE" =~ ^[a-z][a-z0-9_]{2,96}$ ]]
+          test -f "backend/foundry_candidates/$CANDIDATE.json"
+
+      - name: Build no-secrets candidate runner
+        run: >-
+          docker build --pull
+          --build-arg TOOL_VERSION="$GITHUB_SHA"
+          --file backend/Dockerfile.foundry-demo
+          --tag standard-astro-foundry-demo:ci
+          backend
+
+      - name: Run candidate without network, secrets, or writable root
+        env:
+          CANDIDATE: ${{ inputs.candidate }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p foundry-output
+          chmod 0777 foundry-output
+          runner_digest="$(docker image inspect --format '{{.Id}}' standard-astro-foundry-demo:ci)"
+          docker run --rm \
+            --network none \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=67108864 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 64 \
+            --cpus 2 \
+            --memory 6g \
+            --user 10002:10002 \
+            --volume "$PWD/foundry-output:/out:rw" \
+            standard-astro-foundry-demo:ci \
+            --candidate "$CANDIDATE" \
+            --output /out/demo-report.json \
+            --runner-image-digest "$runner_digest"
+
+      - name: Enforce the non-formal report contract
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("foundry-output/demo-report.json").read_text())
+          assert report["status"] in {"PASSED", "PARTIAL", "FAILED"}
+          assert report["evidence_class"] == "NON_FORMAL_DEMO"
+          assert report["publication_ready"] is False
+          assert report["claim_eligible"] is False
+          assert report["evidence_pack_allowed"] is False
+          assert report.get("scientific_verdict") != "SUPPORTED"
+          assert len(report["candidate_bundle_sha256"]) == 64
+          assert len(report["demo_report_sha256"]) == 64
+          PY
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: foundry-demo-${{ inputs.candidate }}-${{ github.sha }}
+          path: foundry-output/demo-report.json
+          if-no-files-found: error
+          retention-days: 30

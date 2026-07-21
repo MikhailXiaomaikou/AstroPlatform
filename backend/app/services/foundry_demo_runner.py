@@ -1,0 +1,276 @@
+"""Fail-closed runner for non-formal Workflow Foundry demonstrations.
+
+Candidate bundles are data, never executable instructions.  Every permitted
+``entrypoint_id`` is bound in this module, and every result is normalized to a
+non-formal contract that cannot support a Claim Audit or Evidence Pack.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable
+
+
+CANDIDATE_SCHEMA_VERSION = 1
+NON_FORMAL_EVIDENCE_CLASS = "NON_FORMAL_DEMO"
+DEMO_STATUSES = frozenset({"PASSED", "PARTIAL", "FAILED"})
+_CANDIDATE_ID = re.compile(r"^[a-z][a-z0-9_]{2,96}$")
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+
+class FoundryDemoContractError(ValueError):
+    """A candidate or result attempted to leave the non-formal lane."""
+
+
+def _canonical_json(value: Any) -> bytes:
+    try:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise FoundryDemoContractError("candidate_payload_not_canonical_json") from exc
+
+
+def _sha256(value: Any) -> str:
+    return hashlib.sha256(_canonical_json(value)).hexdigest()
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _iso(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def validate_candidate_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
+    """Return a defensive copy of one declarative, non-formal candidate."""
+
+    if not isinstance(bundle, dict):
+        raise FoundryDemoContractError("candidate_bundle_must_be_object")
+    required = {
+        "schema_version",
+        "candidate_id",
+        "candidate_version",
+        "proposed_workflow_id",
+        "entrypoint_id",
+        "risk_level",
+        "workflow_spec",
+        "source_pins",
+        "fixture_hashes",
+        "dependency_lock_sha256",
+        "runner_definition_sha256",
+        "generation",
+        "limitations",
+        "output_policy",
+    }
+    if set(bundle) != required:
+        raise FoundryDemoContractError("candidate_bundle_shape_not_registered")
+    if bundle.get("schema_version") != CANDIDATE_SCHEMA_VERSION:
+        raise FoundryDemoContractError("candidate_schema_version_unsupported")
+    candidate_id = str(bundle.get("candidate_id") or "")
+    workflow_id = str(bundle.get("proposed_workflow_id") or "")
+    if not _CANDIDATE_ID.fullmatch(candidate_id):
+        raise FoundryDemoContractError("candidate_id_invalid")
+    if not _CANDIDATE_ID.fullmatch(workflow_id):
+        raise FoundryDemoContractError("candidate_workflow_id_invalid")
+    version = bundle.get("candidate_version")
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        raise FoundryDemoContractError("candidate_version_invalid")
+    if bundle.get("risk_level") not in {"R0", "R1", "R2", "R3"}:
+        raise FoundryDemoContractError("candidate_risk_level_invalid")
+    for field in ("dependency_lock_sha256", "runner_definition_sha256"):
+        if not _HEX64.fullmatch(str(bundle.get(field) or "")):
+            raise FoundryDemoContractError(f"candidate_{field}_invalid")
+    if not isinstance(bundle.get("workflow_spec"), dict):
+        raise FoundryDemoContractError("candidate_workflow_spec_invalid")
+    if not isinstance(bundle.get("source_pins"), list) or not bundle["source_pins"]:
+        raise FoundryDemoContractError("candidate_source_pins_required")
+    if not isinstance(bundle.get("fixture_hashes"), list):
+        raise FoundryDemoContractError("candidate_fixture_hashes_invalid")
+    if not isinstance(bundle.get("generation"), dict):
+        raise FoundryDemoContractError("candidate_generation_invalid")
+    if not isinstance(bundle.get("limitations"), list) or not bundle["limitations"]:
+        raise FoundryDemoContractError("candidate_limitations_required")
+    output_policy = bundle.get("output_policy")
+    if output_policy != {
+        "evidence_class": NON_FORMAL_EVIDENCE_CLASS,
+        "publication_ready": False,
+        "claim_eligible": False,
+        "evidence_pack_allowed": False,
+    }:
+        raise FoundryDemoContractError("candidate_output_policy_not_non_formal")
+    if str(bundle.get("entrypoint_id") or "") not in _ENTRYPOINTS:
+        raise FoundryDemoContractError("candidate_entrypoint_not_allowlisted")
+    return json.loads(_canonical_json(bundle))
+
+
+def load_candidate_bundle(path: str | Path) -> dict[str, Any]:
+    candidate_path = Path(path).resolve()
+    try:
+        payload = json.loads(candidate_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FoundryDemoContractError("candidate_bundle_unreadable") from exc
+    return validate_candidate_bundle(payload)
+
+
+def _run_desi_dr2_official_chain_summary(
+    bundle: dict[str, Any],
+    *,
+    cache_root: str | Path | None,
+) -> dict[str, Any]:
+    from app.services.cosmology_likelihoods.analysis_registry import (
+        audit_cosmology_analysis_registry,
+    )
+    from app.services.cosmology_likelihoods.dark_energy_matrix import (
+        run_dark_energy_evidence_matrix,
+    )
+
+    issues = audit_cosmology_analysis_registry()
+    if issues:
+        return {
+            "status": "FAILED",
+            "failure_class": "official_registry_integrity_failed",
+            "result": {"registry_issues": issues, "parameter_intervals": {}},
+            "validation_summary": {
+                "registry_integrity": False,
+                "official_mirror_verified": False,
+                "ready_cells": 0,
+            },
+        }
+
+    workflow_spec = bundle["workflow_spec"]
+    inputs = workflow_spec.get("demo_inputs") or {}
+    prior_root = os.environ.get("DESI_DR2_OFFICIAL_CHAIN_ROOT")
+    if cache_root is not None:
+        os.environ["DESI_DR2_OFFICIAL_CHAIN_ROOT"] = str(cache_root)
+    try:
+        matrix = run_dark_energy_evidence_matrix(
+            model=str(inputs.get("model") or "w0wa_cdm"),
+            supernova_sets=list(inputs.get("supernova_sets") or ["union3"]),
+            include_desi_dr1_reference=False,
+        )
+    finally:
+        if cache_root is not None:
+            if prior_root is None:
+                os.environ.pop("DESI_DR2_OFFICIAL_CHAIN_ROOT", None)
+            else:
+                os.environ["DESI_DR2_OFFICIAL_CHAIN_ROOT"] = prior_root
+
+    ready_cells = int(matrix.get("official_ready_cells") or 0)
+    withheld_cells = int(matrix.get("official_withheld_cells") or 0)
+    status = "PASSED" if ready_cells > 0 and withheld_cells == 0 else "PARTIAL"
+    failure_class = None if status == "PASSED" else "official_chain_mirror_unavailable"
+    return {
+        "status": status,
+        "failure_class": failure_class,
+        "result": {
+            "analysis_status": matrix.get("analysis_status"),
+            "official_ready_cells": ready_cells,
+            "official_withheld_cells": withheld_cells,
+            "matrix": matrix.get("matrix") or [],
+            "provenance": matrix.get("provenance") or {},
+            "parameter_intervals_are_non_formal": True,
+        },
+        "validation_summary": {
+            "registry_integrity": True,
+            "official_mirror_verified": ready_cells > 0,
+            "ready_cells": ready_cells,
+            "withheld_cells": withheld_cells,
+            "numeric_claim_gate": "NON_FORMAL_DEMO",
+        },
+    }
+
+
+_ENTRYPOINTS: dict[
+    str,
+    Callable[..., dict[str, Any]],
+] = {
+    "desi_dr2_official_chain_summary_demo_v1": (
+        _run_desi_dr2_official_chain_summary
+    ),
+}
+
+
+def run_candidate_demo(
+    bundle: dict[str, Any],
+    *,
+    cache_root: str | Path | None = None,
+    runner_image_digest: str | None = None,
+    started_at: datetime | None = None,
+) -> dict[str, Any]:
+    """Run an allowlisted candidate and return an immutable DemoReport body."""
+
+    normalized = validate_candidate_bundle(bundle)
+    started = started_at or _utc_now()
+    demo_run_id = str(uuid.uuid4())
+    entrypoint = _ENTRYPOINTS[normalized["entrypoint_id"]]
+    try:
+        outcome = entrypoint(normalized, cache_root=cache_root)
+    except Exception as exc:  # fail closed; never expose a Python traceback
+        outcome = {
+            "status": "FAILED",
+            "failure_class": exc.__class__.__name__,
+            "result": {},
+            "validation_summary": {"runner_exception": True},
+        }
+    status = str(outcome.get("status") or "FAILED").upper()
+    if status not in DEMO_STATUSES:
+        raise FoundryDemoContractError("candidate_demo_status_invalid")
+    result = outcome.get("result") if isinstance(outcome.get("result"), dict) else {}
+    forbidden_supported = str(result.get("scientific_verdict") or "").upper() == "SUPPORTED"
+    if result.get("publication_ready") is True or forbidden_supported:
+        status = "FAILED"
+        result = {}
+        outcome["failure_class"] = "candidate_formal_claim_escape_blocked"
+        outcome["validation_summary"] = {"formal_claim_escape_blocked": True}
+    completed = _utc_now()
+    report = {
+        "schema_version": 1,
+        "candidate_id": normalized["candidate_id"],
+        "candidate_version": normalized["candidate_version"],
+        "demo_run_id": demo_run_id,
+        "status": status,
+        "evidence_class": NON_FORMAL_EVIDENCE_CLASS,
+        "publication_ready": False,
+        "claim_eligible": False,
+        "evidence_pack_allowed": False,
+        "candidate_bundle_sha256": _sha256(normalized),
+        "workflow_spec_sha256": _sha256(normalized["workflow_spec"]),
+        "dependency_lock_sha256": normalized["dependency_lock_sha256"],
+        "runner_definition_sha256": normalized["runner_definition_sha256"],
+        "runner_image_digest": str(runner_image_digest or "unavailable"),
+        "generation": normalized["generation"],
+        "source_pins": normalized["source_pins"],
+        "fixture_hashes": normalized["fixture_hashes"],
+        "started_at": _iso(started),
+        "completed_at": _iso(completed),
+        "duration_ms": max(0, int((completed - started).total_seconds() * 1000)),
+        "failure_class": outcome.get("failure_class"),
+        "validation_summary": outcome.get("validation_summary") or {},
+        "limitations": list(normalized["limitations"]),
+        "result": result,
+    }
+    report["demo_report_sha256"] = _sha256(report)
+    return report
+
+
+__all__ = [
+    "CANDIDATE_SCHEMA_VERSION",
+    "DEMO_STATUSES",
+    "FoundryDemoContractError",
+    "NON_FORMAL_EVIDENCE_CLASS",
+    "load_candidate_bundle",
+    "run_candidate_demo",
+    "validate_candidate_bundle",
+]

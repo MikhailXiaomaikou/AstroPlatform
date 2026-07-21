@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "candidate_id": "desi_dr2_official_chain_summary_candidate",
+  "candidate_version": 1,
+  "proposed_workflow_id": "desi_dr2_official_chain_summary_v1",
+  "entrypoint_id": "desi_dr2_official_chain_summary_demo_v1",
+  "risk_level": "R2",
+  "workflow_spec": {
+    "workflow_version": "1.0.0-candidate.1",
+    "claim_scope": "published_external_chain_context",
+    "demo_inputs": {
+      "model": "w0wa_cdm",
+      "supernova_sets": [
+        "union3"
+      ]
+    },
+    "primary_operation": "verify pinned DESI DR2 official chain artifacts and summarize registered intervals",
+    "independent_verifier": "required_before_formal_registration",
+    "allowed_claims": [
+      "The non-formal demo verified the configured official-chain mirror and produced a candidate summary."
+    ],
+    "forbidden_claims": [
+      "SUPPORTED",
+      "publication-ready",
+      "independent new measurement",
+      "discovery of evolving dark energy"
+    ],
+    "acceptance": {
+      "registry_integrity_required": true,
+      "artifact_checksums_required_for_numeric_output": true,
+      "minimum_kish_weight_ess": 1000,
+      "candidate_only": true
+    }
+  },
+  "source_pins": [
+    {
+      "key": "desi_dr2_bao_cosmology_chains_v1_manifest",
+      "url": "https://data.desi.lbl.gov/public/papers/y3/bao-cosmo-params/dr2_vac_dr2_bao-cosmo-params_v1.0.sha256sum",
+      "sha256": "df78872aa8b2d3473a9e8de78f498180efd7cbcbeb18211ce4787fac52067ee5"
+    }
+  ],
+  "fixture_hashes": [],
+  "dependency_lock_sha256": "1ad3021413d90076bfca5105f360cc53c2a716b59b2f828cc95e64715771529d",
+  "runner_definition_sha256": "71e45164c17879cc312ea348d8969c5adf66d4af06685e64c1f6d652cb19e4bc",
+  "generation": {
+    "kind": "bootstrap_declarative_candidate",
+    "model": "codex",
+    "prompt_or_claim_stored": false,
+    "generated_code_executed_by_draft_job": false
+  },
+  "limitations": [
+    "This is a non-formal candidate Demo and cannot support a scientific claim.",
+    "Without an operator-provided byte-pinned official chain mirror, the Demo records PARTIAL and exposes no posterior intervals.",
+    "Published external posterior chains are context, not reusable likelihood factors.",
+    "Formal registration requires an independent verifier and human scientific review."
+  ],
+  "output_policy": {
+    "evidence_class": "NON_FORMAL_DEMO",
+    "publication_ready": false,
+    "claim_eligible": false,
+    "evidence_pack_allowed": false
+  }
+}

@@ -1,0 +1,24 @@
+FROM python:3.11-slim@sha256:e031123e3d85762b141ad1cbc56452ba69c6e722ebf2f042cc0dc86c47c0d8b3
+
+ARG TOOL_VERSION=""
+ENV TOOL_VERSION=${TOOL_VERSION} \
+    GIT_COMMIT=${TOOL_VERSION} \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HOME=/nonexistent
+
+WORKDIR /app
+
+COPY requirements.txt requirements.lock ./
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
+
+COPY app ./app
+COPY foundry_candidates ./foundry_candidates
+COPY scripts/run_foundry_candidate_demo.py ./scripts/run_foundry_candidate_demo.py
+
+RUN addgroup --system --gid 10002 foundry \
+    && adduser --system --uid 10002 --ingroup foundry --home /nonexistent foundry \
+    && chmod 0555 /app/scripts/run_foundry_candidate_demo.py
+
+USER foundry
+ENTRYPOINT ["python", "/app/scripts/run_foundry_candidate_demo.py"]
