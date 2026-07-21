@@ -78,13 +78,18 @@ The wrapper accepts only the documented, contract-valid outcomes: `PARTIAL`
 when a byte-pinned official mirror is unavailable, or `PASSED` after that
 mirror is fully verified. Dependency errors, runner exceptions, registry
 failures, malformed summaries, and every other `FAILED` result exit non-zero.
+It also binds each new report to the published candidate bundle, immutable
+CandidateVersion, WorkflowSpec, and local runner descriptor recorded in this
+kit; a mismatch exits non-zero instead of creating a detached Demo record.
 
 脚本依次查找 `backend/venv`、`backend/.venv` 和 `python3`。如果依赖安装在
 其他环境，请设置 `PYTHON=/path/to/python`。仓库还必须处于干净状态；脚本会在把
 `TOOL_VERSION` 绑定到当前提交之前拒绝已跟踪或未跟踪的源码改动，避免把修改过的
 运行环境误写成由某个提交固定。包装脚本只接受两种符合合同的结果：缺少逐字节固定
 官方镜像时为 `PARTIAL`，完整验证镜像后为 `PASSED`。依赖错误、Runner 异常、Registry
-失败、摘要格式错误以及其他 `FAILED` 结果都会以非零状态退出。
+失败、摘要格式错误以及其他 `FAILED` 结果都会以非零状态退出。新报告还必须与本套件
+记录的候选 bundle、不可修改 CandidateVersion、WorkflowSpec 和本地 Runner 描述符完全
+一致；任何不匹配都会失败，避免生成无法追加到候选账本的游离 Demo。
 
 If the script is outside the repository, provide the checkout path:
 
