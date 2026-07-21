@@ -445,6 +445,21 @@ async def require_foundry_human_reviewer(
     return user
 
 
+async def _request_has_foundry_admin_access(
+    request: Request,
+    db: AsyncSession,
+) -> bool:
+    """Report this request's existing admin authority without using 403 as a probe."""
+
+    try:
+        await require_admin_any(request, db)
+    except HTTPException as exc:
+        if exc.status_code in {401, 403}:
+            return False
+        raise
+    return True
+
+
 def _require_validation_runner(request: Request) -> None:
     authorization = request.headers.get("Authorization", "")
     expected = settings.foundry_validation_result_secret
@@ -685,6 +700,21 @@ async def list_research_workflows(
     _require_flag(settings.workflow_registry_v2_enabled, "Workflow Registry v2")
     items = await _formal_workflows()
     return {"items": items, "total": len(items)}
+
+
+@research_router.get("/foundry-access")
+async def get_foundry_self_access(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, bool]:
+    """Return only the authenticated caller's Foundry control-plane roles."""
+
+    _require_flag(settings.foundry_candidate_catalog_enabled, "Foundry Candidate Catalog")
+    return {
+        "can_administer": await _request_has_foundry_admin_access(request, db),
+        "can_review": user.username in _human_reviewer_usernames(),
+    }
 
 
 @research_router.post(

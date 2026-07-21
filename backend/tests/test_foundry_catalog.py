@@ -514,6 +514,63 @@ async def test_capability_request_dedupes_without_leaking_owner_data(
     assert len(requests) == 1
 
 
+async def test_foundry_self_access_reports_current_user_roles_without_403_probe(
+    app_client, db_session, monkeypatch
+):
+    normal = await _user(db_session, "foundry_normal_user")
+    named_admin = await _user(db_session, "foundry_named_admin")
+    tier_admin = await _user(db_session, "foundry_tier_admin")
+    reviewer = await _user(db_session, "foundry_human_reviewer")
+    scientific_reviewer = await _user(db_session, "foundry_scientific_reviewer")
+    tier_admin.subscription_tier = "admin"
+    await db_session.commit()
+
+    monkeypatch.setattr(settings, "foundry_candidate_catalog_enabled", True)
+    monkeypatch.setattr(settings, "admin_secret", "configured-admin-secret")
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("LOCAL_DEV_NO_AUTH", "false")
+    monkeypatch.setenv("ADMIN_USERNAMES", named_admin.username)
+    monkeypatch.setenv("FOUNDRY_HUMAN_REVIEWER_USERNAMES", reviewer.username)
+    monkeypatch.setenv("SCIENTIFIC_REVIEWER_USERNAMES", scientific_reviewer.username)
+
+    async def self_access(user: User):
+        return await app_client.get(
+            "/api/research/foundry-access",
+            headers={"Authorization": f"Bearer {create_access_token(user.id)}"},
+        )
+
+    normal_response = await self_access(normal)
+    named_admin_response = await self_access(named_admin)
+    tier_admin_response = await self_access(tier_admin)
+    reviewer_response = await self_access(reviewer)
+    scientific_reviewer_response = await self_access(scientific_reviewer)
+
+    assert normal_response.status_code == 200, normal_response.text
+    assert normal_response.json() == {
+        "can_administer": False,
+        "can_review": False,
+    }
+    assert named_admin_response.json() == {
+        "can_administer": True,
+        "can_review": False,
+    }
+    assert tier_admin_response.json() == {
+        "can_administer": True,
+        "can_review": False,
+    }
+    assert reviewer_response.json() == {
+        "can_administer": False,
+        "can_review": True,
+    }
+    assert scientific_reviewer_response.json() == {
+        "can_administer": False,
+        "can_review": True,
+    }
+
+    unauthenticated = await app_client.get("/api/research/foundry-access")
+    assert unauthenticated.status_code == 401
+
+
 async def test_demo_callback_is_hash_bound_idempotent_and_non_formal(db_session):
     _candidate, version, run, demo, report = await _candidate_with_demo(db_session)
     replay = await record_demo_report(
