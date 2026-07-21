@@ -70,8 +70,14 @@ The script looks for `backend/venv`, then `backend/.venv`, and finally
 `python3`. Use `PYTHON=/path/to/python` when dependencies are installed in a
 different environment.
 
+The checkout must be clean. The replay refuses tracked or untracked source
+changes before binding `TOOL_VERSION` to the current commit, so a modified
+runtime cannot be mislabeled as commit-pinned provenance.
+
 脚本依次查找 `backend/venv`、`backend/.venv` 和 `python3`。如果依赖安装在
-其他环境，请设置 `PYTHON=/path/to/python`。
+其他环境，请设置 `PYTHON=/path/to/python`。仓库还必须处于干净状态；脚本会在把
+`TOOL_VERSION` 绑定到当前提交之前拒绝已跟踪或未跟踪的源码改动，避免把修改过的
+运行环境误写成由某个提交固定。
 
 If the script is outside the repository, provide the checkout path:
 

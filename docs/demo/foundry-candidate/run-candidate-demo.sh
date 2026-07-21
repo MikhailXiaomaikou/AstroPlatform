@@ -25,6 +25,17 @@ if [[ -e "$output_dir/demo-report.json" ]]; then
   exit 2
 fi
 
+# The report binds TOOL_VERSION to the checked-out commit.  Refuse any tracked
+# or untracked source change that could make the executed bytes differ from
+# that commit.  Ignored caches and the default .local output remain harmless.
+dirty_state="$(git -C "$repo_root" status --porcelain --untracked-files=all)"
+if [[ -n "$dirty_state" ]]; then
+  echo "Refusing to bind a dirty checkout to a clean TOOL_VERSION commit." >&2
+  echo "Commit, stash, or remove these changes before replaying:" >&2
+  printf '%s\n' "$dirty_state" >&2
+  exit 3
+fi
+
 commit="$(git -C "$repo_root" rev-parse HEAD)"
 export TOOL_VERSION="$commit"
 
