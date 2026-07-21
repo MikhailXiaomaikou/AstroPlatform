@@ -26,10 +26,17 @@ _GIT_SHA: Final = re.compile(r"^[0-9a-f]{40}$")
 class FoundryCIDispatchError(RuntimeError):
     """Stable, secret-free CI dispatch failure."""
 
-    def __init__(self, code: str, *, retryable: bool = False) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        retryable: bool = False,
+        delivery_uncertain: bool = False,
+    ) -> None:
         super().__init__(code)
         self.code = code
         self.retryable = retryable
+        self.delivery_uncertain = delivery_uncertain
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,7 +100,9 @@ async def _dispatch(
         )
     except (httpx.TimeoutException, httpx.NetworkError) as exc:
         raise FoundryCIDispatchError(
-            "foundry_ci_dispatch_unavailable", retryable=True
+            "foundry_ci_dispatch_unavailable",
+            retryable=True,
+            delivery_uncertain=True,
         ) from exc
     finally:
         if owns_client:
@@ -104,6 +113,7 @@ async def _dispatch(
         raise FoundryCIDispatchError(
             "foundry_ci_dispatch_rejected",
             retryable=response.status_code >= 500 or response.status_code == 429,
+            delivery_uncertain=response.status_code >= 500,
         )
 
 
@@ -134,6 +144,7 @@ async def dispatch_formal_worker_build(
     *,
     candidate_id: uuid.UUID | str,
     candidate_version_id: uuid.UUID | str,
+    formal_build_attempt_id: uuid.UUID | str,
     candidate_version_hash: str,
     source_commit: str,
     source_tree_sha256: str,
@@ -154,6 +165,9 @@ async def dispatch_formal_worker_build(
             "candidate_id": _uuid(candidate_id, "candidate_id"),
             "candidate_version_id": _uuid(
                 candidate_version_id, "candidate_version_id"
+            ),
+            "formal_build_attempt_id": _uuid(
+                formal_build_attempt_id, "formal_build_attempt_id"
             ),
             "candidate_version_hash": str(candidate_version_hash),
             "source_commit": str(source_commit),

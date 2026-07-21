@@ -256,7 +256,11 @@ class Settings(BaseSettings):
     foundry_materialization_github_workflow: str = "foundry-materialize-candidate.yml"
     foundry_materialization_finalize_github_workflow: str = "foundry-finalize-materialization.yml"
     foundry_materialization_github_ref: str = "main"
+    # Success and failure callbacks are deliberately separate.  The failure
+    # credential lives in an automatic, main-only Environment and can only
+    # close an attempt; it cannot submit a formal build attestation.
     foundry_formal_build_result_secret: str = ""
+    foundry_formal_build_failure_result_secret: str = ""
     foundry_formal_build_oidc_subject: str = ""
     # Dedicated public verification keys for protected formal-build receipts.
     # The matching private key exists only in the protected GitHub Environment
@@ -1287,6 +1291,7 @@ class Settings(BaseSettings):
                 self.foundry_draft_result_secret,
                 self.foundry_validation_result_secret,
                 self.foundry_formal_build_result_secret,
+                self.foundry_formal_build_failure_result_secret,
                 self.foundry_registry_export_secret,
                 self.foundry_registry_import_result_secret,
                 self.platform_deepseek_api_key,
@@ -1309,6 +1314,7 @@ class Settings(BaseSettings):
                 self.foundry_validation_result_secret,
                 self.foundry_materialization_result_secret,
                 self.foundry_formal_build_result_secret,
+                self.foundry_formal_build_failure_result_secret,
                 self.foundry_registry_export_secret,
                 self.foundry_registry_import_result_secret,
                 self.platform_deepseek_api_key,
@@ -1350,6 +1356,7 @@ class Settings(BaseSettings):
             and self.foundry_registration_enabled
             and (
                 len(self.foundry_formal_build_result_secret) < 32
+                or len(self.foundry_formal_build_failure_result_secret) < 32
                 or len(self.foundry_registry_import_result_secret) < 32
                 or len(self.foundry_registry_export_secret) < 32
                 or len(self.foundry_registry_activation_result_secret) < 32
@@ -1376,9 +1383,9 @@ class Settings(BaseSettings):
             )
         ):
             raise ValueError(
-                "Foundry registration requires dedicated 32-character formal-build, "
-                "Registry-export, Registry-import, and Registry-activation "
-                "callback secrets, an exact "
+                "Foundry registration requires dedicated 32-character formal-build "
+                "success, formal-build failure, Registry-export, Registry-import, "
+                "and Registry-activation callback secrets, an exact "
                 "formal-build OIDC subject, public formal-build attestation and "
                 "Registry verification keyrings, and narrow formal-build and "
                 "Registry GitHub Actions dispatches fixed to protected main"
@@ -1393,6 +1400,7 @@ class Settings(BaseSettings):
                 self.foundry_validation_result_secret,
                 self.foundry_validation_github_token,
                 self.foundry_formal_build_result_secret,
+                self.foundry_formal_build_failure_result_secret,
                 self.foundry_registry_export_secret,
                 self.foundry_registry_import_result_secret,
                 self.foundry_registry_github_token,
@@ -1416,6 +1424,7 @@ class Settings(BaseSettings):
                 self.foundry_draft_github_token,
                 self.foundry_validation_result_secret,
                 self.foundry_validation_github_token,
+                self.foundry_formal_build_failure_result_secret,
                 self.platform_deepseek_api_key,
                 self.worker_task_signing_private_key,
                 self.evidence_v2_signing_private_key,
@@ -1427,6 +1436,35 @@ class Settings(BaseSettings):
                 "FOUNDRY_FORMAL_BUILD_RESULT_SECRET must be independent from "
                 "AI, admin, Demo, Worker, Evidence, and Registry credentials"
             )
+        if self.foundry_formal_build_failure_result_secret and any(
+            self.foundry_formal_build_failure_result_secret
+            == str(secret or "")
+            for secret in (
+                self.jwt_secret,
+                self.admin_secret,
+                self.foundry_draft_result_secret,
+                self.foundry_draft_github_token,
+                self.foundry_validation_result_secret,
+                self.foundry_validation_github_token,
+                self.foundry_materialization_result_secret,
+                self.foundry_formal_build_result_secret,
+                self.foundry_formal_build_github_token,
+                self.foundry_registry_export_secret,
+                self.foundry_registry_import_result_secret,
+                self.foundry_registry_activation_result_secret,
+                self.foundry_registry_github_token,
+                self.platform_deepseek_api_key,
+                self.worker_task_signing_private_key,
+                self.evidence_v2_signing_private_key,
+                self.workflow_registry_signing_private_key,
+            )
+            if secret
+        ):
+            raise ValueError(
+                "FOUNDRY_FORMAL_BUILD_FAILURE_RESULT_SECRET must be independent "
+                "from success, AI, admin, Demo, Worker, Evidence, and Registry "
+                "credentials"
+            )
         if self.foundry_registry_import_result_secret and any(
             self.foundry_registry_import_result_secret == str(secret or "")
             for secret in (
@@ -1435,6 +1473,7 @@ class Settings(BaseSettings):
                 self.foundry_validation_result_secret,
                 self.foundry_validation_github_token,
                 self.foundry_formal_build_result_secret,
+                self.foundry_formal_build_failure_result_secret,
                 self.foundry_registry_export_secret,
                 self.platform_deepseek_api_key,
                 self.worker_task_signing_private_key,
@@ -1458,6 +1497,7 @@ class Settings(BaseSettings):
                 self.foundry_validation_result_secret,
                 self.foundry_validation_github_token,
                 self.foundry_formal_build_result_secret,
+                self.foundry_formal_build_failure_result_secret,
                 self.foundry_registry_import_result_secret,
                 self.platform_deepseek_api_key,
                 self.worker_task_signing_private_key,
@@ -1481,6 +1521,7 @@ class Settings(BaseSettings):
                 self.foundry_validation_result_secret,
                 self.foundry_validation_github_token,
                 self.foundry_formal_build_result_secret,
+                self.foundry_formal_build_failure_result_secret,
                 self.foundry_registry_export_secret,
                 self.foundry_registry_import_result_secret,
                 self.foundry_registry_github_token,
@@ -1506,6 +1547,7 @@ class Settings(BaseSettings):
                 self.foundry_validation_result_secret,
                 self.foundry_validation_github_token,
                 self.foundry_formal_build_result_secret,
+                self.foundry_formal_build_failure_result_secret,
                 self.foundry_registry_export_secret,
                 self.foundry_registry_import_result_secret,
                 self.platform_deepseek_api_key,

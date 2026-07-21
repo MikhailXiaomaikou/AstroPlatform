@@ -9,7 +9,8 @@ import hmac
 import json
 import re
 import uuid
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping
 
 from cryptography.exceptions import InvalidSignature
@@ -64,6 +65,9 @@ _EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 _FORMAL_BUILD_SIGNING_DOMAIN = b"standard-astro/formal-build-attestation/v2\0"
 _FORMAL_BUILD_BUNDLE_SCHEMA = "standard_astro_formal_build_attestation_bundle_v2"
 _FORMAL_BUILD_PAYLOAD_SCHEMA = "standard_astro_formal_build_attestation_v2"
+FORMAL_BUILD_MAX_ATTEMPTS = 3
+FORMAL_BUILD_DISPATCH_LEASE = timedelta(minutes=5)
+FORMAL_BUILD_ATTEMPT_TIMEOUT = timedelta(hours=6)
 _FORMAL_RELEASE_AUDIT_SCHEMA = "standard_astro_formal_release_audit_v1"
 _FORMAL_RELEASE_RECEIPT_KEYS = frozenset(
     {
@@ -101,6 +105,21 @@ class FoundryCatalogError(ValueError):
         super().__init__(message)
         self.error_class = error_class
         self.status_code = status_code
+
+
+@dataclass(frozen=True, slots=True)
+class FormalBuildDispatchPlan:
+    """One durable, bounded formal-build dispatch decision."""
+
+    binding: dict[str, str]
+    request_event: FoundryCandidateEvent
+    attempt_event: FoundryCandidateEvent | None
+    attempt_id: uuid.UUID | None
+    attempt_number: int
+    already_active: bool
+    dispatch_status: str
+    retry_after: datetime | None
+    attestation: FoundryFormalBuildAttestation | None
 
 
 def _utc_now() -> datetime:
@@ -2340,7 +2359,19 @@ async def record_formal_build_attestation(
             "invalid_formal_build_attestation",
             "Formal build identifiers must be UUIDs",
         ) from exc
-    existing = await db.get(FoundryFormalBuildAttestation, attestation_id)
+    candidate = await db.scalar(
+        select(FoundryCandidate)
+        .where(FoundryCandidate.id == candidate_id)
+        .with_for_update()
+    )
+    # The candidate lock serializes concurrent callbacks. Re-read the
+    # attestation afterwards so an exact callback replay stays idempotent
+    # instead of racing into the primary-key constraint.
+    existing = await db.get(
+        FoundryFormalBuildAttestation,
+        attestation_id,
+        populate_existing=True,
+    )
     if existing is not None:
         if (
             existing.receipt_hash != declared_payload_hash
@@ -2352,11 +2383,6 @@ async def record_formal_build_attestation(
                 status_code=409,
             )
         return existing
-    candidate = await db.scalar(
-        select(FoundryCandidate)
-        .where(FoundryCandidate.id == candidate_id)
-        .with_for_update()
-    )
     version = await db.get(FoundryCandidateVersion, candidate_version_id)
     candidate_version_hash = _require_sha256(
         report["candidate_version_hash"], "candidate_version_hash"
@@ -2471,8 +2497,7 @@ async def record_formal_build_attestation(
             str(build_identity.get("github_workflow_sha") or "")
         )
         or not str(build_identity.get("github_run_id") or "").isdigit()
-        or type(build_identity.get("github_run_attempt")) is not int
-        or int(build_identity["github_run_attempt"]) < 1
+        or build_identity.get("github_run_attempt") != 1
         or subject.get("image") != expected_image
     ):
         raise FoundryCatalogError(
@@ -2506,65 +2531,13 @@ async def record_formal_build_attestation(
         raise FoundryCatalogError(
             "invalid_formal_build_git_commit", "Formal build Git commit must be 40 hex characters"
         )
-    generation = dict(version.ai_generation_config or {})
-    if version.created_by_kind == "AI_DRAFT_JOB":
-        if (
-            generation.get("source_hash_algorithm")
-            != "standard_astro_tracked_source_manifest_v1"
-            or generation.get("source_tree_sha256") != source_tree_hash
-        ):
-            raise FoundryCatalogError(
-                "formal_source_materialization_binding_mismatch",
-                "Formal source commit does not match the host-verified AI Draft source receipt",
-                status_code=409,
-            )
-        base_commit = generation.get("source_base_commit")
-        patch_applied = generation.get("source_materialization_required") is True
-        if (patch_applied and git_commit == base_commit) or (
-            not patch_applied and git_commit != base_commit
-        ):
-            raise FoundryCatalogError(
-                "formal_source_commit_binding_mismatch",
-                "Formal source commit does not match the Draft patch materialization state",
-                status_code=409,
-            )
-    elif version.created_by_kind == "PROTECTED_MATERIALIZATION":
-        from app.models.foundry_materialization_records import (
-            FoundryMaterializationReceipt,
-        )
-
-        try:
-            materialization_receipt_id = uuid.UUID(
-                str(generation.get("source_materialization_receipt_id") or "")
-            )
-        except ValueError as exc:
-            raise FoundryCatalogError(
-                "formal_materialization_receipt_missing",
-                "Formal build requires the signed materialization receipt",
-                status_code=409,
-            ) from exc
-        materialization = await db.get(
-            FoundryMaterializationReceipt, materialization_receipt_id
-        )
-        if (
-            materialization is None
-            or materialization.candidate_id != candidate.id
-            or materialization.materialized_candidate_version_id != version.id
-            or materialization.merge_commit != git_commit
-            or materialization.merge_source_tree_hash != source_tree_hash
-            or materialization.patch_hash != version.patch_hash
-            or materialization.dependency_lock_hash != dependency_lock_hash
-            or materialization.candidate_module_path
-            != generation.get("candidate_module_path")
-            or materialization.candidate_module_hash
-            != generation.get("candidate_module_sha256")
-            or materialization.validation_sbom_hash != version.sbom_hash
-        ):
-            raise FoundryCatalogError(
-                "formal_materialization_receipt_mismatch",
-                "Formal source commit does not match the signed materialization receipt",
-                status_code=409,
-            )
+    materialization_receipt = await _validate_formal_source_provenance(
+        db,
+        version=version,
+        source_commit=git_commit,
+        source_tree_hash=source_tree_hash,
+        dependency_lock_hash=dependency_lock_hash,
+    )
     built_at = _parse_report_time(report["built_at"], "built_at")
     approval_times = [
         review.created_at.replace(tzinfo=timezone.utc)
@@ -2584,6 +2557,17 @@ async def record_formal_build_attestation(
         raise FoundryCatalogError(
             "invalid_formal_build_metadata", "build_metadata must be an object"
         )
+    attempt_id: uuid.UUID | None = None
+    attempt_id_value = build_metadata.get("formal_build_attempt_id")
+    if attempt_id_value is not None:
+        try:
+            attempt_id = uuid.UUID(str(attempt_id_value))
+        except ValueError as exc:
+            raise FoundryCatalogError(
+                "formal_build_attempt_binding_invalid",
+                "Signed formal build attempt identifier is invalid",
+                status_code=409,
+            ) from exc
     expected_metadata = {
         "candidate_id": str(candidate.id),
         "candidate_version_id": str(version.id),
@@ -2600,11 +2584,136 @@ async def record_formal_build_attestation(
         "run_id": str(build_identity["github_run_id"]),
         "run_attempt": str(build_identity["github_run_attempt"]),
     }
+    if attempt_id is not None:
+        expected_metadata["formal_build_attempt_id"] = str(attempt_id)
     if any(build_metadata.get(name) != value for name, value in expected_metadata.items()):
         raise FoundryCatalogError(
             "formal_build_metadata_binding_mismatch",
             "Formal build metadata does not match its signed identity and subject",
         )
+    attempt_events = list(
+        (
+            await db.execute(
+                select(FoundryCandidateEvent).where(
+                    FoundryCandidateEvent.candidate_id == candidate.id,
+                    FoundryCandidateEvent.candidate_version_id == version.id,
+                    FoundryCandidateEvent.event_type.in_(
+                        {
+                            "FORMAL_BUILD_ATTEMPT_RESERVED",
+                            "FORMAL_BUILD_DISPATCHED",
+                            "FORMAL_BUILD_DISPATCH_UNCERTAIN",
+                            "FORMAL_BUILD_DISPATCH_FAILED",
+                            "FORMAL_BUILD_ATTEMPT_FAILED",
+                            "FORMAL_BUILD_DISPATCH_RESERVATION_TIMED_OUT",
+                            "FORMAL_BUILD_DISPATCH_UNCERTAIN_TIMED_OUT",
+                            "FORMAL_BUILD_ATTEMPT_TIMED_OUT",
+                        }
+                    ),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    all_reservations = [
+        event
+        for event in attempt_events
+        if event.event_type == "FORMAL_BUILD_ATTEMPT_RESERVED"
+    ]
+    source_binding = _formal_build_source_binding(version)
+    reservations = [
+        event
+        for event in all_reservations
+        if all(
+            (event.event_payload or {}).get(key) == value
+            for key, value in source_binding.items()
+        )
+    ]
+    # Receipts produced before the bounded-attempt ledger remain valid when
+    # no reservation exists. Once the ledger exists, every new signed receipt
+    # must identify one exact live, successfully dispatched attempt.
+    if all_reservations or attempt_id is not None:
+        if attempt_id is None:
+            raise FoundryCatalogError(
+                "formal_build_attempt_binding_missing",
+                "Signed formal build receipt is missing its durable attempt binding",
+                status_code=409,
+            )
+        reservation = next(
+            (
+                event
+                for event in reservations
+                if (event.event_payload or {}).get("formal_build_attempt_id")
+                == str(attempt_id)
+            ),
+            None,
+        )
+        if reservation is None:
+            raise FoundryCatalogError(
+                "formal_build_attempt_binding_invalid",
+                "Signed formal build receipt does not match a reserved attempt",
+                status_code=409,
+            )
+        exact_attempt_events = [
+            event
+            for event in attempt_events
+            if (event.event_payload or {}).get("formal_build_attempt_id")
+            == str(attempt_id)
+        ]
+        if not any(
+            event.event_type
+            in {"FORMAL_BUILD_DISPATCHED", "FORMAL_BUILD_DISPATCH_UNCERTAIN"}
+            for event in exact_attempt_events
+        ):
+            raise FoundryCatalogError(
+                "formal_build_attempt_not_dispatched",
+                "Signed formal build receipt has no successful dispatch record",
+                status_code=409,
+            )
+        if any(
+            event.event_type
+            in {
+                "FORMAL_BUILD_DISPATCH_FAILED",
+                "FORMAL_BUILD_ATTEMPT_FAILED",
+                "FORMAL_BUILD_DISPATCH_RESERVATION_TIMED_OUT",
+                "FORMAL_BUILD_DISPATCH_UNCERTAIN_TIMED_OUT",
+                "FORMAL_BUILD_ATTEMPT_TIMED_OUT",
+            }
+            for event in exact_attempt_events
+        ):
+            raise FoundryCatalogError(
+                "formal_build_attempt_closed",
+                "Signed formal build receipt belongs to a closed attempt",
+                status_code=409,
+            )
+    else:
+        legacy_dispatch = next(
+            (
+                event
+                for event in attempt_events
+                if event.event_type == "FORMAL_BUILD_DISPATCHED"
+                and not (event.event_payload or {}).get(
+                    "formal_build_attempt_id"
+                )
+                and all(
+                    (event.event_payload or {}).get(key) == value
+                    for key, value in source_binding.items()
+                )
+                and (
+                    event.created_at.replace(tzinfo=timezone.utc)
+                    if event.created_at.tzinfo is None
+                    else event.created_at.astimezone(timezone.utc)
+                )
+                <= built_at
+            ),
+            None,
+        )
+        if legacy_dispatch is None:
+            raise FoundryCatalogError(
+                "formal_build_legacy_dispatch_missing",
+                "Legacy formal build receipt has no exact dispatch ledger entry",
+                status_code=409,
+            )
     row = FoundryFormalBuildAttestation(
         id=attestation_id,
         candidate_id=candidate.id,
@@ -2653,7 +2762,24 @@ async def record_formal_build_attestation(
             "attestation_signing_key_id": row.attestation_signing_key_id,
             "formal_worker_image_digest": row.formal_worker_image_digest,
             "git_commit": row.git_commit,
+            **(
+                {"formal_build_attempt_id": str(attempt_id)}
+                if attempt_id is not None
+                else {}
+            ),
             "formal_release_audit_sha256": row.formal_release_audit_hash,
+            **(
+                {
+                    "source_materialization_receipt_id": str(
+                        materialization_receipt.id
+                    ),
+                    "source_materialization_receipt_sha256": (
+                        materialization_receipt.receipt_hash
+                    ),
+                }
+                if materialization_receipt is not None
+                else {}
+            ),
         },
     )
     await db.commit()
@@ -2757,6 +2883,117 @@ def _formal_build_source_binding(
     }
 
 
+async def _validate_formal_source_provenance(
+    db: AsyncSession,
+    *,
+    version: FoundryCandidateVersion,
+    source_commit: str,
+    source_tree_hash: str,
+    dependency_lock_hash: str,
+) -> Any | None:
+    """Require the exact protected materialization receipt for generated code.
+
+    A protected workflow signature proves who built a commit, not how an AI
+    Draft reached that commit.  Generated patches therefore become formal only
+    through the fresh ``PROTECTED_MATERIALIZATION`` Candidate version created
+    by the append-only materialization receipt.  The callback and registration
+    paths both call this gate so a manual workflow dispatch cannot manufacture
+    the missing lineage from only a commit and tree hash.
+    """
+
+    if version.created_by_kind not in {
+        "AI_DRAFT_JOB",
+        "PROTECTED_MATERIALIZATION",
+    }:
+        # Legacy/non-generated fixtures do not claim an AI Draft source receipt.
+        return None
+
+    generation = dict(version.ai_generation_config or {})
+    if (
+        version.created_by_kind == "AI_DRAFT_JOB"
+        and generation.get("source_materialization_required") is True
+    ):
+        raise FoundryCatalogError(
+            "formal_materialization_receipt_required",
+            "Generated source requires the exact Candidate version created by a protected materialization receipt",
+            status_code=409,
+        )
+
+    binding = _formal_build_source_binding(version)
+    if (
+        binding["source_commit"] != source_commit
+        or binding["source_tree_sha256"] != source_tree_hash
+        or version.dependency_lock_hash != dependency_lock_hash
+    ):
+        raise FoundryCatalogError(
+            "formal_source_materialization_binding_mismatch",
+            "Formal build source does not match its server-verified source lineage",
+            status_code=409,
+        )
+    if version.created_by_kind != "PROTECTED_MATERIALIZATION":
+        return None
+
+    from app.models.foundry_materialization_records import (
+        FoundryMaterializationReceipt,
+    )
+
+    try:
+        receipt_id = uuid.UUID(
+            str(generation.get("source_materialization_receipt_id") or "")
+        )
+        origin_version_id = uuid.UUID(
+            str(
+                generation.get(
+                    "source_materialized_from_candidate_version_id"
+                )
+                or ""
+            )
+        )
+    except ValueError as exc:
+        raise FoundryCatalogError(
+            "formal_materialization_receipt_required",
+            "Formal build requires the exact protected materialization receipt",
+            status_code=409,
+        ) from exc
+
+    materialization = await db.get(FoundryMaterializationReceipt, receipt_id)
+    origin_version = await db.get(FoundryCandidateVersion, origin_version_id)
+    if (
+        materialization is None
+        or origin_version is None
+        or origin_version.candidate_id != version.candidate_id
+        or origin_version.version_hash
+        != generation.get("source_materialized_from_candidate_version_hash")
+        or origin_version.version_number >= version.version_number
+        or materialization.candidate_id != version.candidate_id
+        or materialization.materialized_candidate_version_id != version.id
+        or materialization.origin_candidate_version_id != origin_version_id
+        or materialization.origin_candidate_version_hash
+        != generation.get("source_materialized_from_candidate_version_hash")
+        or materialization.merge_commit != source_commit
+        or materialization.merge_source_tree_hash != source_tree_hash
+        or materialization.patch_hash != version.patch_hash
+        or materialization.dependency_lock_hash != dependency_lock_hash
+        or materialization.runner_definition_hash
+        != version.candidate_bundle.get("runner_definition_sha256")
+        or materialization.candidate_module_path
+        != generation.get("candidate_module_path")
+        or materialization.candidate_module_hash
+        != generation.get("candidate_module_sha256")
+        or materialization.validation_sbom_hash != version.sbom_hash
+        or materialization.validation_runner_image_digest
+        != version.validation_runner_image_digest
+        or materialization.pull_request_base_ref != "main"
+        or materialization.merge_commit_is_ancestor_of_origin_main is not True
+    ):
+        raise FoundryCatalogError(
+            "formal_materialization_receipt_mismatch",
+            "Formal source does not match the exact protected materialization receipt",
+            status_code=409,
+        )
+    return materialization
+
+
 async def request_formal_build_dispatch(
     db: AsyncSession,
     *,
@@ -2764,8 +3001,9 @@ async def request_formal_build_dispatch(
     candidate_version_id: uuid.UUID,
     candidate_version_hash: str,
     actor_user_id: uuid.UUID,
-) -> tuple[dict[str, str], FoundryCandidateEvent, bool, FoundryFormalBuildAttestation | None]:
-    """Create or recover one exact-version formal-build dispatch request."""
+    now: datetime | None = None,
+) -> FormalBuildDispatchPlan:
+    """Reserve one bounded attempt or recover the currently active attempt."""
 
     candidate = await db.scalar(
         select(FoundryCandidate)
@@ -2838,8 +3076,14 @@ async def request_formal_build_dispatch(
                     FoundryCandidateEvent.event_type.in_(
                         {
                             "FORMAL_BUILD_REQUESTED",
+                            "FORMAL_BUILD_ATTEMPT_RESERVED",
                             "FORMAL_BUILD_DISPATCHED",
+                            "FORMAL_BUILD_DISPATCH_UNCERTAIN",
                             "FORMAL_BUILD_DISPATCH_FAILED",
+                            "FORMAL_BUILD_ATTEMPT_FAILED",
+                            "FORMAL_BUILD_DISPATCH_RESERVATION_TIMED_OUT",
+                            "FORMAL_BUILD_DISPATCH_UNCERTAIN_TIMED_OUT",
+                            "FORMAL_BUILD_ATTEMPT_TIMED_OUT",
                         }
                     ),
                 )
@@ -2874,21 +3118,233 @@ async def request_formal_build_dispatch(
             actor_user_id=actor_user_id,
             payload={**binding, "source_binding_origin": "SERVER_DRAFT_RECEIPT"},
         )
+
+    reservations = [
+        event
+        for event in matching
+        if event.event_type == "FORMAL_BUILD_ATTEMPT_RESERVED"
+        and str((event.event_payload or {}).get("formal_build_attempt_id") or "")
+        and isinstance((event.event_payload or {}).get("attempt_number"), int)
+    ]
+    attempt_event: FoundryCandidateEvent | None = None
+    attempt_id: uuid.UUID | None = None
+    attempt_number = 0
+    terminal = False
+    terminal_event: FoundryCandidateEvent | None = None
+    active_anchor: FoundryCandidateEvent | None = None
+    active_status = "DISPATCH_PENDING"
+    active_lease = FORMAL_BUILD_DISPATCH_LEASE
+    timeout_event_type = "FORMAL_BUILD_DISPATCH_RESERVATION_TIMED_OUT"
+    if reservations:
+        attempt_event = max(
+            reservations,
+            key=lambda event: int((event.event_payload or {})["attempt_number"]),
+        )
+        try:
+            attempt_id = uuid.UUID(
+                str((attempt_event.event_payload or {})["formal_build_attempt_id"])
+            )
+        except ValueError as exc:
+            raise FoundryCatalogError(
+                "formal_build_attempt_ledger_invalid",
+                "Formal build attempt ledger contains an invalid identifier",
+                status_code=409,
+            ) from exc
+        attempt_number = int((attempt_event.event_payload or {})["attempt_number"])
+        attempt_outcomes = [
+            event
+            for event in matching
+            if (event.event_payload or {}).get("formal_build_attempt_id")
+            == str(attempt_id)
+        ]
+        terminal_event = next(
+            (
+                event
+                for event in reversed(attempt_outcomes)
+                if event.event_type
+                in {
+                    "FORMAL_BUILD_DISPATCH_FAILED",
+                    "FORMAL_BUILD_ATTEMPT_FAILED",
+                    "FORMAL_BUILD_DISPATCH_RESERVATION_TIMED_OUT",
+                    "FORMAL_BUILD_DISPATCH_UNCERTAIN_TIMED_OUT",
+                    "FORMAL_BUILD_ATTEMPT_TIMED_OUT",
+                }
+            ),
+            None,
+        )
+        terminal = terminal_event is not None
+        delivery_event = next(
+            (
+                event
+                for event in reversed(attempt_outcomes)
+                if event.event_type
+                in {"FORMAL_BUILD_DISPATCHED", "FORMAL_BUILD_DISPATCH_UNCERTAIN"}
+            ),
+            None,
+        )
+        active_anchor = delivery_event or attempt_event
+        if delivery_event is not None:
+            if delivery_event.event_type == "FORMAL_BUILD_DISPATCHED":
+                active_status = "DISPATCHED"
+                active_lease = FORMAL_BUILD_ATTEMPT_TIMEOUT
+                timeout_event_type = "FORMAL_BUILD_ATTEMPT_TIMED_OUT"
+            else:
+                active_status = "DISPATCH_UNCERTAIN"
+                active_lease = FORMAL_BUILD_DISPATCH_LEASE
+                timeout_event_type = "FORMAL_BUILD_DISPATCH_UNCERTAIN_TIMED_OUT"
+    else:
+        # A pre-attempt-ledger dispatch remains active until the same timeout;
+        # this avoids launching a duplicate immediately after an upgrade.
+        legacy = next(
+            (
+                event
+                for event in reversed(matching)
+                if event.event_type
+                in {"FORMAL_BUILD_DISPATCHED", "FORMAL_BUILD_DISPATCH_FAILED"}
+                and not (event.event_payload or {}).get("formal_build_attempt_id")
+            ),
+            None,
+        )
+        if legacy is not None:
+            attempt_event = legacy
+            attempt_id = legacy.id
+            attempt_number = 1
+            terminal = legacy.event_type == "FORMAL_BUILD_DISPATCH_FAILED"
+            terminal_event = legacy if terminal else None
+            active_anchor = legacy
+            active_status = (
+                "DISPATCHED"
+                if legacy.event_type == "FORMAL_BUILD_DISPATCHED"
+                else "DISPATCH_FAILED"
+            )
+            active_lease = FORMAL_BUILD_ATTEMPT_TIMEOUT
+            timeout_event_type = "FORMAL_BUILD_ATTEMPT_TIMED_OUT"
+
+    if attestation is not None:
         await db.commit()
-        await db.refresh(requested)
-    dispatched = any(
-        event.event_type == "FORMAL_BUILD_DISPATCHED" for event in matching
+        return FormalBuildDispatchPlan(
+            binding=binding,
+            request_event=requested,
+            attempt_event=attempt_event,
+            attempt_id=attempt_id,
+            attempt_number=attempt_number,
+            already_active=False,
+            dispatch_status="VERIFIED_BUILD_RECEIPT",
+            retry_after=None,
+            attestation=attestation,
+        )
+
+    current_time = now or _utc_now()
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=timezone.utc)
+    if attempt_event is not None and not terminal and active_anchor is not None:
+        active_since = active_anchor.created_at
+        if active_since.tzinfo is None:
+            active_since = active_since.replace(tzinfo=timezone.utc)
+        retry_after = active_since + active_lease
+        if current_time < retry_after:
+            await db.commit()
+            return FormalBuildDispatchPlan(
+                binding=binding,
+                request_event=requested,
+                attempt_event=attempt_event,
+                attempt_id=attempt_id,
+                attempt_number=attempt_number,
+                already_active=True,
+                dispatch_status=active_status,
+                retry_after=retry_after,
+                attestation=None,
+            )
+        terminal_event = await _append_event(
+            db,
+            candidate_id=candidate.id,
+            candidate_version_id=version.id,
+            event_type=timeout_event_type,
+            actor_kind="CONTROL_PLANE",
+            actor_user_id=None,
+            payload={
+                **binding,
+                "formal_build_attempt_id": str(attempt_id),
+                "attempt_number": attempt_number,
+                "timeout_phase": active_status,
+                "timeout_seconds": int(active_lease.total_seconds()),
+                "retryable": attempt_number < FORMAL_BUILD_MAX_ATTEMPTS,
+            },
+        )
+        terminal = True
+
+    if attempt_number >= FORMAL_BUILD_MAX_ATTEMPTS:
+        await db.commit()
+        raise FoundryCatalogError(
+            "formal_build_attempts_exhausted",
+            "Formal build reached the bounded attempt limit",
+            status_code=409,
+        )
+    if (
+        terminal_event is not None
+        and terminal_event.event_type == "FORMAL_BUILD_DISPATCH_FAILED"
+        and "retryable" in (terminal_event.event_payload or {})
+        and not bool((terminal_event.event_payload or {}).get("retryable"))
+    ):
+        await db.commit()
+        raise FoundryCatalogError(
+            "formal_build_dispatch_not_retryable",
+            "Formal build dispatch failed permanently",
+            status_code=409,
+        )
+
+    attempt_id = uuid.uuid4()
+    attempt_number += 1
+    attempt_event = await _append_event(
+        db,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        event_type="FORMAL_BUILD_ATTEMPT_RESERVED",
+        actor_kind="HUMAN_REVIEWER",
+        actor_user_id=actor_user_id,
+        payload={
+            **binding,
+            "formal_build_attempt_id": str(attempt_id),
+            "attempt_number": attempt_number,
+            "max_attempts": FORMAL_BUILD_MAX_ATTEMPTS,
+            "dispatch_lease_seconds": int(
+                FORMAL_BUILD_DISPATCH_LEASE.total_seconds()
+            ),
+            "workflow_lease_seconds": int(
+                FORMAL_BUILD_ATTEMPT_TIMEOUT.total_seconds()
+            ),
+        },
     )
-    return binding, requested, dispatched, attestation
+    await db.commit()
+    await db.refresh(requested)
+    await db.refresh(attempt_event)
+    return FormalBuildDispatchPlan(
+        binding=binding,
+        request_event=requested,
+        attempt_event=attempt_event,
+        attempt_id=attempt_id,
+        attempt_number=attempt_number,
+        already_active=False,
+        dispatch_status="DISPATCH_PENDING",
+        retry_after=(
+            attempt_event.created_at.replace(tzinfo=timezone.utc)
+            if attempt_event.created_at.tzinfo is None
+            else attempt_event.created_at.astimezone(timezone.utc)
+        )
+        + FORMAL_BUILD_DISPATCH_LEASE,
+        attestation=None,
+    )
 
 
 async def record_formal_build_dispatch(
     db: AsyncSession,
     *,
     binding: dict[str, str],
+    attempt_id: uuid.UUID,
     dispatched: bool,
     failure_class: str | None = None,
     retryable: bool = False,
+    delivery_uncertain: bool = False,
 ) -> tuple[FoundryCandidateEvent, bool]:
     """Append a secret-free, idempotent protected-build dispatch outcome."""
 
@@ -2901,9 +3357,15 @@ async def record_formal_build_dispatch(
             "Formal build dispatch identifiers are invalid",
             status_code=409,
         ) from exc
+    candidate = await db.scalar(
+        select(FoundryCandidate)
+        .where(FoundryCandidate.id == candidate_id)
+        .with_for_update()
+    )
     version = await db.get(FoundryCandidateVersion, version_id)
     if (
-        version is None
+        candidate is None
+        or version is None
         or version.candidate_id != candidate_id
         or _formal_build_source_binding(version) != binding
     ):
@@ -2920,8 +3382,14 @@ async def record_formal_build_dispatch(
                     FoundryCandidateEvent.candidate_version_id == version_id,
                     FoundryCandidateEvent.event_type.in_(
                         {
-                            "FORMAL_BUILD_REQUESTED",
+                            "FORMAL_BUILD_ATTEMPT_RESERVED",
                             "FORMAL_BUILD_DISPATCHED",
+                            "FORMAL_BUILD_DISPATCH_UNCERTAIN",
+                            "FORMAL_BUILD_DISPATCH_FAILED",
+                            "FORMAL_BUILD_ATTEMPT_FAILED",
+                            "FORMAL_BUILD_DISPATCH_RESERVATION_TIMED_OUT",
+                            "FORMAL_BUILD_DISPATCH_UNCERTAIN_TIMED_OUT",
+                            "FORMAL_BUILD_ATTEMPT_TIMED_OUT",
                         }
                     ),
                 )
@@ -2930,19 +3398,13 @@ async def record_formal_build_dispatch(
         .scalars()
         .all()
     )
-    requested = any(
-        event.event_type == "FORMAL_BUILD_REQUESTED"
-        and all(
-            (event.event_payload or {}).get(key) == value
-            for key, value in binding.items()
-        )
-        for event in events
-    )
-    existing = next(
+    reservation = next(
         (
             event
             for event in events
-            if event.event_type == "FORMAL_BUILD_DISPATCHED"
+            if event.event_type == "FORMAL_BUILD_ATTEMPT_RESERVED"
+            and (event.event_payload or {}).get("formal_build_attempt_id")
+            == str(attempt_id)
             and all(
                 (event.event_payload or {}).get(key) == value
                 for key, value in binding.items()
@@ -2950,34 +3412,319 @@ async def record_formal_build_dispatch(
         ),
         None,
     )
-    if not requested:
+    if reservation is None:
         raise FoundryCatalogError(
-            "formal_build_request_missing",
-            "Formal build dispatch has no server-created request",
+            "formal_build_attempt_missing",
+            "Formal build dispatch has no durable attempt reservation",
             status_code=409,
         )
-    if dispatched and existing is not None:
-        return existing, False
+    attempt_events = [
+        event
+        for event in events
+        if (event.event_payload or {}).get("formal_build_attempt_id")
+        == str(attempt_id)
+        and all(
+            (event.event_payload or {}).get(key) == value
+            for key, value in binding.items()
+        )
+    ]
+    if dispatched and delivery_uncertain:
+        raise FoundryCatalogError(
+            "formal_build_dispatch_result_invalid",
+            "A successful dispatch cannot have uncertain delivery",
+            status_code=409,
+        )
+    outcome_type = (
+        "FORMAL_BUILD_DISPATCHED"
+        if dispatched
+        else (
+            "FORMAL_BUILD_DISPATCH_UNCERTAIN"
+            if delivery_uncertain
+            else "FORMAL_BUILD_DISPATCH_FAILED"
+        )
+    )
+    existing = next(
+        (
+            event for event in attempt_events if event.event_type == outcome_type
+        ),
+        None,
+    )
     sanitized_failure = None
     if not dispatched:
         sanitized_failure = str(failure_class or "formal_build_dispatch_failed")
         if not re.fullmatch(r"[a-z][a-z0-9_]{1,127}", sanitized_failure):
             sanitized_failure = "formal_build_dispatch_failed"
+    if existing is not None:
+        if not dispatched and (existing.event_payload or {}).get(
+            "failure_class"
+        ) != sanitized_failure:
+            raise FoundryCatalogError(
+                "formal_build_dispatch_result_conflict",
+                "Formal build attempt already has a different dispatch result",
+                status_code=409,
+            )
+        return existing, False
+    if any(
+        event.event_type
+        in {
+            "FORMAL_BUILD_ATTEMPT_FAILED",
+            "FORMAL_BUILD_DISPATCH_RESERVATION_TIMED_OUT",
+            "FORMAL_BUILD_DISPATCH_UNCERTAIN_TIMED_OUT",
+            "FORMAL_BUILD_ATTEMPT_TIMED_OUT",
+        }
+        for event in attempt_events
+    ):
+        raise FoundryCatalogError(
+            "formal_build_attempt_closed",
+            "Formal build dispatch attempt is already terminal",
+            status_code=409,
+        )
+    prior_dispatched = next(
+        (
+            event
+            for event in attempt_events
+            if event.event_type == "FORMAL_BUILD_DISPATCHED"
+        ),
+        None,
+    )
+    prior_failure = next(
+        (
+            event
+            for event in attempt_events
+            if event.event_type == "FORMAL_BUILD_DISPATCH_FAILED"
+        ),
+        None,
+    )
+    if prior_failure is not None or (
+        prior_dispatched is not None and outcome_type != "FORMAL_BUILD_DISPATCHED"
+    ):
+        raise FoundryCatalogError(
+            "formal_build_dispatch_result_conflict",
+            "Formal build attempt already has a conflicting dispatch result",
+            status_code=409,
+        )
     event = await _append_event(
         db,
         candidate_id=candidate_id,
         candidate_version_id=version_id,
-        event_type=(
-            "FORMAL_BUILD_DISPATCHED"
-            if dispatched
-            else "FORMAL_BUILD_DISPATCH_FAILED"
-        ),
+        event_type=outcome_type,
         actor_kind="CONTROL_PLANE",
         actor_user_id=None,
         payload={
             **binding,
+            "formal_build_attempt_id": str(attempt_id),
+            "attempt_number": int((reservation.event_payload or {})["attempt_number"]),
             "failure_class": sanitized_failure,
-            "retryable": bool(retryable) if not dispatched else False,
+            "delivery_uncertain": bool(delivery_uncertain),
+            "dispatch_lease_seconds": (
+                int(FORMAL_BUILD_DISPATCH_LEASE.total_seconds())
+                if delivery_uncertain
+                else None
+            ),
+            "workflow_lease_seconds": (
+                int(FORMAL_BUILD_ATTEMPT_TIMEOUT.total_seconds())
+                if dispatched
+                else None
+            ),
+            "failure_retryable": bool(retryable) if not dispatched else False,
+            "retryable": (
+                bool(retryable)
+                and int((reservation.event_payload or {})["attempt_number"])
+                < FORMAL_BUILD_MAX_ATTEMPTS
+                if not dispatched
+                else False
+            ),
+        },
+    )
+    await db.commit()
+    await db.refresh(event)
+    return event, True
+
+
+async def record_formal_build_attempt_failure(
+    db: AsyncSession,
+    *,
+    report: dict[str, Any],
+    expected_repository: str,
+    expected_workflow_ref: str,
+) -> tuple[FoundryCandidateEvent, bool]:
+    """Append one idempotent protected-workflow failure for an exact attempt."""
+
+    try:
+        attempt_id = uuid.UUID(str(report["formal_build_attempt_id"]))
+        candidate_id = uuid.UUID(str(report["candidate_id"]))
+        version_id = uuid.UUID(str(report["candidate_version_id"]))
+    except (KeyError, ValueError) as exc:
+        raise FoundryCatalogError(
+            "formal_build_failure_binding_invalid",
+            "Formal build failure identifiers are invalid",
+            status_code=409,
+        ) from exc
+    binding = {
+        "candidate_id": str(candidate_id),
+        "candidate_version_id": str(version_id),
+        "candidate_version_hash": str(report.get("candidate_version_hash") or ""),
+        "source_commit": str(report.get("source_commit") or ""),
+        "source_tree_sha256": str(report.get("source_tree_sha256") or ""),
+    }
+    candidate = await db.scalar(
+        select(FoundryCandidate)
+        .where(FoundryCandidate.id == candidate_id)
+        .with_for_update()
+    )
+    version = await db.get(FoundryCandidateVersion, version_id)
+    if (
+        candidate is None
+        or version is None
+        or version.candidate_id != candidate_id
+        or _formal_build_source_binding(version) != binding
+        or report.get("status") != "FAILED"
+        or report.get("failure_class") != "formal_build_workflow_failed"
+        or report.get("failed_stage")
+        not in {"definition_gate", "validation", "image_build", "signing"}
+        or report.get("workflow_conclusion")
+        not in {"failure", "cancelled", "skipped"}
+        or report.get("github_repository") != expected_repository
+        or report.get("github_workflow_ref") != expected_workflow_ref
+        or not _GIT_SHA_RE.fullmatch(str(report.get("github_workflow_sha") or ""))
+        or not re.fullmatch(
+            r"[1-9][0-9]{0,19}", str(report.get("github_run_id") or "")
+        )
+        or str(report.get("github_run_attempt") or "") != "1"
+    ):
+        raise FoundryCatalogError(
+            "formal_build_failure_binding_invalid",
+            "Formal build failure does not match its protected attempt binding",
+            status_code=409,
+        )
+    events = list(
+        (
+            await db.execute(
+                select(FoundryCandidateEvent).where(
+                    FoundryCandidateEvent.candidate_id == candidate_id,
+                    FoundryCandidateEvent.candidate_version_id == version_id,
+                    FoundryCandidateEvent.event_type.in_(
+                        {
+                            "FORMAL_BUILD_ATTEMPT_RESERVED",
+                            "FORMAL_BUILD_DISPATCHED",
+                            "FORMAL_BUILD_DISPATCH_UNCERTAIN",
+                            "FORMAL_BUILD_ATTEMPT_FAILED",
+                            "FORMAL_BUILD_DISPATCH_FAILED",
+                            "FORMAL_BUILD_DISPATCH_RESERVATION_TIMED_OUT",
+                            "FORMAL_BUILD_DISPATCH_UNCERTAIN_TIMED_OUT",
+                            "FORMAL_BUILD_ATTEMPT_TIMED_OUT",
+                        }
+                    ),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    reservation = next(
+        (
+            event
+            for event in events
+            if event.event_type == "FORMAL_BUILD_ATTEMPT_RESERVED"
+            and (event.event_payload or {}).get("formal_build_attempt_id")
+            == str(attempt_id)
+            and all(
+                (event.event_payload or {}).get(key) == value
+                for key, value in binding.items()
+            )
+        ),
+        None,
+    )
+    if reservation is None:
+        raise FoundryCatalogError(
+            "formal_build_attempt_missing",
+            "Formal build failure has no durable attempt reservation",
+            status_code=409,
+        )
+    report_hash = sha256_json(report)
+    existing = next(
+        (
+            event
+            for event in events
+            if event.event_type == "FORMAL_BUILD_ATTEMPT_FAILED"
+            and (event.event_payload or {}).get("formal_build_attempt_id")
+            == str(attempt_id)
+        ),
+        None,
+    )
+    if existing is not None:
+        if (existing.event_payload or {}).get("failure_report_sha256") != report_hash:
+            raise FoundryCatalogError(
+                "formal_build_failure_result_conflict",
+                "Formal build attempt already has a different failure result",
+                status_code=409,
+            )
+        return existing, False
+    if await db.scalar(
+        select(FoundryFormalBuildAttestation.id).where(
+            FoundryFormalBuildAttestation.candidate_version_id == version_id,
+            FoundryFormalBuildAttestation.candidate_version_hash
+            == version.version_hash,
+        )
+    ):
+        raise FoundryCatalogError(
+            "formal_build_attempt_already_succeeded",
+            "A verified formal build receipt already exists",
+            status_code=409,
+        )
+    if any(
+        event.event_type
+        in {
+            "FORMAL_BUILD_DISPATCH_FAILED",
+            "FORMAL_BUILD_DISPATCH_RESERVATION_TIMED_OUT",
+            "FORMAL_BUILD_DISPATCH_UNCERTAIN_TIMED_OUT",
+            "FORMAL_BUILD_ATTEMPT_TIMED_OUT",
+        }
+        and (event.event_payload or {}).get("formal_build_attempt_id")
+        == str(attempt_id)
+        for event in events
+    ):
+        raise FoundryCatalogError(
+            "formal_build_attempt_closed",
+            "Formal build attempt is already terminal",
+            status_code=409,
+        )
+    if not any(
+        event.event_type
+        in {"FORMAL_BUILD_DISPATCHED", "FORMAL_BUILD_DISPATCH_UNCERTAIN"}
+        and (event.event_payload or {}).get("formal_build_attempt_id")
+        == str(attempt_id)
+        for event in events
+    ):
+        raise FoundryCatalogError(
+            "formal_build_attempt_not_dispatched",
+            "Formal build failure has no successful dispatch record",
+            status_code=409,
+        )
+    event = await _append_event(
+        db,
+        candidate_id=candidate_id,
+        candidate_version_id=version_id,
+        event_type="FORMAL_BUILD_ATTEMPT_FAILED",
+        actor_kind="PROTECTED_BUILD_CALLBACK",
+        actor_user_id=None,
+        payload={
+            **binding,
+            "formal_build_attempt_id": str(attempt_id),
+            "attempt_number": int((reservation.event_payload or {})["attempt_number"]),
+            "failure_class": "formal_build_workflow_failed",
+            "failed_stage": report["failed_stage"],
+            "workflow_conclusion": report["workflow_conclusion"],
+            "github_repository": report["github_repository"],
+            "github_workflow_ref": report["github_workflow_ref"],
+            "github_workflow_sha": report["github_workflow_sha"],
+            "github_run_id": str(report["github_run_id"]),
+            "github_run_attempt": str(report["github_run_attempt"]),
+            "failure_report_sha256": report_hash,
+            "retryable": (
+                int((reservation.event_payload or {})["attempt_number"])
+                < FORMAL_BUILD_MAX_ATTEMPTS
+            ),
         },
     )
     await db.commit()
@@ -3795,6 +4542,25 @@ async def register_candidate_version(
                 "This candidate version already has a different formal-build request",
                 status_code=409,
             )
+        existing_version = await db.get(
+            FoundryCandidateVersion, existing.candidate_version_id
+        )
+        existing_attestation = await db.get(
+            FoundryFormalBuildAttestation, existing.formal_build_attestation_id
+        )
+        if existing_version is None or existing_attestation is None:
+            raise FoundryCatalogError(
+                "formal_build_attestation_binding_mismatch",
+                "Pending registration lost its exact source or build receipt",
+                status_code=409,
+            )
+        await _validate_formal_source_provenance(
+            db,
+            version=existing_version,
+            source_commit=existing_attestation.git_commit,
+            source_tree_hash=existing_attestation.source_tree_hash,
+            dependency_lock_hash=existing_attestation.dependency_lock_hash,
+        )
         releases = list(
             (
                 await db.execute(
@@ -3860,6 +4626,13 @@ async def register_candidate_version(
             "Registration requires a protected formal build for the exact approved version",
             status_code=409,
         )
+    materialization_receipt = await _validate_formal_source_provenance(
+        db,
+        version=version,
+        source_commit=build_attestation.git_commit,
+        source_tree_hash=build_attestation.source_tree_hash,
+        dependency_lock_hash=build_attestation.dependency_lock_hash,
+    )
     try:
         stored_release_audit_hash, stored_release_audit_receipts = (
             _validate_formal_release_audit(
@@ -4024,6 +4797,18 @@ async def register_candidate_version(
             "formal_build_release_audit_receipts": stored_release_audit_receipts,
             "formal_build_sigstore_bundle_sha256": build_attestation.sigstore_bundle_hash,
             "formal_build_provenance_sha256": build_attestation.provenance_hash,
+            **(
+                {
+                    "source_materialization_receipt_id": str(
+                        materialization_receipt.id
+                    ),
+                    "source_materialization_receipt_sha256": (
+                        materialization_receipt.receipt_hash
+                    ),
+                }
+                if materialization_receipt is not None
+                else {}
+            ),
         },
         actor_user_id=registrar_user_id,
     )

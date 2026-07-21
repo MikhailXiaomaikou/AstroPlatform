@@ -21,6 +21,7 @@ from app.models.foundry_materialization_records import (
 from app.models.schemas import User
 from app.services.foundry_catalog import FoundryCatalogError
 from app.services.foundry_materialization import (
+    materialization_workflow_retry_after,
     record_finalization_dispatch,
     record_materialization_dispatch,
     record_materialization_final_receipt,
@@ -95,6 +96,12 @@ def _dispatch_config() -> FoundryMaterializationDispatchConfig:
     )
 
 
+def _reservation_status(state: str) -> str:
+    """Preserve DISPATCHED only when GitHub has actually accepted the request."""
+
+    return "DISPATCHED" if state == "WORKFLOW_DISPATCHED" else state
+
+
 @admin_router.post(
     "/candidates/{candidate_id}/materialize",
     status_code=status.HTTP_202_ACCEPTED,
@@ -109,7 +116,7 @@ async def materialize_candidate_source(
 
     _enabled()
     try:
-        binding, event, dispatched, attestation = await request_source_materialization(
+        binding, event, reservation, attestation = await request_source_materialization(
             db,
             candidate_id=candidate_id,
             candidate_version_id=payload.candidate_version_id,
@@ -128,11 +135,22 @@ async def materialize_candidate_source(
             "auto_merge_performed": False,
             "idempotent_replay": True,
         }
-    if dispatched:
+    if reservation is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_class": "materialization_dispatch_reservation_missing",
+                "message": "Protected materialization dispatch reservation is missing",
+            },
+        )
+    if not reservation.should_dispatch:
         return {
-            "status": "DISPATCHED",
+            "status": _reservation_status(reservation.state),
+            "dispatch_state": reservation.state,
             "materialization_request_id": str(event.id),
             "materialization_attestation_id": None,
+            "dispatch_attempt": reservation.attempt_number,
+            "retry_after": reservation.retry_after.isoformat(),
             "idempotent_replay": True,
         }
     if settings.foundry_materialization_dispatch_backend != "github_actions":
@@ -148,13 +166,28 @@ async def materialize_candidate_source(
         except FoundryMaterializationDispatchError as exc:
             failure = exc
     if failure is not None:
-        await record_materialization_dispatch(
+        outcome_event = await record_materialization_dispatch(
             db,
             request_event=event,
+            reservation=reservation,
             dispatched=False,
             failure_class=failure.code,
             retryable=failure.retryable,
+            outcome_unknown=failure.outcome_unknown,
         )
+        if failure.outcome_unknown:
+            return {
+                "status": "DISPATCH_OUTCOME_UNKNOWN",
+                "dispatch_state": "DISPATCH_OUTCOME_UNKNOWN",
+                "materialization_request_id": str(event.id),
+                "materialization_attestation_id": None,
+                "dispatch_attempt": reservation.attempt_number,
+                "retry_after": materialization_workflow_retry_after(
+                    outcome_event
+                ).isoformat(),
+                "outcome_unknown": True,
+                "idempotent_replay": False,
+            }
         raise HTTPException(
             status_code=503 if failure.retryable else 409,
             detail={
@@ -163,11 +196,21 @@ async def materialize_candidate_source(
                 "retryable": failure.retryable,
             },
         )
-    await record_materialization_dispatch(db, request_event=event, dispatched=True)
+    dispatch_event = await record_materialization_dispatch(
+        db,
+        request_event=event,
+        reservation=reservation,
+        dispatched=True,
+    )
     return {
         "status": "DISPATCHED",
+        "dispatch_state": "WORKFLOW_DISPATCHED",
         "materialization_request_id": str(event.id),
         "materialization_attestation_id": None,
+        "dispatch_attempt": reservation.attempt_number,
+        "retry_after": materialization_workflow_retry_after(
+            dispatch_event
+        ).isoformat(),
         "idempotent_replay": False,
     }
 
@@ -186,7 +229,7 @@ async def finalize_candidate_materialization(
 
     _enabled()
     try:
-        binding, event, dispatched, receipt = await request_materialization_finalization(
+        binding, event, reservation, receipt = await request_materialization_finalization(
             db,
             candidate_id=candidate_id,
             attestation_id=payload.materialization_attestation_id,
@@ -202,10 +245,21 @@ async def finalize_candidate_materialization(
             "demo_and_reviews_transferred": False,
             "idempotent_replay": True,
         }
-    if dispatched:
+    if reservation is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_class": "materialization_finalization_dispatch_reservation_missing",
+                "message": "Merge finalization dispatch reservation is missing",
+            },
+        )
+    if not reservation.should_dispatch:
         return {
-            "status": "DISPATCHED",
+            "status": _reservation_status(reservation.state),
+            "dispatch_state": reservation.state,
             "materialization_attestation_id": str(payload.materialization_attestation_id),
+            "dispatch_attempt": reservation.attempt_number,
+            "retry_after": reservation.retry_after.isoformat(),
             "idempotent_replay": True,
         }
     if settings.foundry_materialization_dispatch_backend != "github_actions":
@@ -225,13 +279,29 @@ async def finalize_candidate_materialization(
         except FoundryMaterializationDispatchError as exc:
             failure = exc
     if failure is not None:
-        await record_finalization_dispatch(
+        outcome_event = await record_finalization_dispatch(
             db,
             request_event=event,
+            reservation=reservation,
             dispatched=False,
             failure_class=failure.code,
             retryable=failure.retryable,
+            outcome_unknown=failure.outcome_unknown,
         )
+        if failure.outcome_unknown:
+            return {
+                "status": "DISPATCH_OUTCOME_UNKNOWN",
+                "dispatch_state": "DISPATCH_OUTCOME_UNKNOWN",
+                "materialization_attestation_id": str(
+                    payload.materialization_attestation_id
+                ),
+                "dispatch_attempt": reservation.attempt_number,
+                "retry_after": materialization_workflow_retry_after(
+                    outcome_event
+                ).isoformat(),
+                "outcome_unknown": True,
+                "idempotent_replay": False,
+            }
         raise HTTPException(
             status_code=503 if failure.retryable else 409,
             detail={
@@ -240,10 +310,20 @@ async def finalize_candidate_materialization(
                 "retryable": failure.retryable,
             },
         )
-    await record_finalization_dispatch(db, request_event=event, dispatched=True)
+    dispatch_event = await record_finalization_dispatch(
+        db,
+        request_event=event,
+        reservation=reservation,
+        dispatched=True,
+    )
     return {
         "status": "DISPATCHED",
+        "dispatch_state": "WORKFLOW_DISPATCHED",
         "materialization_attestation_id": str(payload.materialization_attestation_id),
+        "dispatch_attempt": reservation.attempt_number,
+        "retry_after": materialization_workflow_retry_after(
+            dispatch_event
+        ).isoformat(),
         "idempotent_replay": False,
     }
 

@@ -59,6 +59,7 @@ async def test_formal_build_dispatch_binds_exact_version() -> None:
 
     candidate_id = uuid.uuid4()
     version_id = uuid.uuid4()
+    attempt_id = uuid.uuid4()
     version_hash = "a" * 64
     source_commit = "b" * 40
     source_tree_hash = "c" * 64
@@ -67,6 +68,7 @@ async def test_formal_build_dispatch_binds_exact_version() -> None:
             _config(),
             candidate_id=candidate_id,
             candidate_version_id=version_id,
+            formal_build_attempt_id=attempt_id,
             candidate_version_hash=version_hash,
             source_commit=source_commit,
             source_tree_sha256=source_tree_hash,
@@ -78,6 +80,7 @@ async def test_formal_build_dispatch_binds_exact_version() -> None:
         "inputs": {
             "candidate_id": str(candidate_id),
             "candidate_version_id": str(version_id),
+            "formal_build_attempt_id": str(attempt_id),
             "candidate_version_hash": version_hash,
             "source_commit": source_commit,
             "source_tree_sha256": source_tree_hash,
@@ -98,6 +101,7 @@ async def test_dispatch_rejects_untrusted_identifiers_before_network() -> None:
             _config(),
             candidate_id=uuid.uuid4(),
             candidate_version_id=uuid.uuid4(),
+            formal_build_attempt_id=uuid.uuid4(),
             candidate_version_hash="a" * 64,
             source_commit="main",
             source_tree_sha256="c" * 64,
@@ -130,4 +134,5 @@ async def test_dispatch_failure_is_secret_free_and_classified() -> None:
 
     assert raised.value.code == "foundry_ci_dispatch_rejected"
     assert raised.value.retryable is True
+    assert raised.value.delivery_uncertain is True
     assert "token" not in str(raised.value)

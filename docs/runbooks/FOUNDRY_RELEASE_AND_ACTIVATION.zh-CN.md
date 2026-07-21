@@ -32,6 +32,7 @@
 | `foundry-materialization-attestation` | 签名 PR/merge 身份回执 | 独立 materialization Ed25519 私钥 |
 | `foundry-materialization-callback` | 上传已经签名的物化回执 | 独立 materialization callback bearer；无签名私钥 |
 | `foundry-formal-worker` | 构建、验证和签名正式多架构镜像 | Cosign/OIDC、独立构建证明私钥与回调身份 |
+| `foundry-formal-worker-failure` | 自动记录正式构建失败，只能关闭一次 attempt | `FOUNDRY_FORMAL_BUILD_FAILURE_RESULT_SECRET`；无签名私钥、OIDC、checkout 或成功回调身份 |
 | `foundry-registry-release` | 人工批准后签名 RegistrySnapshot | 独立 Ed25519 Registry 私钥 |
 | `foundry-registry-activation-pr` | 导出已验签 import，生成只含公开材料的 PR | 独立 activation bearer；无签名私钥 |
 | `foundry-registry-activation` | 按精确 commit 部署并写入回执 | Render API key、独立 activation bearer；无签名私钥 |
@@ -50,8 +51,11 @@ shell 检查，只有 GitHub Environment 的部署分支策略能在 Job 启动�
 `foundry-materialization-attestation` 必须至少有 1 名人工 reviewer。
 人工批准仍发生在 Candidate 的工程/科学审核与正式注册阶段。
 `foundry-formal-worker`、Registry Release、Registry Activation PR 与 Registry
-Activation 也必须设置人工 `Required reviewers`。如果团队主动给自动 Environment
-增加 reviewer，流程会在相应 Job 前暂停，这是允许的更严格模式。
+Activation 也必须设置人工 `Required reviewers`。唯一例外是
+`foundry-formal-worker-failure`：它必须保持无 reviewer，才能在构建失败后自动关闭
+attempt；但仍必须只允许 `main`。这个 Environment 只能获得 failure-only bearer，
+不能获得正式构建回调 bearer、attestation 私钥、OIDC 或仓库读取权限。不能主动给它
+增加 reviewer，否则失败记录会再次卡住。
 
 Registry 私钥不得出现在 Render、候选 Runner、本地 Worker 或浏览器。AI 身份不得成为 GitHub Environment reviewer，也不得获得 review、register、suspend 或 revoke API 权限。
 
@@ -72,7 +76,26 @@ FOUNDRY_SOURCE_MATERIALIZATION_ENABLED=false
 FOUNDRY_REGISTRATION_ENABLED=false
 ```
 
-为 Draft、Validation、Formal Build 和 Registry Release 分别使用不同的 GitHub token 与回调秘密。任何两个秘密都不得相同。GitHub token 只授予目标仓库所需的最小 workflow dispatch 权限。
+为 Draft、Validation、Formal Build 成功回调、Formal Build 失败回调和 Registry
+Release 分别使用不同的 GitHub token 与回调秘密。任何两个秘密都不得相同。GitHub
+token 只授予目标仓库所需的最小 workflow dispatch 权限。
+
+Render 必须同时配置下面两个互不相同、至少 32 字符的 bearer：
+
+```text
+FOUNDRY_FORMAL_BUILD_RESULT_SECRET=<成功 attestation 回调专用>
+FOUNDRY_FORMAL_BUILD_FAILURE_RESULT_SECRET=<失败 attempt 关闭专用>
+```
+
+前者只能存在于需要人工审批的 `foundry-formal-worker` Environment；后者只能存在于
+自动的 `foundry-formal-worker-failure` Environment。控制面使用两个不同的认证器：
+failure bearer 调用成功 attestation endpoint 会得到 403，成功 bearer 调用 failure
+endpoint 也会得到 403。
+
+两个 Environment 都要设置同一个非秘密变量
+`FOUNDRY_CONTROL_PLANE_URL=https://<backend-host>`；failure Environment 不应再添加
+任何其他 secret。创建后检查其 Deployment branch policy 是只允许 `main`，并确认
+`Required reviewers` 为空。
 
 控制面只信任配置好的构建证明公钥和 Registry 公钥 keyring。Registry 导入仅保存“已验签、等待部署”的不可修改收据，不会热更新正在服务的进程。
 

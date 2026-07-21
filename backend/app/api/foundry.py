@@ -6,6 +6,7 @@ import hmac
 import inspect
 import os
 import uuid
+from datetime import timedelta, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -39,6 +40,7 @@ from app.services.foundry_catalog import (
     queue_ai_draft,
     record_ai_draft_dispatch,
     record_ai_draft_result,
+    record_formal_build_attempt_failure,
     record_formal_build_dispatch,
     review_candidate_version,
     request_formal_build_dispatch,
@@ -212,6 +214,31 @@ class FormalBuildSubject(BaseModel):
     digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
 
 
+class FormalBuildAttemptFailureReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1]
+    formal_build_attempt_id: uuid.UUID
+    candidate_id: uuid.UUID
+    candidate_version_id: uuid.UUID
+    candidate_version_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    source_tree_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    status: Literal["FAILED"]
+    failure_class: Literal["formal_build_workflow_failed"]
+    failed_stage: Literal[
+        "definition_gate", "validation", "image_build", "signing"
+    ]
+    workflow_conclusion: Literal["failure", "cancelled", "skipped"]
+    github_repository: str = Field(
+        pattern=r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$"
+    )
+    github_workflow_ref: str = Field(min_length=1, max_length=512)
+    github_workflow_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    github_run_id: str = Field(pattern=r"^[1-9][0-9]{0,19}$")
+    github_run_attempt: Literal["1"]
+
+
 class FormalBuildIdentity(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -219,7 +246,7 @@ class FormalBuildIdentity(BaseModel):
     github_workflow_ref: str = Field(min_length=1, max_length=2048)
     github_workflow_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
     github_run_id: str = Field(pattern=r"^[1-9][0-9]*$")
-    github_run_attempt: int = Field(ge=1)
+    github_run_attempt: Literal[1]
 
 
 class FormalBuildSigstoreReceipt(BaseModel):
@@ -412,6 +439,21 @@ def _require_formal_build_callback(request: Request) -> None:
         provided.encode("utf-8"), expected.encode("utf-8")
     ):
         raise HTTPException(status_code=403, detail="Formal build callback access required")
+
+
+def _require_formal_build_failure_callback(request: Request) -> None:
+    """Authenticate the failure-only job, which cannot submit attestations."""
+
+    authorization = request.headers.get("Authorization", "")
+    expected = settings.foundry_formal_build_failure_result_secret
+    provided = authorization[7:] if authorization.startswith("Bearer ") else ""
+    if not expected or not provided or not hmac.compare_digest(
+        provided.encode("utf-8"), expected.encode("utf-8")
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Formal build failure callback access required",
+        )
 
 
 def _require_registry_import_callback(request: Request) -> None:
@@ -1373,6 +1415,54 @@ async def ingest_formal_build_attestation(
     }
 
 
+@internal_router.post(
+    "/formal-build-attempts/{attempt_id}/failure",
+    status_code=status.HTTP_200_OK,
+)
+async def ingest_formal_build_attempt_failure(
+    attempt_id: uuid.UUID,
+    payload: FormalBuildAttemptFailureReport,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Close one protected build attempt without granting any formal evidence."""
+
+    _require_flag(settings.foundry_registration_enabled, "Foundry registration")
+    _require_formal_build_failure_callback(request)
+    if payload.formal_build_attempt_id != attempt_id:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_class": "formal_build_failure_binding_invalid",
+                "message": "Path and body formal_build_attempt_id differ",
+            },
+        )
+    expected_workflow_ref = (
+        f"{settings.foundry_formal_build_github_repository}/.github/workflows/"
+        f"{settings.foundry_formal_build_github_workflow}@refs/heads/"
+        f"{settings.foundry_formal_build_github_ref}"
+    )
+    try:
+        event, created = await record_formal_build_attempt_failure(
+            db,
+            report=payload.model_dump(mode="json"),
+            expected_repository=settings.foundry_formal_build_github_repository,
+            expected_workflow_ref=expected_workflow_ref,
+        )
+    except FoundryCatalogError as exc:
+        _raise_foundry_error(exc)
+    return {
+        "formal_build_attempt_id": str(attempt_id),
+        "candidate_id": str(event.candidate_id),
+        "candidate_version_id": str(event.candidate_version_id),
+        "status": "FAILED_RECORDED",
+        "failure_class": (event.event_payload or {}).get("failure_class"),
+        "retryable": bool((event.event_payload or {}).get("retryable")),
+        "idempotent_replay": not created,
+        "event_hash": event.event_hash,
+    }
+
+
 @internal_router.post("/registry-releases/import")
 async def ingest_signed_registry_release(
     payload: RegistryReleaseImportReceipt,
@@ -1483,37 +1573,50 @@ async def admin_dispatch_foundry_formal_build(
 
     _require_flag(settings.foundry_registration_enabled, "Foundry registration")
     try:
-        binding, request_event, already_dispatched, attestation = (
-            await request_formal_build_dispatch(
-                db,
-                candidate_id=candidate_id,
-                candidate_version_id=payload.candidate_version_id,
-                candidate_version_hash=payload.candidate_version_hash,
-                actor_user_id=reviewer.id,
-            )
+        plan = await request_formal_build_dispatch(
+            db,
+            candidate_id=candidate_id,
+            candidate_version_id=payload.candidate_version_id,
+            candidate_version_hash=payload.candidate_version_hash,
+            actor_user_id=reviewer.id,
         )
     except FoundryCatalogError as exc:
         _raise_foundry_error(exc)
-    if attestation is not None:
+    binding = plan.binding
+    if plan.attestation is not None:
         return {
             "candidate_id": str(candidate_id),
             "candidate_version_id": binding["candidate_version_id"],
             "candidate_version_hash": binding["candidate_version_hash"],
-            "formal_build_request_id": str(request_event.id),
+            "formal_build_request_id": str(plan.request_event.id),
+            "formal_build_attempt_id": (
+                str(plan.attempt_id) if plan.attempt_id else None
+            ),
+            "attempt_number": plan.attempt_number,
             "status": "VERIFIED_BUILD_RECEIPT",
-            "build_attestation_id": str(attestation.id),
+            "build_attestation_id": str(plan.attestation.id),
             "idempotent_replay": True,
         }
-    if already_dispatched:
+    if plan.already_active:
         return {
             "candidate_id": str(candidate_id),
             "candidate_version_id": binding["candidate_version_id"],
             "candidate_version_hash": binding["candidate_version_hash"],
-            "formal_build_request_id": str(request_event.id),
-            "status": "DISPATCHED",
+            "formal_build_request_id": str(plan.request_event.id),
+            "formal_build_attempt_id": str(plan.attempt_id),
+            "attempt_number": plan.attempt_number,
+            "status": plan.dispatch_status,
+            "retry_after": (
+                plan.retry_after.isoformat() if plan.retry_after else None
+            ),
             "build_attestation_id": None,
             "idempotent_replay": True,
         }
+    if plan.attempt_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"error_class": "formal_build_attempt_missing"},
+        )
 
     failure: FoundryCIDispatchError | None = None
     if settings.foundry_formal_build_dispatch_backend != "github_actions":
@@ -1532,6 +1635,7 @@ async def admin_dispatch_foundry_formal_build(
                 config,
                 candidate_id=binding["candidate_id"],
                 candidate_version_id=binding["candidate_version_id"],
+                formal_build_attempt_id=plan.attempt_id,
                 candidate_version_hash=binding["candidate_version_hash"],
                 source_commit=binding["source_commit"],
                 source_tree_sha256=binding["source_tree_sha256"],
@@ -1540,38 +1644,87 @@ async def admin_dispatch_foundry_formal_build(
             failure = exc
     if failure is not None:
         try:
-            await record_formal_build_dispatch(
+            dispatch_event, _created = await record_formal_build_dispatch(
                 db,
                 binding=binding,
+                attempt_id=plan.attempt_id,
                 dispatched=False,
                 failure_class=failure.code,
                 retryable=failure.retryable,
+                delivery_uncertain=failure.delivery_uncertain,
             )
         except FoundryCatalogError as exc:
             _raise_foundry_error(exc)
+        retry_allowed = bool((dispatch_event.event_payload or {}).get("retryable"))
+        if failure.delivery_uncertain:
+            created_at = dispatch_event.created_at
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            return {
+                "candidate_id": str(candidate_id),
+                "candidate_version_id": binding["candidate_version_id"],
+                "candidate_version_hash": binding["candidate_version_hash"],
+                "formal_build_request_id": str(plan.request_event.id),
+                "formal_build_attempt_id": str(plan.attempt_id),
+                "attempt_number": plan.attempt_number,
+                "status": "DISPATCH_UNCERTAIN",
+                "failure_class": failure.code,
+                "retry_after": (
+                    created_at
+                    + timedelta(
+                        seconds=int(
+                            (dispatch_event.event_payload or {}).get(
+                                "dispatch_lease_seconds"
+                            )
+                            or 300
+                        )
+                    )
+                ).isoformat(),
+                "build_attestation_id": None,
+                "idempotent_replay": not _created,
+            }
         raise HTTPException(
-            status_code=503 if failure.retryable else 409,
+            status_code=503 if retry_allowed else 409,
             detail={
                 "error_class": failure.code,
                 "message": "Formal build dispatch failed; the candidate remains approved",
-                "formal_build_request_id": str(request_event.id),
-                "retryable": failure.retryable,
+                "formal_build_request_id": str(plan.request_event.id),
+                "formal_build_attempt_id": str(plan.attempt_id),
+                "attempt_number": plan.attempt_number,
+                "retryable": retry_allowed,
             },
         )
     try:
-        _event, created = await record_formal_build_dispatch(
+        dispatch_event, created = await record_formal_build_dispatch(
             db,
             binding=binding,
+            attempt_id=plan.attempt_id,
             dispatched=True,
         )
     except FoundryCatalogError as exc:
         _raise_foundry_error(exc)
+    dispatched_at = dispatch_event.created_at
+    if dispatched_at.tzinfo is None:
+        dispatched_at = dispatched_at.replace(tzinfo=timezone.utc)
     return {
         "candidate_id": str(candidate_id),
         "candidate_version_id": binding["candidate_version_id"],
         "candidate_version_hash": binding["candidate_version_hash"],
-        "formal_build_request_id": str(request_event.id),
+        "formal_build_request_id": str(plan.request_event.id),
+        "formal_build_attempt_id": str(plan.attempt_id),
+        "attempt_number": plan.attempt_number,
         "status": "DISPATCHED",
+        "retry_after": (
+            dispatched_at
+            + timedelta(
+                seconds=int(
+                    (dispatch_event.event_payload or {}).get(
+                        "workflow_lease_seconds"
+                    )
+                    or 21600
+                )
+            )
+        ).isoformat(),
         "build_attestation_id": None,
         "idempotent_replay": not created,
     }

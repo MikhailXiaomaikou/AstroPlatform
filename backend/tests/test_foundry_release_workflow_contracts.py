@@ -151,7 +151,8 @@ def test_formal_worker_workflow_separates_candidate_code_from_oidc_and_secret():
     )
     assert "pull_request_target" not in text
     assert 'test "$GITHUB_REF" = "refs/heads/main"' in text
-    assert "environment: foundry-formal-worker" in text
+    assert text.count("environment: foundry-formal-worker\n") == 2
+    assert "environment: foundry-formal-worker-failure" in text
     assert "/api/internal/foundry/formal-build-attestations" in text
     assert "linux/amd64,linux/arm64" in text
     assert "provenance: mode=max" in text
@@ -189,13 +190,23 @@ def test_formal_worker_workflow_separates_candidate_code_from_oidc_and_secret():
         "  build-multiarch-without-oidc:",
         "  sign-and-report-from-protected-host:",
     )
-    signing = _section(text, "  sign-and-report-from-protected-host:")
+    signing = _section(
+        text,
+        "  sign-and-report-from-protected-host:",
+        "  report-failed-attempt:",
+    )
+    failure_callback = _section(text, "  report-failed-attempt:")
     assert "id-token: write" not in validation
     assert "id-token: write" not in build
     assert "id-token: write" in signing
     assert "FOUNDRY_FORMAL_BUILD_RESULT_SECRET" not in validation
     assert "FOUNDRY_FORMAL_BUILD_RESULT_SECRET" not in build
     assert text.count("FOUNDRY_FORMAL_BUILD_RESULT_SECRET") == 1
+    assert "FOUNDRY_FORMAL_BUILD_RESULT_SECRET" in signing
+    assert "FOUNDRY_FORMAL_BUILD_RESULT_SECRET" not in failure_callback
+    assert "FOUNDRY_FORMAL_BUILD_FAILURE_RESULT_SECRET" not in signing
+    assert text.count("FOUNDRY_FORMAL_BUILD_FAILURE_RESULT_SECRET") == 1
+    assert "FOUNDRY_FORMAL_BUILD_FAILURE_RESULT_SECRET" in failure_callback
     assert text.count("secrets.FOUNDRY_FORMAL_BUILD_ATTESTATION_PRIVATE_KEY") == 1
     assert "sigstore_verified" not in text
     assert "--github-workflow-ref \"$GITHUB_WORKFLOW_REF\"" in signing
@@ -209,8 +220,35 @@ def test_formal_worker_workflow_separates_candidate_code_from_oidc_and_secret():
     assert text.index("docker run --rm") < text.index(
         "/api/internal/foundry/formal-build-attestations"
     )
+    assert "formal_build_attempt_id:" in text
+    assert "always()" in failure_callback
+    assert "/formal-build-attempts/${FORMAL_BUILD_ATTEMPT_ID}/failure" in (
+        failure_callback
+    )
+    assert "actions/checkout" not in failure_callback
+    assert "candidate-source" not in failure_callback
+    assert "docker " not in failure_callback
+    assert "id-token: write" not in failure_callback
+    assert "FOUNDRY_FORMAL_BUILD_ATTESTATION_PRIVATE_KEY" not in failure_callback
     _assert_dispatch_inputs_are_not_interpolated_in_shell(text)
     _assert_actions_are_commit_pinned(text)
+
+    workflow = yaml.load(text, Loader=_UniqueKeyLoader)
+    failure_job = workflow["jobs"]["report-failed-attempt"]
+    assert failure_job["environment"] == "foundry-formal-worker-failure"
+    assert failure_job["permissions"] == {"contents": "none"}
+    callback_steps = workflow["jobs"]["report-failed-attempt"]["steps"]
+    for step in callback_steps:
+        if step.get("shell") != "bash":
+            continue
+        checked = subprocess.run(
+            ["bash", "-n"],
+            input=step["run"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert checked.returncode == 0, f"{step.get('name')}: {checked.stderr}"
 
 
 def test_candidate_draft_build_cannot_access_callback_bearer_or_execute_patch():
@@ -316,6 +354,7 @@ def test_formal_build_receipt_hashes_actual_files(tmp_path: Path):
     module = _load_script("build_formal_worker_attestation.py")
     candidate_id = str(uuid.uuid4())
     version_id = str(uuid.uuid4())
+    attempt_id = str(uuid.uuid4())
     version_hash = "a" * 64
     commit = "b" * 40
     image_digest = "sha256:" + "c" * 64
@@ -363,6 +402,7 @@ def test_formal_build_receipt_hashes_actual_files(tmp_path: Path):
     metadata = {
         "candidate_id": candidate_id,
         "candidate_version_id": version_id,
+        "formal_build_attempt_id": attempt_id,
         "candidate_version_hash": version_hash,
         "source_commit": commit,
         "source_tree_sha256": source_hash,
@@ -415,6 +455,7 @@ def test_formal_build_receipt_hashes_actual_files(tmp_path: Path):
     args = argparse.Namespace(
         candidate_id=candidate_id,
         candidate_version_id=version_id,
+        formal_build_attempt_id=attempt_id,
         candidate_version_hash=version_hash,
         source_receipt=str(source_receipt),
         source_manifest=str(source_manifest),
@@ -457,6 +498,7 @@ def test_formal_build_receipt_hashes_actual_files(tmp_path: Path):
     assert payload["dependency_lock_sha256"] == hashlib.sha256(
         lock.read_bytes()
     ).hexdigest()
+    assert payload["build_metadata"]["formal_build_attempt_id"] == attempt_id
     assert payload["formal_sbom_sha256"] == hashlib.sha256(
         sbom.read_bytes()
     ).hexdigest()

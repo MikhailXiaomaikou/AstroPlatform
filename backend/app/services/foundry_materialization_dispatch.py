@@ -16,10 +16,17 @@ _WORKFLOW = re.compile(r"^[A-Za-z0-9_.-]{1,128}\.ya?ml$")
 
 
 class FoundryMaterializationDispatchError(RuntimeError):
-    def __init__(self, code: str, *, retryable: bool = False) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        retryable: bool = False,
+        outcome_unknown: bool = False,
+    ) -> None:
         super().__init__(code)
         self.code = code
         self.retryable = retryable
+        self.outcome_unknown = outcome_unknown
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +86,9 @@ async def _dispatch(
         )
     except (httpx.TimeoutException, httpx.NetworkError) as exc:
         raise FoundryMaterializationDispatchError(
-            "materialization_dispatch_unavailable", retryable=True
+            "materialization_dispatch_unavailable",
+            retryable=True,
+            outcome_unknown=True,
         ) from exc
     finally:
         if owns_client:

@@ -259,6 +259,9 @@ def build_attestation(args: argparse.Namespace) -> dict[str, Any]:
     candidate_version_id = _require_uuid(
         args.candidate_version_id, "candidate_version_id"
     )
+    formal_build_attempt_id = _require_uuid(
+        args.formal_build_attempt_id, "formal_build_attempt_id"
+    )
     candidate_version_hash = _require_pattern(
         args.candidate_version_hash, _HEX64, "candidate_version_hash"
     )
@@ -314,8 +317,7 @@ def build_attestation(args: argparse.Namespace) -> dict[str, Any]:
         or _WORKFLOW_REF.fullmatch(github_workflow_ref) is None
         or not github_run_id.isdigit()
         or int(github_run_id) < 1
-        or type(args.github_run_attempt) is not int
-        or args.github_run_attempt < 1
+        or args.github_run_attempt != 1
     ):
         raise AttestationInputError("GitHub build identity is invalid")
     subject_image = str(args.subject_image or "").strip().lower()
@@ -338,6 +340,7 @@ def build_attestation(args: argparse.Namespace) -> dict[str, Any]:
     expected_metadata = {
         "candidate_id": candidate_id,
         "candidate_version_id": candidate_version_id,
+        "formal_build_attempt_id": formal_build_attempt_id,
         "candidate_version_hash": candidate_version_hash,
         "source_commit": git_commit,
         "source_tree_sha256": source_tree_hash,
@@ -414,6 +417,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--candidate-id", required=True)
     parser.add_argument("--candidate-version-id", required=True)
+    parser.add_argument("--formal-build-attempt-id", required=True)
     parser.add_argument("--candidate-version-hash", required=True)
     parser.add_argument("--source-receipt", required=True)
     parser.add_argument("--source-manifest", required=True)

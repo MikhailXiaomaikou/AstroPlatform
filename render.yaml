@@ -216,7 +216,10 @@ services:
       - key: FOUNDRY_MATERIALIZATION_GITHUB_REF
         value: main
       - key: FOUNDRY_FORMAL_BUILD_RESULT_SECRET
-        # Narrow callback secret; the signing key remains inside protected CI.
+        # Success-only callback secret; the signing key remains inside protected CI.
+        sync: false
+      - key: FOUNDRY_FORMAL_BUILD_FAILURE_RESULT_SECRET
+        # Failure-only bearer from the automatic main-only failure Environment.
         sync: false
       - key: FOUNDRY_FORMAL_BUILD_OIDC_SUBJECT
         sync: false

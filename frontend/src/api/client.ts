@@ -2378,9 +2378,20 @@ export async function materializeAdminFoundryCandidate(
   candidateVersionId: string,
   candidateVersionHash: string,
 ): Promise<{
-  status: "DISPATCHED" | "DRAFT_PR_ATTESTED";
+  status:
+    | "DISPATCH_RESERVED"
+    | "DISPATCH_OUTCOME_UNKNOWN"
+    | "DISPATCHED"
+    | "DRAFT_PR_ATTESTED";
+  dispatch_state?:
+    | "DISPATCH_RESERVED"
+    | "DISPATCH_OUTCOME_UNKNOWN"
+    | "WORKFLOW_DISPATCHED";
   materialization_request_id: string;
   materialization_attestation_id: string | null;
+  dispatch_attempt?: number;
+  retry_after?: string;
+  outcome_unknown?: true;
   pull_request_number?: number;
   pull_request_url?: string;
   auto_merge_performed?: false;
@@ -2400,11 +2411,22 @@ export async function finalizeAdminFoundryMaterialization(
   candidateId: string,
   materializationAttestationId: string,
 ): Promise<{
-  status: "DISPATCHED" | "FINALIZED_NEW_VERSION";
+  status:
+    | "DISPATCH_RESERVED"
+    | "DISPATCH_OUTCOME_UNKNOWN"
+    | "DISPATCHED"
+    | "FINALIZED_NEW_VERSION";
+  dispatch_state?:
+    | "DISPATCH_RESERVED"
+    | "DISPATCH_OUTCOME_UNKNOWN"
+    | "WORKFLOW_DISPATCHED";
   materialization_attestation_id?: string;
   materialization_receipt_id?: string;
   candidate_version_id?: string;
   demo_and_reviews_transferred?: false;
+  dispatch_attempt?: number;
+  retry_after?: string;
+  outcome_unknown?: true;
   idempotent_replay: boolean;
 }> {
   const { data } = await api.post(

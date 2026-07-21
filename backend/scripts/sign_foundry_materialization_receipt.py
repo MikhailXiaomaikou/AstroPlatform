@@ -8,7 +8,10 @@ import base64
 import binascii
 import hashlib
 import json
+import os
 import re
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +22,10 @@ _PAYLOAD_SCHEMAS = {
     "standard_astro_materialization_final_v1",
 }
 _KEY_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+# RFC 8410 PKCS#8 prefix for an Ed25519 32-byte private seed.  Keeping the
+# conversion here lets the minimal GitHub signing job use the runner's OpenSSL
+# instead of assuming the third-party ``cryptography`` package is installed.
+_ED25519_PKCS8_PREFIX = bytes.fromhex("302e020100300506032b657004220420")
 
 
 def canonical(value: Any) -> bytes:
@@ -55,6 +62,41 @@ def _load_payload(path: Path) -> dict[str, Any]:
     return payload
 
 
+def _sign_ed25519(seed: bytes, message: bytes) -> bytes:
+    if len(seed) != 32:
+        raise ValueError("materialization_private_key_invalid")
+    try:
+        with tempfile.NamedTemporaryFile(prefix="foundry-ed25519-key-") as key_file:
+            os.fchmod(key_file.fileno(), 0o600)
+            key_file.write(_ED25519_PKCS8_PREFIX + seed)
+            key_file.flush()
+            with tempfile.NamedTemporaryFile(prefix="foundry-signing-input-") as input_file:
+                input_file.write(message)
+                input_file.flush()
+                result = subprocess.run(
+                    [
+                        "openssl",
+                        "pkeyutl",
+                        "-sign",
+                        "-rawin",
+                        "-inkey",
+                        key_file.name,
+                        "-keyform",
+                        "DER",
+                        "-in",
+                        input_file.name,
+                    ],
+                    check=False,
+                    capture_output=True,
+                    timeout=10,
+                )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError("materialization_signing_backend_unavailable") from exc
+    if result.returncode != 0 or len(result.stdout) != 64:
+        raise ValueError("materialization_signing_backend_failed")
+    return result.stdout
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--payload", required=True)
@@ -71,12 +113,8 @@ def main() -> int:
         raise ValueError("materialization_private_key_invalid") from exc
     if len(seed) != 32:
         raise ValueError("materialization_private_key_invalid")
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
     canonical_payload = canonical(payload)
-    signature = Ed25519PrivateKey.from_private_bytes(seed).sign(
-        _DOMAIN + canonical_payload
-    )
+    signature = _sign_ed25519(seed, _DOMAIN + canonical_payload)
     envelope = {
         "schema_version": "standard_astro_materialization_attestation_bundle_v1",
         "payload": payload,

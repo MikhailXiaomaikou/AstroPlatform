@@ -11,6 +11,10 @@ on:
         description: Exact immutable candidate-version UUID
         required: true
         type: string
+      formal_build_attempt_id:
+        description: Durable control-plane UUID for this bounded build attempt
+        required: true
+        type: string
       candidate_version_hash:
         description: Exact candidate-version SHA-256 hex digest
         required: true
@@ -45,6 +49,7 @@ jobs:
         env:
           CANDIDATE_ID: ${{ inputs.candidate_id }}
           CANDIDATE_VERSION_ID: ${{ inputs.candidate_version_id }}
+          FORMAL_BUILD_ATTEMPT_ID: ${{ inputs.formal_build_attempt_id }}
           CANDIDATE_VERSION_HASH: ${{ inputs.candidate_version_hash }}
           SOURCE_COMMIT: ${{ inputs.source_commit }}
           SOURCE_TREE_SHA256: ${{ inputs.source_tree_sha256 }}
@@ -52,8 +57,10 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_RUN_ATTEMPT" = "1"
           [[ "$CANDIDATE_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
           [[ "$CANDIDATE_VERSION_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
+          [[ "$FORMAL_BUILD_ATTEMPT_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
           [[ "$CANDIDATE_VERSION_HASH" =~ ^[0-9a-f]{64}$ ]]
           [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           [[ "$SOURCE_TREE_SHA256" =~ ^[0-9a-f]{64}$ ]]
@@ -402,6 +409,7 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
           CANDIDATE_ID: ${{ inputs.candidate_id }}
           CANDIDATE_VERSION_ID: ${{ inputs.candidate_version_id }}
+          FORMAL_BUILD_ATTEMPT_ID: ${{ inputs.formal_build_attempt_id }}
           CANDIDATE_VERSION_HASH: ${{ inputs.candidate_version_hash }}
           SOURCE_COMMIT: ${{ inputs.source_commit }}
           SOURCE_TREE_SHA256: ${{ inputs.source_tree_sha256 }}
@@ -427,6 +435,9 @@ jobs:
               "candidate_id": str(uuid.UUID(os.environ["CANDIDATE_ID"])),
               "candidate_version_id": str(
                   uuid.UUID(os.environ["CANDIDATE_VERSION_ID"])
+              ),
+              "formal_build_attempt_id": str(
+                  uuid.UUID(os.environ["FORMAL_BUILD_ATTEMPT_ID"])
               ),
               "candidate_version_hash": os.environ["CANDIDATE_VERSION_HASH"],
               "source_commit": os.environ["SOURCE_COMMIT"],
@@ -566,6 +577,7 @@ jobs:
         env:
           CANDIDATE_ID: ${{ inputs.candidate_id }}
           CANDIDATE_VERSION_ID: ${{ inputs.candidate_version_id }}
+          FORMAL_BUILD_ATTEMPT_ID: ${{ inputs.formal_build_attempt_id }}
           CANDIDATE_VERSION_HASH: ${{ inputs.candidate_version_hash }}
           SOURCE_COMMIT: ${{ inputs.source_commit }}
           SOURCE_TREE_SHA256: ${{ inputs.source_tree_sha256 }}
@@ -589,6 +601,7 @@ jobs:
           python3 release-tools/backend/scripts/build_formal_worker_attestation.py \
             --candidate-id "$CANDIDATE_ID" \
             --candidate-version-id "$CANDIDATE_VERSION_ID" \
+            --formal-build-attempt-id "$FORMAL_BUILD_ATTEMPT_ID" \
             --candidate-version-hash "$CANDIDATE_VERSION_HASH" \
             --source-receipt formal-attestation/source-receipt.json \
             --source-manifest formal-attestation/source-manifest.json \
@@ -643,3 +656,106 @@ jobs:
           path: formal-attestation
           if-no-files-found: error
           retention-days: 90
+
+  report-failed-attempt:
+    if: ${{ always() && github.run_attempt == 1 && (needs.definition-gate.result != 'success' || needs.validate-without-secrets.result != 'success' || needs.build-multiarch-without-oidc.result != 'success' || needs.sign-and-report-from-protected-host.result != 'success') }}
+    needs:
+      - definition-gate
+      - validate-without-secrets
+      - build-multiarch-without-oidc
+      - sign-and-report-from-protected-host
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # This Environment is restricted to main but has no required reviewers.
+    # It exposes only the failure-only bearer, never signing/OIDC credentials.
+    environment: foundry-formal-worker-failure
+    permissions:
+      contents: none
+    steps:
+      - name: Freeze the bounded workflow-failure receipt
+        env:
+          FORMAL_BUILD_ATTEMPT_ID: ${{ inputs.formal_build_attempt_id }}
+          CANDIDATE_ID: ${{ inputs.candidate_id }}
+          CANDIDATE_VERSION_ID: ${{ inputs.candidate_version_id }}
+          CANDIDATE_VERSION_HASH: ${{ inputs.candidate_version_hash }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          SOURCE_TREE_SHA256: ${{ inputs.source_tree_sha256 }}
+          DEFINITION_RESULT: ${{ needs.definition-gate.result }}
+          VALIDATION_RESULT: ${{ needs.validate-without-secrets.result }}
+          IMAGE_RESULT: ${{ needs.build-multiarch-without-oidc.result }}
+          SIGNING_RESULT: ${{ needs.sign-and-report-from-protected-host.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          failed_stage=definition_gate
+          workflow_conclusion="$DEFINITION_RESULT"
+          if test "$DEFINITION_RESULT" = success; then
+            failed_stage=validation
+            workflow_conclusion="$VALIDATION_RESULT"
+          fi
+          if test "$VALIDATION_RESULT" = success; then
+            failed_stage=image_build
+            workflow_conclusion="$IMAGE_RESULT"
+          fi
+          if test "$IMAGE_RESULT" = success; then
+            failed_stage=signing
+            workflow_conclusion="$SIGNING_RESULT"
+          fi
+          case "$workflow_conclusion" in
+            failure|cancelled|skipped) ;;
+            *) exit 1 ;;
+          esac
+          export FAILED_STAGE="$failed_stage" WORKFLOW_CONCLUSION="$workflow_conclusion"
+          python3 - <<'PY'
+          import json
+          import os
+          import uuid
+          from pathlib import Path
+
+          report = {
+              "schema_version": 1,
+              "formal_build_attempt_id": str(
+                  uuid.UUID(os.environ["FORMAL_BUILD_ATTEMPT_ID"])
+              ),
+              "candidate_id": str(uuid.UUID(os.environ["CANDIDATE_ID"])),
+              "candidate_version_id": str(
+                  uuid.UUID(os.environ["CANDIDATE_VERSION_ID"])
+              ),
+              "candidate_version_hash": os.environ["CANDIDATE_VERSION_HASH"],
+              "source_commit": os.environ["SOURCE_COMMIT"],
+              "source_tree_sha256": os.environ["SOURCE_TREE_SHA256"],
+              "status": "FAILED",
+              "failure_class": "formal_build_workflow_failed",
+              "failed_stage": os.environ["FAILED_STAGE"],
+              "workflow_conclusion": os.environ["WORKFLOW_CONCLUSION"],
+              "github_repository": os.environ["GITHUB_REPOSITORY"],
+              "github_workflow_ref": os.environ["GITHUB_WORKFLOW_REF"],
+              "github_workflow_sha": os.environ["GITHUB_WORKFLOW_SHA"],
+              "github_run_id": os.environ["GITHUB_RUN_ID"],
+              "github_run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+          }
+          Path("formal-build-attempt-failure.json").write_text(
+              json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n"
+          )
+          PY
+
+      - name: Close only the failed formal-build attempt
+        env:
+          CONTROL_PLANE_URL: ${{ vars.FOUNDRY_CONTROL_PLANE_URL }}
+          RESULT_SECRET: ${{ secrets.FOUNDRY_FORMAL_BUILD_FAILURE_RESULT_SECRET }}
+          FORMAL_BUILD_ATTEMPT_ID: ${{ inputs.formal_build_attempt_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CONTROL_PLANE_URL"
+          test -n "$RESULT_SECRET"
+          callback="${CONTROL_PLANE_URL%/}/api/internal/foundry/formal-build-attempts/${FORMAL_BUILD_ATTEMPT_ID}/failure"
+          curl --fail-with-body --silent --show-error --output /dev/null \
+            --proto '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --connect-timeout 10 --max-time 60 \
+            -H "Authorization: Bearer $RESULT_SECRET" \
+            -H "Content-Type: application/json" \
+            --data-binary @formal-build-attempt-failure.json \
+            "$callback"

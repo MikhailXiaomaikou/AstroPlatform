@@ -255,6 +255,8 @@ jobs:
           KEY_ID: ${{ vars.FOUNDRY_MATERIALIZATION_ATTESTATION_KEY_ID }}
         run: |
           set -euo pipefail
+          command -v openssl
+          openssl version
           python backend/scripts/sign_foundry_materialization_receipt.py \
             --payload unsigned/materialization-final-payload.json \
             --private-key "$PRIVATE_KEY" --key-id "$KEY_ID" \

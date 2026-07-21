@@ -256,6 +256,8 @@ def test_render_workers_wait_for_exact_schema_head():
         "EVIDENCE_V2_SIGNING_PUBLIC_KEY",
         "EVIDENCE_V2_VERIFICATION_KEYS",
         "SCIENTIFIC_REVIEWER_USERNAMES",
+        "FOUNDRY_FORMAL_BUILD_RESULT_SECRET",
+        "FOUNDRY_FORMAL_BUILD_FAILURE_RESULT_SECRET",
     ):
         assert backend_env[key] == {"key": key, "sync": False}
         assert "generateValue" not in backend_env[key]
@@ -421,6 +423,12 @@ def test_compose_declares_role_scoped_secrets_and_one_release_identity():
     assert services["backend"]["environment"]["SCIENCE_EXECUTION_BACKEND"] == (
         "https_worker"
     )
+    assert services["backend"]["environment"][
+        "FOUNDRY_FORMAL_BUILD_RESULT_SECRET"
+    ] == "${FOUNDRY_FORMAL_BUILD_RESULT_SECRET:-}"
+    assert services["backend"]["environment"][
+        "FOUNDRY_FORMAL_BUILD_FAILURE_RESULT_SECRET"
+    ] == "${FOUNDRY_FORMAL_BUILD_FAILURE_RESULT_SECRET:-}"
     assert worker["environment"]["SCIENCE_EXECUTION_BACKEND"] == "https_worker"
     assert worker["environment"]["WORKER_TASK_SIGNING_KEY_ID"] == (
         "${WORKER_TASK_SIGNING_KEY_ID:?WORKER_TASK_SIGNING_KEY_ID must be set "

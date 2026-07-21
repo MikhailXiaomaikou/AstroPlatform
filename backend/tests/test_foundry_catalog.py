@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -25,6 +26,7 @@ from app.models.foundry_records import (
     FoundryCandidate,
     FoundryCandidateEvent,
     FoundryCandidateVersion,
+    FoundryFormalBuildAttestation,
     WorkflowRegistryEntry,
     WorkflowRegistryRelease,
 )
@@ -32,17 +34,21 @@ from app.models.schemas import User
 from app.services.foundry_catalog import (
     FoundryCatalogError,
     _append_event,
+    _formal_build_source_binding,
     _pending_registry_release_request,
     append_candidate_version,
     record_demo_report,
+    record_formal_build_dispatch,
     record_formal_build_attestation,
     register_candidate_version,
+    request_formal_build_dispatch,
     review_candidate_version,
     serialize_capability_gaps,
     serialize_demo_run,
     sha256_json,
     start_validation_run,
 )
+from app.services.foundry_ci_dispatch import FoundryCIDispatchError
 from app.services.foundry_validation_dispatch import (
     FoundryValidationDispatchError,
     dispatch_candidate_validation,
@@ -75,6 +81,7 @@ def _bundle(
     workflow_id: str | None = None,
     workflow_version: str | None = None,
     formal_source: bool = False,
+    source_materialization_required: bool = False,
 ) -> dict:
     proposed_workflow_id = workflow_id or f"desi_dr2_workflow_{suffix}"
     return {
@@ -109,8 +116,10 @@ def _bundle(
                 "source_hash_algorithm": "standard_astro_tracked_source_manifest_v1",
                 "source_base_commit": "6" * 40,
                 "source_base_tree_sha256": "4" * 64,
-                "source_tree_sha256": "4" * 64,
-                "source_materialization_required": False,
+                "source_tree_sha256": (
+                    "5" * 64 if source_materialization_required else "4" * 64
+                ),
+                "source_materialization_required": source_materialization_required,
             }
             if formal_source
             else {
@@ -212,6 +221,7 @@ async def _candidate_with_demo(
     workflow_id: str | None = None,
     workflow_version: str | None = None,
     formal_source: bool = False,
+    source_materialization_required: bool = False,
 ):
     candidate = FoundryCandidate(
         gap_fingerprint=hashlib.sha256(suffix.encode()).hexdigest(),
@@ -237,10 +247,23 @@ async def _candidate_with_demo(
                 workflow_id=workflow_id,
                 workflow_version=workflow_version,
                 formal_source=formal_source,
+                source_materialization_required=source_materialization_required,
             ),
             "validation_runner_image_digest": VALIDATION_IMAGE,
-            "code_tree_hash": "4" * 64,
-            **({"patch_hash": EMPTY_SHA256} if formal_source else {}),
+            "code_tree_hash": (
+                "5" * 64 if source_materialization_required else "4" * 64
+            ),
+            **(
+                {
+                    "patch_hash": (
+                        "6" * 64
+                        if source_materialization_required
+                        else EMPTY_SHA256
+                    )
+                }
+                if formal_source
+                else {}
+            ),
             "sbom_hash": "5" * 64,
         },
         actor_kind="AI_DRAFT_JOB" if formal_source else "AI_SERVICE",
@@ -261,6 +284,25 @@ async def _candidate_with_demo(
     )
     await db_session.refresh(candidate)
     return candidate, version, run, demo, report
+
+
+async def _append_legacy_formal_build_dispatch(
+    db_session,
+    *,
+    candidate: FoundryCandidate,
+    version: FoundryCandidateVersion,
+) -> FoundryCandidateEvent:
+    event = await _append_event(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        event_type="FORMAL_BUILD_DISPATCHED",
+        actor_kind="CONTROL_PLANE",
+        actor_user_id=None,
+        payload=_formal_build_source_binding(version),
+    )
+    await db_session.commit()
+    return event
 
 
 async def test_event_append_locks_candidate_before_reading_chain_head() -> None:
@@ -774,7 +816,13 @@ def _resign_formal_build_report(report: dict) -> dict:
     return report
 
 
-def _formal_build_report(candidate, version, *, built_at: datetime) -> dict:
+def _formal_build_report(
+    candidate,
+    version,
+    *,
+    built_at: datetime,
+    formal_build_attempt_id: uuid.UUID | None = None,
+) -> dict:
     workflow_sha = "e" * 40
     git_commit = "6" * 40
     receipt_names = (
@@ -861,6 +909,10 @@ def _formal_build_report(candidate, version, *, built_at: datetime) -> dict:
         },
         "built_at": built_at.isoformat(),
     }
+    if formal_build_attempt_id is not None:
+        payload["build_metadata"]["formal_build_attempt_id"] = str(
+            formal_build_attempt_id
+        )
     report = {
         "schema_version": "standard_astro_formal_build_attestation_bundle_v2",
         "payload": payload,
@@ -872,7 +924,7 @@ async def test_formal_build_is_protected_and_registration_stays_pending(
     app_client, db_session, monkeypatch
 ):
     candidate, version, _run, _demo, _report = await _candidate_with_demo(
-        db_session, suffix="formal"
+        db_session, suffix="formal", formal_source=True
     )
     reviewer = await _user(db_session, "reviewer")
     await review_candidate_version(
@@ -891,6 +943,11 @@ async def test_formal_build_is_protected_and_registration_stays_pending(
     )
     monkeypatch.setattr(settings, "foundry_registration_enabled", True)
     monkeypatch.setattr(settings, "foundry_formal_build_result_secret", "build-" + "x" * 40)
+    monkeypatch.setattr(
+        settings,
+        "foundry_formal_build_failure_result_secret",
+        "failure-" + "y" * 40,
+    )
     monkeypatch.setattr(settings, "foundry_formal_build_oidc_subject", OIDC_SUBJECT)
     monkeypatch.setattr(
         settings,
@@ -908,6 +965,65 @@ async def test_formal_build_is_protected_and_registration_stays_pending(
         json=report,
     )
     assert denied.status_code == 403
+    failure_bearer_denied = await app_client.post(
+        "/api/internal/foundry/formal-build-attestations",
+        headers={"Authorization": "Bearer " + "failure-" + "y" * 40},
+        json=report,
+    )
+    assert failure_bearer_denied.status_code == 403
+    with pytest.raises(FoundryCatalogError) as missing_dispatch:
+        await record_formal_build_attestation(
+            db_session,
+            attestation_report=report,
+            expected_oidc_subject=OIDC_SUBJECT,
+            expected_github_repository=GITHUB_REPOSITORY,
+            expected_github_workflow=GITHUB_WORKFLOW,
+            expected_github_ref="main",
+            trusted_attestation_public_keys={
+                ATTESTATION_KEY_ID: ATTESTATION_PUBLIC_KEY
+            },
+        )
+    assert missing_dispatch.value.error_class == (
+        "formal_build_legacy_dispatch_missing"
+    )
+    wrong_binding = _formal_build_source_binding(version)
+    wrong_binding["source_commit"] = "f" * 40
+    await _append_event(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        event_type="FORMAL_BUILD_DISPATCHED",
+        actor_kind="CONTROL_PLANE",
+        actor_user_id=None,
+        payload=wrong_binding,
+    )
+    await db_session.commit()
+    with pytest.raises(FoundryCatalogError) as mismatched_dispatch:
+        await record_formal_build_attestation(
+            db_session,
+            attestation_report=report,
+            expected_oidc_subject=OIDC_SUBJECT,
+            expected_github_repository=GITHUB_REPOSITORY,
+            expected_github_workflow=GITHUB_WORKFLOW,
+            expected_github_ref="main",
+            trusted_attestation_public_keys={
+                ATTESTATION_KEY_ID: ATTESTATION_PUBLIC_KEY
+            },
+        )
+    assert mismatched_dispatch.value.error_class == (
+        "formal_build_legacy_dispatch_missing"
+    )
+    await _append_legacy_formal_build_dispatch(
+        db_session,
+        candidate=candidate,
+        version=version,
+    )
+    accepted = await app_client.post(
+        "/api/internal/foundry/formal-build-attestations",
+        headers={"Authorization": "Bearer " + "build-" + "x" * 40},
+        json=report,
+    )
+    assert accepted.status_code == 201, accepted.text
     attestation = await record_formal_build_attestation(
         db_session,
         attestation_report=report,
@@ -1057,6 +1173,108 @@ async def test_formal_build_callback_verifies_signature_and_workflow_identity(
     assert supply_gate_rejected.value.error_class == "formal_release_audit_invalid"
 
 
+async def test_generated_patch_cannot_bypass_protected_materialization_receipt(
+    db_session,
+):
+    candidate, version, *_ = await _candidate_with_demo(
+        db_session,
+        suffix="formal_materialization_bypass",
+        formal_source=True,
+        source_materialization_required=True,
+    )
+    reviewer = await _user(db_session, "formal_materialization_bypass_reviewer")
+    await review_candidate_version(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        reviewer_user_id=reviewer.id,
+        review_scope="ENGINEERING",
+        decision="APPROVED",
+        comment="Review the generated patch without materializing it",
+    )
+    report = _formal_build_report(
+        candidate,
+        version,
+        built_at=datetime.now(timezone.utc) + timedelta(minutes=1),
+    )
+    # Reproduce the bypass: a manually dispatched protected workflow attests a
+    # non-base commit with the Draft's post-patch tree, but no protected
+    # materialization receipt ever created an exact materialized version.
+    unledgered_commit = "f" * 40
+    report["payload"]["git_commit"] = unledgered_commit
+    report["payload"]["build_metadata"]["source_commit"] = unledgered_commit
+    _resign_formal_build_report(report)
+
+    with pytest.raises(FoundryCatalogError) as callback_rejected:
+        await record_formal_build_attestation(
+            db_session,
+            attestation_report=report,
+            expected_oidc_subject=OIDC_SUBJECT,
+            expected_github_repository=GITHUB_REPOSITORY,
+            expected_github_workflow=GITHUB_WORKFLOW,
+            expected_github_ref="main",
+            trusted_attestation_public_keys={
+                ATTESTATION_KEY_ID: ATTESTATION_PUBLIC_KEY
+            },
+        )
+    assert (
+        callback_rejected.value.error_class
+        == "formal_materialization_receipt_required"
+    )
+
+    # Registration repeats the source-provenance gate.  Even a row inserted by
+    # a legacy/manual path cannot turn the unledgered build into a release.
+    payload = report["payload"]
+    forged_attestation = FoundryFormalBuildAttestation(
+        id=uuid.UUID(payload["attestation_id"]),
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        source_tree_hash=version.code_tree_hash,
+        git_commit=unledgered_commit,
+        dependency_lock_hash=version.dependency_lock_hash,
+        formal_sbom_hash=str(payload["formal_sbom_sha256"]),
+        test_report_hash=str(payload["test_report_sha256"]),
+        formal_release_audit_hash=str(
+            payload["release_audit"]["aggregate_receipt_sha256"]
+        ),
+        formal_release_audit_receipts=dict(payload["release_audit"]),
+        formal_worker_image_digest=FORMAL_IMAGE,
+        github_repository=GITHUB_REPOSITORY,
+        github_workflow_ref=GITHUB_WORKFLOW_REF,
+        github_workflow_sha=str(payload["build_identity"]["github_workflow_sha"]),
+        oidc_issuer=str(payload["sigstore"]["oidc_issuer"]),
+        oidc_subject=str(payload["sigstore"]["certificate_identity"]),
+        attestation_signing_key_id=ATTESTATION_KEY_ID,
+        sigstore_bundle_hash=str(payload["sigstore"]["bundle_sha256"]),
+        sigstore_verification_record_hash=str(
+            payload["sigstore"]["verification_record_sha256"]
+        ),
+        provenance_hash=str(payload["provenance_sha256"]),
+        build_metadata=dict(payload["build_metadata"]),
+        receipt_hash=str(report["payload_sha256"]),
+        attestation_artifact_hash=str(report["attestation_artifact_sha256"]),
+        built_at=datetime.fromisoformat(str(payload["built_at"])),
+    )
+    db_session.add(forged_attestation)
+    await db_session.commit()
+
+    with pytest.raises(FoundryCatalogError) as registration_rejected:
+        await register_candidate_version(
+            db_session,
+            candidate_id=candidate.id,
+            candidate_version_id=version.id,
+            candidate_version_hash=version.version_hash,
+            build_attestation_id=forged_attestation.id,
+            registrar_user_id=reviewer.id,
+        )
+    assert (
+        registration_rejected.value.error_class
+        == "formal_materialization_receipt_required"
+    )
+
+
 async def test_formal_build_dispatch_is_server_bound_and_idempotent(
     app_client, db_session, monkeypatch
 ):
@@ -1094,9 +1312,13 @@ async def test_formal_build_dispatch_is_server_bound_and_idempotent(
         "formal-dispatch-token-" + "x" * 32,
     )
     dispatched: list[dict] = []
+    dispatch_started = asyncio.Event()
+    allow_dispatch_to_finish = asyncio.Event()
 
     async def _dispatch(_config, **kwargs):
         dispatched.append(kwargs)
+        dispatch_started.set()
+        await allow_dispatch_to_finish.wait()
 
     monkeypatch.setattr("app.api.foundry.dispatch_formal_worker_build", _dispatch)
     payload = {
@@ -1111,18 +1333,37 @@ async def test_formal_build_dispatch_is_server_bound_and_idempotent(
     )
     assert forged.status_code == 422
     assert dispatched == []
-    first = await app_client.post(
+    first_task = asyncio.create_task(
+        app_client.post(
+            f"/api/admin/foundry/candidates/{candidate.id}/formal-build",
+            headers=headers,
+            json=payload,
+        )
+    )
+    await asyncio.wait_for(dispatch_started.wait(), timeout=2)
+    concurrent = await app_client.post(
         f"/api/admin/foundry/candidates/{candidate.id}/formal-build",
         headers=headers,
         json=payload,
     )
+    assert concurrent.status_code == 202, concurrent.text
+    assert concurrent.json()["status"] == "DISPATCH_PENDING"
+    assert concurrent.json()["attempt_number"] == 1
+    assert concurrent.json()["idempotent_replay"] is True
+    assert len(dispatched) == 1
+    allow_dispatch_to_finish.set()
+    first = await first_task
     assert first.status_code == 202, first.text
     assert first.json()["status"] == "DISPATCHED"
+    assert first.json()["retry_after"] is not None
     assert first.json()["idempotent_replay"] is False
+    attempt_id = first.json()["formal_build_attempt_id"]
+    assert first.json()["attempt_number"] == 1
     assert dispatched == [
         {
             "candidate_id": str(candidate.id),
             "candidate_version_id": str(version.id),
+            "formal_build_attempt_id": uuid.UUID(attempt_id),
             "candidate_version_hash": version.version_hash,
             "source_commit": "6" * 40,
             "source_tree_sha256": "4" * 64,
@@ -1136,6 +1377,7 @@ async def test_formal_build_dispatch_is_server_bound_and_idempotent(
     assert repeated.status_code == 202, repeated.text
     assert repeated.json()["status"] == "DISPATCHED"
     assert repeated.json()["idempotent_replay"] is True
+    assert repeated.json()["formal_build_attempt_id"] == attempt_id
     assert len(dispatched) == 1
     events = list(
         (
@@ -1143,7 +1385,11 @@ async def test_formal_build_dispatch_is_server_bound_and_idempotent(
                 select(FoundryCandidateEvent).where(
                     FoundryCandidateEvent.candidate_id == candidate.id,
                     FoundryCandidateEvent.event_type.in_(
-                        {"FORMAL_BUILD_REQUESTED", "FORMAL_BUILD_DISPATCHED"}
+                        {
+                            "FORMAL_BUILD_REQUESTED",
+                            "FORMAL_BUILD_ATTEMPT_RESERVED",
+                            "FORMAL_BUILD_DISPATCHED",
+                        }
                     ),
                 )
             )
@@ -1153,8 +1399,528 @@ async def test_formal_build_dispatch_is_server_bound_and_idempotent(
     )
     assert [event.event_type for event in events] == [
         "FORMAL_BUILD_REQUESTED",
+        "FORMAL_BUILD_ATTEMPT_RESERVED",
         "FORMAL_BUILD_DISPATCHED",
     ]
+    attestation = await record_formal_build_attestation(
+        db_session,
+        attestation_report=_formal_build_report(
+            candidate,
+            version,
+            built_at=datetime.now(timezone.utc) + timedelta(minutes=1),
+            formal_build_attempt_id=uuid.UUID(attempt_id),
+        ),
+        expected_oidc_subject=OIDC_SUBJECT,
+        expected_github_repository=GITHUB_REPOSITORY,
+        expected_github_workflow=GITHUB_WORKFLOW,
+        expected_github_ref="main",
+        trusted_attestation_public_keys={
+            ATTESTATION_KEY_ID: ATTESTATION_PUBLIC_KEY
+        },
+    )
+    assert attestation.build_metadata["formal_build_attempt_id"] == attempt_id
+
+
+async def test_formal_build_failure_callback_retries_idempotently_and_is_bounded(
+    app_client, db_session, monkeypatch
+):
+    candidate, version, _run, _demo, _report = await _candidate_with_demo(
+        db_session,
+        suffix="formal_retry",
+        formal_source=True,
+    )
+    reviewer = await _user(db_session, "formal_retry_reviewer")
+    await review_candidate_version(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        reviewer_user_id=reviewer.id,
+        review_scope="ENGINEERING",
+        decision="APPROVED",
+        comment="Approve bounded formal build retries",
+    )
+    monkeypatch.setenv("FOUNDRY_HUMAN_REVIEWER_USERNAMES", reviewer.username)
+    monkeypatch.setattr(settings, "foundry_registration_enabled", True)
+    monkeypatch.setattr(
+        settings, "foundry_formal_build_dispatch_backend", "github_actions"
+    )
+    monkeypatch.setattr(
+        settings, "foundry_formal_build_github_repository", "astro/platform"
+    )
+    monkeypatch.setattr(
+        settings,
+        "foundry_formal_build_github_workflow",
+        "foundry-formal-worker.yml",
+    )
+    monkeypatch.setattr(settings, "foundry_formal_build_github_ref", "main")
+    monkeypatch.setattr(
+        settings,
+        "foundry_formal_build_github_token",
+        "formal-dispatch-token-" + "x" * 32,
+    )
+    monkeypatch.setattr(
+        settings,
+        "foundry_formal_build_result_secret",
+        "formal-success-" + "s" * 32,
+    )
+    monkeypatch.setattr(
+        settings,
+        "foundry_formal_build_failure_result_secret",
+        "formal-failure-" + "z" * 32,
+    )
+    dispatched: list[dict] = []
+
+    async def _dispatch(_config, **kwargs):
+        dispatched.append(kwargs)
+
+    monkeypatch.setattr("app.api.foundry.dispatch_formal_worker_build", _dispatch)
+    payload = {
+        "candidate_version_id": str(version.id),
+        "candidate_version_hash": version.version_hash,
+    }
+    admin_headers = {"Authorization": f"Bearer {create_access_token(reviewer.id)}"}
+    callback_headers = {
+        "Authorization": "Bearer " + "formal-failure-" + "z" * 32
+    }
+    success_callback_headers = {
+        "Authorization": "Bearer " + "formal-success-" + "s" * 32
+    }
+
+    async def dispatch_attempt(expected_number: int) -> dict:
+        response = await app_client.post(
+            f"/api/admin/foundry/candidates/{candidate.id}/formal-build",
+            headers=admin_headers,
+            json=payload,
+        )
+        assert response.status_code == 202, response.text
+        assert response.json()["attempt_number"] == expected_number
+        return response.json()
+
+    async def fail_attempt(attempt: dict, run_id: int) -> dict:
+        failure = {
+            "schema_version": 1,
+            "formal_build_attempt_id": attempt["formal_build_attempt_id"],
+            "candidate_id": str(candidate.id),
+            "candidate_version_id": str(version.id),
+            "candidate_version_hash": version.version_hash,
+            "source_commit": "6" * 40,
+            "source_tree_sha256": "4" * 64,
+            "status": "FAILED",
+            "failure_class": "formal_build_workflow_failed",
+            "failed_stage": "image_build",
+            "workflow_conclusion": "failure",
+            "github_repository": "astro/platform",
+            "github_workflow_ref": (
+                "astro/platform/.github/workflows/foundry-formal-worker.yml"
+                "@refs/heads/main"
+            ),
+            "github_workflow_sha": "9" * 40,
+            "github_run_id": str(run_id),
+            "github_run_attempt": "1",
+        }
+        response = await app_client.post(
+            "/api/internal/foundry/formal-build-attempts/"
+            f"{attempt['formal_build_attempt_id']}/failure",
+            headers=callback_headers,
+            json=failure,
+        )
+        assert response.status_code == 200, response.text
+        return {"response": response.json(), "payload": failure}
+
+    first = await dispatch_attempt(1)
+    first_failure = await fail_attempt(first, 1001)
+    success_bearer_denied = await app_client.post(
+        "/api/internal/foundry/formal-build-attempts/"
+        f"{first['formal_build_attempt_id']}/failure",
+        headers=success_callback_headers,
+        json=first_failure["payload"],
+    )
+    assert success_bearer_denied.status_code == 403
+    replay = await app_client.post(
+        "/api/internal/foundry/formal-build-attempts/"
+        f"{first['formal_build_attempt_id']}/failure",
+        headers=callback_headers,
+        json=first_failure["payload"],
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["idempotent_replay"] is True
+
+    second = await dispatch_attempt(2)
+    assert second["formal_build_attempt_id"] != first["formal_build_attempt_id"]
+    await fail_attempt(second, 1002)
+    third = await dispatch_attempt(3)
+    await fail_attempt(third, 1003)
+    exhausted = await app_client.post(
+        f"/api/admin/foundry/candidates/{candidate.id}/formal-build",
+        headers=admin_headers,
+        json=payload,
+    )
+    assert exhausted.status_code == 409
+    assert exhausted.json()["detail"]["error_class"] == (
+        "formal_build_attempts_exhausted"
+    )
+    assert len(dispatched) == 3
+
+
+async def test_formal_build_api_holds_uncertain_delivery_without_redispatch(
+    app_client, db_session, monkeypatch
+):
+    candidate, version, *_ = await _candidate_with_demo(
+        db_session,
+        suffix="formal_api_uncertain",
+        formal_source=True,
+    )
+    reviewer = await _user(db_session, "formal_api_uncertain_reviewer")
+    await review_candidate_version(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        reviewer_user_id=reviewer.id,
+        review_scope="ENGINEERING",
+        decision="APPROVED",
+        comment="Approve uncertain delivery handling",
+    )
+    monkeypatch.setenv("FOUNDRY_HUMAN_REVIEWER_USERNAMES", reviewer.username)
+    monkeypatch.setattr(settings, "foundry_registration_enabled", True)
+    monkeypatch.setattr(
+        settings, "foundry_formal_build_dispatch_backend", "github_actions"
+    )
+    monkeypatch.setattr(
+        settings, "foundry_formal_build_github_repository", "astro/platform"
+    )
+    monkeypatch.setattr(
+        settings,
+        "foundry_formal_build_github_workflow",
+        "foundry-formal-worker.yml",
+    )
+    monkeypatch.setattr(settings, "foundry_formal_build_github_ref", "main")
+    monkeypatch.setattr(
+        settings,
+        "foundry_formal_build_github_token",
+        "formal-dispatch-token-" + "x" * 32,
+    )
+    dispatch_calls = 0
+
+    async def _uncertain_dispatch(_config, **_kwargs):
+        nonlocal dispatch_calls
+        dispatch_calls += 1
+        raise FoundryCIDispatchError(
+            "foundry_ci_dispatch_unavailable",
+            retryable=True,
+            delivery_uncertain=True,
+        )
+
+    monkeypatch.setattr(
+        "app.api.foundry.dispatch_formal_worker_build", _uncertain_dispatch
+    )
+    headers = {"Authorization": f"Bearer {create_access_token(reviewer.id)}"}
+    payload = {
+        "candidate_version_id": str(version.id),
+        "candidate_version_hash": version.version_hash,
+    }
+    first = await app_client.post(
+        f"/api/admin/foundry/candidates/{candidate.id}/formal-build",
+        headers=headers,
+        json=payload,
+    )
+    assert first.status_code == 202, first.text
+    assert first.json()["status"] == "DISPATCH_UNCERTAIN"
+    assert first.json()["retry_after"] is not None
+    second = await app_client.post(
+        f"/api/admin/foundry/candidates/{candidate.id}/formal-build",
+        headers=headers,
+        json=payload,
+    )
+    assert second.status_code == 202, second.text
+    assert second.json()["status"] == "DISPATCH_UNCERTAIN"
+    assert second.json()["formal_build_attempt_id"] == first.json()[
+        "formal_build_attempt_id"
+    ]
+    assert second.json()["idempotent_replay"] is True
+    assert dispatch_calls == 1
+
+
+async def test_stale_formal_build_attempt_times_out_before_one_retry(
+    db_session, monkeypatch
+):
+    candidate, version, _run, _demo, _report = await _candidate_with_demo(
+        db_session,
+        suffix="formal_timeout",
+        formal_source=True,
+    )
+    reviewer = await _user(db_session, "formal_timeout_reviewer")
+    await review_candidate_version(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        reviewer_user_id=reviewer.id,
+        review_scope="ENGINEERING",
+        decision="APPROVED",
+        comment="Approve timeout recovery",
+    )
+    started = datetime.now(timezone.utc)
+    clock = [started]
+
+    def _clock_tick():
+        value = clock[0]
+        clock[0] = value + timedelta(microseconds=1)
+        return value
+
+    monkeypatch.setattr("app.services.foundry_catalog._utc_now", _clock_tick)
+    first = await request_formal_build_dispatch(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        actor_user_id=reviewer.id,
+        now=started,
+    )
+    assert first.attempt_id is not None
+    assert first.dispatch_status == "DISPATCH_PENDING"
+    reserved_replay = await request_formal_build_dispatch(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        actor_user_id=reviewer.id,
+        now=started + timedelta(seconds=1),
+    )
+    assert reserved_replay.attempt_id == first.attempt_id
+    assert reserved_replay.already_active is True
+    assert reserved_replay.dispatch_status == "DISPATCH_PENDING"
+    await record_formal_build_dispatch(
+        db_session,
+        binding=first.binding,
+        attempt_id=first.attempt_id,
+        dispatched=True,
+    )
+    with pytest.raises(FoundryCatalogError) as conflicting_dispatch:
+        await record_formal_build_dispatch(
+            db_session,
+            binding=first.binding,
+            attempt_id=first.attempt_id,
+            dispatched=False,
+            failure_class="foundry_ci_dispatch_unavailable",
+            retryable=True,
+        )
+    assert conflicting_dispatch.value.error_class == (
+        "formal_build_dispatch_result_conflict"
+    )
+    retry_time = started + timedelta(hours=7)
+    clock[0] = retry_time
+    retry = await request_formal_build_dispatch(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        actor_user_id=reviewer.id,
+        now=retry_time,
+    )
+    replay = await request_formal_build_dispatch(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        actor_user_id=reviewer.id,
+        now=retry_time + timedelta(minutes=1),
+    )
+
+    assert retry.attempt_number == 2
+    assert retry.attempt_id != first.attempt_id
+    assert retry.already_active is False
+    assert replay.attempt_id == retry.attempt_id
+    assert replay.already_active is True
+    events = list(
+        (
+            await db_session.execute(
+                select(FoundryCandidateEvent).where(
+                    FoundryCandidateEvent.candidate_id == candidate.id,
+                    FoundryCandidateEvent.event_type
+                    == "FORMAL_BUILD_ATTEMPT_TIMED_OUT",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(events) == 1
+    assert events[0].event_payload["formal_build_attempt_id"] == str(
+        first.attempt_id
+    )
+    late_report = _formal_build_report(
+        candidate,
+        version,
+        built_at=started + timedelta(hours=1),
+        formal_build_attempt_id=first.attempt_id,
+    )
+    with pytest.raises(FoundryCatalogError) as late_success:
+        await record_formal_build_attestation(
+            db_session,
+            attestation_report=late_report,
+            expected_oidc_subject=OIDC_SUBJECT,
+            expected_github_repository=GITHUB_REPOSITORY,
+            expected_github_workflow=GITHUB_WORKFLOW,
+            expected_github_ref="main",
+            trusted_attestation_public_keys={
+                ATTESTATION_KEY_ID: ATTESTATION_PUBLIC_KEY
+            },
+        )
+    assert late_success.value.error_class == "formal_build_attempt_closed"
+
+
+async def test_crashed_dispatch_reservation_uses_short_lease_before_retry(
+    db_session, monkeypatch
+):
+    candidate, version, *_ = await _candidate_with_demo(
+        db_session,
+        suffix="formal_reservation_crash",
+        formal_source=True,
+    )
+    reviewer = await _user(db_session, "formal_reservation_crash_reviewer")
+    await review_candidate_version(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        reviewer_user_id=reviewer.id,
+        review_scope="ENGINEERING",
+        decision="APPROVED",
+        comment="Approve reservation crash recovery",
+    )
+    started = datetime.now(timezone.utc)
+    clock = [started]
+
+    def _clock_tick():
+        value = clock[0]
+        clock[0] = value + timedelta(microseconds=1)
+        return value
+
+    monkeypatch.setattr("app.services.foundry_catalog._utc_now", _clock_tick)
+    first = await request_formal_build_dispatch(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        actor_user_id=reviewer.id,
+        now=started,
+    )
+    pending = await request_formal_build_dispatch(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        actor_user_id=reviewer.id,
+        now=started + timedelta(minutes=4),
+    )
+    assert pending.attempt_id == first.attempt_id
+    assert pending.dispatch_status == "DISPATCH_PENDING"
+    assert pending.already_active is True
+
+    clock[0] = started + timedelta(minutes=6)
+    retry = await request_formal_build_dispatch(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        actor_user_id=reviewer.id,
+        now=clock[0],
+    )
+    assert retry.attempt_number == 2
+    assert retry.attempt_id != first.attempt_id
+    assert retry.dispatch_status == "DISPATCH_PENDING"
+    timeout_event = await db_session.scalar(
+        select(FoundryCandidateEvent).where(
+            FoundryCandidateEvent.candidate_id == candidate.id,
+            FoundryCandidateEvent.event_type
+            == "FORMAL_BUILD_DISPATCH_RESERVATION_TIMED_OUT",
+        )
+    )
+    assert timeout_event is not None
+    assert timeout_event.event_payload["timeout_phase"] == "DISPATCH_PENDING"
+    assert timeout_event.event_payload["timeout_seconds"] == 300
+
+
+async def test_uncertain_dispatch_waits_on_short_lease_before_retry(
+    db_session, monkeypatch
+):
+    candidate, version, *_ = await _candidate_with_demo(
+        db_session,
+        suffix="formal_dispatch_uncertain",
+        formal_source=True,
+    )
+    reviewer = await _user(db_session, "formal_dispatch_uncertain_reviewer")
+    await review_candidate_version(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        reviewer_user_id=reviewer.id,
+        review_scope="ENGINEERING",
+        decision="APPROVED",
+        comment="Approve uncertain dispatch recovery",
+    )
+    started = datetime.now(timezone.utc)
+    clock = [started]
+
+    def _clock_tick():
+        value = clock[0]
+        clock[0] = value + timedelta(microseconds=1)
+        return value
+
+    monkeypatch.setattr("app.services.foundry_catalog._utc_now", _clock_tick)
+    first = await request_formal_build_dispatch(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        actor_user_id=reviewer.id,
+        now=started,
+    )
+    assert first.attempt_id is not None
+    await record_formal_build_dispatch(
+        db_session,
+        binding=first.binding,
+        attempt_id=first.attempt_id,
+        dispatched=False,
+        failure_class="foundry_ci_dispatch_unavailable",
+        retryable=True,
+        delivery_uncertain=True,
+    )
+    active = await request_formal_build_dispatch(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        actor_user_id=reviewer.id,
+        now=started + timedelta(minutes=4),
+    )
+    assert active.attempt_id == first.attempt_id
+    assert active.dispatch_status == "DISPATCH_UNCERTAIN"
+    assert active.already_active is True
+
+    clock[0] = started + timedelta(minutes=6)
+    retry = await request_formal_build_dispatch(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        actor_user_id=reviewer.id,
+        now=clock[0],
+    )
+    assert retry.attempt_number == 2
+    assert retry.attempt_id != first.attempt_id
+    timeout_event = await db_session.scalar(
+        select(FoundryCandidateEvent).where(
+            FoundryCandidateEvent.candidate_id == candidate.id,
+            FoundryCandidateEvent.event_type
+            == "FORMAL_BUILD_DISPATCH_UNCERTAIN_TIMED_OUT",
+        )
+    )
+    assert timeout_event is not None
+    assert timeout_event.event_payload["timeout_phase"] == "DISPATCH_UNCERTAIN"
 
 
 async def test_pending_release_requests_form_a_complete_deterministic_delta_chain(
@@ -1228,12 +1994,14 @@ async def test_registering_new_workflow_version_atomically_supersedes_old_versio
         suffix="supersede_old",
         workflow_id=workflow_id,
         workflow_version="1.0.0",
+        formal_source=True,
     )
     new_candidate, new_version, *_ = await _candidate_with_demo(
         db_session,
         suffix="supersede_new",
         workflow_id=workflow_id,
         workflow_version="2.0.0",
+        formal_source=True,
     )
     reviewer = await _user(db_session, "supersede_reviewer")
     for candidate, version in (
@@ -1249,6 +2017,11 @@ async def test_registering_new_workflow_version_atomically_supersedes_old_versio
             review_scope="SCIENTIFIC",
             decision="APPROVED",
             comment="Exact-version scientific approval",
+        )
+        await _append_legacy_formal_build_dispatch(
+            db_session,
+            candidate=candidate,
+            version=version,
         )
     old_attestation = await record_formal_build_attestation(
         db_session,

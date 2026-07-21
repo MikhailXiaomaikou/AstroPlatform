@@ -9,7 +9,8 @@ import hmac
 import json
 import re
 import uuid
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
 from cryptography.exceptions import InvalidSignature
@@ -52,10 +53,352 @@ _MATERIALIZATION_DOMAIN = b"standard-astro/foundry-materialization/v1\0"
 _PR_PAYLOAD_SCHEMA = "standard_astro_materialization_pr_v1"
 _FINAL_PAYLOAD_SCHEMA = "standard_astro_materialization_final_v1"
 _BUNDLE_SCHEMA = "standard_astro_materialization_attestation_bundle_v1"
+_DISPATCH_LEASE_TIMEOUT = timedelta(minutes=2)
+_WORKFLOW_CALLBACK_TIMEOUT = timedelta(minutes=60)
+_MAX_DISPATCH_ATTEMPTS = 3
+
+
+@dataclass(frozen=True, slots=True)
+class MaterializationDispatchReservation:
+    """One durable, bounded right to call a protected workflow once."""
+
+    request_event_id: uuid.UUID
+    dispatch_request_id: uuid.UUID
+    reservation_event_id: uuid.UUID
+    attempt_number: int
+    should_dispatch: bool
+    state: str
+    retry_after: datetime
+
+
+_DISPATCH_LANES = {
+    "materialization": {
+        "reserved": "SOURCE_MATERIALIZATION_DISPATCH_RESERVED",
+        "succeeded": "SOURCE_MATERIALIZATION_DISPATCHED",
+        "failed": "SOURCE_MATERIALIZATION_DISPATCH_FAILED",
+        "exhausted": "SOURCE_MATERIALIZATION_DISPATCH_EXHAUSTED",
+        "error_prefix": "materialization_dispatch",
+    },
+    "finalization": {
+        "reserved": "SOURCE_MATERIALIZATION_FINALIZATION_DISPATCH_RESERVED",
+        "succeeded": "SOURCE_MATERIALIZATION_FINALIZATION_DISPATCHED",
+        "failed": "SOURCE_MATERIALIZATION_FINALIZATION_DISPATCH_FAILED",
+        "exhausted": "SOURCE_MATERIALIZATION_FINALIZATION_DISPATCH_EXHAUSTED",
+        "error_prefix": "materialization_finalization_dispatch",
+    },
+}
+
+
+def _legacy_dispatch_success_binds(
+    event: FoundryCandidateEvent,
+    *,
+    request_event_id: uuid.UUID,
+    dispatch_request_id: uuid.UUID,
+    lane: str,
+) -> bool:
+    config = _DISPATCH_LANES[lane]
+    payload = dict(event.event_payload or {})
+    if event.event_type != config["succeeded"] or "reservation_event_id" in payload:
+        return False
+    if lane == "materialization":
+        return payload.get("materialization_request_id") == str(request_event_id)
+    return payload.get("materialization_attestation_id") == str(
+        dispatch_request_id
+    )
+
+
+def _successful_dispatch_binds(
+    event: FoundryCandidateEvent,
+    *,
+    request_event_id: uuid.UUID,
+    dispatch_request_id: uuid.UUID,
+    lane: str,
+) -> bool:
+    config = _DISPATCH_LANES[lane]
+    payload = dict(event.event_payload or {})
+    if event.event_type != config["succeeded"]:
+        return False
+    if "reservation_event_id" not in payload:
+        return _legacy_dispatch_success_binds(
+            event,
+            request_event_id=request_event_id,
+            dispatch_request_id=dispatch_request_id,
+            lane=lane,
+        )
+    return (
+        payload.get("request_event_id") == str(request_event_id)
+        and payload.get("dispatch_request_id") == str(dispatch_request_id)
+        and isinstance(payload.get("reservation_event_id"), str)
+    )
 
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def materialization_workflow_retry_after(event: FoundryCandidateEvent) -> datetime:
+    """Return the workflow callback deadline after a known/unknown dispatch."""
+
+    return _as_utc(event.created_at) + _WORKFLOW_CALLBACK_TIMEOUT
+
+
+async def _reserve_dispatch_attempt(
+    db: AsyncSession,
+    *,
+    request_event: FoundryCandidateEvent,
+    dispatch_request_id: uuid.UUID,
+    lane: str,
+) -> MaterializationDispatchReservation:
+    """Reserve at most one active workflow dispatch for an immutable request.
+
+    A GitHub ``204`` only proves that Actions accepted a dispatch.  If no
+    signed callback arrives, the same human endpoint may reserve another
+    attempt after a fixed timeout.  Reservations and outcomes are append-only,
+    so retries are bounded, idempotent under concurrent callers, and auditable.
+    """
+
+    config = _DISPATCH_LANES.get(lane)
+    if config is None:
+        raise ValueError("materialization_dispatch_lane_invalid")
+    candidate = await db.scalar(
+        select(FoundryCandidate.id)
+        .where(FoundryCandidate.id == request_event.candidate_id)
+        .with_for_update()
+    )
+    if candidate is None:
+        raise FoundryCatalogError(
+            "candidate_not_found", "Candidate not found", status_code=404
+        )
+    event_types = tuple(
+        str(config[key])
+        for key in ("reserved", "succeeded", "failed", "exhausted")
+    )
+    events = list(
+        (
+            await db.execute(
+                select(FoundryCandidateEvent)
+                .where(
+                    FoundryCandidateEvent.candidate_id
+                    == request_event.candidate_id,
+                    FoundryCandidateEvent.candidate_version_id
+                    == request_event.candidate_version_id,
+                    FoundryCandidateEvent.event_type.in_(event_types),
+                )
+                .order_by(
+                    FoundryCandidateEvent.created_at.asc(),
+                    FoundryCandidateEvent.id.asc(),
+                )
+            )
+        ).scalars().all()
+    )
+    request_id = str(request_event.id)
+    reservations = [
+        row
+        for row in events
+        if row.event_type == config["reserved"]
+        and str((row.event_payload or {}).get("request_event_id") or "")
+        == request_id
+    ]
+    outcomes = [
+        row
+        for row in events
+        if row.event_type in {config["succeeded"], config["failed"]}
+        and str((row.event_payload or {}).get("request_event_id") or "")
+        == request_id
+        and str((row.event_payload or {}).get("dispatch_request_id") or "")
+        == str(dispatch_request_id)
+    ]
+    exhausted = next(
+        (
+            row
+            for row in events
+            if row.event_type == config["exhausted"]
+            and str((row.event_payload or {}).get("request_event_id") or "")
+            == request_id
+        ),
+        None,
+    )
+    now = _utc_now()
+    reason = "initial_dispatch"
+    previous_reservation_id: str | None = None
+    attempt_number = 1
+    if reservations:
+        reservations_by_attempt: dict[int, FoundryCandidateEvent] = {}
+        for row in reservations:
+            raw_attempt = (row.event_payload or {}).get("attempt_number")
+            if (
+                type(raw_attempt) is not int
+                or not 1 <= raw_attempt <= _MAX_DISPATCH_ATTEMPTS
+                or raw_attempt in reservations_by_attempt
+            ):
+                raise FoundryCatalogError(
+                    f"{config['error_prefix']}_ledger_invalid",
+                    "Dispatch reservation ledger is invalid",
+                    status_code=409,
+                )
+            reservations_by_attempt[raw_attempt] = row
+        latest_attempt = max(reservations_by_attempt)
+        latest = reservations_by_attempt[latest_attempt]
+        previous_reservation_id = str(latest.id)
+        matching_outcome = next(
+            (
+                row
+                for row in reversed(outcomes)
+                if str(
+                    (row.event_payload or {}).get("reservation_event_id") or ""
+                )
+                == previous_reservation_id
+            ),
+            None,
+        )
+        if (
+            matching_outcome is not None
+            and matching_outcome.event_type == config["failed"]
+        ):
+            outcome_payload = dict(matching_outcome.event_payload or {})
+            if bool(outcome_payload.get("outcome_unknown")):
+                retry_after = (
+                    _as_utc(matching_outcome.created_at)
+                    + _WORKFLOW_CALLBACK_TIMEOUT
+                )
+                if now < retry_after:
+                    return MaterializationDispatchReservation(
+                        request_event_id=request_event.id,
+                        dispatch_request_id=dispatch_request_id,
+                        reservation_event_id=latest.id,
+                        attempt_number=latest_attempt,
+                        should_dispatch=False,
+                        state="DISPATCH_OUTCOME_UNKNOWN",
+                        retry_after=retry_after,
+                    )
+                reason = "dispatch_outcome_unknown_timeout"
+            elif not bool(outcome_payload.get("retryable")):
+                raise FoundryCatalogError(
+                    f"{config['error_prefix']}_not_retryable",
+                    "The protected workflow dispatch failed permanently",
+                    status_code=409,
+                )
+            else:
+                reason = "retryable_dispatch_failure"
+        elif matching_outcome is not None:
+            retry_after = (
+                _as_utc(matching_outcome.created_at) + _WORKFLOW_CALLBACK_TIMEOUT
+            )
+            if now < retry_after:
+                return MaterializationDispatchReservation(
+                    request_event_id=request_event.id,
+                    dispatch_request_id=dispatch_request_id,
+                    reservation_event_id=latest.id,
+                    attempt_number=latest_attempt,
+                    should_dispatch=False,
+                    state="WORKFLOW_DISPATCHED",
+                    retry_after=retry_after,
+                )
+            reason = "workflow_callback_timeout"
+        else:
+            retry_after = _as_utc(latest.created_at) + _DISPATCH_LEASE_TIMEOUT
+            if now < retry_after:
+                return MaterializationDispatchReservation(
+                    request_event_id=request_event.id,
+                    dispatch_request_id=dispatch_request_id,
+                    reservation_event_id=latest.id,
+                    attempt_number=latest_attempt,
+                    should_dispatch=False,
+                    state="DISPATCH_RESERVED",
+                    retry_after=retry_after,
+                )
+            reason = "dispatch_lease_expired"
+        attempt_number = latest_attempt + 1
+    else:
+        # Preserve bounded recovery only for a real pre-attempt-ledger
+        # DISPATCHED record. A legacy failure or unrelated event must never be
+        # promoted into an active workflow lease.
+        legacy = next(
+            (
+                row
+                for row in reversed(events)
+                if _legacy_dispatch_success_binds(
+                    row,
+                    request_event_id=request_event.id,
+                    dispatch_request_id=dispatch_request_id,
+                    lane=lane,
+                )
+            ),
+            None,
+        )
+        if legacy is not None:
+            retry_after = _as_utc(legacy.created_at) + _WORKFLOW_CALLBACK_TIMEOUT
+            if now < retry_after:
+                return MaterializationDispatchReservation(
+                    request_event_id=request_event.id,
+                    dispatch_request_id=dispatch_request_id,
+                    reservation_event_id=legacy.id,
+                    attempt_number=1,
+                    should_dispatch=False,
+                    state="WORKFLOW_DISPATCHED",
+                    retry_after=retry_after,
+                )
+            attempt_number = 2
+            previous_reservation_id = str(legacy.id)
+            reason = "legacy_workflow_callback_timeout"
+    if exhausted is not None or attempt_number > _MAX_DISPATCH_ATTEMPTS:
+        if exhausted is None:
+            await _append_event(
+                db,
+                candidate_id=request_event.candidate_id,
+                candidate_version_id=request_event.candidate_version_id,
+                event_type=str(config["exhausted"]),
+                actor_kind="CONTROL_PLANE",
+                actor_user_id=None,
+                payload={
+                    "request_event_id": request_id,
+                    "dispatch_request_id": str(dispatch_request_id),
+                    "attempts_exhausted": _MAX_DISPATCH_ATTEMPTS,
+                    "last_reservation_event_id": previous_reservation_id,
+                },
+            )
+            await db.commit()
+        raise FoundryCatalogError(
+            f"{config['error_prefix']}_retry_exhausted",
+            "Protected workflow retry budget is exhausted",
+            status_code=409,
+        )
+    reservation = await _append_event(
+        db,
+        candidate_id=request_event.candidate_id,
+        candidate_version_id=request_event.candidate_version_id,
+        event_type=str(config["reserved"]),
+        actor_kind="CONTROL_PLANE",
+        actor_user_id=None,
+        payload={
+            "request_event_id": request_id,
+            "dispatch_request_id": str(dispatch_request_id),
+            "attempt_number": attempt_number,
+            "max_attempts": _MAX_DISPATCH_ATTEMPTS,
+            "dispatch_lease_seconds": int(_DISPATCH_LEASE_TIMEOUT.total_seconds()),
+            "workflow_timeout_seconds": int(
+                _WORKFLOW_CALLBACK_TIMEOUT.total_seconds()
+            ),
+            "retry_reason": reason,
+            "previous_reservation_event_id": previous_reservation_id,
+        },
+    )
+    retry_after = _as_utc(reservation.created_at) + _DISPATCH_LEASE_TIMEOUT
+    return MaterializationDispatchReservation(
+        request_event_id=request_event.id,
+        dispatch_request_id=dispatch_request_id,
+        reservation_event_id=reservation.id,
+        attempt_number=attempt_number,
+        should_dispatch=True,
+        state="DISPATCH_RESERVED",
+        retry_after=retry_after,
+    )
 
 
 def _hash(value: Any, field: str) -> str:
@@ -217,7 +560,12 @@ async def request_source_materialization(
     candidate_version_id: uuid.UUID,
     candidate_version_hash: str,
     actor_user_id: uuid.UUID,
-) -> tuple[dict[str, Any], FoundryCandidateEvent, bool, FoundryMaterializationAttestation | None]:
+) -> tuple[
+    dict[str, Any],
+    FoundryCandidateEvent,
+    MaterializationDispatchReservation | None,
+    FoundryMaterializationAttestation | None,
+]:
     """Create/recover a server-reconstructed request for the protected PR workflow."""
 
     candidate, version = await _approved_origin(
@@ -264,16 +612,17 @@ async def request_source_materialization(
             **dict(request.event_payload or {}),
             "materialization_request_id": str(request.id),
         }
-        dispatched = bool(
-            await db.scalar(
-                select(FoundryCandidateEvent.id).where(
-                    FoundryCandidateEvent.candidate_id == candidate.id,
-                    FoundryCandidateEvent.candidate_version_id == version.id,
-                    FoundryCandidateEvent.event_type == "SOURCE_MATERIALIZATION_DISPATCHED",
-                )
-            )
+        if existing_attestation is not None:
+            await db.commit()
+            return binding, request, None, existing_attestation
+        reservation = await _reserve_dispatch_attempt(
+            db,
+            request_event=request,
+            dispatch_request_id=request.id,
+            lane="materialization",
         )
-        return binding, request, dispatched, existing_attestation
+        await db.commit()
+        return binding, request, reservation, None
 
     branch = f"foundry/materialize-{candidate.id.hex[:12]}-v{version.version_number}-{version.version_hash[:12]}"
     binding: dict[str, Any] = {
@@ -307,34 +656,124 @@ async def request_source_materialization(
         actor_user_id=actor_user_id,
         payload=binding,
     )
+    reservation = await _reserve_dispatch_attempt(
+        db,
+        request_event=request,
+        dispatch_request_id=request.id,
+        lane="materialization",
+    )
     await db.commit()
     await db.refresh(request)
-    return {**binding, "materialization_request_id": str(request.id)}, request, False, None
+    return (
+        {**binding, "materialization_request_id": str(request.id)},
+        request,
+        reservation,
+        None,
+    )
 
 
-async def record_materialization_dispatch(
+async def _record_dispatch_outcome(
     db: AsyncSession,
     *,
     request_event: FoundryCandidateEvent,
+    reservation: MaterializationDispatchReservation,
+    lane: str,
     dispatched: bool,
-    failure_class: str | None = None,
-    retryable: bool = False,
+    failure_class: str | None,
+    retryable: bool,
+    outcome_unknown: bool,
 ) -> FoundryCandidateEvent:
-    event_type = "SOURCE_MATERIALIZATION_DISPATCHED" if dispatched else "SOURCE_MATERIALIZATION_DISPATCH_FAILED"
-    existing = await db.scalar(
-        select(FoundryCandidateEvent).where(
-            FoundryCandidateEvent.candidate_id == request_event.candidate_id,
-            FoundryCandidateEvent.candidate_version_id == request_event.candidate_version_id,
-            FoundryCandidateEvent.event_type == event_type,
-        )
+    config = _DISPATCH_LANES.get(lane)
+    if config is None:
+        raise ValueError("materialization_dispatch_lane_invalid")
+    candidate = await db.scalar(
+        select(FoundryCandidate.id)
+        .where(FoundryCandidate.id == request_event.candidate_id)
+        .with_for_update()
     )
-    if existing is not None and dispatched:
-        return existing
+    if candidate is None:
+        raise FoundryCatalogError(
+            "candidate_not_found", "Candidate not found", status_code=404
+        )
+    if (
+        reservation.request_event_id != request_event.id
+        or not reservation.should_dispatch
+        or not 1 <= reservation.attempt_number <= _MAX_DISPATCH_ATTEMPTS
+    ):
+        raise FoundryCatalogError(
+            f"{config['error_prefix']}_reservation_invalid",
+            "Dispatch outcome is not bound to an active reservation",
+            status_code=409,
+        )
+    reservation_event = await db.get(
+        FoundryCandidateEvent, reservation.reservation_event_id
+    )
+    reservation_payload = (
+        dict(reservation_event.event_payload or {})
+        if reservation_event is not None
+        else {}
+    )
+    if (
+        reservation_event is None
+        or reservation_event.event_type != config["reserved"]
+        or reservation_event.candidate_id != request_event.candidate_id
+        or reservation_event.candidate_version_id
+        != request_event.candidate_version_id
+        or reservation_payload.get("request_event_id") != str(request_event.id)
+        or reservation_payload.get("dispatch_request_id")
+        != str(reservation.dispatch_request_id)
+        or reservation_payload.get("attempt_number") != reservation.attempt_number
+    ):
+        raise FoundryCatalogError(
+            f"{config['error_prefix']}_reservation_invalid",
+            "Dispatch outcome is not bound to the durable reservation",
+            status_code=409,
+        )
+    outcome_types = {str(config["succeeded"]), str(config["failed"])}
+    outcomes = list(
+        (
+            await db.execute(
+                select(FoundryCandidateEvent).where(
+                    FoundryCandidateEvent.candidate_id
+                    == request_event.candidate_id,
+                    FoundryCandidateEvent.candidate_version_id
+                    == request_event.candidate_version_id,
+                    FoundryCandidateEvent.event_type.in_(tuple(outcome_types)),
+                )
+            )
+        ).scalars().all()
+    )
+    existing = next(
+        (
+            row
+            for row in outcomes
+            if str((row.event_payload or {}).get("reservation_event_id") or "")
+            == str(reservation.reservation_event_id)
+        ),
+        None,
+    )
+    event_type = str(config["succeeded"] if dispatched else config["failed"])
+    unknown = bool(outcome_unknown) if not dispatched else False
     failure = None
     if not dispatched:
-        failure = str(failure_class or "materialization_dispatch_failed")
+        failure = str(failure_class or f"{config['error_prefix']}_failed")
         if not re.fullmatch(r"[a-z][a-z0-9_]{1,127}", failure):
-            failure = "materialization_dispatch_failed"
+            failure = f"{config['error_prefix']}_failed"
+    if existing is not None:
+        existing_payload = dict(existing.event_payload or {})
+        if (
+            existing.event_type != event_type
+            or existing_payload.get("failure_class") != failure
+            or bool(existing_payload.get("retryable"))
+            != (bool(retryable) if not dispatched else False)
+            or bool(existing_payload.get("outcome_unknown")) != unknown
+        ):
+            raise FoundryCatalogError(
+                f"{config['error_prefix']}_outcome_conflict",
+                "Dispatch reservation already has a different outcome",
+                status_code=409,
+            )
+        return existing
     event = await _append_event(
         db,
         candidate_id=request_event.candidate_id,
@@ -343,14 +782,40 @@ async def record_materialization_dispatch(
         actor_kind="CONTROL_PLANE",
         actor_user_id=None,
         payload={
-            "materialization_request_id": str(request_event.id),
+            "request_event_id": str(request_event.id),
+            "dispatch_request_id": str(reservation.dispatch_request_id),
+            "reservation_event_id": str(reservation.reservation_event_id),
+            "attempt_number": reservation.attempt_number,
             "failure_class": failure,
             "retryable": bool(retryable) if not dispatched else False,
+            "outcome_unknown": unknown,
         },
     )
     await db.commit()
     await db.refresh(event)
     return event
+
+
+async def record_materialization_dispatch(
+    db: AsyncSession,
+    *,
+    request_event: FoundryCandidateEvent,
+    reservation: MaterializationDispatchReservation,
+    dispatched: bool,
+    failure_class: str | None = None,
+    retryable: bool = False,
+    outcome_unknown: bool = False,
+) -> FoundryCandidateEvent:
+    return await _record_dispatch_outcome(
+        db,
+        request_event=request_event,
+        reservation=reservation,
+        lane="materialization",
+        dispatched=dispatched,
+        failure_class=failure_class,
+        retryable=retryable,
+        outcome_unknown=outcome_unknown,
+    )
 
 
 def _expected_workflow_ref(repository: str, workflow: str) -> str:
@@ -412,14 +877,27 @@ async def record_materialization_pr_attestation(
         raise FoundryCatalogError(
             "materialization_request_not_found", "Exact materialization request was not found", status_code=404
         )
-    dispatched = await db.scalar(
-        select(FoundryCandidateEvent.id).where(
-            FoundryCandidateEvent.candidate_id == candidate_id,
-            FoundryCandidateEvent.candidate_version_id == version_id,
-            FoundryCandidateEvent.event_type == "SOURCE_MATERIALIZATION_DISPATCHED",
-        )
+    dispatch_events = list(
+        (
+            await db.execute(
+                select(FoundryCandidateEvent).where(
+                    FoundryCandidateEvent.candidate_id == candidate_id,
+                    FoundryCandidateEvent.candidate_version_id == version_id,
+                    FoundryCandidateEvent.event_type
+                    == "SOURCE_MATERIALIZATION_DISPATCHED",
+                )
+            )
+        ).scalars().all()
     )
-    if dispatched is None:
+    if not any(
+        _successful_dispatch_binds(
+            event,
+            request_event_id=request_id,
+            dispatch_request_id=request_id,
+            lane="materialization",
+        )
+        for event in dispatch_events
+    ):
         raise FoundryCatalogError(
             "materialization_not_dispatched",
             "A PR attestation cannot precede the protected-workflow dispatch",
@@ -550,7 +1028,12 @@ async def request_materialization_finalization(
     candidate_id: uuid.UUID,
     attestation_id: uuid.UUID,
     actor_user_id: uuid.UUID,
-) -> tuple[dict[str, Any], FoundryCandidateEvent, bool, FoundryMaterializationReceipt | None]:
+) -> tuple[
+    dict[str, Any],
+    FoundryCandidateEvent,
+    MaterializationDispatchReservation | None,
+    FoundryMaterializationReceipt | None,
+]:
     attestation = await db.get(FoundryMaterializationAttestation, attestation_id)
     if attestation is None or attestation.candidate_id != candidate_id:
         raise FoundryCatalogError(
@@ -591,15 +1074,17 @@ async def request_materialization_finalization(
     )
     if events:
         event = events[0]
-        dispatched = bool(
-            await db.scalar(
-                select(FoundryCandidateEvent.id).where(
-                    FoundryCandidateEvent.candidate_id == candidate.id,
-                    FoundryCandidateEvent.event_type == "SOURCE_MATERIALIZATION_FINALIZATION_DISPATCHED",
-                )
-            )
+        if receipt is not None:
+            await db.commit()
+            return dict(event.event_payload or {}), event, None, receipt
+        reservation = await _reserve_dispatch_attempt(
+            db,
+            request_event=event,
+            dispatch_request_id=attestation.id,
+            lane="finalization",
         )
-        return dict(event.event_payload or {}), event, dispatched, receipt
+        await db.commit()
+        return dict(event.event_payload or {}), event, reservation, None
     binding = {
         "schema_version": "standard_astro_materialization_finalization_request_v1",
         "candidate_id": str(candidate.id),
@@ -635,48 +1120,37 @@ async def request_materialization_finalization(
         actor_user_id=actor_user_id,
         payload=binding,
     )
+    reservation = await _reserve_dispatch_attempt(
+        db,
+        request_event=event,
+        dispatch_request_id=attestation.id,
+        lane="finalization",
+    )
     await db.commit()
     await db.refresh(event)
-    return binding, event, False, None
+    return binding, event, reservation, None
 
 
 async def record_finalization_dispatch(
     db: AsyncSession,
     *,
     request_event: FoundryCandidateEvent,
+    reservation: MaterializationDispatchReservation,
     dispatched: bool,
     failure_class: str | None = None,
     retryable: bool = False,
+    outcome_unknown: bool = False,
 ) -> FoundryCandidateEvent:
-    event_type = "SOURCE_MATERIALIZATION_FINALIZATION_DISPATCHED" if dispatched else "SOURCE_MATERIALIZATION_FINALIZATION_DISPATCH_FAILED"
-    existing = await db.scalar(
-        select(FoundryCandidateEvent).where(
-            FoundryCandidateEvent.candidate_id == request_event.candidate_id,
-            FoundryCandidateEvent.candidate_version_id == request_event.candidate_version_id,
-            FoundryCandidateEvent.event_type == event_type,
-        )
-    )
-    if existing is not None and dispatched:
-        return existing
-    failure = str(failure_class or "materialization_finalization_dispatch_failed") if not dispatched else None
-    if failure is not None and not re.fullmatch(r"[a-z][a-z0-9_]{1,127}", failure):
-        failure = "materialization_finalization_dispatch_failed"
-    event = await _append_event(
+    return await _record_dispatch_outcome(
         db,
-        candidate_id=request_event.candidate_id,
-        candidate_version_id=request_event.candidate_version_id,
-        event_type=event_type,
-        actor_kind="CONTROL_PLANE",
-        actor_user_id=None,
-        payload={
-            "materialization_attestation_id": (request_event.event_payload or {}).get("materialization_attestation_id"),
-            "failure_class": failure,
-            "retryable": bool(retryable) if not dispatched else False,
-        },
+        request_event=request_event,
+        reservation=reservation,
+        lane="finalization",
+        dispatched=dispatched,
+        failure_class=failure_class,
+        retryable=retryable,
+        outcome_unknown=outcome_unknown,
     )
-    await db.commit()
-    await db.refresh(event)
-    return event
 
 
 async def record_materialization_final_receipt(
@@ -754,17 +1228,29 @@ async def record_materialization_final_receipt(
             == "SOURCE_MATERIALIZATION_FINALIZATION_REQUESTED",
         )
     )
-    finalization_dispatch = await db.scalar(
-        select(FoundryCandidateEvent.id).where(
-            FoundryCandidateEvent.candidate_id == candidate_id,
-            FoundryCandidateEvent.candidate_version_id == origin_id,
-            FoundryCandidateEvent.event_type
-            == "SOURCE_MATERIALIZATION_FINALIZATION_DISPATCHED",
-        )
+    finalization_dispatches = list(
+        (
+            await db.execute(
+                select(FoundryCandidateEvent).where(
+                    FoundryCandidateEvent.candidate_id == candidate_id,
+                    FoundryCandidateEvent.candidate_version_id == origin_id,
+                    FoundryCandidateEvent.event_type
+                    == "SOURCE_MATERIALIZATION_FINALIZATION_DISPATCHED",
+                )
+            )
+        ).scalars().all()
     )
     if (
         finalization_request is None
-        or finalization_dispatch is None
+        or not any(
+            _successful_dispatch_binds(
+                event,
+                request_event_id=finalization_request.id,
+                dispatch_request_id=attestation_id,
+                lane="finalization",
+            )
+            for event in finalization_dispatches
+        )
         or (finalization_request.event_payload or {}).get(
             "materialization_attestation_id"
         )
@@ -930,6 +1416,8 @@ async def record_materialization_final_receipt(
 
 
 __all__ = [
+    "MaterializationDispatchReservation",
+    "materialization_workflow_retry_after",
     "record_finalization_dispatch",
     "record_materialization_dispatch",
     "record_materialization_final_receipt",

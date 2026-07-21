@@ -16,14 +16,20 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from sqlalchemy import select
 
+import app.services.foundry_materialization as materialization_module
+import app.api.foundry_materialization as materialization_api
+from app.api.foundry_materialization import _reservation_status
+from app.config import settings
 from app.models.foundry_records import (
     FoundryCandidate,
+    FoundryCandidateEvent,
     FoundryDemoRun,
     FoundryReview,
 )
 from app.services.foundry_catalog import (
     FoundryCatalogError,
     _append_event,
+    _validate_formal_source_provenance,
     append_candidate_version,
     record_demo_report,
     review_candidate_version,
@@ -40,12 +46,14 @@ from app.services.foundry_materialization import (
 )
 from app.services.foundry_materialization_dispatch import (
     FoundryMaterializationDispatchConfig,
+    FoundryMaterializationDispatchError,
     dispatch_materialization_pr,
 )
 from scripts.prepare_foundry_materialization import (
     _verify_protected_main_ancestry,
     _verify_pull_request_merge_identity,
 )
+from scripts.sign_foundry_materialization_receipt import _sign_ed25519
 
 
 REPOSITORY = "standard-astro/platform"
@@ -174,12 +182,16 @@ def _signed(payload: dict) -> dict:
     return envelope
 
 
-async def _approved_generated_version(db_session, reviewer_id: uuid.UUID):
+async def _approved_generated_version(
+    db_session, reviewer_id: uuid.UUID, *, gap_nonce: str | None = None
+):
     descriptor = {
         "gap_code": "registered_workflow_missing",
         "dataset_key": "materialization-test",
         "research_domain": "cosmology",
     }
+    if gap_nonce is not None:
+        descriptor["test_nonce"] = gap_nonce
     candidate = FoundryCandidate(
         gap_fingerprint=sha256_json(descriptor),
         gap_code=descriptor["gap_code"],
@@ -190,7 +202,13 @@ async def _approved_generated_version(db_session, reviewer_id: uuid.UUID):
     )
     db_session.add(candidate)
     await db_session.flush()
-    candidate_key = "generated_materialization_test_v1"
+    nonce_suffix = (
+        f"_{hashlib.sha256(gap_nonce.encode()).hexdigest()[:8]}"
+        if gap_nonce is not None
+        else ""
+    )
+    candidate_key = f"generated_materialization_test{nonce_suffix}_v1"
+    workflow_id = f"generated_materialization_workflow{nonce_suffix}_v1"
     base_tree = "4" * 64
     patched_tree = "5" * 64
     patch_hash = "6" * 64
@@ -198,11 +216,11 @@ async def _approved_generated_version(db_session, reviewer_id: uuid.UUID):
         "schema_version": 1,
         "candidate_id": candidate_key,
         "candidate_version": 1,
-        "proposed_workflow_id": "generated_materialization_workflow_v1",
+        "proposed_workflow_id": workflow_id,
         "entrypoint_id": "candidate_generated_python_demo_v1",
         "risk_level": "R1",
         "workflow_spec": {
-            "workflow_id": "generated_materialization_workflow_v1",
+            "workflow_id": workflow_id,
             "workflow_version": "1.0.0-candidate.1",
             "claim_scope": "non_formal_generated_demo",
             "output_policy": {"publication_ready": False},
@@ -350,18 +368,22 @@ async def test_materialization_requires_exact_reviewed_version_and_signed_callba
 ):
     reviewer, _token = test_user
     candidate, origin = await _approved_generated_version(db_session, reviewer.id)
-    binding, request, dispatched, attestation = await request_source_materialization(
+    binding, request, reservation, attestation = await request_source_materialization(
         db_session,
         candidate_id=candidate.id,
         candidate_version_id=origin.id,
         candidate_version_hash=origin.version_hash,
         actor_user_id=reviewer.id,
     )
-    assert dispatched is False and attestation is None
+    assert reservation is not None and reservation.should_dispatch is True
+    assert reservation.attempt_number == 1 and attestation is None
     assert binding["artifact_id"] == "456"
     assert binding["candidate_module_path"].endswith(f"/{origin.candidate_key}.py")
     await record_materialization_dispatch(
-        db_session, request_event=request, dispatched=True
+        db_session,
+        request_event=request,
+        reservation=reservation,
+        dispatched=True,
     )
     opened = datetime.now(timezone.utc) + timedelta(seconds=1)
     pr_payload = {
@@ -417,7 +439,7 @@ async def test_materialization_requires_exact_reviewed_version_and_signed_callba
     )
     assert pr_attestation.pull_request_number == 42
 
-    final_binding, final_request, final_dispatched, receipt = (
+    final_binding, final_request, final_reservation, receipt = (
         await request_materialization_finalization(
             db_session,
             candidate_id=candidate.id,
@@ -425,9 +447,13 @@ async def test_materialization_requires_exact_reviewed_version_and_signed_callba
             actor_user_id=reviewer.id,
         )
     )
-    assert final_dispatched is False and receipt is None
+    assert final_reservation is not None and final_reservation.should_dispatch is True
+    assert final_reservation.attempt_number == 1 and receipt is None
     await record_finalization_dispatch(
-        db_session, request_event=final_request, dispatched=True
+        db_session,
+        request_event=final_request,
+        reservation=final_reservation,
+        dispatched=True,
     )
     finalized = opened + timedelta(seconds=2)
     new_image = "sha256:" + "2" * 64
@@ -507,6 +533,15 @@ async def test_materialization_requires_exact_reviewed_version_and_signed_callba
     assert materialization.pull_request_head_repository == REPOSITORY
     assert materialization.origin_main_commit == "a" * 40
     assert materialization.merge_commit_is_ancestor_of_origin_main is True
+    validated_receipt = await _validate_formal_source_provenance(
+        db_session,
+        version=new_version,
+        source_commit=materialization.merge_commit,
+        source_tree_hash=materialization.merge_source_tree_hash,
+        dependency_lock_hash=materialization.dependency_lock_hash,
+    )
+    assert validated_receipt is not None
+    assert validated_receipt.id == materialization.id
     same_receipt, same_version = await record_materialization_final_receipt(
         db_session,
         attestation_bundle=_signed(final_payload),
@@ -516,6 +551,99 @@ async def test_materialization_requires_exact_reviewed_version_and_signed_callba
     )
     assert same_receipt.id == materialization.id
     assert same_version.id == new_version.id
+
+
+def test_materialization_api_only_reports_confirmed_workflow_as_dispatched():
+    assert _reservation_status("DISPATCH_RESERVED") == "DISPATCH_RESERVED"
+    assert (
+        _reservation_status("DISPATCH_OUTCOME_UNKNOWN")
+        == "DISPATCH_OUTCOME_UNKNOWN"
+    )
+    assert _reservation_status("WORKFLOW_DISPATCHED") == "DISPATCHED"
+
+
+async def test_materialization_api_reports_committed_reservation_before_dispatch(
+    db_session, test_user, monkeypatch
+):
+    reviewer, _token = test_user
+    candidate, origin = await _approved_generated_version(db_session, reviewer.id)
+    _binding, _request, reservation, _attestation = (
+        await request_source_materialization(
+            db_session,
+            candidate_id=candidate.id,
+            candidate_version_id=origin.id,
+            candidate_version_hash=origin.version_hash,
+            actor_user_id=reviewer.id,
+        )
+    )
+    assert reservation is not None and reservation.state == "DISPATCH_RESERVED"
+    monkeypatch.setattr(settings, "foundry_source_materialization_enabled", True)
+    calls = 0
+
+    async def unexpected_dispatch(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+
+    monkeypatch.setattr(
+        materialization_api, "dispatch_materialization_pr", unexpected_dispatch
+    )
+    response = await materialization_api.materialize_candidate_source(
+        candidate.id,
+        materialization_api.ExactCandidateVersion(
+            candidate_version_id=origin.id,
+            candidate_version_hash=origin.version_hash,
+        ),
+        db_session,
+        reviewer,
+    )
+    assert response["status"] == "DISPATCH_RESERVED"
+    assert response["dispatch_state"] == "DISPATCH_RESERVED"
+    assert response["retry_after"] == reservation.retry_after.isoformat()
+    assert calls == 0
+
+
+async def test_materialization_api_keeps_unknown_network_result_pending(
+    db_session, test_user, monkeypatch
+):
+    reviewer, _token = test_user
+    candidate, origin = await _approved_generated_version(db_session, reviewer.id)
+    monkeypatch.setattr(settings, "foundry_source_materialization_enabled", True)
+    monkeypatch.setattr(
+        settings, "foundry_materialization_dispatch_backend", "github_actions"
+    )
+    calls = 0
+
+    async def unknown_dispatch(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise FoundryMaterializationDispatchError(
+            "materialization_dispatch_unavailable",
+            retryable=True,
+            outcome_unknown=True,
+        )
+
+    monkeypatch.setattr(
+        materialization_api, "dispatch_materialization_pr", unknown_dispatch
+    )
+    payload = materialization_api.ExactCandidateVersion(
+        candidate_version_id=origin.id,
+        candidate_version_hash=origin.version_hash,
+    )
+    first = await materialization_api.materialize_candidate_source(
+        candidate.id, payload, db_session, reviewer
+    )
+    assert first["status"] == "DISPATCH_OUTCOME_UNKNOWN"
+    assert first["dispatch_state"] == "DISPATCH_OUTCOME_UNKNOWN"
+    assert first["outcome_unknown"] is True
+    assert calls == 1
+
+    replay = await materialization_api.materialize_candidate_source(
+        candidate.id, payload, db_session, reviewer
+    )
+    assert replay["status"] == "DISPATCH_OUTCOME_UNKNOWN"
+    assert replay["idempotent_replay"] is True
+    assert replay["retry_after"] == first["retry_after"]
+    assert calls == 1
 
 
 async def test_materialization_dispatch_contains_only_server_binding():
@@ -542,6 +670,524 @@ async def test_materialization_dispatch_contains_only_server_binding():
     assert set(seen["inputs"]) == {"request_id", "binding"}
     assert "code" not in seen["inputs"]
     assert "commit" not in seen["inputs"]
+
+
+async def test_materialization_dispatch_timeout_marks_result_unknown():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("dispatch response timed out", request=request)
+
+    config = FoundryMaterializationDispatchConfig(
+        repository=REPOSITORY,
+        token="t" * 32,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(FoundryMaterializationDispatchError) as caught:
+            await dispatch_materialization_pr(
+                config,
+                request_id=uuid.uuid4(),
+                binding={"schema_version": "test"},
+                client=client,
+            )
+    assert caught.value.code == "materialization_dispatch_unavailable"
+    assert caught.value.retryable is True
+    assert caught.value.outcome_unknown is True
+
+
+@pytest.mark.parametrize(
+    ("lane", "request_event_type"),
+    (
+        ("materialization", "SOURCE_MATERIALIZATION_REQUESTED"),
+        ("finalization", "SOURCE_MATERIALIZATION_FINALIZATION_REQUESTED"),
+    ),
+)
+async def test_unconfirmed_reservation_uses_short_dispatch_lease_for_both_lanes(
+    db_session, test_user, monkeypatch, lane, request_event_type
+):
+    reviewer, _token = test_user
+    candidate, origin = await _approved_generated_version(db_session, reviewer.id)
+    dispatch_request_id = uuid.uuid4()
+    request = await _append_event(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=origin.id,
+        event_type=request_event_type,
+        actor_kind="HUMAN_REVIEWER",
+        actor_user_id=reviewer.id,
+        payload={"test_dispatch_request_id": str(dispatch_request_id)},
+    )
+    first = await materialization_module._reserve_dispatch_attempt(
+        db_session,
+        request_event=request,
+        dispatch_request_id=dispatch_request_id,
+        lane=lane,
+    )
+    await db_session.commit()
+    assert first.should_dispatch is True
+    assert first.state == "DISPATCH_RESERVED"
+
+    active = await materialization_module._reserve_dispatch_attempt(
+        db_session,
+        request_event=request,
+        dispatch_request_id=dispatch_request_id,
+        lane=lane,
+    )
+    assert active.should_dispatch is False
+    assert active.state == "DISPATCH_RESERVED"
+    assert active.reservation_event_id == first.reservation_event_id
+    assert active.retry_after == first.retry_after
+    reservation_event = await db_session.get(
+        FoundryCandidateEvent, first.reservation_event_id
+    )
+    assert reservation_event is not None
+    assert (
+        active.retry_after - materialization_module._as_utc(
+            reservation_event.created_at
+        )
+    ) == timedelta(minutes=2)
+
+    monkeypatch.setattr(
+        materialization_module,
+        "_utc_now",
+        lambda: active.retry_after + timedelta(seconds=1),
+    )
+    second = await materialization_module._reserve_dispatch_attempt(
+        db_session,
+        request_event=request,
+        dispatch_request_id=dispatch_request_id,
+        lane=lane,
+    )
+    assert second.should_dispatch is True
+    assert second.state == "DISPATCH_RESERVED"
+    assert second.attempt_number == 2
+    retry_event = await db_session.get(
+        FoundryCandidateEvent, second.reservation_event_id
+    )
+    assert retry_event is not None
+    assert retry_event.event_payload["retry_reason"] == "dispatch_lease_expired"
+
+
+async def test_unknown_dispatch_outcome_waits_for_workflow_callback_timeout(
+    db_session, test_user, monkeypatch
+):
+    reviewer, _token = test_user
+    candidate, origin = await _approved_generated_version(db_session, reviewer.id)
+    _binding, request, first, _attestation = await request_source_materialization(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=origin.id,
+        candidate_version_hash=origin.version_hash,
+        actor_user_id=reviewer.id,
+    )
+    assert first is not None and first.should_dispatch is True
+    outcome = await record_materialization_dispatch(
+        db_session,
+        request_event=request,
+        reservation=first,
+        dispatched=False,
+        failure_class="materialization_dispatch_unavailable",
+        retryable=True,
+        outcome_unknown=True,
+    )
+    same_outcome = await record_materialization_dispatch(
+        db_session,
+        request_event=request,
+        reservation=first,
+        dispatched=False,
+        failure_class="materialization_dispatch_unavailable",
+        retryable=True,
+        outcome_unknown=True,
+    )
+    assert same_outcome.id == outcome.id
+
+    _binding, _request, waiting, _attestation = await request_source_materialization(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=origin.id,
+        candidate_version_hash=origin.version_hash,
+        actor_user_id=reviewer.id,
+    )
+    assert waiting is not None and waiting.should_dispatch is False
+    assert waiting.state == "DISPATCH_OUTCOME_UNKNOWN"
+    assert waiting.attempt_number == 1
+    assert waiting.retry_after == (
+        materialization_module._as_utc(outcome.created_at) + timedelta(minutes=60)
+    )
+
+    monkeypatch.setattr(
+        materialization_module,
+        "_utc_now",
+        lambda: waiting.retry_after + timedelta(seconds=1),
+    )
+    _binding, _request, second, _attestation = await request_source_materialization(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=origin.id,
+        candidate_version_hash=origin.version_hash,
+        actor_user_id=reviewer.id,
+    )
+    assert second is not None and second.should_dispatch is True
+    assert second.attempt_number == 2
+    event = await db_session.get(FoundryCandidateEvent, second.reservation_event_id)
+    assert event is not None
+    assert event.event_payload["retry_reason"] == "dispatch_outcome_unknown_timeout"
+
+
+@pytest.mark.parametrize(
+    (
+        "lane",
+        "request_event_type",
+        "legacy_success_type",
+        "legacy_failure_type",
+        "legacy_binding_field",
+    ),
+    (
+        (
+            "materialization",
+            "SOURCE_MATERIALIZATION_REQUESTED",
+            "SOURCE_MATERIALIZATION_DISPATCHED",
+            "SOURCE_MATERIALIZATION_DISPATCH_FAILED",
+            "materialization_request_id",
+        ),
+        (
+            "finalization",
+            "SOURCE_MATERIALIZATION_FINALIZATION_REQUESTED",
+            "SOURCE_MATERIALIZATION_FINALIZATION_DISPATCHED",
+            "SOURCE_MATERIALIZATION_FINALIZATION_DISPATCH_FAILED",
+            "materialization_attestation_id",
+        ),
+    ),
+)
+async def test_legacy_compatibility_requires_exact_old_dispatched_event(
+    db_session,
+    test_user,
+    lane,
+    request_event_type,
+    legacy_success_type,
+    legacy_failure_type,
+    legacy_binding_field,
+):
+    reviewer, _token = test_user
+
+    ignored_candidate, ignored_origin = await _approved_generated_version(
+        db_session, reviewer.id
+    )
+    ignored_request = await _append_event(
+        db_session,
+        candidate_id=ignored_candidate.id,
+        candidate_version_id=ignored_origin.id,
+        event_type=request_event_type,
+        actor_kind="HUMAN_REVIEWER",
+        actor_user_id=reviewer.id,
+        payload={},
+    )
+    ignored_dispatch_id = (
+        ignored_request.id if lane == "materialization" else uuid.uuid4()
+    )
+    legacy_failed = await _append_event(
+        db_session,
+        candidate_id=ignored_candidate.id,
+        candidate_version_id=ignored_origin.id,
+        event_type=legacy_failure_type,
+        actor_kind="CONTROL_PLANE",
+        actor_user_id=None,
+        payload={
+            legacy_binding_field: str(ignored_dispatch_id),
+            "failure_class": "legacy_dispatch_failed",
+            "retryable": True,
+        },
+    )
+    wrong_legacy_dispatched = await _append_event(
+        db_session,
+        candidate_id=ignored_candidate.id,
+        candidate_version_id=ignored_origin.id,
+        event_type=legacy_success_type,
+        actor_kind="CONTROL_PLANE",
+        actor_user_id=None,
+        payload={legacy_binding_field: str(uuid.uuid4())},
+    )
+    assert not materialization_module._successful_dispatch_binds(
+        legacy_failed,
+        request_event_id=ignored_request.id,
+        dispatch_request_id=ignored_dispatch_id,
+        lane=lane,
+    )
+    assert not materialization_module._successful_dispatch_binds(
+        wrong_legacy_dispatched,
+        request_event_id=ignored_request.id,
+        dispatch_request_id=ignored_dispatch_id,
+        lane=lane,
+    )
+    ignored = await materialization_module._reserve_dispatch_attempt(
+        db_session,
+        request_event=ignored_request,
+        dispatch_request_id=ignored_dispatch_id,
+        lane=lane,
+    )
+    await db_session.commit()
+    assert ignored.should_dispatch is True
+    assert ignored.state == "DISPATCH_RESERVED"
+    assert ignored.attempt_number == 1
+
+    legacy_candidate, legacy_origin = await _approved_generated_version(
+        db_session, reviewer.id, gap_nonce=f"legacy-{lane}"
+    )
+    legacy_request = await _append_event(
+        db_session,
+        candidate_id=legacy_candidate.id,
+        candidate_version_id=legacy_origin.id,
+        event_type=request_event_type,
+        actor_kind="HUMAN_REVIEWER",
+        actor_user_id=reviewer.id,
+        payload={},
+    )
+    legacy_dispatch_id = (
+        legacy_request.id if lane == "materialization" else uuid.uuid4()
+    )
+    legacy_dispatched = await _append_event(
+        db_session,
+        candidate_id=legacy_candidate.id,
+        candidate_version_id=legacy_origin.id,
+        event_type=legacy_success_type,
+        actor_kind="CONTROL_PLANE",
+        actor_user_id=None,
+        payload={legacy_binding_field: str(legacy_dispatch_id)},
+    )
+    await db_session.commit()
+    assert materialization_module._successful_dispatch_binds(
+        legacy_dispatched,
+        request_event_id=legacy_request.id,
+        dispatch_request_id=legacy_dispatch_id,
+        lane=lane,
+    )
+    active = await materialization_module._reserve_dispatch_attempt(
+        db_session,
+        request_event=legacy_request,
+        dispatch_request_id=legacy_dispatch_id,
+        lane=lane,
+    )
+    assert active.should_dispatch is False
+    assert active.state == "WORKFLOW_DISPATCHED"
+    assert active.reservation_event_id == legacy_dispatched.id
+    assert active.attempt_number == 1
+    reserved_type = materialization_module._DISPATCH_LANES[lane]["reserved"]
+    reserved_count = len(
+        list(
+            (
+                await db_session.execute(
+                    select(FoundryCandidateEvent).where(
+                        FoundryCandidateEvent.candidate_id == legacy_candidate.id,
+                        FoundryCandidateEvent.candidate_version_id
+                        == legacy_origin.id,
+                        FoundryCandidateEvent.event_type == reserved_type,
+                    )
+                )
+            ).scalars().all()
+        )
+    )
+    assert reserved_count == 0
+
+
+async def test_materialization_dispatch_retry_is_bounded_idempotent_and_audited(
+    db_session, test_user, monkeypatch
+):
+    reviewer, _token = test_user
+    candidate, origin = await _approved_generated_version(db_session, reviewer.id)
+    _binding, request, first, attestation = await request_source_materialization(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=origin.id,
+        candidate_version_hash=origin.version_hash,
+        actor_user_id=reviewer.id,
+    )
+    assert first is not None and first.should_dispatch is True
+    assert first.attempt_number == 1 and attestation is None
+    first_outcome = await record_materialization_dispatch(
+        db_session,
+        request_event=request,
+        reservation=first,
+        dispatched=True,
+    )
+    same_outcome = await record_materialization_dispatch(
+        db_session,
+        request_event=request,
+        reservation=first,
+        dispatched=True,
+    )
+    assert same_outcome.id == first_outcome.id
+
+    _binding, same_request, active, _attestation = (
+        await request_source_materialization(
+            db_session,
+            candidate_id=candidate.id,
+            candidate_version_id=origin.id,
+            candidate_version_hash=origin.version_hash,
+            actor_user_id=reviewer.id,
+        )
+    )
+    assert same_request.id == request.id
+    assert active is not None and active.should_dispatch is False
+    assert active.reservation_event_id == first.reservation_event_id
+
+    monkeypatch.setattr(
+        materialization_module,
+        "_utc_now",
+        lambda: active.retry_after + timedelta(seconds=1),
+    )
+    _binding, _request, second, _attestation = await request_source_materialization(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=origin.id,
+        candidate_version_hash=origin.version_hash,
+        actor_user_id=reviewer.id,
+    )
+    assert second is not None and second.should_dispatch is True
+    assert second.attempt_number == 2
+    second_outcome = await record_materialization_dispatch(
+        db_session,
+        request_event=request,
+        reservation=second,
+        dispatched=True,
+    )
+
+    monkeypatch.setattr(
+        materialization_module,
+        "_utc_now",
+        lambda: materialization_module.materialization_workflow_retry_after(
+            second_outcome
+        )
+        + timedelta(seconds=1),
+    )
+    _binding, _request, third, _attestation = await request_source_materialization(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=origin.id,
+        candidate_version_hash=origin.version_hash,
+        actor_user_id=reviewer.id,
+    )
+    assert third is not None and third.should_dispatch is True
+    assert third.attempt_number == 3
+    third_outcome = await record_materialization_dispatch(
+        db_session,
+        request_event=request,
+        reservation=third,
+        dispatched=True,
+    )
+
+    monkeypatch.setattr(
+        materialization_module,
+        "_utc_now",
+        lambda: materialization_module.materialization_workflow_retry_after(
+            third_outcome
+        )
+        + timedelta(seconds=1),
+    )
+    for _ in range(2):
+        with pytest.raises(
+            FoundryCatalogError, match="retry budget is exhausted"
+        ):
+            await request_source_materialization(
+                db_session,
+                candidate_id=candidate.id,
+                candidate_version_id=origin.id,
+                candidate_version_hash=origin.version_hash,
+                actor_user_id=reviewer.id,
+            )
+    ledger = list(
+        (
+            await db_session.execute(
+                select(FoundryCandidateEvent).where(
+                    FoundryCandidateEvent.candidate_id == candidate.id,
+                    FoundryCandidateEvent.candidate_version_id == origin.id,
+                    FoundryCandidateEvent.event_type.in_(
+                        (
+                            "SOURCE_MATERIALIZATION_DISPATCH_RESERVED",
+                            "SOURCE_MATERIALIZATION_DISPATCHED",
+                            "SOURCE_MATERIALIZATION_DISPATCH_EXHAUSTED",
+                        )
+                    ),
+                )
+            )
+        ).scalars().all()
+    )
+    reservations = [
+        row
+        for row in ledger
+        if row.event_type == "SOURCE_MATERIALIZATION_DISPATCH_RESERVED"
+    ]
+    assert [row.event_payload["attempt_number"] for row in reservations] == [
+        1,
+        2,
+        3,
+    ]
+    assert len(
+        [
+            row
+            for row in ledger
+            if row.event_type == "SOURCE_MATERIALIZATION_DISPATCH_EXHAUSTED"
+        ]
+    ) == 1
+
+
+async def test_retryable_dispatch_failure_reserves_next_attempt_immediately(
+    db_session, test_user
+):
+    reviewer, _token = test_user
+    candidate, origin = await _approved_generated_version(db_session, reviewer.id)
+    _binding, request, first, _attestation = await request_source_materialization(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=origin.id,
+        candidate_version_hash=origin.version_hash,
+        actor_user_id=reviewer.id,
+    )
+    assert first is not None
+    await record_materialization_dispatch(
+        db_session,
+        request_event=request,
+        reservation=first,
+        dispatched=False,
+        failure_class="materialization_dispatch_unavailable",
+        retryable=True,
+    )
+    _binding, _request, second, _attestation = await request_source_materialization(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=origin.id,
+        candidate_version_hash=origin.version_hash,
+        actor_user_id=reviewer.id,
+    )
+    assert second is not None and second.should_dispatch is True
+    assert second.attempt_number == 2
+    event = await db_session.get(FoundryCandidateEvent, second.reservation_event_id)
+    assert event is not None
+    assert event.event_payload["retry_reason"] == "retryable_dispatch_failure"
+    _binding, _request, active, _attestation = await request_source_materialization(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=origin.id,
+        candidate_version_hash=origin.version_hash,
+        actor_user_id=reviewer.id,
+    )
+    assert active is not None and active.should_dispatch is False
+    assert active.state == "DISPATCH_RESERVED"
+    assert active.attempt_number == 2
+    assert active.reservation_event_id == second.reservation_event_id
+
+
+def test_materialization_signer_uses_clean_runner_openssl_backend():
+    seed = bytes(range(32))
+    message = b"standard-astro-materialization-signing-smoke"
+    signature = _sign_ed25519(seed, message)
+    assert len(signature) == 64
+    Ed25519PrivateKey.from_private_bytes(seed).public_key().verify(
+        signature, message
+    )
+    root = Path(__file__).resolve().parents[2]
+    signer = (
+        root / "backend/scripts/sign_foundry_materialization_receipt.py"
+    ).read_text(encoding="utf-8")
+    assert "cryptography.hazmat" not in signer
+    assert '"openssl",' in signer
 
 
 def test_materialization_workflows_never_auto_merge_or_expose_private_key_to_render():
@@ -579,6 +1225,10 @@ def test_materialization_workflows_never_auto_merge_or_expose_private_key_to_ren
     assert "environment: foundry-materialization-build" in final_prepare
     assert "environment: foundry-materialization-attestation" in pr_sign
     assert "environment: foundry-materialization-attestation" in final_sign
+    assert "command -v openssl" in pr_sign
+    assert "command -v openssl" in final_sign
+    assert "openssl version" in pr_sign
+    assert "openssl version" in final_sign
     assert "environment: foundry-materialization-callback" in pr_callback
     assert "environment: foundry-materialization-callback" in final_callback
     for section in (
