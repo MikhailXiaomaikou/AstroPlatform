@@ -572,6 +572,12 @@ from app.services.ai_tools_research import (  # noqa: E402
 )
 TOOLS.extend(_RESEARCH_TOOL_SCHEMAS)
 
+from app.services.ai_tools_registered_workflows import (  # noqa: E402
+    REGISTERED_WORKFLOW_TOOL_NAMES as _REGISTERED_WORKFLOW_TOOL_NAMES,
+    REGISTERED_WORKFLOW_TOOL_SCHEMAS as _REGISTERED_WORKFLOW_TOOL_SCHEMAS,
+)
+TOOLS.extend(_REGISTERED_WORKFLOW_TOOL_SCHEMAS)
+
 
 # ── Tool Executors ──
 
@@ -1100,6 +1106,19 @@ async def _execute_tool_inner(
         elif tool_name in _RESEARCH_TOOL_NAMES:
             from app.services.ai_tools_research import dispatch_research
             return await dispatch_research(tool_name, tool_input)
+        # Stable Formal Registry tools. Candidate Catalog entries are never
+        # included in this dispatcher or in the model-visible result.
+        # "discover_registered_workflows", "start_registered_workflow".
+        elif tool_name in _REGISTERED_WORKFLOW_TOOL_NAMES:
+            from app.services.ai_tools_registered_workflows import (
+                dispatch_registered_workflow_tool,
+            )
+
+            return await dispatch_registered_workflow_tool(
+                tool_name,
+                tool_input,
+                user_id=user_id,
+            )
         # ── H1 split (2026-05-26): paper-mining 7-tool centralized dispatch ──
         # Deployment-readiness introspection scans this function body for
         # quoted tool names. Keep in sync with PAPER_MINING_TOOL_NAMES:
