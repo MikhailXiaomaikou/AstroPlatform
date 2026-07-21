@@ -1011,6 +1011,94 @@ def test_ci_builder_produces_file_backed_but_withheld_manifest(tmp_path: Path) -
     ) == {"valid": True, "reasons": []}
 
 
+def test_exact_release_policy_stays_withheld_until_environment_validation(
+    monkeypatch,
+) -> None:
+    from app.services.research_alpha_manifest import _research_alpha_release_policy
+    from app.services.w0wa_exact_contract import (
+        EXACT_ENVIRONMENT_FORMAL_STATUS,
+        EXACT_ENVIRONMENT_PENDING_REASON,
+        EXACT_ENVIRONMENT_REVISION,
+        EXACT_MAX_READINESS_STATUS,
+        EXACT_PROFILE_ID,
+    )
+
+    assert _research_alpha_release_policy(EXACT_PROFILE_ID) == {
+        "readiness_status": EXACT_ENVIRONMENT_REVISION["status"],
+        "eligible": False,
+        "numerical_eligible": False,
+        "reasons": [EXACT_ENVIRONMENT_PENDING_REASON],
+    }
+
+    monkeypatch.setitem(
+        EXACT_ENVIRONMENT_REVISION,
+        "status",
+        EXACT_ENVIRONMENT_FORMAL_STATUS,
+    )
+    assert _research_alpha_release_policy(EXACT_PROFILE_ID) == {
+        "readiness_status": EXACT_MAX_READINESS_STATUS,
+        "eligible": True,
+        "numerical_eligible": True,
+        "reasons": [],
+    }
+
+
+def test_validator_rejects_pending_environment_a_ready_envelope() -> None:
+    from app.services.research_alpha_attestation import build_scientific_attestation
+    from app.services.research_alpha_manifest import (
+        RESEARCH_ALPHA_MANIFEST_VERSION,
+        _research_alpha_release_policy,
+        validate_research_alpha_manifest,
+    )
+    from app.services.w0wa_exact_contract import (
+        EXACT_ENVIRONMENT_REVISION,
+        EXACT_MAX_READINESS_STATUS,
+        EXACT_PROFILE_ID,
+    )
+
+    payload = {
+        "source": "server_attested",
+        "profile_id": EXACT_PROFILE_ID,
+        "research_alpha_manifest_version": RESEARCH_ALPHA_MANIFEST_VERSION,
+        "environment_revision": copy.deepcopy(EXACT_ENVIRONMENT_REVISION),
+        "readiness_status": EXACT_MAX_READINESS_STATUS,
+        "publication_gate": {
+            "eligible": True,
+            "numerical_eligible": True,
+            "reasons": [],
+            "model_adequacy": {},
+        },
+    }
+    a_ready = build_scientific_attestation(
+        attestation_type="research_alpha",
+        payload=payload,
+    )
+    reasons = validate_research_alpha_manifest(a_ready)["reasons"]
+    assert "readiness_status_mismatch" in reasons
+    assert "exact_environment_revision_publication_gate_not_withheld" in reasons
+
+    policy = _research_alpha_release_policy(EXACT_PROFILE_ID)
+    payload["readiness_status"] = policy["readiness_status"]
+    payload["publication_gate"].update(
+        {
+            "eligible": policy["eligible"],
+            "numerical_eligible": policy["numerical_eligible"],
+            "reasons": policy["reasons"],
+        }
+    )
+    withheld = build_scientific_attestation(
+        attestation_type="research_alpha",
+        payload=payload,
+    )
+    withheld_reasons = validate_research_alpha_manifest(withheld)["reasons"]
+    assert "environment_revision_mismatch" not in withheld_reasons
+    assert "readiness_status_mismatch" not in withheld_reasons
+    assert (
+        "exact_environment_revision_publication_gate_not_withheld"
+        not in withheld_reasons
+    )
+
+
 def test_sha_shaped_strings_and_reused_chain_files_are_rejected(tmp_path: Path) -> None:
     from app.services.research_alpha_manifest import build_research_alpha_manifest
 

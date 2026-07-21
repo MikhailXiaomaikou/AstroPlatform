@@ -71,6 +71,19 @@ EXACT_ENVIRONMENT_REVISION = {
         "independent_scientific_regression",
     ],
 }
+EXACT_ENVIRONMENT_FORMAL_STATUS = "VALIDATED_FOR_FORMAL_EXECUTION"
+EXACT_ENVIRONMENT_PENDING_REASON = (
+    "environment_revision_pending_fresh_preflight_and_science_regression"
+)
+
+
+def exact_environment_validated_for_formal_execution() -> bool:
+    """Keep every exact-result consumer fail-closed until revision 2 is approved."""
+
+    return (
+        EXACT_ENVIRONMENT_REVISION.get("status")
+        == EXACT_ENVIRONMENT_FORMAL_STATUS
+    )
 
 # The answer key stays outside every model prompt, but its uncertainty scales
 # are an immutable verifier input.  Otherwise an adequacy producer could make

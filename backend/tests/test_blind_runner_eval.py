@@ -863,6 +863,7 @@ def test_signed_ci_full_likelihood_fixture_is_bound_but_publication_withheld(
 
 def test_f2_exact_publication_true_positive_through_verifier_boundary(
     signed_full_likelihood_result: dict,
+    monkeypatch,
 ):
     """Exercise F2's positive branch without creating a production bypass.
 
@@ -966,6 +967,25 @@ def test_f2_exact_publication_true_positive_through_verifier_boundary(
             result, manifest_verifier=test_fixture_signature_verifier
         )
         is True
+    )
+    # Even an injected verifier cannot bypass the current pending environment
+    # revision.  The positive branch opens only after that revision is marked
+    # validated for formal execution.
+    assert (
+        runner_module._signed_full_likelihood_specificity_ready(
+            tools, manifest_verifier=test_fixture_signature_verifier
+        )
+        is False
+    )
+    from app.services.w0wa_exact_contract import (
+        EXACT_ENVIRONMENT_FORMAL_STATUS,
+        EXACT_ENVIRONMENT_REVISION,
+    )
+
+    monkeypatch.setitem(
+        EXACT_ENVIRONMENT_REVISION,
+        "status",
+        EXACT_ENVIRONMENT_FORMAL_STATUS,
     )
     assert (
         runner_module._signed_full_likelihood_specificity_ready(

@@ -49,6 +49,7 @@ from app.services.w0wa_exact_contract import (
     EXACT_CLAIM_SCOPE,
     EXACT_EVIDENCE_SIGNING_KEY_ID,
     EXACT_EVIDENCE_SIGNING_KEY_SHA256,
+    EXACT_ENVIRONMENT_PENDING_REASON,
     EXACT_ENVIRONMENT_REVISION,
     EXACT_HOST_EXECUTION_TRUST_BOUNDARY,
     EXACT_MAX_READINESS_STATUS,
@@ -86,6 +87,7 @@ from app.services.w0wa_exact_contract import (
     TRUSTED_SOURCE_BASE_COMMIT,
     TRUSTED_EXTERNAL_REVIEW_AUTHORITY_REGISTRY,
     TRUSTED_WHEEL_MANIFEST_SHA256,
+    exact_environment_validated_for_formal_execution,
 )
 
 
@@ -3352,6 +3354,70 @@ def build_research_alpha_execution_binding(
     }
 
 
+def _research_alpha_release_policy(profile_id: str) -> dict[str, Any]:
+    """Return the signed readiness/publication policy for one manifest profile."""
+
+    if profile_id != EXACT_PROFILE_ID:
+        return {
+            "readiness_status": "CI_FIXTURE_WITHHELD",
+            "eligible": False,
+            "numerical_eligible": False,
+            "reasons": ["ci_fixture_non_publication_profile"],
+        }
+    if exact_environment_validated_for_formal_execution():
+        return {
+            "readiness_status": EXACT_MAX_READINESS_STATUS,
+            "eligible": True,
+            "numerical_eligible": True,
+            "reasons": [],
+        }
+    return {
+        "readiness_status": str(
+            EXACT_ENVIRONMENT_REVISION.get("status")
+            or "WITHHELD_ENVIRONMENT_REVISION_INVALID"
+        ),
+        "eligible": False,
+        "numerical_eligible": False,
+        "reasons": [EXACT_ENVIRONMENT_PENDING_REASON],
+    }
+
+
+def _validate_research_alpha_release_policy(
+    manifest: Mapping[str, Any],
+    *,
+    profile_id: str,
+    reasons: list[str],
+) -> None:
+    """Validate readiness independently of expensive artifact closure checks."""
+
+    policy = _research_alpha_release_policy(profile_id)
+    if profile_id == EXACT_PROFILE_ID and manifest.get(
+        "environment_revision"
+    ) != EXACT_ENVIRONMENT_REVISION:
+        reasons.append("environment_revision_mismatch")
+    if manifest.get("readiness_status") != policy["readiness_status"]:
+        reasons.append("readiness_status_mismatch")
+
+    gate = manifest.get("publication_gate")
+    if not isinstance(gate, Mapping):
+        reasons.append("publication_gate_missing")
+        return
+    policy_matches = all(
+        gate.get(key) == policy[key]
+        for key in ("eligible", "numerical_eligible", "reasons")
+    )
+    if policy_matches:
+        return
+    if profile_id == EXACT_PROFILE_ID:
+        reasons.append(
+            "publication_gate_not_eligible"
+            if policy["eligible"] is True
+            else "exact_environment_revision_publication_gate_not_withheld"
+        )
+    else:
+        reasons.append("ci_fixture_publication_gate_not_withheld")
+
+
 def build_research_alpha_manifest(
     *,
     run_id: str,
@@ -3497,6 +3563,7 @@ def build_research_alpha_manifest(
         ),
     ]
     is_exact = prepared["profile_id"] == EXACT_PROFILE_ID
+    release_policy = _research_alpha_release_policy(prepared["profile_id"])
     external_review = _normalize_external_review(
         external_review_attestation,
         run_id=prepared["run_id"],
@@ -3513,11 +3580,7 @@ def build_research_alpha_manifest(
         "source": "server_attested",
         "profile_id": prepared["profile_id"],
         "research_alpha_manifest_version": RESEARCH_ALPHA_MANIFEST_VERSION,
-        "readiness_status": (
-            EXACT_MAX_READINESS_STATUS
-            if is_exact
-            else "CI_FIXTURE_WITHHELD"
-        ),
+        "readiness_status": release_policy["readiness_status"],
         "run_identity": run_identity,
         "target": {"hash": prepared["target_hash"]},
         "artifacts": prepared["artifacts"],
@@ -3532,15 +3595,17 @@ def build_research_alpha_manifest(
         "diagnostics": signed_diagnostics,
         "model_adequacy": adequacy_manifest,
         "publication_gate": {
-            "eligible": is_exact,
-            "numerical_eligible": is_exact,
-            "reasons": [] if is_exact else ["ci_fixture_non_publication_profile"],
+            "eligible": release_policy["eligible"],
+            "numerical_eligible": release_policy["numerical_eligible"],
+            "reasons": release_policy["reasons"],
             "model_adequacy": adequacy_assessment,
         },
         "evidence_ids": list(dict.fromkeys(evidence_ids)),
         "claim_support_paths": support_paths,
         "external_review": external_review,
     }
+    if is_exact:
+        payload["environment_revision"] = copy.deepcopy(EXACT_ENVIRONMENT_REVISION)
     return _build_research_alpha_scientific_attestation(
         attestation_type="research_alpha",
         payload=payload,
@@ -3573,6 +3638,12 @@ def validate_research_alpha_manifest(
             _validate_exact_evidence_signing_key_binding(manifest)
         except ValueError as exc:
             reasons.append(_reason_from_error(exc))
+    if profile_id is not None:
+        _validate_research_alpha_release_policy(
+            manifest,
+            profile_id=profile_id,
+            reasons=reasons,
+        )
     try:
         manifest_protocol_status = _normalize_protocol_status(
             manifest.get("protocol_status")
@@ -3778,14 +3849,6 @@ def validate_research_alpha_manifest(
             reasons.append("external_review_report_evidence_unlisted")
     if profile_id == CI_FIXTURE_PROFILE_ID and approved:
         reasons.append("ci_fixture_external_review_forbidden")
-    expected_status = (
-        EXACT_MAX_READINESS_STATUS
-        if profile_id == EXACT_PROFILE_ID
-        else "CI_FIXTURE_WITHHELD"
-    )
-    if manifest.get("readiness_status") != expected_status:
-        reasons.append("readiness_status_mismatch")
-
     return {"valid": not reasons, "reasons": list(dict.fromkeys(reasons))}
 
 
@@ -6737,17 +6800,8 @@ def _validate_adequacy_manifest(
     except ValueError as exc:
         reasons.append(_reason_from_error(exc))
     gate = manifest.get("publication_gate")
-    is_exact = manifest.get("profile_id") == EXACT_PROFILE_ID
     if not isinstance(gate, Mapping):
         reasons.append("publication_gate_missing")
-    elif is_exact and gate.get("eligible") is not True:
-        reasons.append("publication_gate_not_eligible")
-    elif not is_exact and (
-        gate.get("eligible") is not False
-        or gate.get("numerical_eligible") is not False
-        or gate.get("reasons") != ["ci_fixture_non_publication_profile"]
-    ):
-        reasons.append("ci_fixture_publication_gate_not_withheld")
     elif not isinstance(gate.get("model_adequacy"), Mapping) or gate[
         "model_adequacy"
     ].get("manifest_hash") != assessment.get("manifest_hash"):
