@@ -84,7 +84,11 @@ async def _dispatch(
                 "inputs": {"request_id": str(request_id), "binding": binding_json},
             },
         )
-    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+    except httpx.HTTPError as exc:
+        # A protocol/read failure can happen after GitHub accepted the
+        # workflow_dispatch request, not only during TCP connection setup.
+        # Preserve the reservation under the long callback lease so a signed
+        # receipt can settle the ambiguity without an immediate duplicate.
         raise FoundryMaterializationDispatchError(
             "materialization_dispatch_unavailable",
             retryable=True,
@@ -93,10 +97,20 @@ async def _dispatch(
     finally:
         if owns_client:
             await http.aclose()
+    if 500 <= response.status_code <= 599:
+        # GitHub or an intermediary may emit a 5xx after accepting the
+        # workflow_dispatch request. Treat the delivery result as unknown so
+        # the control plane waits for a callback instead of dispatching a
+        # duplicate immediately.
+        raise FoundryMaterializationDispatchError(
+            "materialization_dispatch_outcome_unknown",
+            retryable=True,
+            outcome_unknown=True,
+        )
     if response.status_code != 204:
         raise FoundryMaterializationDispatchError(
             "materialization_dispatch_rejected",
-            retryable=response.status_code >= 500 or response.status_code == 429,
+            retryable=response.status_code == 429,
         )
 
 

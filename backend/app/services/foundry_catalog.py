@@ -16,7 +16,7 @@ from typing import Any, Iterable, Mapping
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from sqlalchemy import func, select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -58,6 +58,9 @@ DEMO_STATUSES = frozenset({"PASSED", "PARTIAL", "FAILED"})
 REVIEW_DECISIONS = frozenset({"APPROVED", "REJECTED", "CHANGES_REQUESTED"})
 REVIEW_SCOPES = frozenset({"ENGINEERING", "SCIENTIFIC"})
 NON_FORMAL_EVIDENCE_CLASS = "NON_FORMAL_DEMO"
+VALIDATION_MAX_ATTEMPTS = 3
+VALIDATION_DISPATCH_LEASE = timedelta(minutes=5)
+VALIDATION_WORKFLOW_LEASE = timedelta(hours=1)
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _IMAGE_DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 _GIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
@@ -1810,6 +1813,7 @@ async def ensure_validation_run(
     actor_kind: str,
     actor_user_id: uuid.UUID | None,
     reuse_terminal: bool = False,
+    now: datetime | None = None,
 ) -> tuple[FoundryValidationRun, bool]:
     """Return one validation run and whether this call created it.
 
@@ -1870,14 +1874,168 @@ async def ensure_validation_run(
         raise FoundryCatalogError(
             "candidate_not_validatable", "This candidate cannot start a validation run", status_code=409
         )
-    active = await db.scalar(
-        select(FoundryValidationRun).where(
-            FoundryValidationRun.candidate_version_id == version.id,
-            FoundryValidationRun.status.in_({"QUEUED", "DISPATCHED", "RUNNING"}),
+    runs = list(
+        (
+            await db.execute(
+                select(FoundryValidationRun)
+                .where(
+                    FoundryValidationRun.candidate_version_id == version.id,
+                    FoundryValidationRun.candidate_version_hash
+                    == version.version_hash,
+                )
+                .order_by(FoundryValidationRun.created_at.asc())
+            )
         )
+        .scalars()
+        .all()
+    )
+    current_time = now or _utc_now()
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=timezone.utc)
+    active = next(
+        (
+            row
+            for row in reversed(runs)
+            if row.status
+            in {"QUEUED", "OUTCOME_UNKNOWN", "DISPATCHED", "RUNNING"}
+        ),
+        None,
     )
     if active is not None:
-        return active, False
+        active_since = active.started_at or active.created_at
+        if active_since.tzinfo is None:
+            active_since = active_since.replace(tzinfo=timezone.utc)
+        lease = (
+            VALIDATION_DISPATCH_LEASE
+            if active.status == "QUEUED"
+            else VALIDATION_WORKFLOW_LEASE
+        )
+        retry_after = active_since + lease
+        if current_time < retry_after:
+            summary = dict(active.validation_summary or {})
+            summary.update(
+                {
+                    "phase": (
+                        "DISPATCH_PENDING"
+                        if active.status == "QUEUED"
+                        else (
+                            "DISPATCH_UNCERTAIN"
+                            if active.status == "OUTCOME_UNKNOWN"
+                            else active.status
+                        )
+                    ),
+                    "retry_after": retry_after.isoformat(),
+                }
+            )
+            active.validation_summary = summary
+            await db.commit()
+            await db.refresh(active)
+            return active, False
+
+        active_status = active.status
+        timeout_event_type = {
+            "QUEUED": "VALIDATION_DISPATCH_RESERVATION_TIMED_OUT",
+            "OUTCOME_UNKNOWN": "VALIDATION_DISPATCH_UNCERTAIN_TIMED_OUT",
+            "DISPATCHED": "VALIDATION_WORKFLOW_TIMED_OUT",
+            "RUNNING": "VALIDATION_WORKFLOW_TIMED_OUT",
+        }[active_status]
+        timeout_phase = (
+            "DISPATCH_UNCERTAIN"
+            if active_status == "OUTCOME_UNKNOWN"
+            else (
+                "DISPATCH_PENDING" if active_status == "QUEUED" else active_status
+            )
+        )
+        attempt_number = int(
+            (active.validation_summary or {}).get("attempt_number")
+            or runs.index(active) + 1
+        )
+        active.failure_class = {
+            "QUEUED": "validation_dispatch_reservation_timeout",
+            "OUTCOME_UNKNOWN": "validation_dispatch_outcome_unknown_timeout",
+            "DISPATCHED": "validation_workflow_timeout",
+            "RUNNING": "validation_workflow_timeout",
+        }[active_status]
+        active.status = "TIMED_OUT"
+        active.completed_at = current_time
+        active.validation_summary = {
+            **dict(active.validation_summary or {}),
+            "phase": "TIMED_OUT",
+            "timeout_phase": timeout_phase,
+            "timeout_seconds": int(lease.total_seconds()),
+            "retryable": attempt_number < VALIDATION_MAX_ATTEMPTS,
+        }
+        if (
+            candidate.current_version_number == version.version_number
+            and candidate.status == "VALIDATING"
+        ):
+            candidate.status = "BUILDING"
+        await _append_event(
+            db,
+            candidate_id=candidate.id,
+            candidate_version_id=version.id,
+            event_type=timeout_event_type,
+            actor_kind="CONTROL_PLANE",
+            actor_user_id=None,
+            payload={
+                "validation_run_id": str(active.id),
+                "candidate_version_hash": version.version_hash,
+                "attempt_number": attempt_number,
+                "max_attempts": VALIDATION_MAX_ATTEMPTS,
+                "timeout_phase": timeout_phase,
+                "timeout_seconds": int(lease.total_seconds()),
+                "retryable": attempt_number < VALIDATION_MAX_ATTEMPTS,
+            },
+        )
+
+    if len(runs) >= VALIDATION_MAX_ATTEMPTS:
+        await db.commit()
+        raise FoundryCatalogError(
+            "validation_attempts_exhausted",
+            "Candidate validation reached the bounded attempt limit",
+            status_code=409,
+        )
+    if runs:
+        latest = runs[-1]
+        if latest.status == "DISPATCH_FAILED":
+            summary = dict(latest.validation_summary or {})
+            retryable = bool(summary.get("retryable"))
+            if "retryable" not in summary:
+                # Before the attempt-state upgrade, retryability lived only
+                # in the append-only event.  Preserve that exact legacy
+                # contract without treating an unbound/missing event as a
+                # retry grant.
+                legacy_events = list(
+                    (
+                        await db.execute(
+                            select(FoundryCandidateEvent).where(
+                                FoundryCandidateEvent.candidate_id
+                                == candidate.id,
+                                FoundryCandidateEvent.candidate_version_id
+                                == version.id,
+                                FoundryCandidateEvent.event_type
+                                == "VALIDATION_DISPATCH_FAILED",
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                retryable = any(
+                    (event.event_payload or {}).get("validation_run_id")
+                    == str(latest.id)
+                    and (event.event_payload or {}).get("retryable") is True
+                    for event in legacy_events
+                )
+            if not retryable:
+                await db.commit()
+                raise FoundryCatalogError(
+                    "validation_dispatch_not_retryable",
+                    "Candidate validation dispatch failed permanently",
+                    status_code=409,
+                )
+    attempt_number = len(runs) + 1
+    retry_after = current_time + VALIDATION_DISPATCH_LEASE
     run = FoundryValidationRun(
         candidate_id=candidate.id,
         candidate_version_id=version.id,
@@ -1885,6 +2043,18 @@ async def ensure_validation_run(
         status="QUEUED",
         requested_by_kind=actor_kind,
         requested_by_user_id=actor_user_id,
+        validation_summary={
+            "attempt_number": attempt_number,
+            "max_attempts": VALIDATION_MAX_ATTEMPTS,
+            "phase": "DISPATCH_PENDING",
+            "retry_after": retry_after.isoformat(),
+            "dispatch_lease_seconds": int(
+                VALIDATION_DISPATCH_LEASE.total_seconds()
+            ),
+            "workflow_lease_seconds": int(
+                VALIDATION_WORKFLOW_LEASE.total_seconds()
+            ),
+        },
     )
     db.add(run)
     candidate.status = "VALIDATING"
@@ -1899,6 +2069,14 @@ async def ensure_validation_run(
         payload={
             "validation_run_id": str(run.id),
             "candidate_version_hash": version.version_hash,
+            "attempt_number": attempt_number,
+            "max_attempts": VALIDATION_MAX_ATTEMPTS,
+            "dispatch_lease_seconds": int(
+                VALIDATION_DISPATCH_LEASE.total_seconds()
+            ),
+            "workflow_lease_seconds": int(
+                VALIDATION_WORKFLOW_LEASE.total_seconds()
+            ),
         },
     )
     await db.commit()
@@ -1934,9 +2112,27 @@ async def record_validation_dispatch(
     validation_run_id: uuid.UUID,
     dispatched: bool,
     failure_class: str | None = None,
+    retryable: bool = False,
+    delivery_uncertain: bool = False,
+    now: datetime | None = None,
 ) -> FoundryValidationRun:
-    """Record the post-commit CI dispatch outcome; never leave a fake QUEUED run."""
+    """Record one idempotent CI delivery transition for an exact attempt.
 
+    ``delivery_uncertain`` is also written *before* crossing the external
+    network boundary.  A process crash or lost response then keeps the exact
+    attempt under the long workflow lease instead of dispatching a duplicate.
+    """
+
+    initial = await db.get(FoundryValidationRun, validation_run_id)
+    if initial is None:
+        raise FoundryCatalogError(
+            "validation_run_not_found", "Validation run not found", status_code=404
+        )
+    candidate = await db.scalar(
+        select(FoundryCandidate)
+        .where(FoundryCandidate.id == initial.candidate_id)
+        .with_for_update()
+    )
     run = await db.scalar(
         select(FoundryValidationRun)
         .where(FoundryValidationRun.id == validation_run_id)
@@ -1946,34 +2142,397 @@ async def record_validation_dispatch(
         raise FoundryCatalogError(
             "validation_run_not_found", "Validation run not found", status_code=404
         )
-    if run.status != "QUEUED":
-        return run
-    candidate = await db.scalar(
-        select(FoundryCandidate)
-        .where(FoundryCandidate.id == run.candidate_id)
-        .with_for_update()
+    desired_status = (
+        "DISPATCHED"
+        if dispatched
+        else ("OUTCOME_UNKNOWN" if delivery_uncertain else "DISPATCH_FAILED")
     )
-    run.status = "DISPATCHED" if dispatched else "DISPATCH_FAILED"
-    run.failure_class = None if dispatched else str(failure_class or "dispatch_failed")[:255]
-    if candidate is not None and not dispatched:
+    if run.status == desired_status:
+        if desired_status != "OUTCOME_UNKNOWN" or (
+            run.failure_class == str(failure_class or "dispatch_outcome_unknown")[:255]
+        ):
+            return run
+    if run.status not in {"QUEUED", "OUTCOME_UNKNOWN"}:
+        if run.status in DEMO_STATUSES or run.status in {
+            "TIMED_OUT",
+            "WORKFLOW_FAILED",
+            "DISPATCH_FAILED",
+        }:
+            return run
+        raise FoundryCatalogError(
+            "validation_dispatch_state_conflict",
+            "Validation dispatch outcome conflicts with the durable run state",
+            status_code=409,
+        )
+    current_time = now or _utc_now()
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=timezone.utc)
+    attempt_number = int(
+        (run.validation_summary or {}).get("attempt_number") or 1
+    )
+    effective_retryable = bool(retryable) and attempt_number < VALIDATION_MAX_ATTEMPTS
+    run.status = desired_status
+    run.failure_class = (
+        None
+        if dispatched
+        else str(failure_class or "dispatch_failed")[:255]
+    )
+    started_at = run.started_at or current_time
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    run.started_at = started_at
+    lease = (
+        VALIDATION_WORKFLOW_LEASE
+        if desired_status in {"DISPATCHED", "OUTCOME_UNKNOWN"}
+        else None
+    )
+    run.completed_at = current_time if desired_status == "DISPATCH_FAILED" else None
+    run.validation_summary = {
+        **dict(run.validation_summary or {}),
+        "phase": (
+            "DISPATCH_UNCERTAIN"
+            if desired_status == "OUTCOME_UNKNOWN"
+            else desired_status
+        ),
+        "retryable": effective_retryable,
+        "delivery_uncertain": desired_status == "OUTCOME_UNKNOWN",
+        "retry_after": (
+            (started_at + lease).isoformat() if lease is not None else None
+        ),
+    }
+    version = await db.get(FoundryCandidateVersion, run.candidate_version_id)
+    if (
+        candidate is not None
+        and version is not None
+        and desired_status == "DISPATCH_FAILED"
+        and candidate.current_version_number
+        == version.version_number
+        and candidate.status == "VALIDATING"
+    ):
         candidate.status = "BUILDING"
+    event_type = {
+        "DISPATCHED": "VALIDATION_DISPATCHED",
+        "OUTCOME_UNKNOWN": "VALIDATION_DISPATCH_UNCERTAIN",
+        "DISPATCH_FAILED": "VALIDATION_DISPATCH_FAILED",
+    }[desired_status]
     await _append_event(
         db,
         candidate_id=run.candidate_id,
         candidate_version_id=run.candidate_version_id,
-        event_type=("VALIDATION_DISPATCHED" if dispatched else "VALIDATION_DISPATCH_FAILED"),
+        event_type=event_type,
         actor_kind="CONTROL_PLANE",
         actor_user_id=None,
         payload={
             "validation_run_id": str(run.id),
             "status": run.status,
             "failure_class": run.failure_class,
-            "retryable": not dispatched,
+            "attempt_number": attempt_number,
+            "max_attempts": VALIDATION_MAX_ATTEMPTS,
+            "delivery_uncertain": desired_status == "OUTCOME_UNKNOWN",
+            "retryable": effective_retryable,
+            "retry_after": (run.validation_summary or {}).get("retry_after"),
         },
     )
     await db.commit()
     await db.refresh(run)
     return run
+
+
+async def record_validation_workflow_failure(
+    db: AsyncSession,
+    *,
+    validation_run_id: uuid.UUID,
+    report: dict[str, Any],
+    expected_repository: str,
+    expected_workflow_ref: str,
+    now: datetime | None = None,
+) -> tuple[FoundryValidationRun, bool]:
+    """Close one exact protected validation attempt without creating evidence."""
+
+    try:
+        report_run_id = uuid.UUID(str(report["validation_run_id"]))
+        candidate_id = uuid.UUID(str(report["candidate_id"]))
+        version_id = uuid.UUID(str(report["candidate_version_id"]))
+    except (KeyError, ValueError) as exc:
+        raise FoundryCatalogError(
+            "validation_failure_binding_invalid",
+            "Validation failure identifiers are invalid",
+            status_code=409,
+        ) from exc
+    initial = await db.get(FoundryValidationRun, validation_run_id)
+    if initial is None:
+        raise FoundryCatalogError(
+            "validation_run_not_found", "Validation run not found", status_code=404
+        )
+    candidate = await db.scalar(
+        select(FoundryCandidate)
+        .where(FoundryCandidate.id == initial.candidate_id)
+        .with_for_update()
+    )
+    run = await db.scalar(
+        select(FoundryValidationRun)
+        .where(FoundryValidationRun.id == validation_run_id)
+        .with_for_update()
+    )
+    version = await db.get(FoundryCandidateVersion, version_id)
+    if (
+        candidate is None
+        or run is None
+        or report_run_id != validation_run_id
+        or run.candidate_id != candidate_id
+        or run.candidate_version_id != version_id
+        or version is None
+        or version.candidate_id != candidate_id
+        or run.candidate_version_hash != version.version_hash
+        or report.get("candidate_version_hash") != version.version_hash
+        or report.get("candidate_version_number") != version.version_number
+        or report.get("status") != "FAILED"
+        or report.get("failure_class") != "validation_workflow_failed"
+        or report.get("failed_stage") != "isolated_demo"
+        or report.get("workflow_conclusion")
+        not in {"failure", "cancelled", "skipped"}
+        or report.get("github_repository") != expected_repository
+        or report.get("github_workflow_ref") != expected_workflow_ref
+        or not _GIT_SHA_RE.fullmatch(str(report.get("github_workflow_sha") or ""))
+        or not re.fullmatch(
+            r"[1-9][0-9]{0,19}", str(report.get("github_run_id") or "")
+        )
+        or str(report.get("github_run_attempt") or "") != "1"
+    ):
+        raise FoundryCatalogError(
+            "validation_failure_binding_invalid",
+            "Validation failure does not match its protected attempt binding",
+            status_code=409,
+        )
+    report_hash = sha256_json(report)
+    existing_failure_hash = (run.validation_summary or {}).get(
+        "workflow_failure_report_sha256"
+    )
+    if run.status == "WORKFLOW_FAILED":
+        if existing_failure_hash != report_hash:
+            raise FoundryCatalogError(
+                "validation_failure_result_conflict",
+                "Validation attempt already has a different failure result",
+                status_code=409,
+            )
+        return run, False
+    existing_demo = await db.scalar(
+        select(FoundryDemoRun).where(
+            FoundryDemoRun.validation_run_id == validation_run_id
+        )
+    )
+    if existing_demo is not None:
+        # The Demo callback may have succeeded before a later artifact-upload
+        # step failed.  Never overwrite the already durable scientific Demo.
+        return run, False
+    if run.status not in {"OUTCOME_UNKNOWN", "DISPATCHED", "RUNNING"}:
+        raise FoundryCatalogError(
+            "validation_attempt_closed",
+            "Validation attempt is not active or is already terminal",
+            status_code=409,
+        )
+    current_time = now or _utc_now()
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=timezone.utc)
+    attempt_number = int(
+        (run.validation_summary or {}).get("attempt_number") or 1
+    )
+    retryable = attempt_number < VALIDATION_MAX_ATTEMPTS
+    run.status = "WORKFLOW_FAILED"
+    run.failure_class = "validation_workflow_failed"
+    run.completed_at = current_time
+    run.validation_summary = {
+        **dict(run.validation_summary or {}),
+        "phase": "WORKFLOW_FAILED",
+        "retryable": retryable,
+        "workflow_failure_report_sha256": report_hash,
+        "failed_stage": report["failed_stage"],
+        "workflow_conclusion": report["workflow_conclusion"],
+        "github_repository": report["github_repository"],
+        "github_workflow_ref": report["github_workflow_ref"],
+        "github_workflow_sha": report["github_workflow_sha"],
+        "github_run_id": str(report["github_run_id"]),
+        "github_run_attempt": str(report["github_run_attempt"]),
+        "retry_after": None,
+    }
+    if (
+        candidate.current_version_number == version.version_number
+        and candidate.status == "VALIDATING"
+    ):
+        candidate.status = "BUILDING"
+    await _append_event(
+        db,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        event_type="VALIDATION_WORKFLOW_FAILED",
+        actor_kind="PROTECTED_VALIDATION_CALLBACK",
+        actor_user_id=None,
+        payload={
+            "validation_run_id": str(run.id),
+            "candidate_version_hash": version.version_hash,
+            "attempt_number": attempt_number,
+            "max_attempts": VALIDATION_MAX_ATTEMPTS,
+            "failure_class": run.failure_class,
+            "failed_stage": report["failed_stage"],
+            "workflow_conclusion": report["workflow_conclusion"],
+            "github_repository": report["github_repository"],
+            "github_workflow_ref": report["github_workflow_ref"],
+            "github_workflow_sha": report["github_workflow_sha"],
+            "github_run_id": str(report["github_run_id"]),
+            "github_run_attempt": str(report["github_run_attempt"]),
+            "failure_report_sha256": report_hash,
+            "retryable": retryable,
+        },
+    )
+    await db.commit()
+    await db.refresh(run)
+    return run, True
+
+
+async def reconcile_expired_validation_runs(
+    db: AsyncSession,
+    *,
+    now: datetime | None = None,
+    limit: int = 100,
+) -> int:
+    """Close expired validation attempts even when no user retries them."""
+
+    current_time = now or _utc_now()
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=timezone.utc)
+    dispatch_cutoff = current_time - VALIDATION_DISPATCH_LEASE
+    workflow_cutoff = current_time - VALIDATION_WORKFLOW_LEASE
+    run_ids = list(
+        (
+            await db.execute(
+                select(FoundryValidationRun.id)
+                .where(
+                    or_(
+                        and_(
+                            FoundryValidationRun.status == "QUEUED",
+                            FoundryValidationRun.created_at <= dispatch_cutoff,
+                        ),
+                        and_(
+                            FoundryValidationRun.status.in_(
+                                {"OUTCOME_UNKNOWN", "DISPATCHED", "RUNNING"}
+                            ),
+                            func.coalesce(
+                                FoundryValidationRun.started_at,
+                                FoundryValidationRun.created_at,
+                            )
+                            <= workflow_cutoff,
+                        ),
+                    )
+                )
+                .order_by(
+                    func.coalesce(
+                        FoundryValidationRun.started_at,
+                        FoundryValidationRun.created_at,
+                    ).asc()
+                )
+                .limit(max(1, min(int(limit), 1000)))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    reconciled = 0
+    for run_id in run_ids:
+        initial = await db.get(FoundryValidationRun, run_id)
+        if initial is None:
+            continue
+        candidate = await db.scalar(
+            select(FoundryCandidate)
+            .where(FoundryCandidate.id == initial.candidate_id)
+            .with_for_update()
+        )
+        run = await db.scalar(
+            select(FoundryValidationRun)
+            .where(FoundryValidationRun.id == run_id)
+            .with_for_update()
+        )
+        if candidate is None or run is None or run.status not in {
+            "QUEUED",
+            "OUTCOME_UNKNOWN",
+            "DISPATCHED",
+            "RUNNING",
+        }:
+            await db.rollback()
+            continue
+        active_status = run.status
+        active_since = run.started_at or run.created_at
+        if active_since.tzinfo is None:
+            active_since = active_since.replace(tzinfo=timezone.utc)
+        lease = (
+            VALIDATION_DISPATCH_LEASE
+            if active_status == "QUEUED"
+            else VALIDATION_WORKFLOW_LEASE
+        )
+        if current_time < active_since + lease:
+            await db.rollback()
+            continue
+        version = await db.get(FoundryCandidateVersion, run.candidate_version_id)
+        if version is None or version.version_hash != run.candidate_version_hash:
+            await db.rollback()
+            continue
+        attempt_number = int(
+            (run.validation_summary or {}).get("attempt_number") or 1
+        )
+        timeout_phase = {
+            "QUEUED": "DISPATCH_PENDING",
+            "OUTCOME_UNKNOWN": "DISPATCH_UNCERTAIN",
+            "DISPATCHED": "DISPATCHED",
+            "RUNNING": "RUNNING",
+        }[active_status]
+        run.status = "TIMED_OUT"
+        run.failure_class = {
+            "QUEUED": "validation_dispatch_reservation_timeout",
+            "OUTCOME_UNKNOWN": "validation_dispatch_outcome_unknown_timeout",
+            "DISPATCHED": "validation_workflow_timeout",
+            "RUNNING": "validation_workflow_timeout",
+        }[active_status]
+        run.completed_at = current_time
+        run.validation_summary = {
+            **dict(run.validation_summary or {}),
+            "phase": "TIMED_OUT",
+            "timeout_phase": timeout_phase,
+            "timeout_seconds": int(lease.total_seconds()),
+            "retryable": attempt_number < VALIDATION_MAX_ATTEMPTS,
+            "retry_after": None,
+        }
+        if (
+            candidate.current_version_number == version.version_number
+            and candidate.status == "VALIDATING"
+        ):
+            candidate.status = "BUILDING"
+        await _append_event(
+            db,
+            candidate_id=candidate.id,
+            candidate_version_id=version.id,
+            event_type=(
+                "VALIDATION_DISPATCH_RESERVATION_TIMED_OUT"
+                if active_status == "QUEUED"
+                else (
+                    "VALIDATION_DISPATCH_UNCERTAIN_TIMED_OUT"
+                    if active_status == "OUTCOME_UNKNOWN"
+                    else "VALIDATION_WORKFLOW_TIMED_OUT"
+                )
+            ),
+            actor_kind="CONTROL_PLANE_RECONCILER",
+            actor_user_id=None,
+            payload={
+                "validation_run_id": str(run.id),
+                "candidate_version_hash": version.version_hash,
+                "attempt_number": attempt_number,
+                "max_attempts": VALIDATION_MAX_ATTEMPTS,
+                "timeout_phase": timeout_phase,
+                "timeout_seconds": int(lease.total_seconds()),
+                "retryable": attempt_number < VALIDATION_MAX_ATTEMPTS,
+            },
+        )
+        await db.commit()
+        reconciled += 1
+    return reconciled
 
 
 def _parse_report_time(value: Any, field: str) -> datetime:
@@ -2033,6 +2592,25 @@ async def record_demo_report(
         raise FoundryCatalogError(
             "invalid_demo_report", "demo_run_id must be a UUID"
         ) from exc
+    initial = await db.get(FoundryValidationRun, validation_run_id)
+    if initial is None:
+        raise FoundryCatalogError(
+            "validation_run_not_found", "Validation run not found", status_code=404
+        )
+    candidate = await db.scalar(
+        select(FoundryCandidate)
+        .where(FoundryCandidate.id == initial.candidate_id)
+        .with_for_update()
+    )
+    run = await db.scalar(
+        select(FoundryValidationRun)
+        .where(FoundryValidationRun.id == validation_run_id)
+        .with_for_update()
+    )
+    if run is None or candidate is None:
+        raise FoundryCatalogError(
+            "validation_run_not_found", "Validation run not found", status_code=404
+        )
     existing = await db.get(FoundryDemoRun, report_demo_id)
     if existing is not None:
         if (
@@ -2045,29 +2623,25 @@ async def record_demo_report(
                 status_code=409,
             )
         return existing
-
-    run = await db.scalar(
-        select(FoundryValidationRun)
-        .where(FoundryValidationRun.id == validation_run_id)
-        .with_for_update()
-    )
-    if run is None:
-        raise FoundryCatalogError(
-            "validation_run_not_found", "Validation run not found", status_code=404
+    existing_for_attempt = await db.scalar(
+        select(FoundryDemoRun).where(
+            FoundryDemoRun.validation_run_id == validation_run_id
         )
-    if run.status not in {"QUEUED", "DISPATCHED", "RUNNING"}:
+    )
+    if existing_for_attempt is not None:
         raise FoundryCatalogError(
-            "validation_run_already_completed",
-            "Validation run is already terminal",
+            "validation_result_conflict",
+            "Validation attempt already has a different Demo result",
             status_code=409,
         )
-    candidate = await db.scalar(
-        select(FoundryCandidate)
-        .where(FoundryCandidate.id == run.candidate_id)
-        .with_for_update()
-    )
+    if run.status not in {"OUTCOME_UNKNOWN", "DISPATCHED", "RUNNING"}:
+        raise FoundryCatalogError(
+            "validation_attempt_closed",
+            "Validation attempt is not active or is already terminal",
+            status_code=409,
+        )
     version = await db.get(FoundryCandidateVersion, run.candidate_version_id)
-    if candidate is None or version is None:
+    if version is None:
         raise FoundryCatalogError(
             "candidate_version_not_found", "Candidate version not found", status_code=404
         )
@@ -2163,7 +2737,17 @@ async def record_demo_report(
         )
     run.status = status
     run.runner_image_digest = image_digest
-    run.validation_summary = dict(report.get("validation_summary") or {})
+    attempt_number = int(
+        (run.validation_summary or {}).get("attempt_number") or 1
+    )
+    run.validation_summary = {
+        **dict(run.validation_summary or {}),
+        "phase": status,
+        "retryable": False,
+        "retry_after": None,
+        "demo_report_sha256": declared_report_hash,
+        "demo_validation": dict(report.get("validation_summary") or {}),
+    }
     run.failure_class = str(report.get("failure_class") or "") or None
     run.started_at = started_at
     run.completed_at = completed_at
@@ -2213,7 +2797,10 @@ async def record_demo_report(
     # A newer immutable version may be appended while this exact-version run is
     # still executing.  Keep the older Demo and its event, but never let that
     # late callback overwrite the aggregate state owned by the newer version.
-    if candidate.current_version_number == version.version_number:
+    if (
+        candidate.current_version_number == version.version_number
+        and candidate.status == "VALIDATING"
+    ):
         candidate.status = "DEMO_RECORDED"
     await db.flush()
     await _append_event(
@@ -2226,6 +2813,8 @@ async def record_demo_report(
         payload={
             "demo_run_id": str(demo.id),
             "validation_run_id": str(run.id),
+            "attempt_number": attempt_number,
+            "max_attempts": VALIDATION_MAX_ATTEMPTS,
             "demo_report_sha256": declared_report_hash,
             "status": status,
             "evidence_class": NON_FORMAL_EVIDENCE_CLASS,
@@ -3768,29 +4357,53 @@ async def record_validation_result(
             "candidate_formal_claim_forbidden",
             "A candidate Demo cannot contain a formal verdict or Evidence Pack",
         )
+    initial = await db.get(FoundryValidationRun, validation_run_id)
+    if initial is None:
+        raise FoundryCatalogError(
+            "validation_run_not_found", "Validation run not found", status_code=404
+        )
+    candidate = await db.scalar(
+        select(FoundryCandidate)
+        .where(FoundryCandidate.id == initial.candidate_id)
+        .with_for_update()
+    )
     run = await db.scalar(
         select(FoundryValidationRun)
         .where(FoundryValidationRun.id == validation_run_id)
         .with_for_update()
     )
-    if run is None:
+    if run is None or candidate is None:
         raise FoundryCatalogError("validation_run_not_found", "Validation run not found", status_code=404)
-    if run.status not in {"QUEUED", "RUNNING"}:
+    if run.status not in {"OUTCOME_UNKNOWN", "DISPATCHED", "RUNNING"}:
         existing = await db.scalar(
             select(FoundryDemoRun).where(FoundryDemoRun.validation_run_id == run.id)
         )
         if existing is not None:
+            if not (
+                existing.status == status
+                and existing.runner_image_digest == runner_image_digest
+                and existing.stdout_sha256 == stdout_sha256
+                and existing.stderr_sha256 == stderr_sha256
+                and existing.structured_result == structured_result
+                and existing.limitations == limitations
+                and existing.validation_summary == validation_summary
+                and existing.failure_class == failure_class
+                and existing.resource_usage == resource_usage
+                and existing.artifact_manifest == artifact_manifest
+                and existing.started_at == started_at
+                and existing.completed_at == completed_at
+            ):
+                raise FoundryCatalogError(
+                    "validation_result_conflict",
+                    "Validation attempt already has a different Demo result",
+                    status_code=409,
+                )
             return existing
         raise FoundryCatalogError(
-            "validation_run_already_completed", "Validation run is already terminal", status_code=409
+            "validation_attempt_closed", "Validation attempt is not active or is already terminal", status_code=409
         )
     version = await db.get(FoundryCandidateVersion, run.candidate_version_id)
-    candidate = await db.scalar(
-        select(FoundryCandidate)
-        .where(FoundryCandidate.id == run.candidate_id)
-        .with_for_update()
-    )
-    if version is None or candidate is None or version.version_hash != run.candidate_version_hash:
+    if version is None or version.version_hash != run.candidate_version_hash:
         raise FoundryCatalogError(
             "candidate_version_binding_mismatch",
             "Validation result no longer matches its immutable candidate version",
@@ -3805,7 +4418,13 @@ async def record_validation_result(
         )
     run.status = status
     run.runner_image_digest = image_digest
-    run.validation_summary = validation_summary
+    run.validation_summary = {
+        **dict(run.validation_summary or {}),
+        "phase": status,
+        "retryable": False,
+        "retry_after": None,
+        "demo_validation": validation_summary,
+    }
     run.failure_class = failure_class
     run.started_at = started_at
     run.completed_at = completed_at
@@ -3869,7 +4488,10 @@ async def record_validation_result(
     )
     db.add(demo)
     await db.flush()
-    if candidate.current_version_number == version.version_number:
+    if (
+        candidate.current_version_number == version.version_number
+        and candidate.status == "VALIDATING"
+    ):
         candidate.status = "DEMO_RECORDED"
     await _append_event(
         db,
@@ -3971,6 +4593,21 @@ async def review_candidate_version(
         raise FoundryCatalogError(
             "candidate_version_review_closed",
             "This exact candidate version has a terminal review decision; create a new version",
+            status_code=409,
+        )
+    active_validation = await db.scalar(
+        select(FoundryValidationRun.id).where(
+            FoundryValidationRun.candidate_version_id == version.id,
+            FoundryValidationRun.candidate_version_hash == version.version_hash,
+            FoundryValidationRun.status.in_(
+                {"QUEUED", "OUTCOME_UNKNOWN", "DISPATCHED", "RUNNING"}
+            ),
+        )
+    )
+    if active_validation is not None:
+        raise FoundryCatalogError(
+            "candidate_validation_active",
+            "Human review must wait for the active validation attempt to finish",
             status_code=409,
         )
     if version.created_by_user_id == reviewer_user_id:

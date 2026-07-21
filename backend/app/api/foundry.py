@@ -49,6 +49,7 @@ from app.services.foundry_catalog import (
     serialize_demo_run,
     triage_capability_request,
     record_demo_report,
+    record_validation_workflow_failure,
     record_formal_build_attestation,
 )
 from app.services.foundry_validation_dispatch import (
@@ -195,6 +196,28 @@ class CandidateVersionBinding(BaseModel):
 
     candidate_version_id: uuid.UUID
     candidate_version_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ValidationWorkflowFailureReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1]
+    validation_run_id: uuid.UUID
+    candidate_id: uuid.UUID
+    candidate_version_id: uuid.UUID
+    candidate_version_number: int = Field(ge=1)
+    candidate_version_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    status: Literal["FAILED"]
+    failure_class: Literal["validation_workflow_failed"]
+    failed_stage: Literal["isolated_demo"]
+    workflow_conclusion: Literal["failure", "cancelled", "skipped"]
+    github_repository: str = Field(
+        pattern=r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$"
+    )
+    github_workflow_ref: str = Field(min_length=1, max_length=512)
+    github_workflow_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    github_run_id: str = Field(pattern=r"^[1-9][0-9]{0,19}$")
+    github_run_attempt: Literal["1"]
 
 
 class FoundryReviewCreate(CandidateVersionBinding):
@@ -356,6 +379,17 @@ def _raise_foundry_error(exc: FoundryCatalogError) -> None:
         status_code=exc.status_code,
         detail={"error_class": exc.error_class, "message": str(exc)},
     ) from exc
+
+
+def _validation_api_status(row: FoundryValidationRun) -> str:
+    return {
+        "QUEUED": "DISPATCH_PENDING",
+        "OUTCOME_UNKNOWN": "DISPATCH_UNCERTAIN",
+    }.get(row.status, row.status)
+
+
+def _validation_retryable(row: FoundryValidationRun) -> bool:
+    return bool((row.validation_summary or {}).get("retryable"))
 
 
 async def _admin_actor(request: Request, db: AsyncSession) -> tuple[str, uuid.UUID | None]:
@@ -1189,9 +1223,11 @@ async def admin_get_foundry_candidate(
             "validation_run_id": str(row.id),
             "candidate_version_id": str(row.candidate_version_id),
             "candidate_version_hash": row.candidate_version_hash,
-            "status": row.status,
+            "status": _validation_api_status(row),
             "validation_summary": dict(row.validation_summary or {}),
             "failure_class": row.failure_class,
+            "retryable": _validation_retryable(row),
+            "retry_after": (row.validation_summary or {}).get("retry_after"),
             "created_at": row.created_at.isoformat(),
         }
         for row in validations
@@ -1268,11 +1304,12 @@ async def admin_validate_foundry_candidate(
         _raise_foundry_error(exc)
     return {
         "validation_run_id": str(row.id),
-        "status": row.status,
+        "status": _validation_api_status(row),
         "candidate_id": str(row.candidate_id),
         "candidate_version_id": str(row.candidate_version_id),
         "candidate_version_hash": row.candidate_version_hash,
-        "retryable": row.status == "DISPATCH_FAILED",
+        "retryable": _validation_retryable(row),
+        "retry_after": (row.validation_summary or {}).get("retry_after"),
         "failure_class": row.failure_class,
         "created_at": row.created_at.isoformat(),
     }
@@ -1302,6 +1339,58 @@ async def ingest_foundry_demo_report(
         demo,
         version_number=version.version_number if version else None,
     )
+
+
+@internal_router.post(
+    "/validation-runs/{validation_run_id}/failure",
+    status_code=status.HTTP_200_OK,
+)
+async def ingest_foundry_validation_failure(
+    validation_run_id: uuid.UUID,
+    payload: ValidationWorkflowFailureReport,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Close a failed protected workflow without creating formal evidence."""
+
+    _require_flag(settings.foundry_auto_demo_enabled, "Foundry automatic Demo")
+    _require_validation_runner(request)
+    if payload.validation_run_id != validation_run_id:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_class": "validation_failure_binding_invalid",
+                "message": "Path and body validation_run_id differ",
+            },
+        )
+    expected_workflow_ref = (
+        f"{settings.foundry_validation_github_repository}/.github/workflows/"
+        f"{settings.foundry_validation_github_workflow}@refs/heads/"
+        f"{settings.foundry_validation_github_ref}"
+    )
+    try:
+        run, created = await record_validation_workflow_failure(
+            db,
+            validation_run_id=validation_run_id,
+            report=payload.model_dump(mode="json"),
+            expected_repository=settings.foundry_validation_github_repository,
+            expected_workflow_ref=expected_workflow_ref,
+        )
+    except FoundryCatalogError as exc:
+        _raise_foundry_error(exc)
+    return {
+        "validation_run_id": str(run.id),
+        "candidate_id": str(run.candidate_id),
+        "candidate_version_id": str(run.candidate_version_id),
+        "status": (
+            "DEMO_ALREADY_RECORDED"
+            if run.status in {"PASSED", "PARTIAL", "FAILED"}
+            else "FAILED_RECORDED"
+        ),
+        "failure_class": run.failure_class,
+        "retryable": _validation_retryable(run),
+        "idempotent_replay": not created,
+    }
 
 
 @internal_router.post("/draft-runs/{draft_run_id}/result")
@@ -1359,8 +1448,11 @@ async def ingest_foundry_ai_draft_result(
             _raise_foundry_error(exc)
         auto_demo = {
             "validation_run_id": str(validation.id),
-            "status": validation.status,
-            "retryable": validation.status == "DISPATCH_FAILED",
+            "status": _validation_api_status(validation),
+            "retryable": _validation_retryable(validation),
+            "retry_after": (validation.validation_summary or {}).get(
+                "retry_after"
+            ),
             "failure_class": validation.failure_class,
         }
     return {

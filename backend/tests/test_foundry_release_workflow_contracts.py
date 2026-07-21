@@ -300,8 +300,23 @@ def test_candidate_demo_secrets_are_guarded_by_main_only_environment_contract():
 
     assert "environment: foundry-candidate-validation" in text
     assert 'test "$GITHUB_REF" = "refs/heads/main"' in text
-    assert text.count("FOUNDRY_VALIDATION_RESULT_SECRET") == 1
-    assert text.count("FOUNDRY_VALIDATION_CALLBACK_URL") == 1
+    assert text.count("FOUNDRY_VALIDATION_RESULT_SECRET") == 2
+    assert text.count("FOUNDRY_VALIDATION_CALLBACK_URL") == 2
+    assert (
+        "group: foundry-candidate-demo-${{ inputs.validation_run_id || "
+        "inputs.candidate_key }}"
+    ) in text
+    assert "group: foundry-candidate-demo-${{ inputs.candidate_key }}" not in text
+    assert 'test "$GITHUB_RUN_ATTEMPT" = "1"' in text
+    failure = _section(text, "  report-failed-validation:")
+    assert "always()" in failure
+    assert "github.run_attempt == 1" in failure
+    assert "contents: none" in failure
+    assert "actions/checkout" not in failure
+    assert "docker " not in failure
+    assert "candidate-source" not in failure
+    assert "FORMAL" not in failure
+    assert "/failure" in failure
     assert "Deployment branches and tags" in release_runbook
     assert "Selected branches and tags" in release_runbook
     assert "只允许 `main`" in release_runbook

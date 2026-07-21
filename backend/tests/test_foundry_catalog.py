@@ -27,6 +27,7 @@ from app.models.foundry_records import (
     FoundryCandidateEvent,
     FoundryCandidateVersion,
     FoundryFormalBuildAttestation,
+    FoundryValidationRun,
     WorkflowRegistryEntry,
     WorkflowRegistryRelease,
 )
@@ -37,7 +38,11 @@ from app.services.foundry_catalog import (
     _formal_build_source_binding,
     _pending_registry_release_request,
     append_candidate_version,
+    ensure_validation_run,
     record_demo_report,
+    record_validation_dispatch,
+    record_validation_workflow_failure,
+    reconcile_expired_validation_runs,
     record_formal_build_dispatch,
     record_formal_build_attestation,
     register_candidate_version,
@@ -52,6 +57,7 @@ from app.services.foundry_ci_dispatch import FoundryCIDispatchError
 from app.services.foundry_validation_dispatch import (
     FoundryValidationDispatchError,
     dispatch_candidate_validation,
+    queue_and_dispatch_candidate_validation,
 )
 
 
@@ -214,6 +220,38 @@ async def _user(db_session, name: str) -> User:
     return row
 
 
+async def _candidate_version(db_session, suffix: str):
+    candidate = FoundryCandidate(
+        gap_fingerprint=hashlib.sha256(suffix.encode()).hexdigest(),
+        gap_code="registered_workflow_missing",
+        gap_descriptor={
+            "gap_code": "registered_workflow_missing",
+            "dataset_key": suffix,
+            "research_domain": "cosmology",
+        },
+        status="BUILDING",
+        risk_level="R1",
+        generation_route="COMPOSITION",
+    )
+    db_session.add(candidate)
+    await db_session.commit()
+    await db_session.refresh(candidate)
+    version = await append_candidate_version(
+        db_session,
+        candidate=candidate,
+        draft={
+            "candidate_bundle": _bundle(suffix=suffix),
+            "validation_runner_image_digest": VALIDATION_IMAGE,
+            "code_tree_hash": "4" * 64,
+            "sbom_hash": "5" * 64,
+        },
+        actor_kind="AI_SERVICE",
+        actor_user_id=None,
+    )
+    await db_session.commit()
+    return candidate, version
+
+
 async def _candidate_with_demo(
     db_session,
     *,
@@ -277,6 +315,9 @@ async def _candidate_with_demo(
         candidate_version_hash=version.version_hash,
         actor_kind="HUMAN_ADMIN",
         actor_user_id=None,
+    )
+    await record_validation_dispatch(
+        db_session, validation_run_id=run.id, dispatched=True
     )
     report = _demo_report(version)
     demo = await record_demo_report(
@@ -571,6 +612,9 @@ async def test_old_version_demo_is_recorded_without_overwriting_new_version_stat
         actor_kind="HUMAN_ADMIN",
         actor_user_id=None,
     )
+    await record_validation_dispatch(
+        db_session, validation_run_id=run_one.id, dispatched=True
+    )
 
     version_two = await append_candidate_version(
         db_session,
@@ -700,9 +744,491 @@ async def test_validate_dispatch_records_success_and_retryable_failure(
         },
     )
     assert failed.status_code == 202, failed.text
-    assert failed.json()["status"] == "DISPATCH_FAILED"
+    assert failed.json()["status"] == "DISPATCH_UNCERTAIN"
     assert failed.json()["retryable"] is True
     assert failed.json()["failure_class"] == "validation_dispatch_timeout"
+    assert failed.json()["retry_after"] is not None
+
+
+def _validation_failure_report(run, version, *, run_attempt="1"):
+    return {
+        "schema_version": 1,
+        "validation_run_id": str(run.id),
+        "candidate_id": str(run.candidate_id),
+        "candidate_version_id": str(version.id),
+        "candidate_version_number": version.version_number,
+        "candidate_version_hash": version.version_hash,
+        "status": "FAILED",
+        "failure_class": "validation_workflow_failed",
+        "failed_stage": "isolated_demo",
+        "workflow_conclusion": "failure",
+        "github_repository": GITHUB_REPOSITORY,
+        "github_workflow_ref": (
+            f"{GITHUB_REPOSITORY}/.github/workflows/"
+            "foundry-candidate-demo.yml@refs/heads/main"
+        ),
+        "github_workflow_sha": "9" * 40,
+        "github_run_id": "12345",
+        "github_run_attempt": run_attempt,
+    }
+
+
+async def test_validation_reentry_during_dispatch_reuses_uncertain_attempt(
+    db_session, monkeypatch
+):
+    candidate, version = await _candidate_version(db_session, "dispatch_reentry")
+    dispatches = 0
+
+    async def _dispatch(**_kwargs):
+        nonlocal dispatches
+        dispatches += 1
+        active, created = await ensure_validation_run(
+            db_session,
+            candidate_id=candidate.id,
+            candidate_version_id=version.id,
+            candidate_version_hash=version.version_hash,
+            actor_kind="HUMAN_ADMIN",
+            actor_user_id=None,
+        )
+        assert created is False
+        assert active.status == "OUTCOME_UNKNOWN"
+
+    monkeypatch.setattr(
+        "app.services.foundry_validation_dispatch.dispatch_candidate_validation",
+        _dispatch,
+    )
+    run = await queue_and_dispatch_candidate_validation(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+    )
+    assert run.status == "DISPATCHED"
+    assert dispatches == 1
+
+
+async def test_validation_short_long_leases_reconcile_and_bound_attempts(db_session):
+    candidate, version = await _candidate_version(db_session, "validation_leases")
+    first, created = await ensure_validation_run(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+    )
+    assert created is True
+    created_at = first.created_at.replace(tzinfo=timezone.utc)
+    same, created = await ensure_validation_run(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+        now=created_at + timedelta(minutes=4),
+    )
+    assert (same.id, created) == (first.id, False)
+    assert await reconcile_expired_validation_runs(
+        db_session, now=created_at + timedelta(minutes=6)
+    ) == 1
+    await db_session.refresh(first)
+    assert first.status == "TIMED_OUT"
+
+    second, created = await ensure_validation_run(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+        now=created_at + timedelta(minutes=6),
+    )
+    assert created is True
+    dispatched_at = created_at + timedelta(minutes=7)
+    await record_validation_dispatch(
+        db_session,
+        validation_run_id=second.id,
+        dispatched=False,
+        failure_class="validation_dispatch_timeout",
+        retryable=True,
+        delivery_uncertain=True,
+        now=dispatched_at,
+    )
+    same, created = await ensure_validation_run(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+        now=dispatched_at + timedelta(minutes=59),
+    )
+    assert (same.id, created) == (second.id, False)
+    assert await reconcile_expired_validation_runs(
+        db_session, now=dispatched_at + timedelta(minutes=61)
+    ) == 1
+
+    third, created = await ensure_validation_run(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+        now=dispatched_at + timedelta(minutes=61),
+    )
+    assert created is True
+    await record_validation_dispatch(
+        db_session,
+        validation_run_id=third.id,
+        dispatched=True,
+        now=dispatched_at + timedelta(minutes=62),
+    )
+    assert await reconcile_expired_validation_runs(
+        db_session, now=dispatched_at + timedelta(minutes=123)
+    ) == 1
+    with pytest.raises(FoundryCatalogError, match="bounded attempt limit"):
+        await ensure_validation_run(
+            db_session,
+            candidate_id=candidate.id,
+            candidate_version_id=version.id,
+            candidate_version_hash=version.version_hash,
+            actor_kind="HUMAN_ADMIN",
+            actor_user_id=None,
+            now=dispatched_at + timedelta(minutes=124),
+        )
+
+
+@pytest.mark.parametrize("legacy_retryable", (True, False, None))
+async def test_validation_legacy_dispatch_failure_retry_uses_exact_event(
+    db_session, legacy_retryable
+):
+    candidate, version = await _candidate_version(
+        db_session, f"legacy_dispatch_{str(legacy_retryable).lower()}"
+    )
+    legacy = FoundryValidationRun(
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        status="DISPATCH_FAILED",
+        requested_by_kind="HUMAN_ADMIN",
+        validation_summary={},
+        failure_class="legacy_dispatch_failed",
+        completed_at=datetime.now(timezone.utc),
+    )
+    db_session.add(legacy)
+    await db_session.flush()
+    if legacy_retryable is not None:
+        await _append_event(
+            db_session,
+            candidate_id=candidate.id,
+            candidate_version_id=version.id,
+            event_type="VALIDATION_DISPATCH_FAILED",
+            actor_kind="CONTROL_PLANE",
+            actor_user_id=None,
+            payload={
+                "validation_run_id": str(legacy.id),
+                "retryable": legacy_retryable,
+            },
+        )
+    await db_session.commit()
+
+    if legacy_retryable is True:
+        retry, created = await ensure_validation_run(
+            db_session,
+            candidate_id=candidate.id,
+            candidate_version_id=version.id,
+            candidate_version_hash=version.version_hash,
+            actor_kind="HUMAN_ADMIN",
+            actor_user_id=None,
+        )
+        assert created is True
+        assert retry.id != legacy.id
+        assert retry.validation_summary["attempt_number"] == 2
+    else:
+        with pytest.raises(FoundryCatalogError, match="failed permanently"):
+            await ensure_validation_run(
+                db_session,
+                candidate_id=candidate.id,
+                candidate_version_id=version.id,
+                candidate_version_hash=version.version_hash,
+                actor_kind="HUMAN_ADMIN",
+                actor_user_id=None,
+            )
+
+
+async def test_validation_reconciler_filters_expired_rows_before_limit(db_session):
+    candidate, version = await _candidate_version(db_session, "reconcile_limit")
+    now = datetime.now(timezone.utc)
+    for index in range(100):
+        db_session.add(
+            FoundryValidationRun(
+                candidate_id=candidate.id,
+                candidate_version_id=version.id,
+                candidate_version_hash=version.version_hash,
+                status="DISPATCHED",
+                requested_by_kind="HUMAN_ADMIN",
+                validation_summary={"attempt_number": 1},
+                created_at=now - timedelta(hours=2, seconds=index),
+                started_at=now,
+            )
+        )
+    stale = FoundryValidationRun(
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        status="QUEUED",
+        requested_by_kind="HUMAN_ADMIN",
+        validation_summary={"attempt_number": 1},
+        created_at=now - timedelta(minutes=6),
+    )
+    db_session.add(stale)
+    candidate.status = "VALIDATING"
+    await db_session.commit()
+
+    assert await reconcile_expired_validation_runs(
+        db_session, now=now, limit=100
+    ) == 1
+    await db_session.refresh(stale)
+    assert stale.status == "TIMED_OUT"
+
+
+async def test_review_waits_for_active_retry_and_late_demo_cannot_downgrade(
+    db_session, test_user
+):
+    reviewer, _token = test_user
+    candidate, version, _first_run, _demo, _report = await _candidate_with_demo(
+        db_session, suffix="review_retry_race"
+    )
+    retry, created = await ensure_validation_run(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=reviewer.id,
+    )
+    assert created is True
+    await record_validation_dispatch(
+        db_session, validation_run_id=retry.id, dispatched=True
+    )
+    with pytest.raises(FoundryCatalogError, match="active validation attempt"):
+        await review_candidate_version(
+            db_session,
+            candidate_id=candidate.id,
+            candidate_version_id=version.id,
+            candidate_version_hash=version.version_hash,
+            reviewer_user_id=reviewer.id,
+            review_scope="ENGINEERING",
+            decision="APPROVED",
+            comment="Must wait for the retry.",
+        )
+
+    # Defense in depth for a cross-process race: even if a terminal aggregate
+    # state is committed after the callback checked its active run, the Demo
+    # remains append-only and cannot demote that aggregate state.
+    candidate.status = "APPROVED"
+    await db_session.commit()
+    await record_demo_report(
+        db_session,
+        validation_run_id=retry.id,
+        demo_report=_demo_report(version),
+    )
+    await db_session.refresh(candidate)
+    assert candidate.status == "APPROVED"
+
+
+async def test_validation_failure_callback_is_exact_idempotent_and_retryable(db_session):
+    candidate, version = await _candidate_version(db_session, "workflow_failure")
+    run, _ = await ensure_validation_run(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+    )
+    await record_validation_dispatch(
+        db_session, validation_run_id=run.id, dispatched=True
+    )
+    report = _validation_failure_report(run, version)
+    recorded, created = await record_validation_workflow_failure(
+        db_session,
+        validation_run_id=run.id,
+        report=report,
+        expected_repository=GITHUB_REPOSITORY,
+        expected_workflow_ref=report["github_workflow_ref"],
+    )
+    replay, replay_created = await record_validation_workflow_failure(
+        db_session,
+        validation_run_id=run.id,
+        report=report,
+        expected_repository=GITHUB_REPOSITORY,
+        expected_workflow_ref=report["github_workflow_ref"],
+    )
+    assert recorded.status == replay.status == "WORKFLOW_FAILED"
+    assert created is True and replay_created is False
+    assert recorded.validation_summary["retryable"] is True
+    conflicting = dict(report)
+    conflicting["github_run_id"] = "12346"
+    with pytest.raises(FoundryCatalogError, match="different failure result"):
+        await record_validation_workflow_failure(
+            db_session,
+            validation_run_id=run.id,
+            report=conflicting,
+            expected_repository=GITHUB_REPOSITORY,
+            expected_workflow_ref=report["github_workflow_ref"],
+        )
+    with pytest.raises(FoundryCatalogError, match="protected attempt binding"):
+        await record_validation_workflow_failure(
+            db_session,
+            validation_run_id=run.id,
+            report=_validation_failure_report(run, version, run_attempt="2"),
+            expected_repository=GITHUB_REPOSITORY,
+            expected_workflow_ref=report["github_workflow_ref"],
+        )
+    retry, retry_created = await ensure_validation_run(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+    )
+    assert retry_created is True
+    assert retry.id != run.id
+
+
+async def test_validation_failure_callback_http_contract(
+    app_client, db_session, monkeypatch
+):
+    candidate, version = await _candidate_version(db_session, "failure_http")
+    run, _ = await ensure_validation_run(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+    )
+    await record_validation_dispatch(
+        db_session, validation_run_id=run.id, dispatched=True
+    )
+    secret = "validation-result-secret-for-tests-123456"
+    monkeypatch.setattr(settings, "foundry_validation_result_secret", secret)
+    monkeypatch.setattr(
+        settings, "foundry_validation_github_repository", GITHUB_REPOSITORY
+    )
+    monkeypatch.setattr(
+        settings,
+        "foundry_validation_github_workflow",
+        "foundry-candidate-demo.yml",
+    )
+    monkeypatch.setattr(settings, "foundry_validation_github_ref", "main")
+    report = _validation_failure_report(run, version)
+    endpoint = f"/api/internal/foundry/validation-runs/{run.id}/failure"
+
+    monkeypatch.setattr(settings, "foundry_auto_demo_enabled", False)
+    disabled = await app_client.post(
+        endpoint,
+        headers={"Authorization": f"Bearer {secret}"},
+        json=report,
+    )
+    assert disabled.status_code == 404
+    monkeypatch.setattr(settings, "foundry_auto_demo_enabled", True)
+    assert (await app_client.post(endpoint, json=report)).status_code == 403
+    mismatch = await app_client.post(
+        f"/api/internal/foundry/validation-runs/{uuid.uuid4()}/failure",
+        headers={"Authorization": f"Bearer {secret}"},
+        json=report,
+    )
+    assert mismatch.status_code == 409
+    extra = await app_client.post(
+        endpoint,
+        headers={"Authorization": f"Bearer {secret}"},
+        json={**report, "unexpected": True},
+    )
+    assert extra.status_code == 422
+    rerun = await app_client.post(
+        endpoint,
+        headers={"Authorization": f"Bearer {secret}"},
+        json={**report, "github_run_attempt": "2"},
+    )
+    assert rerun.status_code == 422
+    accepted = await app_client.post(
+        endpoint,
+        headers={"Authorization": f"Bearer {secret}"},
+        json=report,
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["status"] == "FAILED_RECORDED"
+    assert accepted.json()["retryable"] is True
+
+
+async def test_failure_callback_never_overwrites_recorded_demo(db_session):
+    _candidate, version, run, demo, _report = await _candidate_with_demo(
+        db_session, suffix="demo_wins"
+    )
+    failure = _validation_failure_report(run, version)
+    preserved, created = await record_validation_workflow_failure(
+        db_session,
+        validation_run_id=run.id,
+        report=failure,
+        expected_repository=GITHUB_REPOSITORY,
+        expected_workflow_ref=failure["github_workflow_ref"],
+    )
+    assert created is False
+    assert preserved.status == demo.status == "PASSED"
+
+
+async def test_validation_rejects_late_demo_after_reconciled_timeout(db_session):
+    candidate, version = await _candidate_version(db_session, "late_demo")
+    run, _ = await ensure_validation_run(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+    )
+    started = datetime.now(timezone.utc)
+    await record_validation_dispatch(
+        db_session, validation_run_id=run.id, dispatched=True, now=started
+    )
+    assert await reconcile_expired_validation_runs(
+        db_session, now=started + timedelta(hours=1, seconds=1)
+    ) == 1
+    with pytest.raises(FoundryCatalogError, match="not active"):
+        await record_demo_report(
+            db_session,
+            validation_run_id=run.id,
+            demo_report=_demo_report(version),
+        )
+
+
+def test_validation_dispatch_classifies_known_rejection_and_unknown_delivery():
+    rejected = FoundryValidationDispatchError("validation_dispatch_http_401")
+    overloaded = FoundryValidationDispatchError("validation_dispatch_http_503")
+    throttled = FoundryValidationDispatchError("validation_dispatch_http_429")
+    assert (rejected.retryable, rejected.delivery_uncertain) == (False, False)
+    assert (overloaded.retryable, overloaded.delivery_uncertain) == (True, True)
+    assert (throttled.retryable, throttled.delivery_uncertain) == (True, False)
+
+
+def test_foundry_validation_reconciler_is_maintenance_scheduled():
+    import celery_worker
+
+    schedule = celery_worker._build_beat_schedule()
+    entry = schedule["reconcile-stale-foundry-validations"]
+    assert entry == {
+        "task": "maintenance.reconcile_foundry_validations",
+        "schedule": 300.0,
+        "options": {"queue": "maintenance"},
+    }
+    assert "app.tasks.foundry_tasks" in celery_worker.celery_app.conf.include
 
 
 async def test_github_dispatch_sends_only_opaque_validation_identifiers(monkeypatch):

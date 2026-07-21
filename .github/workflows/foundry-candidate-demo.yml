@@ -26,6 +26,13 @@ permissions:
   actions: read
   packages: read
 
+concurrency:
+  # A durable validation run is already the server's single exact attempt.
+  # Scope concurrency to that attempt so independent immutable versions do
+  # not spend their one-hour callback lease waiting behind each other.
+  group: foundry-candidate-demo-${{ inputs.validation_run_id || inputs.candidate_key }}
+  cancel-in-progress: false
+
 jobs:
   isolated-demo:
     runs-on: ubuntu-latest
@@ -36,7 +43,7 @@ jobs:
     steps:
       - name: Require the protected main workflow source
         shell: bash
-        run: test "$GITHUB_REF" = "refs/heads/main"
+        run: test "$GITHUB_REF" = "refs/heads/main" && test "$GITHUB_RUN_ATTEMPT" = "1"
 
       # Control code comes from the pinned validation workflow ref. Candidate
       # code is downloaded and handled separately; it cannot replace these host
@@ -297,3 +304,86 @@ jobs:
             foundry-validation-input/receipt.json
           if-no-files-found: error
           retention-days: 30
+
+  report-failed-validation:
+    needs: isolated-demo
+    if: ${{ always() && github.run_attempt == 1 && inputs.validation_run_id != '' && needs.isolated-demo.result != 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: foundry-candidate-validation
+    permissions:
+      contents: none
+    steps:
+      - name: Append the exact failed attempt to the durable Candidate ledger
+        env:
+          CALLBACK_URL: ${{ secrets.FOUNDRY_VALIDATION_CALLBACK_URL }}
+          RESULT_SECRET: ${{ secrets.FOUNDRY_VALIDATION_RESULT_SECRET }}
+          VALIDATION_RUN_ID: ${{ inputs.validation_run_id }}
+          VERSION_BINDING: ${{ inputs.version_binding }}
+          WORKFLOW_CONCLUSION: ${{ needs.isolated-demo.result }}
+          GITHUB_WORKFLOW_REF_VALUE: ${{ github.workflow_ref }}
+          GITHUB_WORKFLOW_SHA_VALUE: ${{ github.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_RUN_ATTEMPT" = "1"
+          test -n "$CALLBACK_URL"
+          test -n "$RESULT_SECRET"
+          export GITHUB_WORKFLOW_REF_VALUE GITHUB_WORKFLOW_SHA_VALUE
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import uuid
+          from pathlib import Path
+
+          binding = json.loads(os.environ["VERSION_BINDING"])
+          assert set(binding) == {
+              "candidate_id",
+              "candidate_version_id",
+              "candidate_key",
+              "candidate_version_number",
+              "candidate_version_hash",
+              "candidate_bundle_hash",
+              "validation_runner_image_digest",
+          }
+          run_id = str(uuid.UUID(os.environ["VALIDATION_RUN_ID"]))
+          candidate_id = str(uuid.UUID(binding["candidate_id"]))
+          version_id = str(uuid.UUID(binding["candidate_version_id"]))
+          version_number = int(binding["candidate_version_number"])
+          assert version_number >= 1
+          assert re.fullmatch(r"[0-9a-f]{64}", binding["candidate_version_hash"])
+          conclusion = os.environ["WORKFLOW_CONCLUSION"]
+          assert conclusion in {"failure", "cancelled", "skipped"}
+          report = {
+              "schema_version": 1,
+              "validation_run_id": run_id,
+              "candidate_id": candidate_id,
+              "candidate_version_id": version_id,
+              "candidate_version_number": version_number,
+              "candidate_version_hash": binding["candidate_version_hash"],
+              "status": "FAILED",
+              "failure_class": "validation_workflow_failed",
+              "failed_stage": "isolated_demo",
+              "workflow_conclusion": conclusion,
+              "github_repository": os.environ["GITHUB_REPOSITORY"],
+              "github_workflow_ref": os.environ["GITHUB_WORKFLOW_REF_VALUE"],
+              "github_workflow_sha": os.environ["GITHUB_WORKFLOW_SHA_VALUE"],
+              "github_run_id": os.environ["GITHUB_RUN_ID"],
+              "github_run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+          }
+          Path("foundry-validation-failure.json").write_text(
+              json.dumps(report, sort_keys=True, separators=(",", ":")),
+              encoding="utf-8",
+          )
+          PY
+          callback="${CALLBACK_URL%/}/api/internal/foundry/validation-runs/${VALIDATION_RUN_ID}/failure"
+          curl --fail --silent --show-error --output /dev/null \
+            --proto '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --connect-timeout 10 --max-time 60 \
+            -H "Authorization: Bearer $RESULT_SECRET" \
+            -H "Content-Type: application/json" \
+            --data-binary @foundry-validation-failure.json \
+            "$callback"

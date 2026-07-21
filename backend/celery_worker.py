@@ -221,6 +221,7 @@ celery_app.conf.include = [
     "app.services.alert_tasks",
     "app.tasks.ai_tools_tasks",
     "app.tasks.claim_audit_tasks",
+    "app.tasks.foundry_tasks",
     "app.tasks.privacy_tasks",
     "app.tasks.postgres_backup_tasks",
     "app.tasks.union3_source_tasks",
@@ -247,6 +248,11 @@ def _build_beat_schedule() -> dict[str, dict[str, object]]:
         "reconcile-stale-claim-audits": {
             "task": "claim_audit.reconcile_stale",
             "schedule": 300.0,
+        },
+        "reconcile-stale-foundry-validations": {
+            "task": "maintenance.reconcile_foundry_validations",
+            "schedule": 300.0,
+            "options": {"queue": "maintenance"},
         },
         "reconcile-union3-research-loop": {
             "task": "union3.reconcile",

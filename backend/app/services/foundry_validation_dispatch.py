@@ -29,11 +29,31 @@ _REPOSITORY_RE = re.compile(
 
 
 class FoundryValidationDispatchError(RuntimeError):
-    """Sanitized retryable dispatch failure."""
+    """Sanitized dispatch failure with explicit delivery semantics."""
 
-    def __init__(self, failure_class: str):
+    def __init__(
+        self,
+        failure_class: str,
+        *,
+        retryable: bool | None = None,
+        delivery_uncertain: bool | None = None,
+    ):
         super().__init__(failure_class)
         self.failure_class = failure_class
+        inferred_uncertain = failure_class in {
+            "validation_dispatch_timeout",
+            "validation_dispatch_network_error",
+            "validation_dispatch_internal_error",
+        } or bool(re.fullmatch(r"validation_dispatch_http_5[0-9]{2}", failure_class))
+        inferred_retryable = inferred_uncertain or failure_class == "validation_dispatch_http_429"
+        self.delivery_uncertain = (
+            inferred_uncertain
+            if delivery_uncertain is None
+            else bool(delivery_uncertain)
+        )
+        self.retryable = (
+            inferred_retryable if retryable is None else bool(retryable)
+        )
 
 
 async def dispatch_candidate_validation(
@@ -197,7 +217,9 @@ async def dispatch_candidate_validation(
         raise FoundryValidationDispatchError("validation_dispatch_network_error") from exc
     if response.status_code != 204:
         raise FoundryValidationDispatchError(
-            f"validation_dispatch_http_{response.status_code}"
+            f"validation_dispatch_http_{response.status_code}",
+            retryable=response.status_code == 429 or response.status_code >= 500,
+            delivery_uncertain=response.status_code >= 500,
         )
 
 
@@ -232,7 +254,21 @@ async def queue_and_dispatch_candidate_validation(
     if not created:
         return run
 
+    # Commit a long-lease uncertainty marker *before* the external request.
+    # If this process dies after GitHub accepts the request but before the 204
+    # is recorded, another API call will not launch a competing workflow.
+    await record_validation_dispatch(
+        db,
+        validation_run_id=run.id,
+        dispatched=False,
+        failure_class="validation_dispatch_in_progress",
+        retryable=True,
+        delivery_uncertain=True,
+    )
+
     failure_class: str | None = None
+    retryable = False
+    delivery_uncertain = False
     version = await db.get(FoundryCandidateVersion, run.candidate_version_id)
     if version is None:
         failure_class = "validation_dispatch_internal_error"
@@ -247,16 +283,22 @@ async def queue_and_dispatch_candidate_validation(
             )
         except FoundryValidationDispatchError as exc:
             failure_class = exc.failure_class
+            retryable = exc.retryable
+            delivery_uncertain = exc.delivery_uncertain
         except FoundryCatalogError:
             failure_class = "validation_dispatch_binding_error"
         except Exception:
             failure_class = "validation_dispatch_internal_error"
+            retryable = True
+            delivery_uncertain = True
 
     return await record_validation_dispatch(
         db,
         validation_run_id=run.id,
         dispatched=failure_class is None,
         failure_class=failure_class,
+        retryable=retryable,
+        delivery_uncertain=delivery_uncertain,
     )
 
 

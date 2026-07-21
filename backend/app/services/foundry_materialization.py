@@ -116,9 +116,21 @@ def _successful_dispatch_binds(
 ) -> bool:
     config = _DISPATCH_LANES[lane]
     payload = dict(event.event_payload or {})
-    if event.event_type != config["succeeded"]:
+    # A protected workflow may have accepted workflow_dispatch even when
+    # GitHub (or an intermediary) returned a 5xx to the control plane.  The
+    # later signed workflow receipt is authoritative proof that this exact
+    # reservation did run, so an exact outcome-unknown event is an admissible
+    # dispatch binding.  Known failures remain ineligible.
+    if event.event_type not in {config["succeeded"], config["failed"]}:
+        return False
+    if (
+        event.event_type == config["failed"]
+        and payload.get("outcome_unknown") is not True
+    ):
         return False
     if "reservation_event_id" not in payload:
+        if event.event_type != config["succeeded"]:
+            return False
         return _legacy_dispatch_success_binds(
             event,
             request_event_id=request_event_id,
@@ -883,8 +895,12 @@ async def record_materialization_pr_attestation(
                 select(FoundryCandidateEvent).where(
                     FoundryCandidateEvent.candidate_id == candidate_id,
                     FoundryCandidateEvent.candidate_version_id == version_id,
-                    FoundryCandidateEvent.event_type
-                    == "SOURCE_MATERIALIZATION_DISPATCHED",
+                    FoundryCandidateEvent.event_type.in_(
+                        {
+                            "SOURCE_MATERIALIZATION_DISPATCHED",
+                            "SOURCE_MATERIALIZATION_DISPATCH_FAILED",
+                        }
+                    ),
                 )
             )
         ).scalars().all()
@@ -1234,8 +1250,12 @@ async def record_materialization_final_receipt(
                 select(FoundryCandidateEvent).where(
                     FoundryCandidateEvent.candidate_id == candidate_id,
                     FoundryCandidateEvent.candidate_version_id == origin_id,
-                    FoundryCandidateEvent.event_type
-                    == "SOURCE_MATERIALIZATION_FINALIZATION_DISPATCHED",
+                    FoundryCandidateEvent.event_type.in_(
+                        {
+                            "SOURCE_MATERIALIZATION_FINALIZATION_DISPATCHED",
+                            "SOURCE_MATERIALIZATION_FINALIZATION_DISPATCH_FAILED",
+                        }
+                    ),
                 )
             )
         ).scalars().all()

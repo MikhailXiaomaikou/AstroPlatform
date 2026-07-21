@@ -386,7 +386,7 @@ async def test_auto_demo_dispatch_failure_is_recorded_without_implicit_retry(
     assert first.status_code == 200, first.text
     assert replay.status_code == 200, replay.text
     assert first.json()["candidate_version_id"] is not None
-    assert first.json()["auto_demo"]["status"] == "DISPATCH_FAILED"
+    assert first.json()["auto_demo"]["status"] == "DISPATCH_UNCERTAIN"
     assert first.json()["auto_demo"]["failure_class"] == "validation_dispatch_timeout"
     assert replay.json()["auto_demo"] == first.json()["auto_demo"]
     assert dispatch_count == 1

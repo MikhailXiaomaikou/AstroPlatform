@@ -2294,10 +2294,18 @@ export async function validateAdminFoundryCandidate(
   },
 ): Promise<{
   validation_run_id: string;
-  status: "QUEUED";
+  status:
+    | "DISPATCH_PENDING"
+    | "DISPATCH_UNCERTAIN"
+    | "DISPATCHED"
+    | "DISPATCH_FAILED"
+    | string;
   candidate_id: string;
   candidate_version_id: string;
   candidate_version_hash: string;
+  retryable: boolean;
+  retry_after: string | null;
+  failure_class: string | null;
   created_at: string;
 }> {
   const { data } = await api.post(
