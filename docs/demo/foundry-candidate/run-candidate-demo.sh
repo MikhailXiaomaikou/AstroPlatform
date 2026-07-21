@@ -58,12 +58,52 @@ import sys
 from pathlib import Path
 
 report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-assert report["evidence_class"] == "NON_FORMAL_DEMO"
-assert report["publication_ready"] is False
-assert report["claim_eligible"] is False
-assert report["evidence_pack_allowed"] is False
+
+
+def require(condition, message):
+    if not condition:
+        raise SystemExit(f"Replay validation failed: {message}")
+
+
+require(report.get("evidence_class") == "NON_FORMAL_DEMO", "evidence class")
+require(report.get("publication_ready") is False, "publication gate")
+require(report.get("claim_eligible") is False, "claim gate")
+require(report.get("evidence_pack_allowed") is False, "Evidence Pack gate")
+require(
+    isinstance(report.get("limitations"), list) and report["limitations"],
+    "limitations missing",
+)
+summary = report.get("validation_summary")
+require(isinstance(summary, dict), "validation summary missing")
+require(summary.get("registry_integrity") is True, "registry integrity")
+require(summary.get("numeric_claim_gate") == "NON_FORMAL_DEMO", "numeric claim gate")
+
+status = report.get("status")
+if status == "PARTIAL":
+    require(
+        report.get("failure_class") == "official_chain_mirror_unavailable",
+        "unexpected partial failure class",
+    )
+    require(summary.get("official_mirror_verified") is False, "partial mirror state")
+    require(summary.get("ready_cells") == 0, "partial ready-cell count")
+    require(
+        isinstance(summary.get("withheld_cells"), int)
+        and summary["withheld_cells"] > 0,
+        "partial withheld-cell count",
+    )
+elif status == "PASSED":
+    require(report.get("failure_class") is None, "passed failure class")
+    require(summary.get("official_mirror_verified") is True, "passed mirror state")
+    require(
+        isinstance(summary.get("ready_cells"), int) and summary["ready_cells"] > 0,
+        "passed ready-cell count",
+    )
+    require(summary.get("withheld_cells") == 0, "passed withheld-cell count")
+else:
+    raise SystemExit(f"Replay validation failed: unexpected status {status!r}")
+
 print(json.dumps({
-    "status": report["status"],
+    "status": status,
     "failure_class": report.get("failure_class"),
     "demo_report_sha256": report["demo_report_sha256"],
     "formal_claim_escape_blocked": True,
