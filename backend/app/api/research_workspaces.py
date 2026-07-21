@@ -43,6 +43,7 @@ from app.services.union3_research_loop import (
     create_union3_reproduction_audit,
     create_union3_reproduction_revision,
 )
+from app.services.foundry_catalog import serialize_capability_gaps
 
 
 router = APIRouter(prefix="/api/research", tags=["research-workspaces"])
@@ -138,7 +139,9 @@ def _serialize_union3_audit(
         "evidence_input_refs": list(audit.evidence_input_refs or []),
         "dataset_hints": list(audit.dataset_hints or []),
         "normalized_claims": list(audit.normalized_claims or []),
-        "capability_gaps": list(audit.capability_gaps or []),
+        "capability_gaps": serialize_capability_gaps(
+            audit.id, audit.capability_gaps or []
+        ),
         "evidence_record_ids": list(audit.evidence_record_ids or []),
         "child_job_ids": list(audit.child_job_ids or []),
         "evidence_graph": audit.evidence_graph,

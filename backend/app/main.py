@@ -30,6 +30,11 @@ from app.api.health import router as health_router
 from app.api.integration import router as integration_router
 from app.api.jobs import router as jobs_router
 from app.api.claim_audits import router as claim_audits_router
+from app.api.foundry import (
+    admin_router as foundry_admin_router,
+    internal_router as foundry_internal_router,
+    research_router as foundry_research_router,
+)
 from app.api.public_evidence import router as public_evidence_router
 from app.api.research_workspaces import router as research_workspaces_router
 from app.api.worker_control import router as worker_control_router
@@ -668,6 +673,9 @@ app.include_router(inference_router)
 app.include_router(integration_router)
 app.include_router(jobs_router)
 app.include_router(claim_audits_router)
+app.include_router(foundry_research_router)
+app.include_router(foundry_admin_router)
+app.include_router(foundry_internal_router)
 app.include_router(public_evidence_router)
 app.include_router(research_workspaces_router)
 app.include_router(worker_control_router)

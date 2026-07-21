@@ -224,6 +224,15 @@ class Settings(BaseSettings):
     union3_reproduction_enabled: bool = False
     evidence_pack_v2_enabled: bool = False
     local_science_worker_enabled: bool = False
+    workflow_registry_v2_enabled: bool = False
+    foundry_gap_tracking_enabled: bool = False
+    foundry_ai_drafting_enabled: bool = False
+    foundry_auto_demo_enabled: bool = False
+    foundry_candidate_catalog_enabled: bool = False
+    foundry_registration_enabled: bool = False
+    foundry_validation_result_secret: str = ""
+    foundry_formal_build_result_secret: str = ""
+    foundry_formal_build_oidc_subject: str = ""
     claim_audit_execution_mode: str = (
         "celery" if _ENV == "production" else "inline"
     )
@@ -260,6 +269,13 @@ class Settings(BaseSettings):
     evidence_v2_signing_key_id: str = ""
     evidence_v2_signing_public_key: str = ""
     evidence_v2_verification_keys: str = ""
+
+    # Formal workflow registry releases use a third Ed25519 trust domain.
+    # Candidate-generation and Demo services never receive this private seed.
+    workflow_registry_signing_private_key: str = ""
+    workflow_registry_signing_key_id: str = ""
+    workflow_registry_signing_public_key: str = ""
+    workflow_registry_verification_keys: str = ""
 
     # Docker image digest for reproducibility
     docker_image_digest: str = ""
@@ -892,6 +908,172 @@ class Settings(BaseSettings):
                     "key as retired or revoked"
                 )
 
+        if self.app_role == "api" and str(
+            self.workflow_registry_signing_private_key or ""
+        ).strip():
+            raise ValueError(
+                "APP_ROLE=api must not receive WORKFLOW_REGISTRY_SIGNING_PRIVATE_KEY; "
+                "formal releases are signed by an offline protected release job"
+            )
+        configured_registry_public_key = str(
+            self.workflow_registry_signing_public_key or ""
+        ).strip()
+        if configured_registry_public_key:
+            _decode_ed25519_key(
+                "WORKFLOW_REGISTRY_SIGNING_PUBLIC_KEY",
+                configured_registry_public_key,
+            )
+            if configured_registry_public_key in {
+                str(self.worker_task_signing_public_key or "").strip(),
+                str(self.evidence_v2_signing_public_key or "").strip(),
+            }:
+                raise ValueError(
+                    "WORKFLOW_REGISTRY_SIGNING_PUBLIC_KEY must not reuse Worker "
+                    "or Evidence trust roots"
+                )
+        registry_key_id = str(self.workflow_registry_signing_key_id or "").strip()
+        if registry_key_id and any(ch.isspace() for ch in registry_key_id):
+            raise ValueError(
+                "WORKFLOW_REGISTRY_SIGNING_KEY_ID must contain no whitespace"
+            )
+        current_registry_key = (
+            self.workflow_registry_verification_keyring.get(registry_key_id)
+            if registry_key_id
+            else None
+        )
+        if (
+            current_registry_key
+            and configured_registry_public_key
+            and current_registry_key != configured_registry_public_key
+        ):
+            raise ValueError(
+                "WORKFLOW_REGISTRY_VERIFICATION_KEYS contains the current key id "
+                "with a different public key"
+            )
+
+        # Only an offline/non-API release process may validate private signing
+        # material. Candidate Catalog and normal API processes never read it.
+        if self.app_role != "api" and str(
+            self.workflow_registry_signing_private_key or ""
+        ).strip():
+            registry_seed = _decode_ed25519_key(
+                "WORKFLOW_REGISTRY_SIGNING_PRIVATE_KEY",
+                self.workflow_registry_signing_private_key,
+            )
+            self.workflow_registry_signing_key_id = str(
+                self.workflow_registry_signing_key_id or ""
+            ).strip()
+            if not self.workflow_registry_signing_key_id or any(
+                ch.isspace() for ch in self.workflow_registry_signing_key_id
+            ):
+                raise ValueError(
+                    "WORKFLOW_REGISTRY_SIGNING_KEY_ID must be non-empty and "
+                    "contain no whitespace"
+                )
+            if any(
+                _secret_reuses_ed25519_seed(registry_seed, secret)
+                for secret in (
+                    self.jwt_secret,
+                    self.deletion_tombstone_key,
+                    self.evidence_signing_key,
+                    self.worker_task_signing_private_key,
+                    self.evidence_v2_signing_private_key,
+                )
+            ):
+                raise ValueError(
+                    "WORKFLOW_REGISTRY_SIGNING_PRIVATE_KEY must be independent "
+                    "from login, deletion, Evidence, and Worker keys"
+                )
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+                Ed25519PrivateKey,
+            )
+
+            derived_registry_public_key = base64.b64encode(
+                Ed25519PrivateKey.from_private_bytes(registry_seed)
+                .public_key()
+                .public_bytes(
+                    encoding=serialization.Encoding.Raw,
+                    format=serialization.PublicFormat.Raw,
+                )
+            ).decode("ascii")
+            if configured_registry_public_key:
+                if configured_registry_public_key != derived_registry_public_key:
+                    raise ValueError(
+                        "WORKFLOW_REGISTRY_SIGNING_PUBLIC_KEY does not match the "
+                        "private signing seed"
+                    )
+            self.workflow_registry_signing_public_key = derived_registry_public_key
+            current_registry_key = self.workflow_registry_verification_keyring.get(
+                self.workflow_registry_signing_key_id
+            )
+            if (
+                current_registry_key
+                and current_registry_key != derived_registry_public_key
+            ):
+                raise ValueError(
+                    "WORKFLOW_REGISTRY_VERIFICATION_KEYS contains the current key "
+                    "id with a different public key"
+                )
+
+        if (
+            self.app_role == "api"
+            and _ENV == "production"
+            and self.foundry_auto_demo_enabled
+            and len(self.foundry_validation_result_secret) < 32
+        ):
+            raise ValueError(
+                "FOUNDRY_VALIDATION_RESULT_SECRET must contain at least 32 "
+                "characters when automatic Demo ingestion is enabled"
+            )
+        if self.foundry_validation_result_secret and any(
+            self.foundry_validation_result_secret == str(secret or "")
+            for secret in (
+                self.jwt_secret,
+                self.admin_secret,
+                self.platform_deepseek_api_key,
+                self.worker_task_signing_private_key,
+                self.evidence_v2_signing_private_key,
+                self.workflow_registry_signing_private_key,
+            )
+            if secret
+        ):
+            raise ValueError(
+                "FOUNDRY_VALIDATION_RESULT_SECRET must be independent from AI, "
+                "admin, Worker, Evidence, and Registry credentials"
+            )
+        if (
+            self.app_role == "api"
+            and _ENV == "production"
+            and self.foundry_registration_enabled
+            and (
+                len(self.foundry_formal_build_result_secret) < 32
+                or not str(self.foundry_formal_build_oidc_subject or "").strip()
+            )
+        ):
+            raise ValueError(
+                "Foundry registration requires a dedicated 32-character "
+                "FOUNDRY_FORMAL_BUILD_RESULT_SECRET and an exact "
+                "FOUNDRY_FORMAL_BUILD_OIDC_SUBJECT"
+            )
+        if self.foundry_formal_build_result_secret and any(
+            self.foundry_formal_build_result_secret == str(secret or "")
+            for secret in (
+                self.jwt_secret,
+                self.admin_secret,
+                self.foundry_validation_result_secret,
+                self.platform_deepseek_api_key,
+                self.worker_task_signing_private_key,
+                self.evidence_v2_signing_private_key,
+                self.workflow_registry_signing_private_key,
+            )
+            if secret
+        ):
+            raise ValueError(
+                "FOUNDRY_FORMAL_BUILD_RESULT_SECRET must be independent from "
+                "AI, admin, Demo, Worker, Evidence, and Registry credentials"
+            )
+
     @property
     def deletion_tombstone_verification_keyring(self) -> dict[str, str]:
         """Parse retired deletion-ledger keys used only for verification."""
@@ -1044,6 +1226,39 @@ class Settings(BaseSettings):
                 "not_before": not_before,
                 "not_after": not_after,
             }
+        return normalized
+
+    @property
+    def workflow_registry_verification_keyring(self) -> dict[str, str]:
+        """Parse registry release verification keys without private material."""
+
+        raw = str(self.workflow_registry_verification_keys or "").strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "WORKFLOW_REGISTRY_VERIFICATION_KEYS must map key ids to base64 "
+                "Ed25519 public keys"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                "WORKFLOW_REGISTRY_VERIFICATION_KEYS must be a JSON object"
+            )
+        normalized: dict[str, str] = {}
+        for raw_key_id, raw_public_key in parsed.items():
+            key_id = str(raw_key_id or "").strip()
+            public_key = str(raw_public_key or "").strip()
+            if not key_id or any(ch.isspace() for ch in key_id):
+                raise ValueError(
+                    "WORKFLOW_REGISTRY_VERIFICATION_KEYS requires non-empty, "
+                    "whitespace-free key ids"
+                )
+            _decode_ed25519_key(
+                f"WORKFLOW_REGISTRY_VERIFICATION_KEYS[{key_id}]", public_key
+            )
+            normalized[key_id] = public_key
         return normalized
 
     @property
