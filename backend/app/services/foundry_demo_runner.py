@@ -14,11 +14,15 @@ import json
 import os
 import platform
 import re
-import resource
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+
+try:  # ``resource`` is unavailable on native Windows Python.
+    import resource as _resource
+except ImportError:  # pragma: no cover - exercised by Windows CI/clients
+    _resource = None
 
 
 CANDIDATE_SCHEMA_VERSION = 1
@@ -275,7 +279,11 @@ def run_candidate_demo(
     completed = _utc_now()
     stdout_bytes = stdout_buffer.getvalue().encode("utf-8")
     stderr_bytes = stderr_buffer.getvalue().encode("utf-8")
-    usage = resource.getrusage(resource.RUSAGE_SELF)
+    usage = (
+        _resource.getrusage(_resource.RUSAGE_SELF)
+        if _resource is not None
+        else None
+    )
     environment = {
         "python_version": platform.python_version(),
         "python_implementation": platform.python_implementation(),
@@ -314,9 +322,15 @@ def run_candidate_demo(
         "stdout_bytes": len(stdout_bytes),
         "stderr_bytes": len(stderr_bytes),
         "resource_usage": {
-            "max_rss_kib_platform_value": int(usage.ru_maxrss),
-            "user_cpu_seconds": round(float(usage.ru_utime), 6),
-            "system_cpu_seconds": round(float(usage.ru_stime), 6),
+            "max_rss_kib_platform_value": (
+                int(usage.ru_maxrss) if usage is not None else None
+            ),
+            "user_cpu_seconds": (
+                round(float(usage.ru_utime), 6) if usage is not None else None
+            ),
+            "system_cpu_seconds": (
+                round(float(usage.ru_stime), 6) if usage is not None else None
+            ),
         },
         "failure_class": outcome.get("failure_class"),
         "validation_summary": outcome.get("validation_summary") or {},
