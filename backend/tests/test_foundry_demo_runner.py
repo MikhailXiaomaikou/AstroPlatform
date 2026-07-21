@@ -137,3 +137,32 @@ def test_nested_formal_claim_escape_is_erased(
     assert report["status"] == "FAILED"
     assert report["failure_class"] == "candidate_formal_claim_escape_blocked"
     assert report["result"] == {}
+
+
+def test_candidate_stream_capture_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import foundry_demo_runner
+
+    bundle = load_candidate_bundle(_CANDIDATE)
+
+    def noisy_entrypoint(*_args: object, **_kwargs: object) -> dict:
+        print("x" * (foundry_demo_runner._STREAM_CAPTURE_LIMIT_BYTES + 32))
+        return {
+            "status": "PARTIAL",
+            "failure_class": "fixture_only",
+            "result": {},
+            "validation_summary": {"bounded": True},
+        }
+
+    monkeypatch.setitem(
+        foundry_demo_runner._ENTRYPOINTS,  # noqa: SLF001
+        bundle["entrypoint_id"],
+        noisy_entrypoint,
+    )
+    report = run_candidate_demo(bundle)
+
+    assert report["stdout_bytes"] == foundry_demo_runner._STREAM_CAPTURE_LIMIT_BYTES
+    assert report["resource_usage"]["stdout_truncated"] is True
+    assert (
+        report["resource_usage"]["stdout_observed_bytes"]
+        > report["stdout_bytes"]
+    )

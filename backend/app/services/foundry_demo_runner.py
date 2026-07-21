@@ -30,10 +30,49 @@ NON_FORMAL_EVIDENCE_CLASS = "NON_FORMAL_DEMO"
 DEMO_STATUSES = frozenset({"PASSED", "PARTIAL", "FAILED"})
 _CANDIDATE_ID = re.compile(r"^[a-z][a-z0-9_]{2,96}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
+_STREAM_CAPTURE_LIMIT_BYTES = 1024 * 1024
 
 
 class FoundryDemoContractError(ValueError):
     """A candidate or result attempted to leave the non-formal lane."""
+
+
+class _BoundedTextCapture(io.TextIOBase):
+    """Capture at most one UTF-8 byte budget while accepting further writes.
+
+    Candidate output is untrusted.  ``StringIO`` grows without a limit, so a
+    noisy candidate could exhaust the Validation Runner before the container
+    resource limit terminates it.  This sink keeps a deterministic prefix and
+    separately counts all bytes the candidate attempted to write.
+    """
+
+    def __init__(self, limit_bytes: int = _STREAM_CAPTURE_LIMIT_BYTES) -> None:
+        super().__init__()
+        self._limit_bytes = limit_bytes
+        self._captured = bytearray()
+        self.observed_bytes = 0
+        self.truncated = False
+
+    @property
+    def encoding(self) -> str:  # pragma: no cover - TextIO protocol metadata
+        return "utf-8"
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, value: str) -> int:
+        text = str(value)
+        encoded = text.encode("utf-8", errors="replace")
+        self.observed_bytes += len(encoded)
+        remaining = self._limit_bytes - len(self._captured)
+        if remaining > 0:
+            self._captured.extend(encoded[:remaining])
+        if len(encoded) > remaining:
+            self.truncated = True
+        return len(text)
+
+    def get_bytes(self) -> bytes:
+        return bytes(self._captured)
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -251,8 +290,8 @@ def run_candidate_demo(
     started = started_at or _utc_now()
     demo_run_id = str(uuid.uuid4())
     entrypoint = _ENTRYPOINTS[normalized["entrypoint_id"]]
-    stdout_buffer = io.StringIO()
-    stderr_buffer = io.StringIO()
+    stdout_buffer = _BoundedTextCapture()
+    stderr_buffer = _BoundedTextCapture()
     with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(
         stderr_buffer
     ):
@@ -277,8 +316,8 @@ def run_candidate_demo(
         outcome["failure_class"] = "candidate_formal_claim_escape_blocked"
         outcome["validation_summary"] = {"formal_claim_escape_blocked": True}
     completed = _utc_now()
-    stdout_bytes = stdout_buffer.getvalue().encode("utf-8")
-    stderr_bytes = stderr_buffer.getvalue().encode("utf-8")
+    stdout_bytes = stdout_buffer.get_bytes()
+    stderr_bytes = stderr_buffer.get_bytes()
     usage = (
         _resource.getrusage(_resource.RUSAGE_SELF)
         if _resource is not None
@@ -331,6 +370,11 @@ def run_candidate_demo(
             "system_cpu_seconds": (
                 round(float(usage.ru_stime), 6) if usage is not None else None
             ),
+            "stream_capture_limit_bytes": _STREAM_CAPTURE_LIMIT_BYTES,
+            "stdout_observed_bytes": stdout_buffer.observed_bytes,
+            "stderr_observed_bytes": stderr_buffer.observed_bytes,
+            "stdout_truncated": stdout_buffer.truncated,
+            "stderr_truncated": stderr_buffer.truncated,
         },
         "failure_class": outcome.get("failure_class"),
         "validation_summary": outcome.get("validation_summary") or {},
