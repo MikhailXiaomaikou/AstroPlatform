@@ -70,6 +70,9 @@ from app.rate_limit import limiter
 from app.middleware.event_tracking import EventTrackingMiddleware
 from app.services.event_collector import event_collector, periodic_flush
 from app.services.provenance_v2.registry_loader import check_freshness
+# Importing this module is a production boot gate: if a fixed signed Registry
+# release is configured but invalid, API startup fails before serving traffic.
+from app.services import workflow_registry_v2 as _workflow_registry_v2  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

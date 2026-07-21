@@ -230,6 +230,15 @@ class Settings(BaseSettings):
     foundry_auto_demo_enabled: bool = False
     foundry_candidate_catalog_enabled: bool = False
     foundry_registration_enabled: bool = False
+    # AI drafting and candidate execution are separate trust domains.  The
+    # draft callback is used only by a host-side CI ingestion step after the
+    # AI process has exited; it must never be an inference-provider key.
+    foundry_draft_result_secret: str = ""
+    foundry_draft_dispatch_backend: str = "disabled"
+    foundry_draft_github_token: str = ""
+    foundry_draft_github_repository: str = ""
+    foundry_draft_github_workflow: str = "foundry-candidate-draft.yml"
+    foundry_draft_github_ref: str = ""
     foundry_validation_result_secret: str = ""
     foundry_validation_dispatch_backend: str = "disabled"
     foundry_validation_github_token: str = ""
@@ -956,6 +965,27 @@ class Settings(BaseSettings):
                 "with a different public key"
             )
 
+        if (
+            _ENV == "production"
+            and self.app_role != "migration"
+            and self.workflow_registry_v2_enabled
+        ):
+            release_path = str(
+                os.getenv("WORKFLOW_REGISTRY_RELEASE_PATH") or ""
+            ).strip()
+            keyring_json = str(
+                os.getenv("WORKFLOW_REGISTRY_TRUSTED_KEYRING_JSON") or ""
+            ).strip()
+            keyring_path = str(
+                os.getenv("WORKFLOW_REGISTRY_TRUSTED_KEYRING_PATH") or ""
+            ).strip()
+            if not release_path or bool(keyring_json) == bool(keyring_path):
+                raise ValueError(
+                    "WORKFLOW_REGISTRY_V2_ENABLED requires one fixed signed "
+                    "WORKFLOW_REGISTRY_RELEASE_PATH and exactly one trusted "
+                    "Registry keyring source in production"
+                )
+
         # Only an offline/non-API release process may validate private signing
         # material. Candidate Catalog and normal API processes never read it.
         if self.app_role != "api" and str(
@@ -1021,6 +1051,79 @@ class Settings(BaseSettings):
                     "id with a different public key"
                 )
 
+        self.foundry_draft_dispatch_backend = str(
+            self.foundry_draft_dispatch_backend or "disabled"
+        ).strip().lower()
+        if self.foundry_draft_dispatch_backend not in {
+            "disabled",
+            "github_actions",
+        }:
+            raise ValueError(
+                "FOUNDRY_DRAFT_DISPATCH_BACKEND must be disabled or github_actions"
+            )
+        if (
+            self.app_role == "api"
+            and _ENV == "production"
+            and self.foundry_ai_drafting_enabled
+        ):
+            if len(self.foundry_draft_result_secret) < 32:
+                raise ValueError(
+                    "FOUNDRY_DRAFT_RESULT_SECRET must contain at least 32 "
+                    "characters when AI drafting is enabled"
+                )
+            if (
+                self.foundry_draft_dispatch_backend != "github_actions"
+                or len(self.foundry_draft_github_token) < 32
+                or self.foundry_draft_github_repository.count("/") != 1
+                or not re.fullmatch(
+                    r"[0-9a-f]{40}",
+                    str(self.foundry_draft_github_ref or "").lower(),
+                )
+                or not re.fullmatch(
+                    r"[A-Za-z0-9_.-]+\.ya?ml",
+                    str(self.foundry_draft_github_workflow or ""),
+                )
+            ):
+                raise ValueError(
+                    "AI drafting requires a narrow GitHub Actions dispatch "
+                    "configuration pinned to a 40-character Git ref"
+                )
+        if self.foundry_draft_result_secret and any(
+            self.foundry_draft_result_secret == str(secret or "")
+            for secret in (
+                self.jwt_secret,
+                self.admin_secret,
+                self.platform_deepseek_api_key,
+                self.foundry_validation_result_secret,
+                self.worker_task_signing_private_key,
+                self.evidence_v2_signing_private_key,
+                self.workflow_registry_signing_private_key,
+            )
+            if secret
+        ):
+            raise ValueError(
+                "FOUNDRY_DRAFT_RESULT_SECRET must be independent from AI, "
+                "admin, Demo, Worker, Evidence, and Registry credentials"
+            )
+        if self.foundry_draft_github_token and any(
+            self.foundry_draft_github_token == str(secret or "")
+            for secret in (
+                self.jwt_secret,
+                self.admin_secret,
+                self.platform_deepseek_api_key,
+                self.foundry_draft_result_secret,
+                self.foundry_validation_result_secret,
+                self.worker_task_signing_private_key,
+                self.evidence_v2_signing_private_key,
+                self.workflow_registry_signing_private_key,
+            )
+            if secret
+        ):
+            raise ValueError(
+                "FOUNDRY_DRAFT_GITHUB_TOKEN must be independent from AI, "
+                "admin, callback, Worker, Evidence, and Registry credentials"
+            )
+
         if (
             self.app_role == "api"
             and _ENV == "production"
@@ -1064,6 +1167,8 @@ class Settings(BaseSettings):
             for secret in (
                 self.jwt_secret,
                 self.admin_secret,
+                self.foundry_draft_result_secret,
+                self.foundry_draft_github_token,
                 self.platform_deepseek_api_key,
                 self.worker_task_signing_private_key,
                 self.evidence_v2_signing_private_key,
@@ -1080,6 +1185,8 @@ class Settings(BaseSettings):
             for secret in (
                 self.jwt_secret,
                 self.admin_secret,
+                self.foundry_draft_result_secret,
+                self.foundry_draft_github_token,
                 self.foundry_validation_result_secret,
                 self.platform_deepseek_api_key,
                 self.worker_task_signing_private_key,
@@ -1111,6 +1218,8 @@ class Settings(BaseSettings):
             for secret in (
                 self.jwt_secret,
                 self.admin_secret,
+                self.foundry_draft_result_secret,
+                self.foundry_draft_github_token,
                 self.foundry_validation_result_secret,
                 self.foundry_validation_github_token,
                 self.platform_deepseek_api_key,

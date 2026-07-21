@@ -3,7 +3,7 @@ name: Non-formal Foundry candidate demo
 on:
   workflow_dispatch:
     inputs:
-      candidate:
+      candidate_key:
         description: Repository-pinned candidate key (without .json)
         required: true
         default: desi_dr2_official_chain_summary_v1
@@ -25,7 +25,7 @@ jobs:
 
       - name: Validate candidate key
         env:
-          CANDIDATE: ${{ inputs.candidate }}
+          CANDIDATE: ${{ inputs.candidate_key }}
           VALIDATION_RUN_ID: ${{ inputs.validation_run_id }}
         shell: bash
         run: |
@@ -46,7 +46,7 @@ jobs:
 
       - name: Run candidate without network, secrets, or writable root
         env:
-          CANDIDATE: ${{ inputs.candidate }}
+          CANDIDATE: ${{ inputs.candidate_key }}
         shell: bash
         run: |
           set -euo pipefail
@@ -114,7 +114,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ always() }}
         with:
-          name: foundry-demo-${{ inputs.candidate }}-${{ github.sha }}
+          name: foundry-demo-${{ inputs.candidate_key }}-${{ github.sha }}
           path: foundry-output/demo-report.json
           if-no-files-found: error
           retention-days: 30

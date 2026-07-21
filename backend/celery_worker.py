@@ -12,6 +12,8 @@ from celery.schedules import crontab
 from celery.signals import worker_ready
 
 from app.config import settings
+# Worker and Beat must fail boot on the same invalid Registry release as API.
+from app.services import workflow_registry_v2 as _workflow_registry_v2  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
