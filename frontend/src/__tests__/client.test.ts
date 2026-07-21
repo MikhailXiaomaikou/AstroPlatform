@@ -118,6 +118,61 @@ describe("Linked research Bot API helpers", () => {
   });
 });
 
+describe("Workflow Foundry API helpers", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("reads only the formal workflow catalog for registered execution", async () => {
+    const { default: api, listRegisteredWorkflows } = await import("../api/client");
+    const item = {
+      workflow_id: "union3_flat_lcdm_sn_only_v1",
+      workflow_version: "1.0.0",
+      status: "REGISTERED",
+      risk_level: "R3",
+      claim_scope: "reproduction_of_published_constraint",
+      model: "flat_lcdm",
+      dataset_key: "union3",
+      compatibility: {
+        source_profile_keys: ["union3_arxiv_v1"],
+        candidate_types: ["parameter_interval_report"],
+        model_scopes: ["flat_lcdm"],
+        data_scopes: ["union3_sn_only"],
+      },
+    };
+    const getSpy = vi.spyOn(api, "get").mockResolvedValueOnce({ data: { items: [item], total: 1 } });
+
+    await expect(listRegisteredWorkflows()).resolves.toEqual({ items: [item], total: 1 });
+    expect(getSpy).toHaveBeenCalledWith("/api/research/workflows");
+    getSpy.mockRestore();
+  });
+
+  it("queues validation with only an immutable version binding", async () => {
+    const { default: api, validateAdminFoundryCandidate } = await import("../api/client");
+    const binding = {
+      candidate_version_id: "version-1",
+      candidate_version_hash: "a".repeat(64),
+    };
+    const receipt = {
+      validation_run_id: "validation-1",
+      status: "QUEUED",
+      candidate_id: "candidate-1",
+      ...binding,
+      created_at: "2026-07-21T00:00:00Z",
+    };
+    const postSpy = vi.spyOn(api, "post").mockResolvedValueOnce({ data: receipt });
+
+    await expect(validateAdminFoundryCandidate("candidate-1", binding)).resolves.toEqual(receipt);
+    expect(postSpy).toHaveBeenCalledWith(
+      "/api/admin/foundry/candidates/candidate-1/validate",
+      binding,
+    );
+    expect(postSpy.mock.calls[0][1]).not.toHaveProperty("status");
+    expect(postSpy.mock.calls[0][1]).not.toHaveProperty("results");
+    postSpy.mockRestore();
+  });
+});
+
 describe("Auth helper functions", () => {
   beforeEach(() => {
     localStorageMock.clear();

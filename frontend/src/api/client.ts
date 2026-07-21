@@ -246,6 +246,12 @@ export interface RuntimeConfig {
   union3_reproduction_enabled?: boolean;
   evidence_pack_v2_enabled?: boolean;
   local_science_worker_enabled?: boolean;
+  workflow_registry_v2_enabled?: boolean;
+  foundry_gap_tracking_enabled?: boolean;
+  foundry_ai_drafting_enabled?: boolean;
+  foundry_auto_demo_enabled?: boolean;
+  foundry_candidate_catalog_enabled?: boolean;
+  foundry_registration_enabled?: boolean;
   analytics_requires_consent: boolean;
   privacy_notice?: {
     operator_name: string;
@@ -1500,6 +1506,15 @@ export interface ClaimAuditNormalizedClaim {
   source_anchor_ids?: string[];
 }
 
+export interface ClaimAuditCapabilityGap {
+  gap_id: string;
+  code: string;
+  message?: string;
+  missing_capability?: string;
+  details?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
 export interface ClaimAuditReviewBinding {
   source_document_id: string;
   source_extraction_id: string;
@@ -1530,7 +1545,7 @@ export interface ClaimAuditSummary {
   evidence_input_refs: string[];
   dataset_hints: string[];
   normalized_claims: ClaimAuditNormalizedClaim[];
-  capability_gaps: Array<Record<string, unknown>>;
+  capability_gaps: ClaimAuditCapabilityGap[];
   evidence_record_ids: string[];
   child_job_ids: string[];
   evidence_graph: {
@@ -1912,7 +1927,7 @@ export async function retrySourceDocument(
 export interface WorkspaceClaimAuditCreatePayload {
   source_document_id: string;
   candidate_id: string;
-  workflow_key: "union3_flat_lcdm_sn_only_v1";
+  workflow_key: string;
 }
 
 export async function createWorkspaceClaimAudit(
@@ -1931,6 +1946,304 @@ export async function listWorkspaceClaimAudits(
 ): Promise<{ items: ClaimAuditSummary[]; total?: number }> {
   const { data } = await api.get(
     `/api/research/workspaces/${encodeURIComponent(workspaceId)}/claim-audits`,
+  );
+  return data;
+}
+
+// ── Workflow Foundry and formal registry API ──
+
+export type WorkflowRiskLevel = "R0" | "R1" | "R2" | "R3" | "R4";
+
+export interface RegisteredWorkflowCompatibility {
+  source_profile_keys?: string[];
+  candidate_types?: string[];
+  claim_scopes?: string[];
+  model_scopes?: string[];
+  data_scopes?: string[];
+}
+
+export interface RegisteredWorkflowSummary {
+  workflow_id: string;
+  workflow_version: string;
+  display_name?: string;
+  description?: string;
+  status: "REGISTERED" | "SUSPENDED" | "SUPERSEDED" | "REVOKED" | string;
+  risk_level: WorkflowRiskLevel;
+  claim_scope: string;
+  model: string;
+  dataset_key: string;
+  registry_epoch?: number;
+  registry_entry_hash?: string;
+  execution_enabled?: boolean;
+  compatibility?: RegisteredWorkflowCompatibility;
+  source_profile_keys?: string[];
+  candidate_types?: string[];
+  claim_scopes?: string[];
+  model_scopes?: string[];
+  data_scopes?: string[];
+}
+
+export async function listRegisteredWorkflows(): Promise<{
+  items: RegisteredWorkflowSummary[];
+  total: number;
+}> {
+  const { data } = await api.get<
+    RegisteredWorkflowSummary[] | { items: RegisteredWorkflowSummary[]; total?: number }
+  >("/api/research/workflows");
+  const items = Array.isArray(data) ? data : data.items;
+  return { items, total: Array.isArray(data) ? data.length : (data.total ?? items.length) };
+}
+
+export type CapabilityRequestStatus =
+  | "SUBMITTED"
+  | "TRIAGE_PENDING"
+  | "ACCEPTED"
+  | "MERGED"
+  | "BUILDING"
+  | "DEMO_RECORDED"
+  | "REVIEW_PENDING"
+  | "PROMOTED"
+  | "REJECTED"
+  | string;
+
+export interface CapabilityRequestSummary {
+  id: string;
+  audit_id: string;
+  gap_id: string;
+  gap_fingerprint: string;
+  status: CapabilityRequestStatus;
+  candidate_id: string | null;
+  candidate?: FoundryCandidateSummary | null;
+  aggregate_request_count?: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export async function createCapabilityRequest(
+  auditId: string,
+  gapId: string,
+): Promise<CapabilityRequestSummary> {
+  const { data } = await api.post<CapabilityRequestSummary>(
+    `/api/research/claim-audits/${encodeURIComponent(auditId)}/capability-requests`,
+    { gap_id: gapId },
+  );
+  return data;
+}
+
+export async function listCapabilityRequests(): Promise<{
+  items: CapabilityRequestSummary[];
+  total: number;
+}> {
+  const { data } = await api.get<
+    CapabilityRequestSummary[] | { items: CapabilityRequestSummary[]; total?: number }
+  >("/api/research/capability-requests");
+  const items = Array.isArray(data) ? data : data.items;
+  return { items, total: Array.isArray(data) ? data.length : (data.total ?? items.length) };
+}
+
+export async function getCapabilityRequest(
+  requestId: string,
+): Promise<CapabilityRequestSummary> {
+  const { data } = await api.get<CapabilityRequestSummary>(
+    `/api/research/capability-requests/${encodeURIComponent(requestId)}`,
+  );
+  return data;
+}
+
+export type FoundryCandidateStatus =
+  | "DRAFT"
+  | "BUILDING"
+  | "VALIDATING"
+  | "DEMO_RECORDED"
+  | "REVIEW_PENDING"
+  | "APPROVED"
+  | "REJECTED"
+  | "PROMOTED"
+  | "SUSPENDED"
+  | "REVOKED"
+  | string;
+
+export type FoundryDemoStatus = "PASSED" | "PARTIAL" | "FAILED" | string;
+
+export interface FoundryCandidateVersion {
+  id: string;
+  version_number: number;
+  version_hash: string;
+  workflow_id: string;
+  workflow_version: string;
+  workflow_spec_hash: string;
+  code_tree_hash?: string | null;
+  dependency_lock_hash?: string | null;
+  sbom_hash?: string | null;
+  fixture_hashes?: Record<string, string>;
+  created_at: string | null;
+}
+
+export interface FoundryDemoRun {
+  demo_run_id: string;
+  candidate_id: string;
+  candidate_version: number | string;
+  status: FoundryDemoStatus;
+  evidence_class: "NON_FORMAL_DEMO";
+  publication_ready: false;
+  claim_eligible: false;
+  limitations: string[];
+  validation_summary: Record<string, unknown> | string;
+  runner_image_digest?: string | null;
+  stdout_hash?: string | null;
+  stderr_hash?: string | null;
+  resource_usage?: Record<string, unknown>;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface FoundryCandidateSummary {
+  id: string;
+  gap_fingerprint: string;
+  gap_code: string;
+  generation_route: "COMPOSITION" | "DATA_ADAPTER" | "SCIENCE_CODE" | string | null;
+  risk_level: WorkflowRiskLevel | null;
+  status: FoundryCandidateStatus;
+  current_version: FoundryCandidateVersion | null;
+  versions?: FoundryCandidateVersion[];
+  demo_runs?: FoundryDemoRun[];
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export async function getFoundryCandidate(
+  candidateId: string,
+): Promise<FoundryCandidateSummary> {
+  const { data } = await api.get<FoundryCandidateSummary>(
+    `/api/research/foundry-candidates/${encodeURIComponent(candidateId)}`,
+  );
+  return data;
+}
+
+export async function listFoundryDemoRuns(
+  candidateId: string,
+): Promise<{ items: FoundryDemoRun[]; total: number }> {
+  const { data } = await api.get<
+    FoundryDemoRun[] | { items: FoundryDemoRun[]; total?: number }
+  >(`/api/research/foundry-candidates/${encodeURIComponent(candidateId)}/demo-runs`);
+  const items = Array.isArray(data) ? data : data.items;
+  return { items, total: Array.isArray(data) ? data.length : (data.total ?? items.length) };
+}
+
+export async function listAdminFoundryRequests(): Promise<{
+  items: CapabilityRequestSummary[];
+  total: number;
+}> {
+  const { data } = await api.get<
+    CapabilityRequestSummary[] | { items: CapabilityRequestSummary[]; total?: number }
+  >("/api/admin/foundry/requests");
+  const items = Array.isArray(data) ? data : data.items;
+  return { items, total: Array.isArray(data) ? data.length : (data.total ?? items.length) };
+}
+
+export async function triageAdminFoundryRequest(
+  requestId: string,
+  payload: {
+    generation_route: "COMPOSITION" | "DATA_ADAPTER" | "SCIENCE_CODE";
+    risk_level: Exclude<WorkflowRiskLevel, "R4">;
+    candidate_version?: Record<string, unknown>;
+  },
+): Promise<CapabilityRequestSummary> {
+  const { data } = await api.post<CapabilityRequestSummary>(
+    `/api/admin/foundry/requests/${encodeURIComponent(requestId)}/triage`,
+    payload,
+  );
+  return data;
+}
+
+export async function mergeAdminFoundryRequest(
+  requestId: string,
+  targetCandidateId: string,
+): Promise<CapabilityRequestSummary> {
+  const { data } = await api.post<CapabilityRequestSummary>(
+    `/api/admin/foundry/requests/${encodeURIComponent(requestId)}/merge`,
+    { target_candidate_id: targetCandidateId },
+  );
+  return data;
+}
+
+export async function getAdminFoundryCandidate(
+  candidateId: string,
+): Promise<FoundryCandidateSummary> {
+  const { data } = await api.get<FoundryCandidateSummary>(
+    `/api/admin/foundry/candidates/${encodeURIComponent(candidateId)}`,
+  );
+  return data;
+}
+
+export async function validateAdminFoundryCandidate(
+  candidateId: string,
+  payload: {
+    candidate_version_id: string;
+    candidate_version_hash: string;
+  },
+): Promise<{
+  validation_run_id: string;
+  status: "QUEUED";
+  candidate_id: string;
+  candidate_version_id: string;
+  candidate_version_hash: string;
+  created_at: string;
+}> {
+  const { data } = await api.post(
+    `/api/admin/foundry/candidates/${encodeURIComponent(candidateId)}/validate`,
+    payload,
+  );
+  return data;
+}
+
+export async function reviewAdminFoundryCandidate(
+  candidateId: string,
+  payload: {
+    candidate_version_id: string;
+    candidate_version_hash: string;
+    review_scope: "ENGINEERING" | "SCIENTIFIC";
+    decision: "APPROVED" | "REJECTED" | "CHANGES_REQUESTED";
+    comment: string;
+  },
+): Promise<FoundryCandidateSummary> {
+  const { data } = await api.post<FoundryCandidateSummary>(
+    `/api/admin/foundry/candidates/${encodeURIComponent(candidateId)}/reviews`,
+    payload,
+  );
+  return data;
+}
+
+export async function registerAdminFoundryCandidate(
+  candidateId: string,
+  candidateVersionId: string,
+  candidateVersionHash: string,
+): Promise<FoundryCandidateSummary> {
+  const { data } = await api.post<FoundryCandidateSummary>(
+    `/api/admin/foundry/candidates/${encodeURIComponent(candidateId)}/register`,
+    { candidate_version_id: candidateVersionId, candidate_version_hash: candidateVersionHash },
+  );
+  return data;
+}
+
+export async function suspendAdminFoundryCandidate(
+  candidateId: string,
+  reason: string,
+): Promise<FoundryCandidateSummary> {
+  const { data } = await api.post<FoundryCandidateSummary>(
+    `/api/admin/foundry/candidates/${encodeURIComponent(candidateId)}/suspend`,
+    { reason },
+  );
+  return data;
+}
+
+export async function revokeAdminFoundryCandidate(
+  candidateId: string,
+  reason: string,
+): Promise<FoundryCandidateSummary> {
+  const { data } = await api.post<FoundryCandidateSummary>(
+    `/api/admin/foundry/candidates/${encodeURIComponent(candidateId)}/revoke`,
+    { reason },
   );
   return data;
 }

@@ -4,6 +4,7 @@ import {
   archiveResearchWorkspace,
   cancelClaimAudit,
   createClaimAuditRevision,
+  createCapabilityRequest,
   createSourceDocument,
   createWorkerEnrollment,
   createWorkspaceClaimAudit,
@@ -14,6 +15,8 @@ import {
   getSourceDocumentContent,
   getSourceDocumentTables,
   listScientificReviewQueue,
+  listCapabilityRequests,
+  listRegisteredWorkflows,
   listSourceDocuments,
   listWorkerNodes,
   listWorkspaceClaimAudits,
@@ -25,6 +28,9 @@ import {
   type ClaimAuditReviewBinding,
   type ClaimAuditReviewDecision,
   type ClaimAuditSummary,
+  type CapabilityRequestSummary,
+  type ClaimAuditCapabilityGap,
+  type RegisteredWorkflowSummary,
   type RuntimeConfig,
   type SourceCandidate,
   type SourceDocumentContent,
@@ -37,13 +43,12 @@ import {
 } from "../../api/client";
 import { useAuth } from "../../context/AuthContext";
 import { useI18n } from "../../i18n";
+import { localizedApiError } from "../../utils/apiErrors";
 import "./ResearchWorkspace.css";
 
 type FeatureState = "loading" | "enabled" | "disabled" | "unreachable";
 type WorkspaceTab = "overview" | "sources" | "claims" | "runs" | "evidence";
 type ReviewerAccess = "loading" | "allowed" | "denied" | "error";
-
-const WORKFLOW_KEY = "union3_flat_lcdm_sn_only_v1" as const;
 
 interface CandidateRecord {
   document: SourceDocumentSummary;
@@ -125,6 +130,29 @@ function statusText(value: string): string {
   return value.replaceAll("_", " ");
 }
 
+function workflowCompatible(
+  workflow: RegisteredWorkflowSummary,
+  record: CandidateRecord,
+): boolean {
+  if (workflow.status !== "REGISTERED" || workflow.execution_enabled === false) return false;
+  const compatibility = workflow.compatibility;
+  const sourceProfiles = compatibility?.source_profile_keys ?? workflow.source_profile_keys;
+  const candidateTypes = compatibility?.candidate_types ?? workflow.candidate_types;
+  const claimScopes = compatibility?.claim_scopes ?? workflow.claim_scopes;
+  const modelScopes = compatibility?.model_scopes ?? workflow.model_scopes;
+  const dataScopes = compatibility?.data_scopes ?? workflow.data_scopes;
+  if (!sourceProfiles?.includes(record.document.source_profile_key)) return false;
+  if (!candidateTypes?.includes(record.candidate.candidate_type)) return false;
+  if (claimScopes?.length && !claimScopes.includes(record.candidate.claim_scope)) return false;
+  if (!modelScopes?.includes(record.candidate.model_scope)) return false;
+  if (!dataScopes?.includes(record.candidate.data_scope)) return false;
+  return true;
+}
+
+function gapCode(gap: ClaimAuditCapabilityGap): string {
+  return String(gap.code || "capability_gap").toLowerCase();
+}
+
 function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -172,6 +200,10 @@ export default function ResearchWorkspacePage() {
   const [workspace, setWorkspace] = useState<ResearchWorkspaceSummary | null>(null);
   const [sources, setSources] = useState<SourceDocumentSummary[]>([]);
   const [audits, setAudits] = useState<ClaimAuditSummary[]>([]);
+  const [workflows, setWorkflows] = useState<RegisteredWorkflowSummary[]>([]);
+  const [selectedWorkflows, setSelectedWorkflows] = useState<Record<string, string>>({});
+  const [capabilityRequests, setCapabilityRequests] = useState<CapabilityRequestSummary[]>([]);
+  const [requestingGapId, setRequestingGapId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("overview");
   const [busy, setBusy] = useState(false);
   const [runningCandidateId, setRunningCandidateId] = useState<string | null>(null);
@@ -192,12 +224,20 @@ export default function ResearchWorkspacePage() {
 
   const loadWorkspace = useCallback(async () => {
     if (!workspaceId) return;
-    const [workspaceResponse, sourceResponse] = await Promise.all([
+    const [workspaceResponse, sourceResponse, workflowResponse, requestResponse] = await Promise.all([
       getResearchWorkspace(workspaceId),
       listSourceDocuments(workspaceId),
+      config?.workflow_registry_v2_enabled
+        ? listRegisteredWorkflows()
+        : Promise.resolve({ items: [], total: 0 }),
+      config?.foundry_gap_tracking_enabled
+        ? listCapabilityRequests()
+        : Promise.resolve({ items: [], total: 0 }),
     ]);
     setWorkspace(workspaceResponse);
     setSources(sourceResponse.items);
+    setWorkflows(workflowResponse.items);
+    setCapabilityRequests(requestResponse.items);
 
     if (config?.claim_audit_enabled) {
       const auditResponse = await listWorkspaceClaimAudits(workspaceId);
@@ -205,7 +245,12 @@ export default function ResearchWorkspacePage() {
     } else {
       setAudits([]);
     }
-  }, [config?.claim_audit_enabled, workspaceId]);
+  }, [
+    config?.claim_audit_enabled,
+    config?.foundry_gap_tracking_enabled,
+    config?.workflow_registry_v2_enabled,
+    workspaceId,
+  ]);
 
   const loadWorkerNodes = useCallback(async () => {
     const response = await listWorkerNodes();
@@ -292,8 +337,9 @@ export default function ResearchWorkspacePage() {
 
   const hasActiveWork = useMemo(
     () => sources.some((source) => ["QUEUED", "RUNNING"].includes(source.lifecycle_status))
-      || audits.some((audit) => ["QUEUED", "RUNNING"].includes(audit.lifecycle_status)),
-    [audits, sources],
+      || audits.some((audit) => ["QUEUED", "RUNNING"].includes(audit.lifecycle_status))
+      || capabilityRequests.some((request) => ["BUILDING", "VALIDATING"].includes(request.status)),
+    [audits, capabilityRequests, sources],
   );
 
   useEffect(() => {
@@ -333,7 +379,7 @@ export default function ResearchWorkspacePage() {
       && evidenceV2Enabled
       && config?.claim_audit_enabled
       && config?.local_science_worker_enabled
-      && config?.union3_reproduction_enabled,
+      && config?.workflow_registry_v2_enabled,
   );
 
   async function refresh() {
@@ -443,8 +489,8 @@ export default function ResearchWorkspacePage() {
     }
   }
 
-  async function startRegisteredWorkflow(record: CandidateRecord) {
-    if (!workspaceId || !workspaceActive || !executionEnabled || runningCandidateId) return;
+  async function startRegisteredWorkflow(record: CandidateRecord, workflowId: string) {
+    if (!workspaceId || !workspaceActive || !executionEnabled || !workflowId || runningCandidateId) return;
     setRunningCandidateId(record.candidate.candidate_id);
     setError(null);
     setNotice(null);
@@ -452,7 +498,7 @@ export default function ResearchWorkspacePage() {
       const audit = await createWorkspaceClaimAudit(workspaceId, {
         source_document_id: record.document.source_document_id,
         candidate_id: record.candidate.candidate_id,
-        workflow_key: WORKFLOW_KEY,
+        workflow_key: workflowId,
       });
       setAudits((current) => [audit, ...current.filter((item) => item.audit_id !== audit.audit_id)]);
       setActiveTab("runs");
@@ -461,6 +507,25 @@ export default function ResearchWorkspacePage() {
       setError(errorMessage(runError, t("research.error.start_run")));
     } finally {
       setRunningCandidateId(null);
+    }
+  }
+
+  async function submitFoundryRequest(auditId: string, gap: ClaimAuditCapabilityGap) {
+    if (!config?.foundry_gap_tracking_enabled || !gap.gap_id || requestingGapId) return;
+    setRequestingGapId(gap.gap_id);
+    setError(null);
+    setNotice(null);
+    try {
+      const request = await createCapabilityRequest(auditId, gap.gap_id);
+      setCapabilityRequests((current) => [
+        request,
+        ...current.filter((item) => item.id !== request.id),
+      ]);
+      setNotice(t("research.foundry_request_submitted"));
+    } catch (requestError: unknown) {
+      setError(localizedApiError(requestError, t, "research.error.foundry_request"));
+    } finally {
+      setRequestingGapId(null);
     }
   }
 
@@ -660,6 +725,9 @@ export default function ResearchWorkspacePage() {
           <button className="btn-secondary" disabled={busy} onClick={() => { void refresh(); }}>
             {t("research.refresh")}
           </button>
+          {config?.foundry_candidate_catalog_enabled && (
+            <Link className="btn-secondary" to="/foundry">{t("research.open_foundry")}</Link>
+          )}
           <button className="btn-danger-sm" disabled={busy || !workspaceActive} onClick={() => { void archiveWorkspace(); }}>
             {t("research.archive")}
           </button>
@@ -1005,7 +1073,14 @@ export default function ResearchWorkspacePage() {
               <div className="research-empty-card"><h3>{t("research.no_claims")}</h3><p>{t("research.no_claims_body")}</p></div>
             ) : (
               <div className="research-card-list">
-                {candidates.map((record) => (
+                {candidates.map((record) => {
+                  const compatibleWorkflows = workflows.filter((workflow) => (
+                    workflowCompatible(workflow, record)
+                  ));
+                  const selectedWorkflow = selectedWorkflows[record.candidate.candidate_id]
+                    ?? compatibleWorkflows[0]?.workflow_id
+                    ?? "";
+                  return (
                   <article className="research-claim-card" key={record.candidate.candidate_id}>
                     <div className="research-card-heading">
                       <div><p className="research-kicker">{t("research.paper_candidate")}</p><h3>{record.candidate.claim_text}</h3></div>
@@ -1019,22 +1094,46 @@ export default function ResearchWorkspacePage() {
                     <p className="research-method-note">{t("research.frequentist_note")}</p>
                     <label className="research-workflow-select">
                       {t("research.workflow")}
-                      <select value={WORKFLOW_KEY} disabled>
-                        <option value={WORKFLOW_KEY}>{t("research.union3_workflow")}</option>
+                      <select
+                        value={selectedWorkflow}
+                        disabled={compatibleWorkflows.length === 0}
+                        onChange={(event) => setSelectedWorkflows((current) => ({
+                          ...current,
+                          [record.candidate.candidate_id]: event.target.value,
+                        }))}
+                      >
+                        {compatibleWorkflows.length === 0 && (
+                          <option value="">{t("research.no_compatible_workflow")}</option>
+                        )}
+                        {compatibleWorkflows.map((workflow) => (
+                          <option key={`${workflow.workflow_id}@${workflow.workflow_version}`} value={workflow.workflow_id}>
+                            {workflow.display_name || workflow.workflow_id} · v{workflow.workflow_version}
+                          </option>
+                        ))}
                       </select>
                     </label>
+                    {compatibleWorkflows.length === 0 && (
+                      <div className="research-workflow-gap" role="note">
+                        <strong>{t("research.workflow_gap_title")}</strong>
+                        <span>{t("research.workflow_gap_body")}</span>
+                        {config?.foundry_candidate_catalog_enabled && (
+                          <Link to="/foundry">{t("research.open_foundry")}</Link>
+                        )}
+                      </div>
+                    )}
                     <p className="research-server-selection">{t("research.server_selects_inputs")}</p>
                     <button
                       className="btn-primary"
-                      disabled={!executionEnabled || runningCandidateId !== null}
-                      onClick={() => { void startRegisteredWorkflow(record); }}
+                      disabled={!executionEnabled || !selectedWorkflow || runningCandidateId !== null}
+                      onClick={() => { void startRegisteredWorkflow(record, selectedWorkflow); }}
                     >
                       {runningCandidateId === record.candidate.candidate_id
                         ? t("research.starting_run")
                         : t("research.start_run")}
                     </button>
                   </article>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1069,6 +1168,47 @@ export default function ResearchWorkspacePage() {
                         ? t("research.supported_limit")
                         : t("research.withheld_limit")}
                     </p>
+                    {audit.scientific_verdict === "CAPABILITY_GAP" && audit.capability_gaps.length > 0 && (
+                      <div className="research-capability-gaps">
+                        <strong>{t("research.capability_gap_title")}</strong>
+                        {audit.capability_gaps.map((gap) => {
+                          const existing = capabilityRequests.find((request) => (
+                            request.audit_id === audit.audit_id && request.gap_id === gap.gap_id
+                          ));
+                          const code = gapCode(gap);
+                          const translationKey = `foundry.gap.${code}`;
+                          const localized = t(translationKey);
+                          const explanation = localized === translationKey
+                            ? (gap.message || gap.missing_capability || code)
+                            : localized;
+                          return (
+                            <div className="research-capability-gap" key={gap.gap_id || code}>
+                              <div>
+                                <code>{code}</code>
+                                <span>{explanation}</span>
+                              </div>
+                              {existing ? (
+                                <div className="research-gap-request-status">
+                                  <span>{statusText(existing.status)}</span>
+                                  <Link to="/foundry">{t("research.track_foundry_request")}</Link>
+                                </div>
+                              ) : (
+                                <button
+                                  className="btn-secondary"
+                                  disabled={!config?.foundry_gap_tracking_enabled || !gap.gap_id || requestingGapId !== null}
+                                  onClick={() => { void submitFoundryRequest(audit.audit_id, gap); }}
+                                >
+                                  {requestingGapId === gap.gap_id
+                                    ? t("research.submitting_foundry_request")
+                                    : t("research.submit_foundry_request")}
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                        <p>{t("research.capability_gap_boundary")}</p>
+                      </div>
+                    )}
                     {(audit.can_cancel || audit.can_retry || audit.can_revise
                       || !["QUEUED", "RUNNING"].includes(audit.lifecycle_status)) && (
                       <div className="research-card-actions">

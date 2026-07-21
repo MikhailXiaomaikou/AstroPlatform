@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   archiveResearchWorkspace: vi.fn(),
   cancelClaimAudit: vi.fn(),
   createResearchWorkspace: vi.fn(),
+  createCapabilityRequest: vi.fn(),
   createSourceDocument: vi.fn(),
   createWorkerEnrollment: vi.fn(),
   createWorkspaceClaimAudit: vi.fn(),
@@ -16,6 +17,8 @@ const api = vi.hoisted(() => ({
   getSourceDocumentContent: vi.fn(),
   getSourceDocumentTables: vi.fn(),
   listScientificReviewQueue: vi.fn(),
+  listCapabilityRequests: vi.fn(),
+  listRegisteredWorkflows: vi.fn(),
   listResearchWorkspaces: vi.fn(),
   listSourceDocuments: vi.fn(),
   listWorkerNodes: vi.fn(),
@@ -169,7 +172,28 @@ const enabledConfig = {
   union3_reproduction_enabled: true,
   evidence_pack_v2_enabled: true,
   local_science_worker_enabled: true,
+  workflow_registry_v2_enabled: true,
+  foundry_gap_tracking_enabled: true,
+  foundry_candidate_catalog_enabled: true,
   analytics_requires_consent: true,
+};
+
+const registeredWorkflow = {
+  workflow_id: "union3_flat_lcdm_sn_only_v1",
+  workflow_version: "1.0.0",
+  display_name: "Union3 SN-only Flat ΛCDM reproduction",
+  description: "Registered frequentist reproduction",
+  status: "REGISTERED",
+  risk_level: "R3",
+  claim_scope: "reproduction_of_published_constraint",
+  model: "flat_lcdm",
+  dataset_key: "union3",
+  compatibility: {
+    source_profile_keys: ["union3_arxiv_v1"],
+    candidate_types: ["parameter_interval_report"],
+    model_scopes: ["flat_lcdm"],
+    data_scopes: ["union3_sn_only"],
+  },
 };
 
 function renderIndex() {
@@ -208,12 +232,24 @@ describe("Research workspace pages", () => {
     api.getResearchWorkspace.mockResolvedValue(workspace);
     api.listSourceDocuments.mockResolvedValue({ items: [source] });
     api.listWorkspaceClaimAudits.mockResolvedValue({ items: [] });
+    api.listRegisteredWorkflows.mockResolvedValue({ items: [registeredWorkflow], total: 1 });
+    api.listCapabilityRequests.mockResolvedValue({ items: [], total: 0 });
     api.listWorkerNodes.mockResolvedValue({ nodes: [] });
     api.listScientificReviewQueue.mockRejectedValue(
       Object.assign(new Error("reviewer only"), { response: { status: 403 } }),
     );
     api.createSourceDocument.mockResolvedValue(source);
     api.createWorkspaceClaimAudit.mockResolvedValue(audit);
+    api.createCapabilityRequest.mockResolvedValue({
+      id: "request-1",
+      audit_id: audit.audit_id,
+      gap_id: "gap-1",
+      gap_fingerprint: "gap-fingerprint-1",
+      status: "TRIAGE_PENDING",
+      candidate_id: null,
+      created_at: "2026-07-20T00:00:03Z",
+      updated_at: "2026-07-20T00:00:03Z",
+    });
     api.getSourceDocumentContent.mockResolvedValue({
       source_document_id: source.source_document_id,
       canonical_identifier: source.canonical_identifier,
@@ -293,7 +329,7 @@ describe("Research workspace pages", () => {
     });
   });
 
-  it("starts a registered workflow without exposing technical execution inputs", async () => {
+  it("loads the workflow catalog and starts the compatible registered workflow", async () => {
     renderWorkspace();
     await screen.findByRole("tab", { name: "Claims" });
     fireEvent.click(screen.getByRole("tab", { name: "Claims" }));
@@ -303,6 +339,10 @@ describe("Research workspace pages", () => {
     expect(screen.queryByLabelText(/tool parameter/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/anchor/i)).not.toBeInTheDocument();
     expect(screen.getByText(/not a posterior interval/i)).toBeInTheDocument();
+    expect(api.listRegisteredWorkflows).toHaveBeenCalled();
+    const workflowSelect = screen.getByLabelText("Registered workflow");
+    expect(workflowSelect).not.toBeDisabled();
+    expect(screen.getByRole("option", { name: /Union3 SN-only Flat ΛCDM reproduction/ })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Start registered reproduction" }));
     await waitFor(() => {
@@ -313,6 +353,47 @@ describe("Research workspace pages", () => {
       });
     });
     expect(await screen.findByRole("tab", { name: "Runs" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("fails closed when the catalog has no source-and-claim compatible workflow", async () => {
+    api.listRegisteredWorkflows.mockResolvedValue({
+      items: [{
+        ...registeredWorkflow,
+        workflow_id: "desi_dr2_chain_summary_v1",
+        compatibility: {
+          ...registeredWorkflow.compatibility,
+          source_profile_keys: ["desi_dr2_chains_v1"],
+          data_scopes: ["desi_dr2"],
+        },
+      }],
+      total: 1,
+    });
+    renderWorkspace();
+    fireEvent.click(await screen.findByRole("tab", { name: "Claims" }));
+
+    expect(screen.getByText("No compatible registered workflow")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start registered reproduction" })).toBeDisabled();
+    expect(api.createWorkspaceClaimAudit).not.toHaveBeenCalled();
+  });
+
+  it("submits a structured capability gap to Foundry and never invents inputs", async () => {
+    const gap = {
+      gap_id: "gap-1",
+      code: "workflow_not_registered",
+      message: "No registered workflow covers this claim.",
+    };
+    api.listWorkspaceClaimAudits.mockResolvedValue({
+      items: [{ ...audit, lifecycle_status: "COMPLETED", scientific_verdict: "CAPABILITY_GAP", capability_gaps: [gap] }],
+    });
+    renderWorkspace();
+    fireEvent.click(await screen.findByRole("tab", { name: "Runs" }));
+
+    expect(screen.getByText("No formal workflow is registered for this source and claim type.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Request a candidate workflow" }));
+    await waitFor(() => {
+      expect(api.createCapabilityRequest).toHaveBeenCalledWith(audit.audit_id, gap.gap_id);
+    });
+    expect(await screen.findByText("The capability gap was submitted to the candidate catalog.")).toBeInTheDocument();
   });
 
   it("keeps registered execution closed until every required feature gate is enabled", async () => {
