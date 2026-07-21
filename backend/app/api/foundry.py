@@ -554,6 +554,40 @@ async def admin_get_foundry_candidate(
     if candidate is None:
         raise HTTPException(status_code=404, detail="Foundry candidate not found")
     payload = await serialize_candidate(db, candidate, demo_limit=100)
+    candidate_versions = list(
+        (
+            await db.execute(
+                select(FoundryCandidateVersion)
+                .where(FoundryCandidateVersion.candidate_id == candidate.id)
+                .order_by(FoundryCandidateVersion.version_number.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    payload["versions"] = [
+        {
+            "id": str(row.id),
+            "candidate_key": row.candidate_key,
+            "version_number": row.version_number,
+            "version_hash": row.version_hash,
+            "workflow_id": row.workflow_id,
+            "workflow_version": row.workflow_version,
+            "candidate_bundle": dict(row.candidate_bundle or {}),
+            "workflow_spec": dict(row.workflow_spec or {}),
+            "workflow_spec_hash": row.workflow_spec_hash,
+            "code_tree_sha256": row.code_tree_hash,
+            "patch_sha256": row.patch_hash,
+            "dependency_lock_sha256": row.dependency_lock_hash,
+            "sbom_sha256": row.sbom_hash,
+            "validation_runner_image_digest": row.validation_runner_image_digest,
+            "ai_model": row.ai_model,
+            "ai_generation_config": dict(row.ai_generation_config or {}),
+            "created_by_kind": row.created_by_kind,
+            "created_at": row.created_at.isoformat(),
+        }
+        for row in candidate_versions
+    ]
     reviews = list(
         (
             await db.execute(

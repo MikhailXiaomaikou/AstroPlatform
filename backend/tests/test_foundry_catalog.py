@@ -252,6 +252,20 @@ async def test_demo_callback_is_hash_bound_idempotent_and_non_formal(db_session)
         db_session, validation_run_id=run.id, demo_report=report
     )
     assert replay.id == demo.id
+    wrong_run = await start_validation_run(
+        db_session,
+        candidate_id=version.candidate_id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+    )
+    with pytest.raises(FoundryCatalogError, match="different content or binding"):
+        await record_demo_report(
+            db_session,
+            validation_run_id=wrong_run.id,
+            demo_report=report,
+        )
     view = serialize_demo_run(demo, version_number=1)
     assert view["result"] == {"official_ready_cells": 1}
     assert view["evidence_class"] == "NON_FORMAL_DEMO"

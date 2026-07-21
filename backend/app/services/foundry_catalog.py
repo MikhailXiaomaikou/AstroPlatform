@@ -403,6 +403,15 @@ async def create_capability_request(
         if request is None:
             raise
         return request
+    candidate = await db.scalar(
+        select(FoundryCandidate)
+        .where(FoundryCandidate.id == candidate.id)
+        .with_for_update()
+    )
+    if candidate is None:
+        raise FoundryCatalogError(
+            "candidate_not_found", "Foundry candidate not found", status_code=404
+        )
     await _append_event(
         db,
         candidate_id=candidate.id,
@@ -1021,10 +1030,13 @@ async def record_demo_report(
         ) from exc
     existing = await db.get(FoundryDemoRun, report_demo_id)
     if existing is not None:
-        if existing.demo_report_hash != declared_report_hash:
+        if (
+            existing.demo_report_hash != declared_report_hash
+            or existing.validation_run_id != validation_run_id
+        ):
             raise FoundryCatalogError(
                 "demo_run_id_conflict",
-                "The Demo run id already exists with different content",
+                "The Demo run id already exists with different content or binding",
                 status_code=409,
             )
         return existing
@@ -1803,9 +1815,14 @@ async def _pending_registry_release_request(
         previous_operations = []
         previous_request_hash = None
     new_operations = [
-        {"operation": "UPSERT_ENTRY", "entry": entry} for entry in entries
+        {"operation": "UPSERT_ENTRY", "entry": entry, "context": context}
+        for entry in entries
     ] + [
-        {"operation": "SET_ENTRY_STATUS", "status_change": change}
+        {
+            "operation": "SET_ENTRY_STATUS",
+            "status_change": change,
+            "context": context,
+        }
         for change in status_changes
     ]
     operation_sequence = previous_operations + new_operations
