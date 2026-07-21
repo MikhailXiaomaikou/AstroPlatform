@@ -2218,10 +2218,15 @@ export async function registerAdminFoundryCandidate(
   candidateId: string,
   candidateVersionId: string,
   candidateVersionHash: string,
+  workerImageDigest: string,
 ): Promise<FoundryCandidateSummary> {
   const { data } = await api.post<FoundryCandidateSummary>(
     `/api/admin/foundry/candidates/${encodeURIComponent(candidateId)}/register`,
-    { candidate_version_id: candidateVersionId, candidate_version_hash: candidateVersionHash },
+    {
+      candidate_version_id: candidateVersionId,
+      candidate_version_hash: candidateVersionHash,
+      worker_image_digest: workerImageDigest,
+    },
   );
   return data;
 }

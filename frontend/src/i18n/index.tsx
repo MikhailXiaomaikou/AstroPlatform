@@ -422,6 +422,8 @@ const translations: Record<string, Record<Lang, string>> = {
   "foundry.review_scope_engineering": { en: "Engineering review", zh: "工程审核", fr: "Engineering review", es: "Engineering review" },
   "foundry.review_scope_scientific": { en: "Scientific review", zh: "科学审核", fr: "Scientific review", es: "Scientific review" },
   "foundry.review_separation": { en: "AI identities and candidate authors cannot approve their own work. R3 registration requires engineering and scientific approvals from different eligible people.", zh: "AI 身份和候选作者不能审核自己的工作；R3 注册需要由不同且有资格的人分别完成工程审核和科学审核。", fr: "AI and candidate authors cannot self-review.", es: "AI and candidate authors cannot self-review." },
+  "foundry.worker_digest": { en: "Signed Worker image digest", zh: "已签名 Worker 镜像摘要", fr: "Signed Worker image digest", es: "Signed Worker image digest" },
+  "foundry.worker_digest_body": { en: "Formal registration binds the approved version to an exact sha256 image digest supplied by the trusted build pipeline.", zh: "正式注册会把已批准版本绑定到可信构建流水线给出的精确 sha256 镜像摘要。", fr: "Registration binds an exact signed image digest.", es: "Registration binds an exact signed image digest." },
   "foundry.binding_missing": { en: "The server did not provide an immutable version id and hash. Administrative actions are locked.", zh: "服务端没有提供不可修改的版本 ID 和哈希，因此管理操作已锁定。", fr: "Immutable version binding is missing.", es: "Immutable version binding is missing." },
   "foundry.loading_candidate": { en: "Loading the linked candidate…", zh: "正在加载关联候选…", fr: "Loading candidate…", es: "Loading candidate…" },
   "foundry.action_triaged": { en: "The request was accepted for candidate generation.", zh: "请求已接受并进入候选生成流程。", fr: "The request was accepted.", es: "The request was accepted." },

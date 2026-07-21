@@ -175,7 +175,10 @@ describe("Workflow Foundry page", () => {
     };
     api.getFoundryCandidate.mockResolvedValue(draftCandidate);
     api.listFoundryDemoRuns.mockResolvedValue({ items: [], total: 0 });
-    api.listAdminFoundryRequests.mockResolvedValue({ items: [request], total: 1 });
+    api.listAdminFoundryRequests.mockResolvedValue({
+      items: [{ ...request, status: "SUBMITTED" }],
+      total: 1,
+    });
     api.getAdminFoundryCandidate.mockResolvedValue(draftCandidate);
     renderPage();
 
@@ -210,6 +213,32 @@ describe("Workflow Foundry page", () => {
         decision: "APPROVED",
         comment: "Engineering checks passed.",
       });
+    });
+  });
+
+  it("registers an approved exact version only with a pinned Worker image digest", async () => {
+    const approvedCandidate = { ...candidate, status: "APPROVED" };
+    const digest = `sha256:${"c".repeat(64)}`;
+    api.listAdminFoundryRequests.mockResolvedValue({ items: [request], total: 1 });
+    api.getAdminFoundryCandidate.mockResolvedValue(approvedCandidate);
+    renderPage();
+
+    await screen.findByText("Foundry Console");
+    const register = screen.getByRole("button", { name: "Promote to formal registry" });
+    expect(register).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Signed Worker image digest"), {
+      target: { value: digest },
+    });
+    expect(register).not.toBeDisabled();
+    fireEvent.click(register);
+
+    await waitFor(() => {
+      expect(api.registerAdminFoundryCandidate).toHaveBeenCalledWith(
+        candidate.id,
+        version.id,
+        version.version_hash,
+        digest,
+      );
     });
   });
 

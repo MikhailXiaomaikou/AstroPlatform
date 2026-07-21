@@ -150,8 +150,8 @@
 .foundry-admin { border-color: rgba(49, 91, 151, .32); }
 .foundry-admin-list > article { margin-top: 0; }
 .foundry-admin-controls { align-items: end; display: grid; gap: .7rem; grid-template-columns: minmax(170px, 1fr) minmax(100px, .5fr) auto; margin-top: .8rem; }
-.foundry-admin-controls label, .foundry-comment, .foundry-review-scope { display: grid; font-size: .76rem; font-weight: 680; gap: .3rem; }
-.foundry-admin-controls select, .foundry-comment textarea, .foundry-review-scope select {
+.foundry-admin-controls label, .foundry-comment, .foundry-review-scope, .foundry-worker-digest { display: grid; font-size: .76rem; font-weight: 680; gap: .3rem; }
+.foundry-admin-controls select, .foundry-comment textarea, .foundry-review-scope select, .foundry-worker-digest input {
   background: var(--color-background, #fff);
   border: 1px solid var(--color-border, #c9c4b9);
   border-radius: 5px;
@@ -161,6 +161,7 @@
 }
 .foundry-comment { margin-top: .8rem; }
 .foundry-review-scope { margin-top: .8rem; max-width: 320px; }
+.foundry-worker-digest { margin-top: .8rem; }
 .foundry-comment textarea { resize: vertical; }
 .foundry-review-boundary { color: var(--color-text-secondary, #65717d); font-size: .76rem; line-height: 1.5; }
 .foundry-action-row { margin-top: .8rem; }

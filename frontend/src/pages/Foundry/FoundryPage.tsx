@@ -49,6 +49,10 @@ function displayStatus(value: string): string {
   return value.replaceAll("_", " ");
 }
 
+function isImageDigest(value: string): boolean {
+  return /^sha256:[0-9a-f]{64}$/.test(value.trim());
+}
+
 function versionBinding(version: FoundryCandidateVersion | null): {
   candidateVersionId: string;
   versionHash: string;
@@ -168,6 +172,7 @@ export default function FoundryPage() {
   const [risks, setRisks] = useState<Record<string, Exclude<WorkflowRiskLevel, "R4">>>({});
   const [comments, setComments] = useState<Record<string, string>>({});
   const [reviewScopes, setReviewScopes] = useState<Record<string, ReviewScope>>({});
+  const [workerDigests, setWorkerDigests] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -354,16 +359,14 @@ export default function FoundryPage() {
                 const candidate = request.candidate_id ? adminCandidates[request.candidate_id] : undefined;
                 const binding = request.candidate_id ? bindingFor(request.candidate_id) : null;
                 const comment = comments[request.id] ?? "";
+                const workerDigest = workerDigests[request.id] ?? "";
                 const reviewScope = reviewScopes[request.id]
                   ?? (candidate?.risk_level === "R0" || candidate?.risk_level === "R1"
                     ? "ENGINEERING"
                     : "SCIENTIFIC");
-                const needsTriage = !request.candidate_id || Boolean(candidate && (
-                  candidate.status === "DRAFT"
-                  || !candidate.generation_route
-                  || !candidate.risk_level
-                  || !candidate.current_version
-                ));
+                const needsTriage = request.status === "SUBMITTED" && (
+                  !request.candidate_id || candidate?.status === "DRAFT"
+                );
                 return (
                   <article key={request.id}>
                     <div className="foundry-card-heading">
@@ -408,6 +411,15 @@ export default function FoundryPage() {
                           </select>
                         </label>
                         <p className="foundry-review-boundary">{t("foundry.review_separation")}</p>
+                        <label className="foundry-worker-digest">{t("foundry.worker_digest")}
+                          <input
+                            value={workerDigest}
+                            placeholder="sha256:…"
+                            spellCheck={false}
+                            onChange={(event) => setWorkerDigests((current) => ({ ...current, [request.id]: event.target.value }))}
+                          />
+                        </label>
+                        <p className="foundry-review-boundary">{t("foundry.worker_digest_body")}</p>
                         <div className="foundry-action-row">
                           <button className="btn-secondary" disabled={!binding || !config?.foundry_auto_demo_enabled || busyId !== null} onClick={() => {
                             if (!binding || !request.candidate_id) return;
@@ -446,9 +458,14 @@ export default function FoundryPage() {
                               comment,
                             }), "foundry.action_reviewed");
                           }}>{t("foundry.reject")}</button>
-                          <button className="btn-primary" disabled={!binding || !config?.foundry_registration_enabled || candidate.status !== "APPROVED" || busyId !== null} onClick={() => {
+                          <button className="btn-primary" disabled={!binding || !isImageDigest(workerDigest) || !config?.foundry_registration_enabled || candidate.status !== "APPROVED" || busyId !== null} onClick={() => {
                             if (!binding || !request.candidate_id) return;
-                            void runAdminAction(request.id, () => registerAdminFoundryCandidate(request.candidate_id!, binding.candidateVersionId, binding.versionHash), "foundry.action_registered");
+                            void runAdminAction(request.id, () => registerAdminFoundryCandidate(
+                              request.candidate_id!,
+                              binding.candidateVersionId,
+                              binding.versionHash,
+                              workerDigest.trim(),
+                            ), "foundry.action_registered");
                           }}>{t("foundry.register")}</button>
                           <button className="btn-secondary" disabled={!comment.trim() || busyId !== null} onClick={() => {
                             if (!request.candidate_id) return;

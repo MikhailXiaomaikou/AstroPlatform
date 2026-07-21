@@ -171,6 +171,24 @@ describe("Workflow Foundry API helpers", () => {
     expect(postSpy.mock.calls[0][1]).not.toHaveProperty("results");
     postSpy.mockRestore();
   });
+
+  it("binds formal registration to the exact candidate and Worker image", async () => {
+    const { default: api, registerAdminFoundryCandidate } = await import("../api/client");
+    const versionHash = "a".repeat(64);
+    const digest = `sha256:${"b".repeat(64)}`;
+    const postSpy = vi.spyOn(api, "post").mockResolvedValueOnce({ data: { id: "candidate-1" } });
+
+    await registerAdminFoundryCandidate("candidate-1", "version-1", versionHash, digest);
+    expect(postSpy).toHaveBeenCalledWith(
+      "/api/admin/foundry/candidates/candidate-1/register",
+      {
+        candidate_version_id: "version-1",
+        candidate_version_hash: versionHash,
+        worker_image_digest: digest,
+      },
+    );
+    postSpy.mockRestore();
+  });
 });
 
 describe("Auth helper functions", () => {
