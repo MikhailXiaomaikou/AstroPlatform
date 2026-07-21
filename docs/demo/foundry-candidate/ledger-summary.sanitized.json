@@ -18,11 +18,14 @@
   },
   "demo": {
     "claim_eligible": false,
+    "demo_report_sha256": "e23225d0a7808c326166bd270885eb1bbb86f720e39a6225c41836734fdb51f1",
+    "demo_run_id": "290a0653-e040-4863-844e-1077cfedb2b0",
     "evidence_class": "NON_FORMAL_DEMO",
     "evidence_pack_allowed": false,
     "failure_class": "official_chain_mirror_unavailable",
     "publication_ready": false,
-    "status": "PARTIAL"
+    "status": "PARTIAL",
+    "validation_run_id": "3ab9a643-00bd-4d2f-8920-9fe8bb243b46"
   },
   "event_chain": [
     {
@@ -63,9 +66,19 @@
   ],
   "git_commit": "f9b637b1f7cf31e3ecad150abe50a7b0b674019f",
   "local_runner_descriptor": {
+    "git_commit": "f9b637b1f7cf31e3ecad150abe50a7b0b674019f",
     "mode": "local_python_without_container",
     "python": "3.14.5",
     "warning": "This is not a signed OCI image digest and cannot be promoted."
+  },
+  "provenance": {
+    "candidate_bundle_receipt": "candidate-bundle.json",
+    "candidate_version_receipt": "candidate-version-envelope.json",
+    "environment_closure": "BOOTSTRAP_DESCRIPTOR_ONLY",
+    "event_envelopes": "ledger-events.json",
+    "historical_provenance_complete": false,
+    "limitation": "Hashes and the event chain are internally verifiable, but the bootstrap run did not capture a complete source tree, patch, SBOM, or signed container environment.",
+    "runner_receipt": "runner-descriptor.json"
   },
   "scope": "disposable_local_non_production_demo",
   "scientific_verdict_at_entry": "CAPABILITY_GAP"

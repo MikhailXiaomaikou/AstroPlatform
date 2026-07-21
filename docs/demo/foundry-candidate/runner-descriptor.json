@@ -1,0 +1,15 @@
+{
+  "descriptor": {
+    "git_commit": "f9b637b1f7cf31e3ecad150abe50a7b0b674019f",
+    "mode": "local_python_without_container",
+    "python": "3.14.5",
+    "warning": "This is not a signed OCI image digest and cannot be promoted."
+  },
+  "descriptor_sha256": "12a937d0522207449e2f3016142e1e7c82ac8abcd6fba6a19a3be372c7ed2f88",
+  "digest_kind": "LOCAL_DESCRIPTOR_SHA256",
+  "environment_closure": "DESCRIPTOR_ONLY",
+  "formal_registry_eligible": false,
+  "is_signed_oci_image_digest": false,
+  "schema_version": 1,
+  "validation_runner_image_digest": "sha256:12a937d0522207449e2f3016142e1e7c82ac8abcd6fba6a19a3be372c7ed2f88"
+}

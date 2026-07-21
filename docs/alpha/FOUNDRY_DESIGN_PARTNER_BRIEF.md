@@ -4,6 +4,11 @@
 > the hosted production service is not open for self-service use yet.
 > **当前状态：**正在招募预约式私测伙伴；托管生产服务尚未开放自助使用。
 
+The first round is a public-data, local replay or guided walkthrough. It does
+not create a hosted account and does not upload research data to Standard
+Astro. / 第一轮只使用公开数据，采用本地重跑或引导式演示；不会创建托管账号，也
+不会向 Standard Astro 上传科研数据。
+
 ## The 20–30 minute test / 20–30 分钟测试内容
 
 Standard Astro is an open-source cosmology workbench that separates AI
@@ -90,14 +95,18 @@ Desktop 属于测试范围，但尚未完成与 macOS/Linux 相同等级的端�
 
 ## Safety, privacy, and contact / 安全、隐私与联系
 
-Please read the [privacy notice](../../PRIVACY.md),
-[security policy](../../SECURITY.md), and the
-[current limitations](../../README.md#当前状态--current-status). Test records
-remain private by default and can be deleted on request.
+This first round does not use the hosted account, upload, or deletion flows.
+The repository's [privacy notice](../../PRIVACY.md) describes the intended
+hosted implementation, which is not being offered in this round. The GitHub
+issue below is public: share only high-level product feedback, and do not place
+personal information or research material in it. Also read the
+[security policy](../../SECURITY.md) and
+[current limitations](../../README.md#当前状态--current-status).
 
-请先阅读[隐私说明](../../PRIVACY.md)、[安全策略](../../SECURITY.md)和
-[当前限制](../../README.md#当前状态--current-status)。测试记录默认私有，并可
-申请删除。
+第一轮不使用托管账号、上传或删除流程。仓库中的[隐私说明](../../PRIVACY.md)描述的是
+计划中的托管实现，本轮并不提供。下方 GitHub issue 是公开页面：请只提交高层产品
+反馈，不要填写个人信息或科研材料。也请阅读[安全策略](../../SECURITY.md)和
+[当前限制](../../README.md#当前状态--current-status)。
 
 To volunteer, open a
 [Quick Feedback issue](https://github.com/MikhailXiaomaikou/Standard-Astro/issues/new?template=quick_feedback.yml)

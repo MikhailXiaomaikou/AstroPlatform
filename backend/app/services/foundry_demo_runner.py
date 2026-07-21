@@ -228,6 +228,7 @@ def _run_desi_dr2_official_chain_summary(
     workflow_spec = bundle["workflow_spec"]
     inputs = workflow_spec.get("demo_inputs") or {}
     prior_root = os.environ.get("DESI_DR2_OFFICIAL_CHAIN_ROOT")
+    configured_root = cache_root if cache_root is not None else prior_root
     if cache_root is not None:
         os.environ["DESI_DR2_OFFICIAL_CHAIN_ROOT"] = str(cache_root)
     try:
@@ -245,8 +246,30 @@ def _run_desi_dr2_official_chain_summary(
 
     ready_cells = int(matrix.get("official_ready_cells") or 0)
     withheld_cells = int(matrix.get("official_withheld_cells") or 0)
-    status = "PASSED" if ready_cells > 0 and withheld_cells == 0 else "PARTIAL"
-    failure_class = None if status == "PASSED" else "official_chain_mirror_unavailable"
+    mirror_was_configured = bool(str(configured_root or "").strip())
+    withheld_reasons = sorted(
+        {
+            str(reason)
+            for cell in matrix.get("matrix") or []
+            if isinstance(cell, dict)
+            for reason in cell.get("withheld_reasons") or []
+            if str(reason).strip()
+        }
+    )
+    if ready_cells > 0 and withheld_cells == 0:
+        status = "PASSED"
+        failure_class = None
+    elif mirror_was_configured:
+        # A configured cache that is missing, corrupt, schema-incompatible, or
+        # scientifically invalid is not equivalent to the operator declining
+        # to provide a mirror.  Preserve the failed receipt, but make the public
+        # wrapper return non-zero so an integrity failure cannot look like the
+        # expected no-mirror demonstration.
+        status = "FAILED"
+        failure_class = "official_chain_mirror_integrity_failed"
+    else:
+        status = "PARTIAL"
+        failure_class = "official_chain_mirror_unavailable"
     return {
         "status": status,
         "failure_class": failure_class,
@@ -261,8 +284,10 @@ def _run_desi_dr2_official_chain_summary(
         "validation_summary": {
             "registry_integrity": True,
             "official_mirror_verified": ready_cells > 0,
+            "official_mirror_configured": mirror_was_configured,
             "ready_cells": ready_cells,
             "withheld_cells": withheld_cells,
+            "withheld_reasons": withheld_reasons,
             "numeric_claim_gate": "NON_FORMAL_DEMO",
         },
     }

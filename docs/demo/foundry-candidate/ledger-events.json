@@ -1,0 +1,144 @@
+{
+  "environment_closure": "BOOTSTRAP_DESCRIPTOR_ONLY",
+  "events": [
+    {
+      "envelope": {
+        "actor_kind": "SYSTEM",
+        "actor_user_id": null,
+        "candidate_id": "88c85d84-4b2d-45d9-b59b-a0418427cffa",
+        "candidate_version_id": null,
+        "event_type": "CANDIDATE_CREATED",
+        "occurred_at": "2026-07-21T16:00:26.353518+00:00",
+        "payload": {
+          "gap_fingerprint": "b80eeb7429eb1885d698fadec9b38aa9a535311c4d51d00867e47a7522996566",
+          "status": "DRAFT"
+        },
+        "previous_event_hash": null
+      },
+      "event_hash": "46ef97a58426b2f1c9c5c703fe845b14c369af415ed4e85d42acc8957033f80e"
+    },
+    {
+      "envelope": {
+        "actor_kind": "USER",
+        "actor_user_id": "3c834b51-b0bb-4a51-813f-cb56d30cc6ec",
+        "candidate_id": "88c85d84-4b2d-45d9-b59b-a0418427cffa",
+        "candidate_version_id": null,
+        "event_type": "CAPABILITY_REQUEST_LINKED",
+        "occurred_at": "2026-07-21T16:00:26.356335+00:00",
+        "payload": {
+          "gap_id": "gap_9ca00f12e260ae164a18825e5e50df6d26f800c6bdf2899ce0752d8a60437934",
+          "request_id": "5e1c5c9f-42fa-43e1-b0fc-9bce5b80a46d"
+        },
+        "previous_event_hash": "46ef97a58426b2f1c9c5c703fe845b14c369af415ed4e85d42acc8957033f80e"
+      },
+      "event_hash": "cfe6801cf98ef1150171e77c9fcf1758cf68c91e18f3b65378fd47717d8d8805"
+    },
+    {
+      "envelope": {
+        "actor_kind": "HUMAN_ADMIN",
+        "actor_user_id": "3c834b51-b0bb-4a51-813f-cb56d30cc6ec",
+        "candidate_id": "88c85d84-4b2d-45d9-b59b-a0418427cffa",
+        "candidate_version_id": "337f3e07-e1b8-4b6a-9b6c-6d44a61133f8",
+        "event_type": "CANDIDATE_VERSION_CREATED",
+        "occurred_at": "2026-07-21T16:00:26.363092+00:00",
+        "payload": {
+          "candidate_bundle_hash": "1206466dc33c8c9f043ada93e7d800783549741089f48e3baa62b896014440eb",
+          "version_hash": "f4e8fa65deeb0b8662770fe436035596a89085ac33ef53cfb8e974d191268868",
+          "version_number": 1,
+          "workflow_id": "desi_dr2_official_chain_summary_v1",
+          "workflow_version": "1.0.0-candidate.1"
+        },
+        "previous_event_hash": "cfe6801cf98ef1150171e77c9fcf1758cf68c91e18f3b65378fd47717d8d8805"
+      },
+      "event_hash": "b422d78b00184a2646ab467a1a5fa08b4102b4b087ab4fd74a49c566a0c8d53d"
+    },
+    {
+      "envelope": {
+        "actor_kind": "HUMAN_ADMIN",
+        "actor_user_id": "3c834b51-b0bb-4a51-813f-cb56d30cc6ec",
+        "candidate_id": "88c85d84-4b2d-45d9-b59b-a0418427cffa",
+        "candidate_version_id": "337f3e07-e1b8-4b6a-9b6c-6d44a61133f8",
+        "event_type": "REQUEST_TRIAGED",
+        "occurred_at": "2026-07-21T16:00:26.364033+00:00",
+        "payload": {
+          "generation_route": "COMPOSITION",
+          "request_id": "5e1c5c9f-42fa-43e1-b0fc-9bce5b80a46d",
+          "risk_level": "R2"
+        },
+        "previous_event_hash": "b422d78b00184a2646ab467a1a5fa08b4102b4b087ab4fd74a49c566a0c8d53d"
+      },
+      "event_hash": "decf198219960f71dce6b777444edccf5e962d63acdf1cbb06b2e5c58600016c"
+    },
+    {
+      "envelope": {
+        "actor_kind": "HUMAN_ADMIN",
+        "actor_user_id": "3c834b51-b0bb-4a51-813f-cb56d30cc6ec",
+        "candidate_id": "88c85d84-4b2d-45d9-b59b-a0418427cffa",
+        "candidate_version_id": "337f3e07-e1b8-4b6a-9b6c-6d44a61133f8",
+        "event_type": "VALIDATION_QUEUED",
+        "occurred_at": "2026-07-21T16:00:26.368281+00:00",
+        "payload": {
+          "attempt_number": 1,
+          "candidate_version_hash": "f4e8fa65deeb0b8662770fe436035596a89085ac33ef53cfb8e974d191268868",
+          "dispatch_lease_seconds": 300,
+          "max_attempts": 3,
+          "validation_run_id": "3ab9a643-00bd-4d2f-8920-9fe8bb243b46",
+          "workflow_lease_seconds": 3600
+        },
+        "previous_event_hash": "decf198219960f71dce6b777444edccf5e962d63acdf1cbb06b2e5c58600016c"
+      },
+      "event_hash": "79833a9a390eb4d65863a4f00362f3b5ec303e9e49c428ef3ddf85d9a53c2a73"
+    },
+    {
+      "envelope": {
+        "actor_kind": "CONTROL_PLANE",
+        "actor_user_id": null,
+        "candidate_id": "88c85d84-4b2d-45d9-b59b-a0418427cffa",
+        "candidate_version_id": "337f3e07-e1b8-4b6a-9b6c-6d44a61133f8",
+        "event_type": "VALIDATION_DISPATCHED",
+        "occurred_at": "2026-07-21T16:00:26.370893+00:00",
+        "payload": {
+          "attempt_number": 1,
+          "delivery_uncertain": false,
+          "failure_class": null,
+          "max_attempts": 3,
+          "retry_after": "2026-07-21T17:00:26.370040+00:00",
+          "retryable": false,
+          "status": "DISPATCHED",
+          "validation_run_id": "3ab9a643-00bd-4d2f-8920-9fe8bb243b46"
+        },
+        "previous_event_hash": "79833a9a390eb4d65863a4f00362f3b5ec303e9e49c428ef3ddf85d9a53c2a73"
+      },
+      "event_hash": "900d64ad166b32aaa26a2a1f21680584502afbef65bf244c819656751e31eea5"
+    },
+    {
+      "envelope": {
+        "actor_kind": "VALIDATION_RUNNER",
+        "actor_user_id": null,
+        "candidate_id": "88c85d84-4b2d-45d9-b59b-a0418427cffa",
+        "candidate_version_id": "337f3e07-e1b8-4b6a-9b6c-6d44a61133f8",
+        "event_type": "DEMO_RECORDED",
+        "occurred_at": "2026-07-21T16:00:26.377535+00:00",
+        "payload": {
+          "attempt_number": 1,
+          "claim_eligible": false,
+          "demo_report_sha256": "e23225d0a7808c326166bd270885eb1bbb86f720e39a6225c41836734fdb51f1",
+          "demo_run_id": "290a0653-e040-4863-844e-1077cfedb2b0",
+          "evidence_class": "NON_FORMAL_DEMO",
+          "evidence_pack_allowed": false,
+          "max_attempts": 3,
+          "publication_ready": false,
+          "status": "PARTIAL",
+          "validation_run_id": "3ab9a643-00bd-4d2f-8920-9fe8bb243b46"
+        },
+        "previous_event_hash": "900d64ad166b32aaa26a2a1f21680584502afbef65bf244c819656751e31eea5"
+      },
+      "event_hash": "46e13270462347d11414bcdf9e19c5be0fef1e465c30d47f47589fe2d7a751fe"
+    }
+  ],
+  "formal_registry_eligible": false,
+  "historical_provenance_complete": false,
+  "note": "The actor UUID belongs to the disposable synthetic local demo account and is included because changing it would invalidate the event hashes.",
+  "schema_version": 1,
+  "scope": "DISPOSABLE_LOCAL_NON_PRODUCTION_DEMO"
+}

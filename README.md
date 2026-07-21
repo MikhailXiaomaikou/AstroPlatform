@@ -83,7 +83,9 @@ made from UI captures of a real local run. The job completes, while the scientif
 researchers interested in testing the Workflow Foundry can read the
 [20–30 minute design-partner Alpha brief](./docs/alpha/FOUNDRY_DESIGN_PARTNER_BRIEF.md).
 The hosted service is not yet open for self-service use; tests are scheduled
-local runs or guided walkthroughs.
+local runs or guided walkthroughs. The first round uses only public data and
+requires neither a hosted account nor a research-data upload. / 第一轮只使用公开数据，
+不创建托管账号，也不上传科研数据。
 
 ## 本地启动 / Local start
 

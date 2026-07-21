@@ -46,6 +46,10 @@ SQLite database and local services; production was not used.
 - `poster-foundry-candidate-zh.png`: screenshot used as the poster.
 - `demo-report.sanitized.json`: complete non-formal DemoReport; contains no local path or secret.
 - `ledger-summary.sanitized.json`: redacted lifecycle and hash-chain receipt.
+- `candidate-bundle.json`: the exact declarative candidate and WorkflowSpec used by the historical run.
+- `candidate-version-envelope.json`: the exact historical bootstrap identity envelope and its explicit provenance limits.
+- `runner-descriptor.json`: the exact local descriptor whose SHA-256 produced the historical `runner_image_digest`.
+- `ledger-events.json`: every canonical event envelope needed to recompute the append-only event chain.
 - `run-candidate-demo.sh`: repository-relative replay command.
 - `SHA256SUMS`: hashes for every published file except itself.
 
@@ -56,7 +60,41 @@ record of what executed.
 视频是这次真实运行的简短分镜，不是连续录屏。可机器检查的执行记录以脱敏 JSON
 收据和重跑脚本为准，而不是以视频剪辑为准。
 
-## Replay / 重跑
+## Verify the recorded receipt / 验证历史收据
+
+```bash
+./docs/demo/foundry-candidate/run-candidate-demo.sh --verify-recorded
+```
+
+This verifies exact file coverage, rejects symlinks, recomputes the DemoReport
+and environment hashes, recomputes the complete CandidateVersion envelope,
+recomputes the local runner-descriptor digest, and verifies every canonical
+event envelope and previous-event link through `DEMO_RECORDED`.
+
+该命令会检查所有公开文件是否都进入校验清单并拒绝符号链接，重新计算 DemoReport、
+环境、完整 CandidateVersion envelope 和本地 Runner 描述符的哈希，并逐条验证直到
+`DEMO_RECORDED` 的事件 envelope 与前序链接。
+
+Passing this check proves that the published bootstrap receipt is internally
+consistent. It does **not** prove complete historical environment closure: the
+old `code_tree_sha256` covered one runner file, while its patch and SBOM hashes
+were explicit bootstrap placeholders. The receipt is therefore non-formal and
+cannot be upgraded after the fact.
+
+These are Git-version-anchored consistency receipts, not digital signatures or
+independent proof of authorship. Authenticity still depends on obtaining this
+repository version from a trusted channel; formal releases require signed
+artifacts and a signed Registry snapshot.
+
+验证通过只证明这份历史 bootstrap 收据内部一致，并**不**证明历史运行环境完整闭包：
+旧 `code_tree_sha256` 只覆盖一个 Runner 源文件，patch 和 SBOM 哈希也是明确的启动阶段
+占位值。这份记录仍是非正式 Demo，不能事后补材料升级成正式证据。
+
+这些文件只是由 Git 版本锚定的内部一致性收据，不是数字签名，也不能独立证明作者
+身份。真实性仍取决于从可信渠道取得该仓库版本；正式发布必须使用签名产物和签名
+Registry snapshot。
+
+## Replay the current checkout / 重跑当前代码
 
 From any clean Standard Astro checkout with backend dependencies installed:
 
@@ -76,21 +114,31 @@ changes before binding `TOOL_VERSION` to the current commit, so a modified
 runtime cannot be mislabeled as commit-pinned provenance.
 
 The wrapper accepts only the documented, contract-valid outcomes: `PARTIAL`
-when a byte-pinned official mirror is unavailable, or `PASSED` after that
-mirror is fully verified. Dependency errors, runner exceptions, registry
-failures, malformed summaries, and every other `FAILED` result exit non-zero.
-It also binds each new report to the published candidate bundle, immutable
-CandidateVersion, WorkflowSpec, and local runner descriptor recorded in this
-kit; a mismatch exits non-zero instead of creating a detached Demo record.
+when no official mirror was configured, or `PASSED` after a configured mirror
+was fully verified. A configured but incomplete, corrupt, or mismatched mirror
+is `FAILED` and exits non-zero. Dependency errors, runner exceptions, registry
+failures, malformed summaries, and every other `FAILED` result also exit
+non-zero.
+
+A replay never reuses the historical `f4e8fa…` CandidateVersion. It calculates
+a new identity from the current canonical tracked-source-tree hash, empty-patch
+hash, dependency lock, installed-package inventory, runtime files, Python
+binary, and local descriptor. The output `replay-identity.json` explicitly says
+`historical_demo_version_reused=false`, `ledger_recorded=false`,
+`environment_closure=DESCRIPTOR_ONLY`, and `formal_registry_eligible=false`.
 
 脚本依次查找 `backend/venv`、`backend/.venv` 和 `python3`。如果依赖安装在
 其他环境，请设置 `PYTHON=/path/to/python`。仓库还必须处于干净状态；脚本会在把
 `TOOL_VERSION` 绑定到当前提交之前拒绝已跟踪或未跟踪的源码改动，避免把修改过的
-运行环境误写成由某个提交固定。包装脚本只接受两种符合合同的结果：缺少逐字节固定
-官方镜像时为 `PARTIAL`，完整验证镜像后为 `PASSED`。依赖错误、Runner 异常、Registry
-失败、摘要格式错误以及其他 `FAILED` 结果都会以非零状态退出。新报告还必须与本套件
-记录的候选 bundle、不可修改 CandidateVersion、WorkflowSpec 和本地 Runner 描述符完全
-一致；任何不匹配都会失败，避免生成无法追加到候选账本的游离 Demo。
+运行环境误写成由某个提交固定。包装脚本只接受两种符合合同的成功结果：没有配置官方
+镜像时为 `PARTIAL`，完整验证已配置镜像后为 `PASSED`。如果配置了镜像但文件缺失、损坏
+或哈希不匹配，则结果为 `FAILED` 并以非零状态退出；依赖错误、Runner 异常、Registry
+失败和摘要格式错误也同样失败。
+
+当前重跑绝不会复用历史 `f4e8fa…` CandidateVersion。它会用当前规范化源码树、空 patch、
+依赖锁、已安装包清单、运行文件、Python 二进制和本地描述符生成全新身份。输出的
+`replay-identity.json` 会明确标记：未复用历史版本、未写入账本、只达到描述符级环境记录，
+且不能进入正式 Registry。
 
 If the script is outside the repository, provide the checkout path:
 

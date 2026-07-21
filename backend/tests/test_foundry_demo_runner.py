@@ -117,7 +117,9 @@ def test_checked_in_candidate_is_non_formal_and_records_partial_without_mirror(
     assert report["evidence_pack_allowed"] is False
     assert report["failure_class"] == "official_chain_mirror_unavailable"
     assert report["validation_summary"]["registry_integrity"] is True
+    assert report["validation_summary"]["official_mirror_configured"] is False
     assert report["validation_summary"]["official_mirror_verified"] is False
+    assert report["validation_summary"]["withheld_reasons"]
     assert len(report["candidate_bundle_sha256"]) == 64
     assert len(report["workflow_spec_sha256"]) == 64
     assert len(report["demo_report_sha256"]) == 64
@@ -148,6 +150,28 @@ def test_checked_in_candidate_is_non_formal_and_records_partial_without_mirror(
     assert set(report) == set(schema["required"])
     assert schema["properties"]["evidence_class"]["const"] == "NON_FORMAL_DEMO"
     assert schema["properties"]["publication_ready"]["const"] is False
+
+
+def test_configured_but_invalid_mirror_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("DESI_DR2_OFFICIAL_CHAIN_ROOT", raising=False)
+    bundle = load_candidate_bundle(_CANDIDATE)
+
+    report = run_candidate_demo(bundle, cache_root=tmp_path)
+
+    assert report["status"] == "FAILED"
+    assert report["failure_class"] == "official_chain_mirror_integrity_failed"
+    assert report["evidence_class"] == "NON_FORMAL_DEMO"
+    assert report["publication_ready"] is False
+    assert report["claim_eligible"] is False
+    assert report["evidence_pack_allowed"] is False
+    assert report["validation_summary"]["official_mirror_configured"] is True
+    assert report["validation_summary"]["official_mirror_verified"] is False
+    assert report["validation_summary"]["ready_cells"] == 0
+    assert report["validation_summary"]["withheld_cells"] > 0
+    assert report["validation_summary"]["withheld_reasons"]
 
 
 def test_candidate_cannot_upgrade_its_output_policy() -> None:
