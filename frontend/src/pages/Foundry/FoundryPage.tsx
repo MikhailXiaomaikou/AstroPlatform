@@ -49,10 +49,6 @@ function displayStatus(value: string): string {
   return value.replaceAll("_", " ");
 }
 
-function isImageDigest(value: string): boolean {
-  return /^sha256:[0-9a-f]{64}$/.test(value.trim());
-}
-
 function versionBinding(version: FoundryCandidateVersion | null): {
   candidateVersionId: string;
   versionHash: string;
@@ -99,6 +95,18 @@ function DemoCard({ demo }: { demo: FoundryDemoRun }) {
         <pre>{typeof demo.validation_summary === "string"
           ? demo.validation_summary
           : JSON.stringify(demo.validation_summary, null, 2)}</pre>
+      </details>
+      <details>
+        <summary>{t("foundry.demo_receipt")}</summary>
+        <pre>{JSON.stringify({
+          result: demo.result ?? {},
+          receipt: demo.receipt ?? {},
+          environment: demo.environment ?? {},
+          resource_usage: demo.resource_usage ?? {},
+          artifact_receipts: demo.artifact_receipts ?? [],
+          validation_runner_image_digest: demo.validation_runner_image_digest ?? null,
+          failure_class: demo.failure_class ?? null,
+        }, null, 2)}</pre>
       </details>
     </article>
   );
@@ -172,7 +180,7 @@ export default function FoundryPage() {
   const [risks, setRisks] = useState<Record<string, Exclude<WorkflowRiskLevel, "R4">>>({});
   const [comments, setComments] = useState<Record<string, string>>({});
   const [reviewScopes, setReviewScopes] = useState<Record<string, ReviewScope>>({});
-  const [workerDigests, setWorkerDigests] = useState<Record<string, string>>({});
+  const [buildAttestationIds, setBuildAttestationIds] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -359,7 +367,14 @@ export default function FoundryPage() {
                 const candidate = request.candidate_id ? adminCandidates[request.candidate_id] : undefined;
                 const binding = request.candidate_id ? bindingFor(request.candidate_id) : null;
                 const comment = comments[request.id] ?? "";
-                const workerDigest = workerDigests[request.id] ?? "";
+                const exactBuilds = (candidate?.formal_build_attestations ?? []).filter(
+                  (attestation) => binding
+                    && attestation.candidate_version_id === binding.candidateVersionId
+                    && attestation.candidate_version_hash === binding.versionHash,
+                );
+                const selectedBuildId = buildAttestationIds[request.id]
+                  ?? exactBuilds[0]?.build_attestation_id
+                  ?? "";
                 const reviewScope = reviewScopes[request.id]
                   ?? (candidate?.risk_level === "R0" || candidate?.risk_level === "R1"
                     ? "ENGINEERING"
@@ -411,15 +426,21 @@ export default function FoundryPage() {
                           </select>
                         </label>
                         <p className="foundry-review-boundary">{t("foundry.review_separation")}</p>
-                        <label className="foundry-worker-digest">{t("foundry.worker_digest")}
-                          <input
-                            value={workerDigest}
-                            placeholder="sha256:…"
-                            spellCheck={false}
-                            onChange={(event) => setWorkerDigests((current) => ({ ...current, [request.id]: event.target.value }))}
-                          />
+                        <label className="foundry-worker-digest">{t("foundry.build_attestation")}
+                          <select
+                            value={selectedBuildId}
+                            disabled={exactBuilds.length === 0}
+                            onChange={(event) => setBuildAttestationIds((current) => ({ ...current, [request.id]: event.target.value }))}
+                          >
+                            {exactBuilds.length === 0 && <option value="">{t("foundry.build_pending")}</option>}
+                            {exactBuilds.map((attestation) => (
+                              <option key={attestation.build_attestation_id} value={attestation.build_attestation_id}>
+                                {attestation.git_commit.slice(0, 10)} · {attestation.formal_worker_image_digest.slice(0, 20)}…
+                              </option>
+                            ))}
+                          </select>
                         </label>
-                        <p className="foundry-review-boundary">{t("foundry.worker_digest_body")}</p>
+                        <p className="foundry-review-boundary">{t("foundry.build_attestation_body")}</p>
                         <div className="foundry-action-row">
                           <button className="btn-secondary" disabled={!binding || !config?.foundry_auto_demo_enabled || busyId !== null} onClick={() => {
                             if (!binding || !request.candidate_id) return;
@@ -458,13 +479,13 @@ export default function FoundryPage() {
                               comment,
                             }), "foundry.action_reviewed");
                           }}>{t("foundry.reject")}</button>
-                          <button className="btn-primary" disabled={!binding || !isImageDigest(workerDigest) || !config?.foundry_registration_enabled || candidate.status !== "APPROVED" || busyId !== null} onClick={() => {
+                          <button className="btn-primary" disabled={!binding || !selectedBuildId || !config?.foundry_registration_enabled || candidate.status !== "APPROVED" || busyId !== null} onClick={() => {
                             if (!binding || !request.candidate_id) return;
                             void runAdminAction(request.id, () => registerAdminFoundryCandidate(
                               request.candidate_id!,
                               binding.candidateVersionId,
                               binding.versionHash,
-                              workerDigest.trim(),
+                              selectedBuildId,
                             ), "foundry.action_registered");
                           }}>{t("foundry.register")}</button>
                           <button className="btn-secondary" disabled={!comment.trim() || busyId !== null} onClick={() => {

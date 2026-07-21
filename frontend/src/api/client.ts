@@ -2075,7 +2075,8 @@ export interface FoundryCandidateVersion {
   code_tree_hash?: string | null;
   dependency_lock_hash?: string | null;
   sbom_hash?: string | null;
-  fixture_hashes?: Record<string, string>;
+  fixture_hashes?: Array<Record<string, unknown>>;
+  validation_runner_image_digest?: string | null;
   created_at: string | null;
 }
 
@@ -2089,12 +2090,39 @@ export interface FoundryDemoRun {
   claim_eligible: false;
   limitations: string[];
   validation_summary: Record<string, unknown> | string;
-  runner_image_digest?: string | null;
-  stdout_hash?: string | null;
-  stderr_hash?: string | null;
+  result?: Record<string, unknown>;
+  environment?: Record<string, unknown>;
+  generation?: Record<string, unknown>;
+  source_pins?: Array<Record<string, unknown>>;
+  fixture_hashes?: Array<Record<string, unknown>>;
+  data_hashes?: Record<string, string>;
+  artifact_receipts?: Array<Record<string, unknown>>;
+  receipt?: Record<string, unknown>;
+  validation_runner_image_digest?: string | null;
+  failure_class?: string | null;
   resource_usage?: Record<string, unknown>;
   started_at: string | null;
   completed_at: string | null;
+}
+
+export interface FoundryFormalBuildAttestation {
+  build_attestation_id: string;
+  candidate_version_id: string;
+  candidate_version_hash: string;
+  formal_worker_image_digest: string;
+  source_tree_sha256: string;
+  dependency_lock_sha256: string;
+  formal_sbom_sha256: string;
+  test_report_sha256: string;
+  git_commit: string;
+  oidc_issuer: string;
+  oidc_subject: string;
+  sigstore_bundle_sha256: string;
+  provenance_sha256: string;
+  receipt_sha256: string;
+  built_at: string;
+  created_at: string;
+  status: "VERIFIED_BUILD_RECEIPT";
 }
 
 export interface FoundryCandidateSummary {
@@ -2107,6 +2135,7 @@ export interface FoundryCandidateSummary {
   current_version: FoundryCandidateVersion | null;
   versions?: FoundryCandidateVersion[];
   demo_runs?: FoundryDemoRun[];
+  formal_build_attestations?: FoundryFormalBuildAttestation[];
   created_at: string | null;
   updated_at: string | null;
 }
@@ -2218,14 +2247,24 @@ export async function registerAdminFoundryCandidate(
   candidateId: string,
   candidateVersionId: string,
   candidateVersionHash: string,
-  workerImageDigest: string,
-): Promise<FoundryCandidateSummary> {
-  const { data } = await api.post<FoundryCandidateSummary>(
+  buildAttestationId: string,
+): Promise<{
+  candidate_id: string;
+  status: "PENDING_RELEASE";
+  candidate_status: "APPROVED";
+  registry_entry_id: string;
+  registry_entry_status: "PENDING_RELEASE";
+  release_request_id: string;
+  release_request_hash: string;
+  release_request_status: "PENDING_SIGNATURE";
+  runtime_registry_modified: false;
+}> {
+  const { data } = await api.post(
     `/api/admin/foundry/candidates/${encodeURIComponent(candidateId)}/register`,
     {
       candidate_version_id: candidateVersionId,
       candidate_version_hash: candidateVersionHash,
-      worker_image_digest: workerImageDigest,
+      build_attestation_id: buildAttestationId,
     },
   );
   return data;

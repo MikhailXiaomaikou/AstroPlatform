@@ -216,19 +216,38 @@ describe("Workflow Foundry page", () => {
     });
   });
 
-  it("registers an approved exact version only with a pinned Worker image digest", async () => {
-    const approvedCandidate = { ...candidate, status: "APPROVED" };
+  it("requests registration only with a server-verified formal build receipt", async () => {
     const digest = `sha256:${"c".repeat(64)}`;
+    const buildAttestation = {
+      build_attestation_id: "build-attestation-1",
+      candidate_version_id: version.id,
+      candidate_version_hash: version.version_hash,
+      formal_worker_image_digest: digest,
+      source_tree_sha256: "d".repeat(64),
+      dependency_lock_sha256: "e".repeat(64),
+      formal_sbom_sha256: "f".repeat(64),
+      test_report_sha256: "1".repeat(64),
+      git_commit: "2".repeat(40),
+      oidc_issuer: "https://token.actions.githubusercontent.com",
+      oidc_subject: "repo:standard-astro/platform:environment:foundry-formal-build",
+      sigstore_bundle_sha256: "3".repeat(64),
+      provenance_sha256: "4".repeat(64),
+      receipt_sha256: "5".repeat(64),
+      built_at: "2026-07-21T00:04:00Z",
+      created_at: "2026-07-21T00:04:00Z",
+      status: "VERIFIED_BUILD_RECEIPT",
+    };
+    const approvedCandidate = {
+      ...candidate,
+      status: "APPROVED",
+      formal_build_attestations: [buildAttestation],
+    };
     api.listAdminFoundryRequests.mockResolvedValue({ items: [request], total: 1 });
     api.getAdminFoundryCandidate.mockResolvedValue(approvedCandidate);
     renderPage();
 
     await screen.findByText("Foundry Console");
-    const register = screen.getByRole("button", { name: "Promote to formal registry" });
-    expect(register).toBeDisabled();
-    fireEvent.change(screen.getByLabelText("Signed Worker image digest"), {
-      target: { value: digest },
-    });
+    const register = screen.getByRole("button", { name: "Request signed registry release" });
     expect(register).not.toBeDisabled();
     fireEvent.click(register);
 
@@ -237,9 +256,21 @@ describe("Workflow Foundry page", () => {
         candidate.id,
         version.id,
         version.version_hash,
-        digest,
+        buildAttestation.build_attestation_id,
       );
     });
+  });
+
+  it("does not let the browser type a formal Worker digest", async () => {
+    const approvedCandidate = { ...candidate, status: "APPROVED", formal_build_attestations: [] };
+    api.listAdminFoundryRequests.mockResolvedValue({ items: [request], total: 1 });
+    api.getAdminFoundryCandidate.mockResolvedValue(approvedCandidate);
+    renderPage();
+
+    await screen.findByText("Foundry Console");
+    expect(screen.getByRole("button", { name: "Request signed registry release" })).toBeDisabled();
+    expect(screen.queryByPlaceholderText("sha256:…")).not.toBeInTheDocument();
+    expect(screen.getByText("Waiting for protected CI build")).toBeInTheDocument();
   });
 
   it("fails closed when the candidate catalog feature flag is off", async () => {
