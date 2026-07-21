@@ -41,7 +41,7 @@
   ],
   "fixture_hashes": [],
   "dependency_lock_sha256": "1ad3021413d90076bfca5105f360cc53c2a716b59b2f828cc95e64715771529d",
-  "runner_definition_sha256": "71e45164c17879cc312ea348d8969c5adf66d4af06685e64c1f6d652cb19e4bc",
+  "runner_definition_sha256": "2386feef9864b757227e295ebd3fe48615283361ab4938f32a9366483b5e573d",
   "generation": {
     "kind": "bootstrap_declarative_candidate",
     "model": "codex",
