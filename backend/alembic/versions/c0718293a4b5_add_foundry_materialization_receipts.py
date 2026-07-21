@@ -63,7 +63,6 @@ def upgrade() -> None:
         sa.UniqueConstraint("receipt_hash", name="uq_foundry_materialization_receipt_hash"),
     )
     op.create_index("ix_foundry_materialization_attestations_candidate_id", "foundry_materialization_attestations", ["candidate_id"])
-    op.create_index("ix_foundry_materialization_attestations_origin_candidate_version_id", "foundry_materialization_attestations", ["origin_candidate_version_id"])
     op.create_index("idx_foundry_materialization_pr", "foundry_materialization_attestations", ["github_repository", "pull_request_number"])
 
     op.create_table(
@@ -106,8 +105,7 @@ def upgrade() -> None:
         sa.UniqueConstraint("receipt_hash", name="uq_foundry_materialization_final_receipt_hash"),
     )
     op.create_index("ix_foundry_materialization_receipts_candidate_id", "foundry_materialization_receipts", ["candidate_id"])
-    op.create_index("ix_foundry_materialization_receipts_origin_candidate_version_id", "foundry_materialization_receipts", ["origin_candidate_version_id"])
-    op.create_index("ix_foundry_materialization_receipts_materialized_candidate_version_id", "foundry_materialization_receipts", ["materialized_candidate_version_id"])
+    op.create_index("idx_fmr_origin_version", "foundry_materialization_receipts", ["origin_candidate_version_id"])
 
 
 def downgrade() -> None:

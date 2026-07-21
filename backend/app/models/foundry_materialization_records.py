@@ -40,7 +40,6 @@ class FoundryMaterializationAttestation(Base):
     )
     origin_candidate_version_id: Mapped[uuid.UUID] = mapped_column(
         UUIDType(), ForeignKey("foundry_candidate_versions.id", ondelete="RESTRICT"), nullable=False,
-        index=True,
     )
     origin_candidate_version_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     materialization_request_event_id: Mapped[uuid.UUID] = mapped_column(
@@ -102,12 +101,10 @@ class FoundryMaterializationReceipt(Base):
     )
     origin_candidate_version_id: Mapped[uuid.UUID] = mapped_column(
         UUIDType(), ForeignKey("foundry_candidate_versions.id", ondelete="RESTRICT"), nullable=False,
-        index=True,
     )
     origin_candidate_version_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     materialized_candidate_version_id: Mapped[uuid.UUID] = mapped_column(
         UUIDType(), ForeignKey("foundry_candidate_versions.id", ondelete="RESTRICT"), nullable=False,
-        index=True,
     )
     pull_request_number: Mapped[int] = mapped_column(Integer, nullable=False)
     pull_request_head_commit: Mapped[str] = mapped_column(String(40), nullable=False)
@@ -144,6 +141,7 @@ class FoundryMaterializationReceipt(Base):
             "materialized_candidate_version_id",
             name="uq_foundry_materialization_final_version",
         ),
+        Index("idx_fmr_origin_version", "origin_candidate_version_id"),
     )
 
 
