@@ -77,6 +77,14 @@ made from UI captures of a real local run. The job completes, while the scientif
 
 [案例、限制与复现方法 / Case, limits, and rebuild instructions](./docs/demo/README.md)
 
+希望帮助测试工作流工厂的宇宙学研究者，可以阅读
+[20–30 分钟设计伙伴 Alpha 说明](./docs/alpha/FOUNDRY_DESIGN_PARTNER_BRIEF.md)。
+托管生产服务尚未开放自助使用；测试采用预约式本地运行或引导式演示。 / Cosmology
+researchers interested in testing the Workflow Foundry can read the
+[20–30 minute design-partner Alpha brief](./docs/alpha/FOUNDRY_DESIGN_PARTNER_BRIEF.md).
+The hosted service is not yet open for self-service use; tests are scheduled
+local runs or guided walkthroughs.
+
 ## 本地启动 / Local start
 
 需要 Python 3.11 和 Node.js 20+。以下命令用于新克隆的仓库。<br>
