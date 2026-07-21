@@ -147,6 +147,16 @@ describe("Workflow Foundry API helpers", () => {
     getSpy.mockRestore();
   });
 
+  it("reads the current user's Foundry roles from the self-access endpoint", async () => {
+    const { default: api, getFoundrySelfAccess } = await import("../api/client");
+    const access = { can_administer: false, can_review: true };
+    const getSpy = vi.spyOn(api, "get").mockResolvedValueOnce({ data: access });
+
+    await expect(getFoundrySelfAccess()).resolves.toEqual(access);
+    expect(getSpy).toHaveBeenCalledWith("/api/research/foundry-access");
+    getSpy.mockRestore();
+  });
+
   it("queues validation with only an immutable version binding", async () => {
     const { default: api, validateAdminFoundryCandidate } = await import("../api/client");
     const binding = {
