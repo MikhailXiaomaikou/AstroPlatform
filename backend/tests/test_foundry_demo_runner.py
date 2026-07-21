@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,11 @@ _CANDIDATE = (
     Path(__file__).resolve().parents[1]
     / "foundry_candidates"
     / "desi_dr2_official_chain_summary_v1.json"
+)
+_REPORT_SCHEMA = (
+    Path(__file__).resolve().parents[1]
+    / "foundry_candidates"
+    / "demo-report-schema-v1.json"
 )
 
 
@@ -47,6 +53,11 @@ def test_checked_in_candidate_is_non_formal_and_records_partial_without_mirror(
     assert report["resource_usage"]["user_cpu_seconds"] >= 0
     assert report["result"]["official_ready_cells"] == 0
     assert all(not cell.get("parameter_intervals") for cell in report["result"]["matrix"])
+
+    schema = json.loads(_REPORT_SCHEMA.read_text(encoding="utf-8"))
+    assert set(report) == set(schema["required"])
+    assert schema["properties"]["evidence_class"]["const"] == "NON_FORMAL_DEMO"
+    assert schema["properties"]["publication_ready"]["const"] is False
 
 
 def test_candidate_cannot_upgrade_its_output_policy() -> None:
