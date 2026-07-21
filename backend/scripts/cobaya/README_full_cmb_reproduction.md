@@ -32,9 +32,9 @@ separate from the web application's requirements and Render deployment. Build
 a dedicated Python 3.14.5 exact environment from the committed 52-wheel
 closure, retaining the original archives because preflight re-hashes them.
 Revision 2 must use new paths: never create, update, remove, or install into the
-revision-1 `exact-venv`, `wheels`, `isolated-venv`, receipt, or chain paths. Do
-not reuse the backend web/test environment either; its extra packages and
-startup hooks are outside the frozen scientific closure.
+revision-1 `exact-venv`, `wheels`, `isolated-venv`, `backend/packages`, receipt,
+or chain paths. Do not reuse the backend web/test environment either; its extra
+packages and startup hooks are outside the frozen scientific closure.
 
 The following setup deliberately fails if any revision-2 destination already
 exists (including a symlink). An interrupted attempt must be inspected and
@@ -47,6 +47,7 @@ set -eu
 export EXACT_R2_ROOT=../.local/w0wa-strict-a-readiness
 export EXACT_VENV="$EXACT_R2_ROOT/exact-venv-r2"
 export EXACT_WHEELHOUSE="$EXACT_R2_ROOT/wheelhouse-r2"
+export EXACT_PACKAGES="$EXACT_R2_ROOT/packages-r2"
 export EXACT_PRIMARY="$EXACT_R2_ROOT/primary-r2"
 export EXACT_PRIMARY_PREFLIGHT="$EXACT_PRIMARY/preflight-r2.json"
 export EXACT_PRIMARY_GENERATION="$EXACT_PRIMARY/generation-r2.json"
@@ -55,7 +56,7 @@ export EXACT_PRIMARY_ADEQUACY="$EXACT_PRIMARY/model-adequacy-r2.json"
 export EXACT_HIDDEN_ANSWER="$EXACT_PRIMARY/hidden-answer-r2.json"
 export EXACT_PRIMARY_GRADE="$EXACT_PRIMARY/grade-r2.json"
 
-for path in "$EXACT_VENV" "$EXACT_WHEELHOUSE" "$EXACT_PRIMARY"; do
+for path in "$EXACT_VENV" "$EXACT_WHEELHOUSE" "$EXACT_PACKAGES" "$EXACT_PRIMARY"; do
   if [ -e "$path" ] || [ -L "$path" ]; then
     echo "refusing to reuse revision-2 destination: $path" >&2
     exit 1
@@ -63,7 +64,7 @@ for path in "$EXACT_VENV" "$EXACT_WHEELHOUSE" "$EXACT_PRIMARY"; do
 done
 
 /opt/homebrew/bin/python3.14 -m venv "$EXACT_VENV"
-mkdir -p "$EXACT_WHEELHOUSE" "$EXACT_PRIMARY"
+mkdir -p "$EXACT_WHEELHOUSE" "$EXACT_PACKAGES" "$EXACT_PRIMARY"
 "$EXACT_VENV/bin/pip" download --only-binary=:all: --no-deps \
   -r scripts/cobaya/w0wa_exact_requirements.txt \
   -d "$EXACT_WHEELHOUSE"
@@ -138,8 +139,17 @@ git -C ../.local/w0wa-strict-a-readiness/pantheonplus-data-release \
 git -C ../.local/w0wa-strict-a-readiness/pantheonplus-data-release \
   checkout --detach c447f0fea703fcd0fff57de5000947b5ca81286b
 
-"$EXACT_VENV/bin/cobaya-install" scripts/cobaya/w0wa_exact_install.yaml -p packages
+"$EXACT_VENV/bin/cobaya-install" scripts/cobaya/w0wa_exact_install.yaml \
+  -p "$EXACT_PACKAGES"
 ```
+
+After that one controlled installation, treat `$EXACT_PACKAGES` as the
+read-only revision-2 likelihood/data closure: do not rerun `cobaya-install`,
+edit it, or use it as an output directory. The primary and isolated revision-2
+environments deliberately read the same hash-verified tree; this avoids a
+second multi-gigabyte copy without trusting or modifying revision-1
+`backend/packages`. Each environment independently re-hashes the tree during
+its own preflight, so any drift fails closed.
 
 Preflight enforces exact versions and hashes every installed file in the full
 runtime dependency closure. It also verifies each original wheel archive,
@@ -202,6 +212,7 @@ installation from becoming trusted merely because it was the first one hashed.
 
 ```bash
 "$EXACT_VENV/bin/python" -I scripts/cobaya/canonical_full_likelihood_evidence.py preflight \
+  --packages-path "$EXACT_PACKAGES" \
   --wheels-path "$EXACT_WHEELHOUSE" \
   --output "$EXACT_PRIMARY_PREFLIGHT"
 ```
@@ -220,6 +231,7 @@ frozen covariance in memory, so a stale or poisoned cache cannot be consumed.
 ```bash
 "$EXACT_VENV/bin/python" -I scripts/cobaya/canonical_full_likelihood_evidence.py generate \
   --preflight-report "$EXACT_PRIMARY_PREFLIGHT" \
+  --packages-path "$EXACT_PACKAGES" \
   --free-output "$EXACT_PRIMARY/free-map-r2.yaml" \
   --fixed-output "$EXACT_PRIMARY/fixed-map-r2.yaml" \
   --adequacy-output-dir "$EXACT_PRIMARY/adequacy-r2" \
@@ -241,7 +253,8 @@ non-citable:
   --kind chain --evidence-class non_citable_smoke \
   --run-id w0wa-exact-smoke-YYYYMMDD \
   --config "$EXACT_PRIMARY/adequacy-r2/non_citable_smoke.yaml" \
-  --prefix cobaya_runs/w0wa_exact_smoke_r2 --packages-path packages \
+  --prefix cobaya_runs/w0wa_exact_smoke_r2 \
+  --packages-path "$EXACT_PACKAGES" \
   --preflight-report "$EXACT_PRIMARY_PREFLIGHT" \
   --generation-report "$EXACT_PRIMARY_GENERATION" \
   --mpi 4
@@ -258,7 +271,8 @@ formal or model-adequacy completion requires the durable
   --kind chain --evidence-class formal_candidate \
   --run-id w0wa-exact-formal-YYYYMMDD \
   --config scripts/cobaya/w0wa_desi_cmb_pantheonplus_exact.yaml \
-  --prefix cobaya_runs/w0wa_exact_formal_r2 --packages-path packages \
+  --prefix cobaya_runs/w0wa_exact_formal_r2 \
+  --packages-path "$EXACT_PACKAGES" \
   --preflight-report "$EXACT_PRIMARY_PREFLIGHT" \
   --generation-report "$EXACT_PRIMARY_GENERATION" \
   --mpi 4
@@ -290,6 +304,7 @@ Supply every physical claim-support artifact explicitly:
 ```bash
 "$EXACT_VENV/bin/python" -I scripts/cobaya/canonical_full_likelihood_evidence.py analyze \
   --chain-prefix cobaya_runs/w0wa_exact_formal_r2 \
+  --packages-path "$EXACT_PACKAGES" \
   --preflight-report "$EXACT_PRIMARY_PREFLIGHT" \
   --generation-report "$EXACT_PRIMARY_GENERATION" \
   --support-path "$EXACT_PRIMARY/protocol-r2.json" \
@@ -343,11 +358,13 @@ mkdir -p "$EXACT_ISOLATED"
 
 "$EXACT_ISOLATED_VENV/bin/python" -I \
   scripts/cobaya/canonical_full_likelihood_evidence.py preflight \
+  --packages-path "$EXACT_PACKAGES" \
   --wheels-path "$EXACT_WHEELHOUSE" \
   --output "$EXACT_ISOLATED/preflight-r2.json"
 "$EXACT_ISOLATED_VENV/bin/python" -I \
   scripts/cobaya/canonical_full_likelihood_evidence.py generate \
   --preflight-report "$EXACT_ISOLATED/preflight-r2.json" \
+  --packages-path "$EXACT_PACKAGES" \
   --free-output "$EXACT_ISOLATED/free-map-r2.yaml" \
   --fixed-output "$EXACT_ISOLATED/fixed-map-r2.yaml" \
   --adequacy-output-dir "$EXACT_ISOLATED/adequacy-r2" \
@@ -357,7 +374,8 @@ mkdir -p "$EXACT_ISOLATED"
   --kind chain --evidence-class model_adequacy \
   --run-id w0wa-exact-isolated-YYYYMMDD \
   --config "$EXACT_ISOLATED/adequacy-r2/independent_reproduction.yaml" \
-  --prefix cobaya_runs/w0wa_exact_isolated_r2 --packages-path packages \
+  --prefix cobaya_runs/w0wa_exact_isolated_r2 \
+  --packages-path "$EXACT_PACKAGES" \
   --preflight-report "$EXACT_ISOLATED/preflight-r2.json" \
   --generation-report "$EXACT_ISOLATED/generation-r2.json" \
   --mpi 4

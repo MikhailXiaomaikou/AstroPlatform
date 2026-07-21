@@ -17,6 +17,7 @@ def test_revision_2_readme_uses_fresh_fail_closed_environment_paths() -> None:
     for path in (
         "exact-venv-r2",
         "wheelhouse-r2",
+        "packages-r2",
         "primary-r2",
         "isolated-venv-r2",
         "isolated-r2",
@@ -27,6 +28,8 @@ def test_revision_2_readme_uses_fresh_fail_closed_environment_paths() -> None:
         "w0wa-strict-a-readiness/exact-venv\n",
         "w0wa-strict-a-readiness/wheels\n",
         "w0wa-strict-a-readiness/isolated-venv\n",
+        'cobaya-install" scripts/cobaya/w0wa_exact_install.yaml -p packages',
+        "--packages-path packages",
         "cobaya_runs/w0wa_exact_formal --",
         "cobaya_runs/w0wa_exact_isolated --",
     ):
@@ -34,6 +37,25 @@ def test_revision_2_readme_uses_fresh_fail_closed_environment_paths() -> None:
 
     assert text.count('if [ -e "$path" ] || [ -L "$path" ]; then') == 2
     assert "never create, update, remove, or install into the\nrevision-1" in text
+
+
+def test_revision_2_readme_isolates_the_likelihood_data_closure() -> None:
+    text = _README.read_text(encoding="utf-8")
+
+    assert 'export EXACT_PACKAGES="$EXACT_R2_ROOT/packages-r2"' in text
+    assert (
+        'for path in "$EXACT_VENV" "$EXACT_WHEELHOUSE" '
+        '"$EXACT_PACKAGES" "$EXACT_PRIMARY"; do'
+    ) in text
+    assert (
+        'cobaya-install" scripts/cobaya/w0wa_exact_install.yaml \\\n'
+        '  -p "$EXACT_PACKAGES"'
+    ) in text
+    assert text.count('--packages-path "$EXACT_PACKAGES"') == 8
+    assert "read-only revision-2 likelihood/data closure" in text
+    assert "without trusting or modifying revision-1\n`backend/packages`" in text
+    assert "Each environment independently re-hashes the tree" in text
+    assert "--packages-path packages" not in text
 
 
 def test_revision_2_readme_verifies_then_installs_the_frozen_wheelhouse() -> None:
