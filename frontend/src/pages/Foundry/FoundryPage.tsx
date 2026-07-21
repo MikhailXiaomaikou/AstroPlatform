@@ -6,6 +6,7 @@ import {
   getAdminFoundryCandidate,
   getAdminFoundryRegistry,
   getFoundryCandidate,
+  getFoundrySelfAccess,
   getRuntimeConfig,
   listAdminFoundryRequests,
   listAdminFoundryMaterializations,
@@ -25,6 +26,7 @@ import {
   type FoundryMaterializationFinalization,
   type FoundryMaterializationPullRequest,
   type FoundryRegistryConsole,
+  type FoundrySelfAccess,
   type RuntimeConfig,
   type WorkflowRiskLevel,
 } from "../../api/client";
@@ -326,6 +328,7 @@ export default function FoundryPage() {
   const { t } = useI18n();
   const [featureState, setFeatureState] = useState<FeatureState>("loading");
   const [config, setConfig] = useState<RuntimeConfig | null>(null);
+  const [foundryAccess, setFoundryAccess] = useState<FoundrySelfAccess | null>(null);
   const [requests, setRequests] = useState<CapabilityRequestSummary[]>([]);
   const [candidateViews, setCandidateViews] = useState<Record<string, CandidateView>>({});
   const [adminAccess, setAdminAccess] = useState<AdminAccess>("loading");
@@ -342,6 +345,8 @@ export default function FoundryPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const materializationEnabled = config?.foundry_source_materialization_enabled === true;
+  const canAdminister = foundryAccess?.can_administer === true;
+  const canReview = foundryAccess?.can_review === true;
 
   const loadUserCatalog = useCallback(async () => {
     const response = await listCapabilityRequests();
@@ -359,7 +364,19 @@ export default function FoundryPage() {
     setCandidateViews(Object.fromEntries(loaded));
   }, []);
 
-  const loadAdminConsole = useCallback(async () => {
+  const clearAdminConsole = useCallback(() => {
+    setAdminRequests([]);
+    setAdminCandidates({});
+    setMaterializations({});
+    setAdminRegistry(null);
+  }, []);
+
+  const loadAdminConsole = useCallback(async (access: FoundrySelfAccess) => {
+    if (!access.can_administer) {
+      setAdminAccess("denied");
+      clearAdminConsole();
+      return;
+    }
     try {
       const response = await listAdminFoundryRequests();
       setAdminRequests(response.items);
@@ -379,7 +396,7 @@ export default function FoundryPage() {
         [candidateId, await getAdminFoundryCandidate(candidateId)] as const
       )));
       setAdminCandidates(Object.fromEntries(loaded));
-      if (materializationEnabled) {
+      if (materializationEnabled && access.can_review) {
         const loadedMaterializations = await Promise.all(ids.map(async (candidateId) => (
           [candidateId, await listAdminFoundryMaterializations(candidateId)] as const
         )));
@@ -390,21 +407,20 @@ export default function FoundryPage() {
     } catch (loadError: unknown) {
       if ([401, 403, 404].includes(responseStatus(loadError) ?? 0)) {
         setAdminAccess("denied");
-        setAdminRequests([]);
-        setAdminCandidates({});
-        setMaterializations({});
-        setAdminRegistry(null);
+        clearAdminConsole();
         return;
       }
       setAdminAccess("error");
       throw loadError;
     }
-  }, [materializationEnabled]);
+  }, [clearAdminConsole, materializationEnabled]);
 
   const refresh = useCallback(async () => {
     setError(null);
     await loadUserCatalog();
-    await loadAdminConsole();
+    const access = await getFoundrySelfAccess();
+    setFoundryAccess(access);
+    await loadAdminConsole(access);
   }, [loadAdminConsole, loadUserCatalog]);
 
   useEffect(() => {
@@ -606,43 +622,51 @@ export default function FoundryPage() {
                           <div><dt>{t("foundry.version")}</dt><dd>{candidate.current_version?.version_number ?? "—"}</dd></div>
                         </dl>
                         <CandidateReviewLedger candidate={candidate} />
-                        {materializationEnabled && (
+                        {canReview && materializationEnabled && (
                           <MaterializationLedger records={candidateMaterializations} />
                         )}
                         {!binding && <p className="foundry-binding-warning">{t("foundry.binding_missing")}</p>}
-                        <label className="foundry-comment">{t("foundry.review_comment")}
-                          <textarea rows={3} value={comment} onChange={(event) => setComments((current) => ({ ...current, [request.id]: event.target.value }))} />
-                        </label>
-                        <label className="foundry-review-scope">{t("foundry.review_scope")}
-                          <select value={reviewScope} onChange={(event) => setReviewScopes((current) => ({ ...current, [request.id]: event.target.value as ReviewScope }))}>
-                            <option value="ENGINEERING">{t("foundry.review_scope_engineering")}</option>
-                            <option value="SCIENTIFIC">{t("foundry.review_scope_scientific")}</option>
-                          </select>
-                        </label>
-                        <p className="foundry-review-boundary">{t("foundry.review_separation")}</p>
-                        <label className="foundry-worker-digest">{t("foundry.build_attestation")}
-                          <select
-                            value={selectedBuildId}
-                            disabled={exactBuilds.length === 0}
-                            onChange={(event) => setBuildAttestationIds((current) => ({ ...current, [request.id]: event.target.value }))}
-                          >
-                            {exactBuilds.length === 0 && <option value="">{t("foundry.build_pending")}</option>}
-                            {exactBuilds.map((attestation) => (
-                              <option key={attestation.build_attestation_id} value={attestation.build_attestation_id}>
-                                {attestation.git_commit.slice(0, 10)} · {attestation.formal_worker_image_digest.slice(0, 20)}…
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <p className="foundry-review-boundary">{t("foundry.build_attestation_body")}</p>
+                        {canReview && (
+                          <>
+                            <label className="foundry-comment">{t("foundry.review_comment")}
+                              <textarea rows={3} value={comment} onChange={(event) => setComments((current) => ({ ...current, [request.id]: event.target.value }))} />
+                            </label>
+                            <label className="foundry-review-scope">{t("foundry.review_scope")}
+                              <select value={reviewScope} onChange={(event) => setReviewScopes((current) => ({ ...current, [request.id]: event.target.value as ReviewScope }))}>
+                                <option value="ENGINEERING">{t("foundry.review_scope_engineering")}</option>
+                                <option value="SCIENTIFIC">{t("foundry.review_scope_scientific")}</option>
+                              </select>
+                            </label>
+                            <p className="foundry-review-boundary">{t("foundry.review_separation")}</p>
+                            <label className="foundry-worker-digest">{t("foundry.build_attestation")}
+                              <select
+                                value={selectedBuildId}
+                                disabled={exactBuilds.length === 0}
+                                onChange={(event) => setBuildAttestationIds((current) => ({ ...current, [request.id]: event.target.value }))}
+                              >
+                                {exactBuilds.length === 0 && <option value="">{t("foundry.build_pending")}</option>}
+                                {exactBuilds.map((attestation) => (
+                                  <option key={attestation.build_attestation_id} value={attestation.build_attestation_id}>
+                                    {attestation.git_commit.slice(0, 10)} · {attestation.formal_worker_image_digest.slice(0, 20)}…
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <p className="foundry-review-boundary">{t("foundry.build_attestation_body")}</p>
+                          </>
+                        )}
                         <div className="foundry-action-row">
-                          <button className="btn-secondary" disabled={!binding || !config?.foundry_auto_demo_enabled || busyId !== null} onClick={() => {
-                            if (!binding || !request.candidate_id) return;
-                            void runAdminAction(request.id, () => validateAdminFoundryCandidate(request.candidate_id!, {
-                              candidate_version_id: binding.candidateVersionId,
-                              candidate_version_hash: binding.versionHash,
-                            }), "foundry.action_validation_started");
-                          }}>{t("foundry.validate")}</button>
+                          {canAdminister && (
+                            <button className="btn-secondary" disabled={!binding || !config?.foundry_auto_demo_enabled || busyId !== null} onClick={() => {
+                              if (!binding || !request.candidate_id) return;
+                              void runAdminAction(request.id, () => validateAdminFoundryCandidate(request.candidate_id!, {
+                                candidate_version_id: binding.candidateVersionId,
+                                candidate_version_hash: binding.versionHash,
+                              }), "foundry.action_validation_started");
+                            }}>{t("foundry.validate")}</button>
+                          )}
+                          {canReview && (
+                            <>
                           <button className="btn-primary" disabled={!binding || !comment.trim() || busyId !== null} onClick={() => {
                             if (!binding || !request.candidate_id) return;
                             void runAdminAction(request.id, () => reviewAdminFoundryCandidate(request.candidate_id!, {
@@ -717,6 +741,8 @@ export default function FoundryPage() {
                             if (!request.candidate_id) return;
                             void runAdminAction(request.id, () => revokeAdminFoundryCandidate(request.candidate_id!, comment), "foundry.action_revoked");
                           }}>{t("foundry.revoke")}</button>
+                            </>
+                          )}
                         </div>
                       </>
                     ) : <p>{t("foundry.loading_candidate")}</p>}
