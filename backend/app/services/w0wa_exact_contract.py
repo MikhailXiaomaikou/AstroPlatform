@@ -54,6 +54,24 @@ TRUSTED_PROTOCOL_AUTHORITY_REGISTRY: dict[str, str] = {}
 TRUSTED_EXTERNAL_REVIEW_AUTHORITY_REGISTRY: dict[str, str] = {}
 EXACT_MAX_READINESS_STATUS = "A_READY_PENDING_EXTERNAL_REVIEW"
 
+# Security revision 2 deliberately remains fail-closed until a fresh exact
+# preflight and independent scientific regression are recorded.  A later
+# immutable amendment must change this status; ordinary CI cannot activate it.
+EXACT_ENVIRONMENT_REVISION = {
+    "schema_version": 1,
+    "revision_id": "w0wa-exact-environment-r2-security-20260721",
+    "status": "WITHHELD_PENDING_FRESH_PREFLIGHT_AND_SCIENCE_REGRESSION",
+    "scientific_contract_changed": False,
+    "supersedes_dependency_lock_sha256": (
+        "sha256:f4cfe85aa7a7f08084eb1c8092784143e3fe711e44ed8379cd689278a119793d"
+    ),
+    "validation_requirements": [
+        "fresh_exact_preflight",
+        "fixed_reference_likelihood_regression",
+        "independent_scientific_regression",
+    ],
+}
+
 # The answer key stays outside every model prompt, but its uncertainty scales
 # are an immutable verifier input.  Otherwise an adequacy producer could make
 # any shift pass by supplying an arbitrarily large ``reference_sigma``.
@@ -99,6 +117,7 @@ REQUIRED_SOURCE_STATE_PATHS = (
     "backend/scripts/cobaya/w0wa_exact_requirements.txt",
     "backend/scripts/cobaya/w0wa_exact_wheel_manifest.json",
     "docs/DESI_W0WA_A_READINESS_AMENDMENT_001.md",
+    "docs/DESI_W0WA_A_READINESS_AMENDMENT_002.md",
     "docs/DESI_W0WA_A_READINESS_PROTOCOL.md",
 )
 
@@ -115,19 +134,19 @@ TRUSTED_ADEQUACY_DATA_INVENTORY_SHA256 = (
     "sha256:c039846636769d8d04779180371806de5fd31c7e041fc2bc6e5991aa39cb55c9"
 )
 TRUSTED_DEPENDENCY_LOCK_SHA256 = (
-    "sha256:f4cfe85aa7a7f08084eb1c8092784143e3fe711e44ed8379cd689278a119793d"
+    "sha256:6d40a07a26b021b3cab6de36dbec3df446115718998a25b68abf08bde0a7f833"
 )
 TRUSTED_REFERENCE_SPEC_SHA256 = (
     "sha256:f2714ff4ff89bbf431638cab93da0222a0d4784a75f83da4a51bebdccbe166ac"
 )
 TRUSTED_LIKELIHOOD_CODE_MANIFEST_SHA256 = (
-    "sha256:c996a8beb2dea00ba5b69ff26a7fd24b970e51ae2341fb27ff12dcf5c7393dee"
+    "sha256:780f6bbd14d4c79a494f80cd1a6ec0f3fff535e815455e54f1a58afc51a078cf"
 )
 TRUSTED_WHEEL_MANIFEST_SHA256 = (
-    "sha256:2d7b9c173b39617ba698dc9a085ded5fde8874eec6ee2ba55f4b454f27ee1aaa"
+    "sha256:e45ea8e098a3470622cd26cd7ed5061262859a09a6f84f93d97eaf49e56541bc"
 )
 TRUSTED_PROTOCOL_AMENDMENT_SHA256 = (
-    "sha256:ad87bb4086697bad543e57715e5c3c42151ac25cb8610529c0f02b0288bba4c1"
+    "sha256:fc8fb56ae5009bc80723ee347ade47cb1c0e1cc7fffc75f3ce80015833d9b7af"
 )
 TRUSTED_NATIVE_RUNTIME_FINGERPRINT = (
     "sha256:6412e4f362e566dc66ff53d9090b18d12cbe1cfdb03e6c05ab9f3c7adff518e1"
@@ -145,7 +164,7 @@ TRUSTED_NATIVE_RUNTIME_SHA256 = {
 # The canonical producer hash is refreshed after changes to that producer.
 TRUSTED_CODE_SHA256 = {
     "canonical_full_likelihood_evidence.py": (
-        "sha256:fbd31a70b19b5a8cd2b2bb66912a5a5335f233a2f08292d6081b4a47308f3a73"
+        "sha256:ad220cb90bc8297e116076085a37ff6844324c80b2362290b1b8548c47c9dd71"
     ),
     "independent_w0wa_postprocess.py": (
         "sha256:42b7dcb4ef085db7b54d4deb12065d2959f4d8e51f4a77ba5b76e96047140755"

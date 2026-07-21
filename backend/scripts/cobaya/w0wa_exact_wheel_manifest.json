@@ -735,7 +735,7 @@
   "profile_id": "desi_2024_vi_table3_desi_cmb_pantheonplus_v1",
   "python_version": "3.14.5 (main, May 10 2026, 10:21:34) [Clang 17.0.0 (clang-1700.6.4.2)]",
   "requirements_path": "w0wa_exact_requirements.txt",
-  "requirements_sha256": "sha256:f4cfe85aa7a7f08084eb1c8092784143e3fe711e44ed8379cd689278a119793d",
+  "requirements_sha256": "sha256:6d40a07a26b021b3cab6de36dbec3df446115718998a25b68abf08bde0a7f833",
   "schema_version": 1,
   "selection_rule": "highest_priority_non_yanked_compatible_pypi_wheel",
   "wheels": [
@@ -920,14 +920,14 @@
       "version": "3.16.0"
     },
     {
-      "filename": "idna-3.11-py3-none-any.whl",
+      "filename": "idna-3.15-py3-none-any.whl",
       "project": "idna",
-      "sha256": "sha256:771a87f49d9defaf64091e6e6fe9c18d4833f140bd19464795bc32d966ca37ea",
-      "size_bytes": 71008,
-      "source_api": "https://pypi.org/pypi/idna/3.11/json",
-      "upload_time_iso_8601": "2025-10-12T14:55:18.883979Z",
-      "url": "https://files.pythonhosted.org/packages/0e/61/66938bbb5fc52dbdf84594873d5b51fb1f7c7794e9c0f5bd885f30bc507b/idna-3.11-py3-none-any.whl",
-      "version": "3.11"
+      "sha256": "sha256:048adeaf8c2d788c40fee287673ccaa74c24ffd8dcf09ffa555a2fbb59f10ac8",
+      "size_bytes": 72340,
+      "source_api": "https://pypi.org/pypi/idna/3.15/json",
+      "upload_time_iso_8601": "2026-05-12T22:45:55.733813Z",
+      "url": "https://files.pythonhosted.org/packages/d2/23/408243171aa9aaba178d3e2559159c24c1171a641aa83b67bdd3394ead8e/idna-3.15-py3-none-any.whl",
+      "version": "3.15"
     },
     {
       "filename": "iniconfig-2.3.0-py3-none-any.whl",
@@ -1010,14 +1010,14 @@
       "version": "2.3.3"
     },
     {
-      "filename": "pillow-12.1.1-cp314-cp314-macosx_11_0_arm64.whl",
+      "filename": "pillow-12.3.0-cp314-cp314-macosx_11_0_arm64.whl",
       "project": "pillow",
-      "sha256": "sha256:f7ed2c6543bad5a7d5530eb9e78c53132f93dfa44a28492db88b41cdab885202",
-      "size_bytes": 4657499,
-      "source_api": "https://pypi.org/pypi/pillow/12.1.1/json",
-      "upload_time_iso_8601": "2026-02-11T04:22:09.613535Z",
-      "url": "https://files.pythonhosted.org/packages/05/30/5db1236b0d6313f03ebf97f5e17cda9ca060f524b2fcc875149a8360b21c/pillow-12.1.1-cp314-cp314-macosx_11_0_arm64.whl",
-      "version": "12.1.1"
+      "sha256": "sha256:e158cb00350dc278f3b91551101aa7d12415a66ebf2c91d8d5ac14e56ddd3ad0",
+      "size_bytes": 4780131,
+      "source_api": "https://pypi.org/pypi/pillow/12.3.0/json",
+      "upload_time_iso_8601": "2026-07-01T11:54:59.713408Z",
+      "url": "https://files.pythonhosted.org/packages/c7/da/32c752228ae345f489e3a42499d817b6c3996da7e8a3bc7a04fc806b243b/pillow-12.3.0-cp314-cp314-macosx_11_0_arm64.whl",
+      "version": "12.3.0"
     },
     {
       "filename": "platformdirs-4.9.6-py3-none-any.whl",
@@ -1070,14 +1070,14 @@
       "version": "2.0.1.5"
     },
     {
-      "filename": "pygments-2.19.2-py3-none-any.whl",
+      "filename": "pygments-2.20.0-py3-none-any.whl",
       "project": "pygments",
-      "sha256": "sha256:86540386c03d588bb81d44bc3928634ff26449851e99741617ecb9037ee5ec0b",
-      "size_bytes": 1225217,
-      "source_api": "https://pypi.org/pypi/pygments/2.19.2/json",
-      "upload_time_iso_8601": "2025-06-21T13:39:07.939730Z",
-      "url": "https://files.pythonhosted.org/packages/c7/21/705964c7812476f378728bdf590ca4b771ec72385c533964653c68e86bdc/pygments-2.19.2-py3-none-any.whl",
-      "version": "2.19.2"
+      "sha256": "sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176",
+      "size_bytes": 1231151,
+      "source_api": "https://pypi.org/pypi/pygments/2.20.0/json",
+      "upload_time_iso_8601": "2026-03-29T13:29:30.038266Z",
+      "url": "https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl",
+      "version": "2.20.0"
     },
     {
       "filename": "pyparsing-3.3.2-py3-none-any.whl",
@@ -1090,14 +1090,14 @@
       "version": "3.3.2"
     },
     {
-      "filename": "pytest-8.4.2-py3-none-any.whl",
+      "filename": "pytest-9.0.3-py3-none-any.whl",
       "project": "pytest",
-      "sha256": "sha256:872f880de3fc3a5bdc88a11b39c9710c3497a547cfa9320bc3c5e62fbf272e79",
-      "size_bytes": 365750,
-      "source_api": "https://pypi.org/pypi/pytest/8.4.2/json",
-      "upload_time_iso_8601": "2025-09-04T14:34:20.226862Z",
-      "url": "https://files.pythonhosted.org/packages/a8/a4/20da314d277121d6534b3a980b29035dcd51e6744bd79075a6ce8fa4eb8d/pytest-8.4.2-py3-none-any.whl",
-      "version": "8.4.2"
+      "sha256": "sha256:2c5efc453d45394fdd706ade797c0a81091eccd1d6e4bccfcd476e2b8e0ab5d9",
+      "size_bytes": 375249,
+      "source_api": "https://pypi.org/pypi/pytest/9.0.3/json",
+      "upload_time_iso_8601": "2026-04-07T17:16:16.130051Z",
+      "url": "https://files.pythonhosted.org/packages/d4/24/a372aaf5c9b7208e7112038812994107bc65a84cd00e0354a88c2c77a617/pytest-9.0.3-py3-none-any.whl",
+      "version": "9.0.3"
     },
     {
       "filename": "pycparser-3.0-py3-none-any.whl",
@@ -1150,14 +1150,14 @@
       "version": "3.14.5"
     },
     {
-      "filename": "requests-2.32.5-py3-none-any.whl",
+      "filename": "requests-2.33.0-py3-none-any.whl",
       "project": "requests",
-      "sha256": "sha256:2462f94637a34fd532264295e186976db0f5d453d1cdd31473c85a6a161affb6",
-      "size_bytes": 64738,
-      "source_api": "https://pypi.org/pypi/requests/2.32.5/json",
-      "upload_time_iso_8601": "2025-08-18T20:46:00.542304Z",
-      "url": "https://files.pythonhosted.org/packages/1e/db/4254e3eabe8020b458f1a747140d32277ec7a271daf1d235b70dc0b4e6e3/requests-2.32.5-py3-none-any.whl",
-      "version": "2.32.5"
+      "sha256": "sha256:3324635456fa185245e24865e810cecec7b4caf933d7eb133dcde67d48cee69b",
+      "size_bytes": 65017,
+      "source_api": "https://pypi.org/pypi/requests/2.33.0/json",
+      "upload_time_iso_8601": "2026-03-25T15:10:40.382036Z",
+      "url": "https://files.pythonhosted.org/packages/56/5d/c814546c2333ceea4ba42262d8c4d55763003e767fa169adc693bd524478/requests-2.33.0-py3-none-any.whl",
+      "version": "2.33.0"
     },
     {
       "filename": "scipy-1.17.1-cp314-cp314-macosx_14_0_arm64.whl",

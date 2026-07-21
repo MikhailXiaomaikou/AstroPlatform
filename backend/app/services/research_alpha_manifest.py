@@ -49,6 +49,7 @@ from app.services.w0wa_exact_contract import (
     EXACT_CLAIM_SCOPE,
     EXACT_EVIDENCE_SIGNING_KEY_ID,
     EXACT_EVIDENCE_SIGNING_KEY_SHA256,
+    EXACT_ENVIRONMENT_REVISION,
     EXACT_HOST_EXECUTION_TRUST_BOUNDARY,
     EXACT_MAX_READINESS_STATUS,
     EXACT_PROFILE_ID,
@@ -1176,6 +1177,7 @@ def _validate_exact_likelihood_code_manifest(value: Any) -> None:
         or payload.get("schema_version") != 1
         or payload.get("kind") != "w0wa_exact_likelihood_code_commitment"
         or payload.get("profile_id") != EXACT_PROFILE_ID
+        or payload.get("environment_revision") != EXACT_ENVIRONMENT_REVISION
         or payload.get("frozen_before_formal_run") is not True
         or payload.get("likelihoods") != list(REQUIRED_LIKELIHOODS)
         or payload.get("adequacy_likelihoods")

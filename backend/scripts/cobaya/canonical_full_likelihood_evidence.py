@@ -70,6 +70,7 @@ from app.services.w0wa_exact_contract import (  # noqa: E402
     EXACT_CLAIM_SCOPE,
     EXACT_EVIDENCE_SIGNING_KEY_ID,
     EXACT_EVIDENCE_SIGNING_KEY_SHA256,
+    EXACT_ENVIRONMENT_REVISION,
     EXACT_HOST_EXECUTION_TRUST_BOUNDARY,
     EXACT_PROFILE_ID,
     FROZEN_BOOTSTRAP_DISTRIBUTIONS,
@@ -174,7 +175,7 @@ PAPER_FIDELITY_AMENDMENT = {
 }
 
 PROTOCOL_AMENDMENT_PATH = (
-    BACKEND_ROOT.parent / "docs" / "DESI_W0WA_A_READINESS_AMENDMENT_001.md"
+    BACKEND_ROOT.parent / "docs" / "DESI_W0WA_A_READINESS_AMENDMENT_002.md"
 )
 TRUSTED_DATA_MANIFEST_PATH = (
     Path(__file__).resolve().parent / "w0wa_exact_data_manifest.json"
@@ -3029,6 +3030,8 @@ def verify_likelihood_code_manifest(
         reasons.append("likelihood_code_manifest_schema_mismatch")
     if payload.get("profile_id") != EXACT_PROFILE_ID:
         reasons.append("likelihood_code_manifest_profile_mismatch")
+    if payload.get("environment_revision") != EXACT_ENVIRONMENT_REVISION:
+        reasons.append("likelihood_code_manifest_environment_revision_mismatch")
     if payload.get("frozen_before_formal_run") is not True:
         reasons.append("likelihood_code_manifest_not_pre_run")
     if payload.get("likelihoods") != list(REQUIRED_LIKELIHOODS):
@@ -7041,6 +7044,10 @@ def grade_exact_analysis(
         failures.append("analysis_protocol_integrity_mismatch")
     if manifest.get("paper_fidelity_amendment") != PAPER_FIDELITY_AMENDMENT:
         failures.append("analysis_paper_fidelity_amendment_mismatch")
+    if EXACT_ENVIRONMENT_REVISION.get("status") != "VALIDATED_FOR_FORMAL_EXECUTION":
+        failures.append(
+            "environment_revision_pending_fresh_preflight_and_science_regression"
+        )
     current_amendment = protocol_amendment_record()
     if current_amendment.get("valid") is not True:
         failures.append("protocol_amendment_hash_invalid")
@@ -7317,6 +7324,7 @@ def grade_exact_analysis(
         "claim_scope": EXACT_CLAIM_SCOPE,
         "protocol_integrity": dict(PROTOCOL_INTEGRITY),
         "paper_fidelity_amendment": dict(PAPER_FIDELITY_AMENDMENT),
+        "environment_revision": copy.deepcopy(EXACT_ENVIRONMENT_REVISION),
         "protocol_amendment_artifact": current_amendment,
         "protocol_adjudication": {
             **protocol_adjudication,

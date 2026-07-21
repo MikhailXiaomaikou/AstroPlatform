@@ -3,6 +3,18 @@
   "kind": "w0wa_exact_likelihood_code_commitment",
   "profile_id": "desi_2024_vi_table3_desi_cmb_pantheonplus_v1",
   "frozen_before_formal_run": true,
+  "environment_revision": {
+    "schema_version": 1,
+    "revision_id": "w0wa-exact-environment-r2-security-20260721",
+    "status": "WITHHELD_PENDING_FRESH_PREFLIGHT_AND_SCIENCE_REGRESSION",
+    "scientific_contract_changed": false,
+    "supersedes_dependency_lock_sha256": "sha256:f4cfe85aa7a7f08084eb1c8092784143e3fe711e44ed8379cd689278a119793d",
+    "validation_requirements": [
+      "fresh_exact_preflight",
+      "fixed_reference_likelihood_regression",
+      "independent_scientific_regression"
+    ]
+  },
   "likelihoods": [
     "planck_2018_lowl.TT_clik",
     "planck_2018_lowl.EE_clik",
@@ -27,15 +39,15 @@
     "cobaya-3.6.2-py3-none-any.whl": "sha256:5e81da5900442c1a20a0ffa9c1ff212983106a7473b29555cecc2af3e4214da0"
   },
   "full_wheel_closure": {
-    "manifest_sha256": "sha256:2d7b9c173b39617ba698dc9a085ded5fde8874eec6ee2ba55f4b454f27ee1aaa",
+    "manifest_sha256": "sha256:e45ea8e098a3470622cd26cd7ed5061262859a09a6f84f93d97eaf49e56541bc",
     "wheel_count": 52
   },
   "runtime_code_verification": "preflight_distribution_files_plus_loaded_likelihood_trees",
   "trusted_artifacts": {
     "canonical_config": "sha256:63d194d45238f7ecc4b18602cc1699c2b3059aa2628eeaf82f61a4e83398dd7a",
     "data_manifest": "sha256:41b6ae2b1cc7c1a13cb59e5a12ed65233d5880e0bcc3c38ae0e270d9b8f853a8",
-    "dependency_lock": "sha256:f4cfe85aa7a7f08084eb1c8092784143e3fe711e44ed8379cd689278a119793d",
+    "dependency_lock": "sha256:6d40a07a26b021b3cab6de36dbec3df446115718998a25b68abf08bde0a7f833",
     "reference_cases": "sha256:f2714ff4ff89bbf431638cab93da0222a0d4784a75f83da4a51bebdccbe166ac",
-    "wheel_manifest": "sha256:2d7b9c173b39617ba698dc9a085ded5fde8874eec6ee2ba55f4b454f27ee1aaa"
+    "wheel_manifest": "sha256:e45ea8e098a3470622cd26cd7ed5061262859a09a6f84f93d97eaf49e56541bc"
   }
 }

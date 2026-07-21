@@ -252,6 +252,9 @@ def test_exact_profile_matches_paper_stack_and_contains_no_answer_key():
         assert nuisance in expanded["params"]
     assert pipeline.protocol_amendment_record()["valid"] is True
     assert pipeline.PAPER_FIDELITY_AMENDMENT["effective_bulk_ess_floor"] == 1000.0
+    assert pipeline.EXACT_ENVIRONMENT_REVISION["status"] == (
+        "WITHHELD_PENDING_FRESH_PREFLIGHT_AND_SCIENCE_REGRESSION"
+    )
 
     reference = json.loads(REFERENCE_CASES.read_text(encoding="utf-8"))
     registered = {
@@ -2334,6 +2337,11 @@ def test_grade_uses_hidden_commitment_and_never_grants_final_a(tmp_path):
         "protocol_adjudication:external_protocol_adjudication_not_provided"
         in grade["failures"]
     )
+    assert (
+        "environment_revision_pending_fresh_preflight_and_science_regression"
+        in grade["failures"]
+    )
+    assert grade["environment_revision"] == pipeline.EXACT_ENVIRONMENT_REVISION
     assert "research_alpha_manifest" not in grade
 
     tampered = pipeline.grade_exact_analysis(

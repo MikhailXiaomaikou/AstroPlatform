@@ -104,9 +104,14 @@ independent postprocessor must be launched with `python -I`. The CLI refuses a
 non-isolated interpreter, a non-empty `PYTHONPATH`, or an untrusted startup-hook
 closure; isolating only the Cobaya child is not sufficient.
 
-Every receipt binds
-`docs/DESI_W0WA_A_READINESS_AMENDMENT_001.md`. It records the known-target
-disclosure and the stricter paper-fidelity `bulk ESS >= 1000` overlay.
+Every new receipt binds
+`docs/DESI_W0WA_A_READINESS_AMENDMENT_002.md`. It carries forward the
+known-target disclosure and stricter paper-fidelity `bulk ESS >= 1000` overlay
+from amendment 001, and freezes the security-only environment revision 2.
+Revision 2 remains
+`WITHHELD_PENDING_FRESH_PREFLIGHT_AND_SCIENCE_REGRESSION` until a later
+immutable amendment records the required validation. Historical revision-1
+receipts keep their original amendment-001 binding and must not be rewritten.
 
 ### 1. Preflight
 
