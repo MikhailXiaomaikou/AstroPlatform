@@ -8,6 +8,7 @@ import hashlib
 import importlib.util
 import json
 import re
+import subprocess
 import uuid
 from copy import deepcopy
 from pathlib import Path
@@ -99,6 +100,48 @@ def test_foundry_workflows_pass_dispatch_inputs_through_environment_only():
         _assert_dispatch_inputs_are_not_interpolated_in_shell(
             path.read_text(encoding="utf-8")
         )
+
+
+def test_candidate_draft_host_failure_fallback_is_uploadable_and_bash_valid():
+    workflow = yaml.load(
+        _CANDIDATE_DRAFT.read_text(encoding="utf-8"),
+        Loader=_UniqueKeyLoader,
+    )
+    jobs = workflow["jobs"]
+    build = jobs["materialize-and-build-without-callback"]
+    callback = jobs["callback-only"]
+    steps = build["steps"]
+    by_name = {step.get("name"): step for step in steps if "name" in step}
+    fallback = by_name[
+        "Freeze a classified failed callback after host packaging failure"
+    ]
+    upload = by_name["Upload the frozen callback document"]
+
+    assert "always()" in fallback["if"]
+    assert "steps.callback_freeze.outcome != 'success'" in fallback["if"]
+    assert "finalize-host-failure" in fallback["run"]
+    draft_script = _load_script("run_foundry_ai_draft_job.py")
+    assert all(
+        failure_class in fallback["run"]
+        for failure_class in draft_script._HOST_FAILURE_CLASSES
+    )
+    assert upload["if"] == "${{ always() }}"
+    assert callback["if"] == "${{ always() }}"
+    assert upload["with"]["if-no-files-found"] == "error"
+
+    bash_steps = [
+        step for step in steps if step.get("shell") == "bash" and "run" in step
+    ]
+    assert bash_steps
+    for step in bash_steps:
+        checked = subprocess.run(
+            ["bash", "-n"],
+            input=step["run"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert checked.returncode == 0, f"{step.get('name')}: {checked.stderr}"
 
 
 def test_formal_worker_workflow_separates_candidate_code_from_oidc_and_secret():

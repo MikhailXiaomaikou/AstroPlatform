@@ -10,7 +10,8 @@ The ``finalize`` phase runs in a separate job without AI credentials.  It
 hashes the inert artifacts and creates the exact callback document accepted by
 the control plane.  An unavailable/misconfigured provider produces a
 classified FAILED receipt and a non-zero generate exit; success is never
-fabricated.
+fabricated.  ``finalize-host-failure`` creates the same fail-closed callback
+shape when trusted packaging or image publication fails after provider success.
 """
 
 from __future__ import annotations
@@ -58,6 +59,17 @@ _PATCH_PATHS = (
 _MAX_PROVIDER_STDOUT = 4 * 1024 * 1024
 _MAX_PATCH = 1024 * 1024
 _MAX_JSON_ARTIFACT = 1024 * 1024
+_HOST_FAILURE_CLASSES = frozenset(
+    {
+        "draft_host_materialization_failed",
+        "draft_host_registry_login_failed",
+        "draft_host_image_build_failed",
+        "draft_host_image_push_failed",
+        "draft_host_image_digest_inspection_failed",
+        "draft_host_callback_finalize_failed",
+        "draft_host_internal_error",
+    }
+)
 
 
 def _canonical(value: Any) -> bytes:
@@ -329,6 +341,27 @@ def _artifact(path: Path, kind: str) -> dict[str, Any]:
     }
 
 
+def _validate_candidate_bundle_for_append(bundle: dict[str, Any]) -> None:
+    """Run the exact data-only validator used by ``append_candidate_version``.
+
+    The AI must leave ``candidate_version`` for the control plane to assign.
+    ``append_candidate_version`` receives the bundle only after that assignment,
+    so validate a defensive copy with a representative positive version here.
+    """
+
+    backend_root = Path(__file__).resolve().parents[1]
+    backend_root_string = str(backend_root)
+    if backend_root_string not in sys.path:
+        sys.path.insert(0, backend_root_string)
+    from app.services.foundry_demo_runner import (  # noqa: PLC0415
+        validate_candidate_bundle,
+    )
+
+    server_assigned = json.loads(_canonical(bundle))
+    server_assigned["candidate_version"] = 1
+    validate_candidate_bundle(server_assigned)
+
+
 def _validate_patch_paths(patch: bytes) -> list[str]:
     """Allow only generated Python modules; reject binary/link/CI mutations."""
 
@@ -494,7 +527,9 @@ def materialize(args: argparse.Namespace) -> int:
     return 0
 
 
-def finalize(args: argparse.Namespace) -> int:
+def _validated_provider_result(
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     input_dir = Path(args.input_dir)
     result_path = input_dir / "provider-result.json"
     if not result_path.is_file() or result_path.stat().st_size > 1024 * 1024:
@@ -520,7 +555,14 @@ def finalize(args: argparse.Namespace) -> int:
         raise SystemExit("draft_provider_result_invalid")
     if any(provider_result.get(key) != value for key, value in binding.items()):
         raise SystemExit("draft_provider_result_binding_mismatch")
+    return provider_result, binding
+
+
+def finalize(args: argparse.Namespace) -> int:
+    input_dir = Path(args.input_dir)
+    provider_result, binding = _validated_provider_result(args)
     status = provider_result.get("status")
+    failure_class = provider_result["failure_class"]
     receipt_path = input_dir / "provider-receipt.json"
     artifact_manifest = [_artifact(receipt_path, "PROVIDER_RECEIPT")]
     candidate_version = None
@@ -578,33 +620,46 @@ def finalize(args: argparse.Namespace) -> int:
         bundle["runner_definition_sha256"] = source_receipt[
             "runner_definition_sha256"
         ]
-        repository = str(args.artifact_repository or "")
-        artifact_name = str(args.artifact_name or "")
-        artifact_digest = str(args.artifact_digest or "").lower()
-        if artifact_digest.startswith("sha256:"):
-            artifact_digest = artifact_digest[7:]
-        if (
-            not _REPOSITORY.fullmatch(repository)
-            or not str(args.workflow_run_id).isdigit()
-            or not str(args.artifact_id).isdigit()
-            or not _ARTIFACT_NAME.fullmatch(artifact_name)
-            or not _HEX64.fullmatch(artifact_digest)
-        ):
-            raise SystemExit("draft_artifact_receipt_invalid")
-        artifact_receipt = {
-            "repository": repository,
-            "workflow_run_id": str(args.workflow_run_id),
-            "artifact_id": str(args.artifact_id),
-            "artifact_name": artifact_name,
-            "artifact_sha256": artifact_digest,
-        }
-        candidate_version = {
-            "candidate_bundle": bundle,
-            "validation_runner_image_digest": digest,
-            "code_tree_hash": source_receipt["post_patch_source_tree_sha256"],
-            "patch_hash": by_name["candidate.patch"]["sha256"],
-            "sbom_hash": by_name["sbom.json"]["sha256"],
-        }
+        try:
+            _validate_candidate_bundle_for_append(bundle)
+        except ValueError:
+            # Provider success is not candidate success.  Emit a callback the
+            # control plane can durably record as AI_DRAFT_RESULT_FAILED rather
+            # than posting an invalid SUCCEEDED report that leaves the dispatch
+            # active forever.
+            status = "FAILED"
+            failure_class = "draft_candidate_bundle_invalid"
+            source_receipt = None
+        else:
+            repository = str(args.artifact_repository or "")
+            artifact_name = str(args.artifact_name or "")
+            artifact_digest = str(args.artifact_digest or "").lower()
+            if artifact_digest.startswith("sha256:"):
+                artifact_digest = artifact_digest[7:]
+            if (
+                not _REPOSITORY.fullmatch(repository)
+                or not str(args.workflow_run_id).isdigit()
+                or not str(args.artifact_id).isdigit()
+                or not _ARTIFACT_NAME.fullmatch(artifact_name)
+                or not _HEX64.fullmatch(artifact_digest)
+            ):
+                raise SystemExit("draft_artifact_receipt_invalid")
+            artifact_receipt = {
+                "repository": repository,
+                "workflow_run_id": str(args.workflow_run_id),
+                "artifact_id": str(args.artifact_id),
+                "artifact_name": artifact_name,
+                "artifact_sha256": artifact_digest,
+            }
+            candidate_version = {
+                "candidate_bundle": bundle,
+                "validation_runner_image_digest": digest,
+                "code_tree_hash": source_receipt[
+                    "post_patch_source_tree_sha256"
+                ],
+                "patch_hash": by_name["candidate.patch"]["sha256"],
+                "sbom_hash": by_name["sbom.json"]["sha256"],
+            }
     elif status != "FAILED":
         raise SystemExit("draft_provider_status_invalid")
     report = {
@@ -616,7 +671,32 @@ def finalize(args: argparse.Namespace) -> int:
         "artifact_manifest": artifact_manifest,
         "artifact_receipt": artifact_receipt,
         "source_receipt": source_receipt,
-        "failure_class": provider_result["failure_class"],
+        "failure_class": failure_class,
+    }
+    report["draft_result_sha256"] = _sha256_json(report)
+    _write_json(Path(args.output), report)
+    return 0
+
+
+def finalize_host_failure(args: argparse.Namespace) -> int:
+    """Freeze a fail-closed callback after trusted host packaging fails."""
+
+    provider_result, binding = _validated_provider_result(args)
+    if provider_result.get("status") != "SUCCEEDED":
+        raise SystemExit("draft_host_failure_requires_succeeded_provider")
+    failure_class = str(args.failure_class or "")
+    if failure_class not in _HOST_FAILURE_CLASSES:
+        raise SystemExit("draft_host_failure_class_invalid")
+    report = {
+        "schema_version": 1,
+        **binding,
+        "status": "FAILED",
+        "candidate_version": None,
+        "provider_receipt": provider_result["provider_receipt"],
+        "artifact_manifest": [],
+        "artifact_receipt": None,
+        "source_receipt": None,
+        "failure_class": failure_class,
     }
     report["draft_result_sha256"] = _sha256_json(report)
     _write_json(Path(args.output), report)
@@ -626,7 +706,7 @@ def finalize(args: argparse.Namespace) -> int:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for name in ("generate", "materialize", "finalize"):
+    for name in ("generate", "materialize", "finalize", "finalize-host-failure"):
         sub = subparsers.add_parser(name)
         sub.add_argument("--draft-run-id", required=True)
         sub.add_argument("--candidate-id", required=True)
@@ -658,6 +738,12 @@ def _parser() -> argparse.ArgumentParser:
     finalize_parser.add_argument("--artifact-id", required=True)
     finalize_parser.add_argument("--artifact-name", required=True)
     finalize_parser.add_argument("--artifact-digest", required=True)
+    failure_parser = subparsers.choices["finalize-host-failure"]
+    failure_parser.add_argument("--input-dir", required=True)
+    failure_parser.add_argument("--output", required=True)
+    failure_parser.add_argument(
+        "--failure-class", required=True, choices=sorted(_HOST_FAILURE_CLASSES)
+    )
     return parser
 
 
@@ -667,7 +753,9 @@ def main() -> int:
         return generate(args)
     if args.command == "materialize":
         return materialize(args)
-    return finalize(args)
+    if args.command == "finalize":
+        return finalize(args)
+    return finalize_host_failure(args)
 
 
 if __name__ == "__main__":

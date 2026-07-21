@@ -681,6 +681,289 @@ def test_provider_receives_only_the_canonical_safe_gap_descriptor(
     assert provider_result["gap_descriptor"] == descriptor
 
 
+@pytest.mark.parametrize(
+    ("mutation", "validator_failure"),
+    [
+        ("missing_source_pins", "candidate_bundle_shape_not_registered"),
+        ("unregistered_entrypoint", "candidate_entrypoint_not_allowlisted"),
+    ],
+)
+async def test_invalid_provider_bundle_becomes_recorded_failed_callback(
+    db_session,
+    tmp_path: Path,
+    monkeypatch,
+    mutation: str,
+    validator_failure: str,
+):
+    candidate = await _candidate(db_session, f"invalid-{mutation}")
+    queued, created = await queue_ai_draft(
+        db_session,
+        candidate_id=candidate.id,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+    )
+    assert created is True
+    await record_ai_draft_dispatch(
+        db_session, draft_run_id=queued.id, dispatched=True
+    )
+
+    descriptor = dict(candidate.gap_descriptor)
+    binding = {
+        "draft_run_id": str(queued.id),
+        "candidate_id": str(candidate.id),
+        "gap_fingerprint": candidate.gap_fingerprint,
+        "gap_code": candidate.gap_code,
+        "gap_descriptor": json.dumps(
+            descriptor, sort_keys=True, separators=(",", ":")
+        ),
+        "generation_route": candidate.generation_route,
+        "risk_level": candidate.risk_level,
+    }
+    bundle = copy.deepcopy(_candidate_version()["candidate_bundle"])
+    if mutation == "missing_source_pins":
+        bundle.pop("source_pins")
+    else:
+        bundle["entrypoint_id"] = "provider_selected_arbitrary_entrypoint"
+
+    server_assigned = copy.deepcopy(bundle)
+    server_assigned["candidate_version"] = 1
+    with pytest.raises(ValueError, match=validator_failure):
+        validate_candidate_bundle(server_assigned)
+
+    def _provider(_command, **_kwargs):
+        response = {
+            "schema_version": 1,
+            "candidate_bundle": bundle,
+            "patch": "",
+            "sbom": {"components": []},
+            "provider": {
+                "provider": "provider",
+                "model": "model-v1",
+                "request_id": "request-invalid-bundle",
+            },
+        }
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(response).encode("utf-8"),
+        )
+
+    monkeypatch.setenv(
+        "FOUNDRY_AI_DRAFT_PROVIDER_COMMAND_JSON",
+        '["/trusted/provider", "draft"]',
+    )
+    monkeypatch.setattr(run_foundry_ai_draft_job.subprocess, "run", _provider)
+    generate_args = argparse.Namespace(**binding, output_dir=str(tmp_path))
+    assert run_foundry_ai_draft_job.generate(generate_args) == 0
+    assert json.loads((tmp_path / "provider-result.json").read_text())[
+        "status"
+    ] == "SUCCEEDED"
+
+    source_receipt = {
+        "hash_algorithm": "standard_astro_tracked_source_manifest_v1",
+        "base_commit": "a" * 40,
+        "base_source_tree_sha256": "4" * 64,
+        "post_patch_source_tree_sha256": "4" * 64,
+        "patch_sha256": EMPTY_SHA256,
+        "patch_applied": False,
+        "changed_paths": [],
+        "dependency_lock_sha256": "2" * 64,
+        "runner_definition_sha256": "3" * 64,
+    }
+    source_receipt_path = tmp_path / "source-receipt.json"
+    run_foundry_ai_draft_job._write_json(source_receipt_path, source_receipt)
+    callback_path = tmp_path / "callback.json"
+    finalize_args = argparse.Namespace(
+        **binding,
+        input_dir=str(tmp_path),
+        output=str(callback_path),
+        validation_runner_image_digest=VALIDATION_IMAGE,
+        source_repo=str(tmp_path / "unused-source"),
+        source_receipt=str(source_receipt_path),
+        artifact_repository="MikhailXiaomaikou/Standard-Astro",
+        workflow_run_id="123",
+        artifact_id="456",
+        artifact_name=f"foundry-draft-{queued.id}",
+        artifact_digest="9" * 64,
+    )
+    assert run_foundry_ai_draft_job.finalize(finalize_args) == 0
+    report = json.loads(callback_path.read_text())
+    assert report["status"] == "FAILED"
+    assert report["failure_class"] == "draft_candidate_bundle_invalid"
+    assert report["candidate_version"] is None
+    assert report["artifact_receipt"] is None
+    assert report["source_receipt"] is None
+    assert report["provider_receipt"]["provider"] == "provider"
+
+    version, failed = await record_ai_draft_result(
+        db_session,
+        draft_run_id=queued.id,
+        draft_result=report,
+    )
+    assert version is None
+    assert failed.event_type == "AI_DRAFT_RESULT_FAILED"
+    assert failed.event_payload["failure_class"] == "draft_candidate_bundle_invalid"
+
+    retry, retry_created = await queue_ai_draft(
+        db_session,
+        candidate_id=candidate.id,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+    )
+    assert retry_created is True
+    assert retry.id != queued.id
+
+
+def test_host_image_failure_cli_freezes_a_failed_callback(tmp_path: Path):
+    descriptor = {
+        "gap_code": "registered_workflow_missing",
+        "dataset_key": "desi_dr2_bao",
+        "research_domain": "cosmology",
+    }
+    binding = {
+        "draft_run_id": str(uuid.uuid4()),
+        "candidate_id": str(uuid.uuid4()),
+        "gap_fingerprint": sha256_json(descriptor),
+        "gap_code": "registered_workflow_missing",
+        "gap_descriptor": json.dumps(
+            descriptor, sort_keys=True, separators=(",", ":")
+        ),
+        "generation_route": "DATA_ADAPTER",
+        "risk_level": "R1",
+    }
+    provider_receipt = {
+        "contract_version": 1,
+        "provider": "provider",
+        "model": "model-v1",
+        "request_id_sha256": "7" * 64,
+        "prompt_or_user_data_stored": False,
+        "generated_code_executed": False,
+        "tests_executed": False,
+    }
+    run_foundry_ai_draft_job._write_json(
+        tmp_path / "provider-result.json",
+        {
+            "schema_version": 1,
+            **{**binding, "gap_descriptor": descriptor},
+            "status": "SUCCEEDED",
+            "failure_class": None,
+            "provider_receipt": provider_receipt,
+        },
+    )
+    callback = tmp_path / "callback.json"
+    script = Path(run_foundry_ai_draft_job.__file__).resolve()
+    command = [
+        sys.executable,
+        str(script),
+        "finalize-host-failure",
+        "--draft-run-id",
+        binding["draft_run_id"],
+        "--candidate-id",
+        binding["candidate_id"],
+        "--gap-fingerprint",
+        binding["gap_fingerprint"],
+        "--gap-code",
+        binding["gap_code"],
+        "--gap-descriptor",
+        binding["gap_descriptor"],
+        "--generation-route",
+        binding["generation_route"],
+        "--risk-level",
+        binding["risk_level"],
+        "--input-dir",
+        str(tmp_path),
+        "--output",
+        str(callback),
+        "--failure-class",
+        "draft_host_image_push_failed",
+    ]
+    completed = subprocess.run(command, check=False, capture_output=True, text=True)
+
+    assert completed.returncode == 0, completed.stderr
+    report = json.loads(callback.read_text(encoding="utf-8"))
+    declared_hash = report.pop("draft_result_sha256")
+    assert declared_hash == sha256_json(report)
+    assert report["status"] == "FAILED"
+    assert report["failure_class"] == "draft_host_image_push_failed"
+    assert report["candidate_version"] is None
+    assert report["artifact_manifest"] == []
+    assert report["artifact_receipt"] is None
+    assert report["source_receipt"] is None
+    assert report["provider_receipt"] == provider_receipt
+
+
+async def test_host_failure_callback_unblocks_a_new_draft_attempt(
+    tmp_path: Path, db_session
+):
+    candidate = await _candidate(db_session, "host_failure_retry")
+    queued, _ = await queue_ai_draft(
+        db_session,
+        candidate_id=candidate.id,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+    )
+    await record_ai_draft_dispatch(
+        db_session, draft_run_id=queued.id, dispatched=True
+    )
+    descriptor = candidate.gap_descriptor
+    binding = {
+        "draft_run_id": str(queued.id),
+        "candidate_id": str(candidate.id),
+        "gap_fingerprint": candidate.gap_fingerprint,
+        "gap_code": candidate.gap_code,
+        "gap_descriptor": json.dumps(
+            descriptor, sort_keys=True, separators=(",", ":")
+        ),
+        "generation_route": candidate.generation_route,
+        "risk_level": candidate.risk_level,
+    }
+    provider_receipt = {
+        "contract_version": 1,
+        "provider": "provider",
+        "model": "model-v1",
+        "request_id_sha256": "8" * 64,
+        "prompt_or_user_data_stored": False,
+        "generated_code_executed": False,
+        "tests_executed": False,
+    }
+    run_foundry_ai_draft_job._write_json(
+        tmp_path / "provider-result.json",
+        {
+            "schema_version": 1,
+            **{**binding, "gap_descriptor": descriptor},
+            "status": "SUCCEEDED",
+            "failure_class": None,
+            "provider_receipt": provider_receipt,
+        },
+    )
+    callback = tmp_path / "callback.json"
+    args = argparse.Namespace(
+        **binding,
+        input_dir=str(tmp_path),
+        output=str(callback),
+        failure_class="draft_host_image_digest_inspection_failed",
+    )
+    assert run_foundry_ai_draft_job.finalize_host_failure(args) == 0
+    version, event = await record_ai_draft_result(
+        db_session,
+        draft_run_id=queued.id,
+        draft_result=json.loads(callback.read_text(encoding="utf-8")),
+    )
+
+    assert version is None
+    assert event.event_type == "AI_DRAFT_RESULT_FAILED"
+    assert event.event_payload["failure_class"] == (
+        "draft_host_image_digest_inspection_failed"
+    )
+    retry, created = await queue_ai_draft(
+        db_session,
+        candidate_id=candidate.id,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+    )
+    assert created is True
+    assert retry.id != queued.id
+
+
 def test_candidate_version_identity_binds_every_reproducibility_input():
     base = {
         "candidate_bundle_sha256": "1" * 64,
