@@ -36,6 +36,7 @@ from app.models.schemas import User
 from app.services.foundry_catalog import (
     FoundryCatalogError,
     create_capability_request,
+    get_ai_draft_run_state,
     merge_capability_request,
     queue_ai_draft,
     record_ai_draft_dispatch,
@@ -45,6 +46,7 @@ from app.services.foundry_catalog import (
     review_candidate_version,
     request_formal_build_dispatch,
     serialize_candidate,
+    serialize_ai_draft_run_event,
     serialize_capability_request,
     serialize_demo_run,
     triage_capability_request,
@@ -1051,6 +1053,9 @@ async def admin_triage_foundry_request(
         draft_status = "ALREADY_ACTIVE"
         failure_class = None
         retryable = False
+        delivery_uncertain = False
+        persisted_event_type = "AI_DRAFT_QUEUED"
+        retry_after = None
         if created:
             try:
                 await dispatch_candidate_draft(
@@ -1068,27 +1073,59 @@ async def admin_triage_foundry_request(
                 dispatched = False
                 failure_class = exc.failure_class
                 retryable = exc.retryable
-                draft_status = "DISPATCH_FAILED"
+                delivery_uncertain = exc.delivery_uncertain
+                draft_status = (
+                    "OUTCOME_UNKNOWN" if delivery_uncertain else "DISPATCH_FAILED"
+                )
             except Exception:
                 dispatched = False
                 failure_class = "draft_dispatch_internal_error"
                 retryable = True
-                draft_status = "DISPATCH_FAILED"
+                # An unexpected exception may happen after GitHub accepted the
+                # non-idempotent dispatch.  Fail closed and preserve this run
+                # for an authenticated callback instead of launching another.
+                delivery_uncertain = True
+                draft_status = "OUTCOME_UNKNOWN"
             try:
-                await record_ai_draft_dispatch(
+                persisted_event = await record_ai_draft_dispatch(
                     db,
                     draft_run_id=draft_event.id,
                     dispatched=dispatched,
                     failure_class=failure_class,
                     retryable=retryable,
+                    delivery_uncertain=delivery_uncertain,
                 )
             except FoundryCatalogError as exc:
                 _raise_foundry_error(exc)
+            persisted = serialize_ai_draft_run_event(persisted_event)
+            draft_status = str(persisted["status"])
+            retryable = bool(persisted["retryable"])
+            failure_class = persisted["failure_class"]
+            delivery_uncertain = bool(persisted["delivery_uncertain"])
+            persisted_event_type = str(persisted["event_type"])
+            retry_after = persisted["retry_after"]
+        else:
+            try:
+                persisted = await get_ai_draft_run_state(
+                    db, draft_run_id=draft_event.id
+                )
+            except FoundryCatalogError as exc:
+                _raise_foundry_error(exc)
+            draft_status = str(persisted["status"])
+            retryable = bool(persisted["retryable"])
+            failure_class = persisted["failure_class"]
+            delivery_uncertain = bool(persisted["delivery_uncertain"])
+            persisted_event_type = str(persisted["event_type"])
+            retry_after = persisted["retry_after"]
         response["draft_run"] = {
             "draft_run_id": str(draft_event.id),
             "status": draft_status,
             "retryable": retryable,
             "failure_class": failure_class,
+            "delivery_uncertain": delivery_uncertain,
+            "event_type": persisted_event_type,
+            "idempotent_replay": not created,
+            "retry_after": retry_after,
         }
     return response
 
@@ -1425,6 +1462,10 @@ async def ingest_foundry_ai_draft_result(
             # bound source receipt, so the literal branch name is not a source
             # commit and must not be compared with it here.
             expected_base_commit=None,
+            # The independently authenticated callback is itself proof that
+            # GitHub accepted the reserved run.  This closes the crash window
+            # between workflow_dispatch and its ledger outcome write.
+            authenticated_callback_proof=True,
         )
     except FoundryCatalogError as exc:
         _raise_foundry_error(exc)

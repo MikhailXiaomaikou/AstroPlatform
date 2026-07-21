@@ -11,6 +11,7 @@ import subprocess
 import sys
 import uuid
 import zipfile
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -27,8 +28,11 @@ from app.models.foundry_records import (
     FoundryValidationRun,
 )
 from app.services.foundry_catalog import (
+    AI_DRAFT_MAX_ATTEMPTS,
+    AI_DRAFT_WORKFLOW_LEASE,
     FoundryCatalogError,
     queue_ai_draft,
+    reconcile_expired_ai_draft_runs,
     record_ai_draft_dispatch,
     record_ai_draft_result,
     serialize_capability_gaps,
@@ -265,6 +269,205 @@ async def test_failed_dispatch_is_append_only_and_can_be_retried(db_session):
     assert retried.id != first.id
 
 
+async def test_nonretryable_dispatch_failure_blocks_new_run(db_session):
+    candidate = await _candidate(db_session, "terminal-dispatch-failure")
+    queued, _ = await queue_ai_draft(
+        db_session,
+        candidate_id=candidate.id,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+    )
+    await record_ai_draft_dispatch(
+        db_session,
+        draft_run_id=queued.id,
+        dispatched=False,
+        failure_class="draft_dispatch_rejected",
+        retryable=False,
+    )
+
+    with pytest.raises(FoundryCatalogError, match="failed permanently"):
+        await queue_ai_draft(
+            db_session,
+            candidate_id=candidate.id,
+            actor_kind="HUMAN_ADMIN",
+            actor_user_id=None,
+        )
+
+
+async def test_uncertain_dispatch_preserves_run_and_accepts_exact_callback(
+    db_session,
+):
+    candidate = await _candidate(db_session, "dispatch-unknown")
+    queued, created = await queue_ai_draft(
+        db_session,
+        candidate_id=candidate.id,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+    )
+    assert created is True
+    outcome = await record_ai_draft_dispatch(
+        db_session,
+        draft_run_id=queued.id,
+        dispatched=False,
+        failure_class="draft_dispatch_outcome_unknown",
+        retryable=True,
+        delivery_uncertain=True,
+    )
+    assert outcome.event_type == "AI_DRAFT_DISPATCH_OUTCOME_UNKNOWN"
+    assert outcome.event_payload["delivery_uncertain"] is True
+
+    active, active_created = await queue_ai_draft(
+        db_session,
+        candidate_id=candidate.id,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+    )
+    assert active_created is False
+    assert active.id == queued.id
+
+    version, accepted = await record_ai_draft_result(
+        db_session,
+        draft_run_id=queued.id,
+        draft_result=_report(candidate, queued.id),
+    )
+    assert version is not None
+    assert accepted.event_type == "AI_DRAFT_RESULT_ACCEPTED"
+    replay_version, replay_event = await record_ai_draft_result(
+        db_session,
+        draft_run_id=queued.id,
+        draft_result=_report(candidate, queued.id),
+    )
+    assert replay_version.id == version.id
+    assert replay_event.id == accepted.id
+
+
+async def test_expired_uncertain_dispatch_retries_and_rejects_late_callback(
+    db_session,
+):
+    candidate = await _candidate(db_session, "expired-dispatch-unknown")
+    first, _ = await queue_ai_draft(
+        db_session,
+        candidate_id=candidate.id,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+    )
+    unknown = await record_ai_draft_dispatch(
+        db_session,
+        draft_run_id=first.id,
+        dispatched=False,
+        failure_class="draft_dispatch_outcome_unknown",
+        retryable=True,
+        delivery_uncertain=True,
+    )
+    retry, created = await queue_ai_draft(
+        db_session,
+        candidate_id=candidate.id,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+        now=unknown.created_at + AI_DRAFT_WORKFLOW_LEASE + timedelta(seconds=1),
+    )
+
+    assert created is True
+    assert retry.id != first.id
+    assert retry.event_payload["attempt_number"] == 2
+    with pytest.raises(FoundryCatalogError, match="lease expired"):
+        await record_ai_draft_result(
+            db_session,
+            draft_run_id=first.id,
+            draft_result=_report(candidate, first.id),
+        )
+
+
+async def test_maintenance_reconciles_expired_uncertain_draft(db_session):
+    candidate = await _candidate(db_session, "maintenance-expiry")
+    queued, _ = await queue_ai_draft(
+        db_session,
+        candidate_id=candidate.id,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+    )
+    unknown = await record_ai_draft_dispatch(
+        db_session,
+        draft_run_id=queued.id,
+        dispatched=False,
+        failure_class="draft_dispatch_outcome_unknown",
+        retryable=True,
+        delivery_uncertain=True,
+    )
+    reconcile_at = (
+        unknown.created_at + AI_DRAFT_WORKFLOW_LEASE + timedelta(seconds=1)
+    )
+
+    assert (
+        await reconcile_expired_ai_draft_runs(db_session, now=reconcile_at) == 1
+    )
+    assert (
+        await reconcile_expired_ai_draft_runs(db_session, now=reconcile_at) == 0
+    )
+    expired = await db_session.scalar(
+        select(FoundryCandidateEvent).where(
+            FoundryCandidateEvent.candidate_id == candidate.id,
+            FoundryCandidateEvent.event_type == "AI_DRAFT_LEASE_EXPIRED",
+        )
+    )
+    assert expired is not None
+    assert expired.event_payload["draft_run_id"] == str(queued.id)
+    assert expired.event_payload["retryable"] is True
+
+
+async def test_ai_draft_attempts_are_bounded(db_session):
+    candidate = await _candidate(db_session, "bounded-attempts")
+    latest = None
+    for attempt_number in range(1, AI_DRAFT_MAX_ATTEMPTS + 1):
+        latest, created = await queue_ai_draft(
+            db_session,
+            candidate_id=candidate.id,
+            actor_kind="HUMAN_ADMIN",
+            actor_user_id=None,
+        )
+        assert created is True
+        assert latest.event_payload["attempt_number"] == attempt_number
+        await record_ai_draft_dispatch(
+            db_session,
+            draft_run_id=latest.id,
+            dispatched=False,
+            failure_class="draft_dispatch_unavailable",
+            retryable=True,
+        )
+
+    with pytest.raises(FoundryCatalogError, match="bounded attempt limit"):
+        await queue_ai_draft(
+            db_session,
+            candidate_id=candidate.id,
+            actor_kind="HUMAN_ADMIN",
+            actor_user_id=None,
+        )
+
+
+async def test_known_failed_dispatch_rejects_late_callback(db_session):
+    candidate = await _candidate(db_session, "known-dispatch-failure")
+    queued, _ = await queue_ai_draft(
+        db_session,
+        candidate_id=candidate.id,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+    )
+    await record_ai_draft_dispatch(
+        db_session,
+        draft_run_id=queued.id,
+        dispatched=False,
+        failure_class="draft_dispatch_rejected",
+        retryable=True,
+    )
+
+    with pytest.raises(FoundryCatalogError, match="failed Draft dispatch"):
+        await record_ai_draft_result(
+            db_session,
+            draft_run_id=queued.id,
+            draft_result=_report(candidate, queued.id),
+        )
+
+
 async def test_draft_internal_callback_requires_independent_secret(
     app_client, db_session, monkeypatch
 ):
@@ -295,6 +498,83 @@ async def test_draft_internal_callback_requires_independent_secret(
     assert accepted.status_code == 200, accepted.text
     assert accepted.json()["status"] == "VERSION_APPENDED"
     assert accepted.json()["actor_kind"] == "AI_DRAFT_JOB"
+
+
+async def test_authenticated_callback_closes_post_dispatch_ledger_crash_window(
+    app_client, db_session, monkeypatch
+):
+    candidate = await _candidate(db_session, "queued-callback-proof")
+    queued, _ = await queue_ai_draft(
+        db_session,
+        candidate_id=candidate.id,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+    )
+    # Simulate GitHub accepting workflow_dispatch immediately before the API
+    # process crashes, leaving only the durable QUEUED reservation.
+    monkeypatch.setattr(settings, "foundry_ai_drafting_enabled", True)
+    monkeypatch.setattr(settings, "foundry_draft_result_secret", "draft-" + "z" * 40)
+    monkeypatch.setattr(settings, "foundry_draft_github_repository", "astro/platform")
+    url = f"/api/internal/foundry/draft-runs/{queued.id}/result"
+    report = _report(candidate, queued.id)
+
+    denied = await app_client.post(
+        url,
+        headers={"Authorization": "Bearer wrong"},
+        json=report,
+    )
+    accepted = await app_client.post(
+        url,
+        headers={"Authorization": "Bearer " + "draft-" + "z" * 40},
+        json=report,
+    )
+
+    assert denied.status_code == 403
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["status"] == "VERSION_APPENDED"
+    assert accepted.json()["candidate_version_id"] is not None
+
+
+async def test_callback_first_makes_late_dispatch_receipt_a_noop(db_session):
+    candidate = await _candidate(db_session, "callback-before-receipt")
+    queued, _ = await queue_ai_draft(
+        db_session,
+        candidate_id=candidate.id,
+        actor_kind="HUMAN_ADMIN",
+        actor_user_id=None,
+    )
+    version, accepted = await record_ai_draft_result(
+        db_session,
+        draft_run_id=queued.id,
+        draft_result=_report(candidate, queued.id),
+        authenticated_callback_proof=True,
+    )
+    assert version is not None
+    candidate.status = "VALIDATING"
+    await db_session.commit()
+
+    late = await record_ai_draft_dispatch(
+        db_session,
+        draft_run_id=queued.id,
+        dispatched=True,
+    )
+
+    assert late.id == accepted.id
+    await db_session.refresh(candidate)
+    assert candidate.status == "VALIDATING"
+    dispatch_events = list(
+        (
+            await db_session.execute(
+                select(FoundryCandidateEvent).where(
+                    FoundryCandidateEvent.candidate_id == candidate.id,
+                    FoundryCandidateEvent.event_type == "AI_DRAFT_DISPATCHED",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert dispatch_events == []
 
 
 async def test_successful_draft_callback_automatically_dispatches_one_demo(
@@ -458,6 +738,112 @@ async def test_github_draft_dispatch_has_no_user_research_content(monkeypatch):
     )
 
 
+@pytest.mark.parametrize(
+    ("status_code", "delivery_uncertain", "retryable"),
+    [(503, True, True), (429, False, True), (422, False, False)],
+)
+async def test_github_draft_dispatch_classifies_delivery_outcome(
+    monkeypatch,
+    status_code: int,
+    delivery_uncertain: bool,
+    retryable: bool,
+):
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code)
+
+    monkeypatch.setattr(settings, "foundry_draft_dispatch_backend", "github_actions")
+    monkeypatch.setattr(settings, "foundry_draft_github_repository", "astro/platform")
+    monkeypatch.setattr(
+        settings, "foundry_draft_github_workflow", "foundry-candidate-draft.yml"
+    )
+    monkeypatch.setattr(settings, "foundry_draft_github_ref", "main")
+    monkeypatch.setattr(settings, "foundry_draft_github_token", "token-" + "t" * 40)
+    descriptor = {
+        "gap_code": "registered_workflow_missing",
+        "dataset_key": "desi_dr2_bao",
+        "research_domain": "cosmology",
+    }
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(FoundryDraftDispatchError) as captured:
+            await dispatch_candidate_draft(
+                draft_run_id=uuid.uuid4(),
+                candidate_id=uuid.uuid4(),
+                gap_fingerprint=sha256_json(descriptor),
+                gap_code="registered_workflow_missing",
+                gap_descriptor=descriptor,
+                generation_route="COMPOSITION",
+                risk_level="R1",
+                client=client,
+            )
+    assert captured.value.delivery_uncertain is delivery_uncertain
+    assert captured.value.retryable is retryable
+
+
+async def test_github_draft_protocol_error_has_unknown_delivery(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("connection closed", request=request)
+
+    monkeypatch.setattr(settings, "foundry_draft_dispatch_backend", "github_actions")
+    monkeypatch.setattr(settings, "foundry_draft_github_repository", "astro/platform")
+    monkeypatch.setattr(
+        settings, "foundry_draft_github_workflow", "foundry-candidate-draft.yml"
+    )
+    monkeypatch.setattr(settings, "foundry_draft_github_ref", "main")
+    monkeypatch.setattr(settings, "foundry_draft_github_token", "token-" + "t" * 40)
+    descriptor = {
+        "gap_code": "registered_workflow_missing",
+        "dataset_key": "desi_dr2_bao",
+        "research_domain": "cosmology",
+    }
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(FoundryDraftDispatchError) as captured:
+            await dispatch_candidate_draft(
+                draft_run_id=uuid.uuid4(),
+                candidate_id=uuid.uuid4(),
+                gap_fingerprint=sha256_json(descriptor),
+                gap_code="registered_workflow_missing",
+                gap_descriptor=descriptor,
+                generation_route="COMPOSITION",
+                risk_level="R1",
+                client=client,
+            )
+    assert captured.value.delivery_uncertain is True
+    assert captured.value.retryable is True
+
+
+async def test_github_draft_connect_error_is_known_retryable_failure(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("dns unavailable", request=request)
+
+    monkeypatch.setattr(settings, "foundry_draft_dispatch_backend", "github_actions")
+    monkeypatch.setattr(settings, "foundry_draft_github_repository", "astro/platform")
+    monkeypatch.setattr(
+        settings, "foundry_draft_github_workflow", "foundry-candidate-draft.yml"
+    )
+    monkeypatch.setattr(settings, "foundry_draft_github_ref", "main")
+    monkeypatch.setattr(settings, "foundry_draft_github_token", "token-" + "t" * 40)
+    descriptor = {
+        "gap_code": "registered_workflow_missing",
+        "dataset_key": "desi_dr2_bao",
+        "research_domain": "cosmology",
+    }
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(FoundryDraftDispatchError) as captured:
+            await dispatch_candidate_draft(
+                draft_run_id=uuid.uuid4(),
+                candidate_id=uuid.uuid4(),
+                gap_fingerprint=sha256_json(descriptor),
+                gap_code="registered_workflow_missing",
+                gap_descriptor=descriptor,
+                generation_route="COMPOSITION",
+                risk_level="R1",
+                client=client,
+            )
+    assert captured.value.failure_class == "draft_dispatch_unavailable"
+    assert captured.value.delivery_uncertain is False
+    assert captured.value.retryable is True
+
+
 async def test_github_draft_dispatch_rejects_non_main_ref(monkeypatch):
     monkeypatch.setattr(settings, "foundry_draft_dispatch_backend", "github_actions")
     monkeypatch.setattr(settings, "foundry_draft_github_repository", "astro/platform")
@@ -570,7 +956,117 @@ async def test_triage_automatically_dispatches_only_the_safe_gap_binding(
         "gap_descriptor",
         "generation_route",
         "risk_level",
+        "attempt_number",
+        "max_attempts",
+        "dispatch_lease_seconds",
+        "workflow_lease_seconds",
+        "lease_expires_at",
     }
+
+
+async def test_triage_preserves_uncertain_dispatch_without_duplicate_run(
+    app_client, db_session, test_user, monkeypatch
+):
+    owner, owner_token = test_user
+    gap = {
+        "gap_code": "registered_workflow_missing",
+        "dataset_key": "desi_dr2_bao",
+    }
+    audit = ClaimAudit(
+        user_id=owner.id,
+        request_hash="e" * 64,
+        lifecycle_status="COMPLETED",
+        scientific_verdict="CAPABILITY_GAP",
+        mode="audit_only",
+        claim_text="private claim",
+        source_kind="arxiv",
+        source_value="private-source-id",
+        capability_gaps=[gap],
+    )
+    db_session.add(audit)
+    await db_session.commit()
+    await db_session.refresh(audit)
+    gap_id = serialize_capability_gaps(audit.id, [gap])[0]["gap_id"]
+    monkeypatch.setattr(settings, "foundry_gap_tracking_enabled", True)
+    monkeypatch.setattr(settings, "foundry_candidate_catalog_enabled", True)
+    monkeypatch.setattr(settings, "foundry_ai_drafting_enabled", True)
+    monkeypatch.setattr(settings, "admin_secret", "foundry-draft-admin")
+    created = await app_client.post(
+        f"/api/research/claim-audits/{audit.id}/capability-requests",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={"gap_id": gap_id},
+    )
+    assert created.status_code == 201, created.text
+    dispatch_count = 0
+
+    async def _uncertain_dispatch(**_kwargs):
+        nonlocal dispatch_count
+        dispatch_count += 1
+        raise FoundryDraftDispatchError(
+            "draft_dispatch_outcome_unknown",
+            retryable=True,
+            delivery_uncertain=True,
+        )
+
+    monkeypatch.setattr(
+        "app.api.foundry.dispatch_candidate_draft", _uncertain_dispatch
+    )
+    url = f"/api/admin/foundry/requests/{created.json()['id']}/triage"
+    headers = {"X-Admin-Secret": "foundry-draft-admin"}
+    payload = {"generation_route": "DATA_ADAPTER", "risk_level": "R1"}
+    first = await app_client.post(url, headers=headers, json=payload)
+    second = await app_client.post(url, headers=headers, json=payload)
+
+    assert first.status_code == 200, first.text
+    assert first.json()["draft_run"]["status"] == "OUTCOME_UNKNOWN"
+    assert first.json()["draft_run"]["delivery_uncertain"] is True
+    assert second.status_code == 200, second.text
+    assert second.json()["draft_run"]["status"] == "OUTCOME_UNKNOWN"
+    assert second.json()["draft_run"]["delivery_uncertain"] is True
+    assert second.json()["draft_run"]["retryable"] is True
+    assert second.json()["draft_run"]["idempotent_replay"] is True
+    assert second.json()["draft_run"]["retry_after"] is not None
+    assert second.json()["draft_run"]["draft_run_id"] == first.json()["draft_run"][
+        "draft_run_id"
+    ]
+    assert dispatch_count == 1
+
+    manual_version = await app_client.post(
+        url,
+        headers=headers,
+        json={**payload, "candidate_version": _candidate_version()},
+    )
+    changed_binding = await app_client.post(
+        url,
+        headers=headers,
+        json={"generation_route": "SCIENCE_CODE", "risk_level": "R2"},
+    )
+    assert manual_version.status_code == 409, manual_version.text
+    assert changed_binding.status_code == 409, changed_binding.text
+    candidate = await db_session.get(
+        FoundryCandidate, uuid.UUID(first.json()["candidate_id"])
+    )
+    assert candidate is not None
+    assert candidate.generation_route == "DATA_ADAPTER"
+    assert candidate.risk_level == "R1"
+    assert candidate.current_version_number is None
+
+    monkeypatch.setattr(settings, "foundry_draft_result_secret", "draft-" + "q" * 40)
+    monkeypatch.setattr(settings, "foundry_draft_github_repository", "astro/platform")
+    draft_run_id = uuid.UUID(first.json()["draft_run"]["draft_run_id"])
+    callback = await app_client.post(
+        f"/api/internal/foundry/draft-runs/{draft_run_id}/result",
+        headers={"Authorization": "Bearer " + "draft-" + "q" * 40},
+        json=_report(candidate, draft_run_id),
+    )
+    assert callback.status_code == 200, callback.text
+    candidate.status = "VALIDATING"
+    await db_session.commit()
+
+    after_acceptance = await app_client.post(url, headers=headers, json=payload)
+    assert after_acceptance.status_code == 409, after_acceptance.text
+    await db_session.refresh(candidate)
+    assert candidate.status == "VALIDATING"
 
 
 def test_provider_command_unavailable_fails_closed_and_is_finalizable(

@@ -58,6 +58,9 @@ DEMO_STATUSES = frozenset({"PASSED", "PARTIAL", "FAILED"})
 REVIEW_DECISIONS = frozenset({"APPROVED", "REJECTED", "CHANGES_REQUESTED"})
 REVIEW_SCOPES = frozenset({"ENGINEERING", "SCIENTIFIC"})
 NON_FORMAL_EVIDENCE_CLASS = "NON_FORMAL_DEMO"
+AI_DRAFT_MAX_ATTEMPTS = 3
+AI_DRAFT_DISPATCH_LEASE = timedelta(minutes=5)
+AI_DRAFT_WORKFLOW_LEASE = timedelta(hours=1)
 VALIDATION_MAX_ATTEMPTS = 3
 VALIDATION_DISPATCH_LEASE = timedelta(minutes=5)
 VALIDATION_WORKFLOW_LEASE = timedelta(hours=1)
@@ -913,10 +916,57 @@ async def triage_capability_request(
     )
     if candidate is None:
         raise FoundryCatalogError("candidate_not_found", "Foundry candidate not found", status_code=404)
-    if candidate.status in {"PROMOTED", "SUSPENDED", "SUPERSEDED", "REVOKED"}:
+    if candidate.status in {
+        "APPROVED",
+        "REJECTED",
+        "PROMOTED",
+        "SUSPENDED",
+        "SUPERSEDED",
+        "REVOKED",
+    }:
         raise FoundryCatalogError(
             "candidate_not_triageable",
-            "A promoted, suspended, or revoked candidate cannot be re-triaged",
+            "A reviewed or formal candidate cannot be re-triaged",
+            status_code=409,
+        )
+    latest_draft_event = await db.scalar(
+        select(FoundryCandidateEvent)
+        .where(
+            FoundryCandidateEvent.candidate_id == candidate.id,
+            FoundryCandidateEvent.event_type.in_(_DRAFT_EVENT_TYPES),
+        )
+        .order_by(
+            FoundryCandidateEvent.created_at.desc(),
+            FoundryCandidateEvent.id.desc(),
+        )
+        .limit(1)
+    )
+    if (
+        latest_draft_event is not None
+        and latest_draft_event.event_type == "AI_DRAFT_RESULT_ACCEPTED"
+    ):
+        raise FoundryCatalogError(
+            "candidate_draft_already_accepted",
+            "An accepted immutable Draft cannot be replaced by re-triage",
+            status_code=409,
+        )
+    if (
+        latest_draft_event is not None
+        and latest_draft_event.event_type
+        in {
+            "AI_DRAFT_QUEUED",
+            "AI_DRAFT_DISPATCHED",
+            "AI_DRAFT_DISPATCH_OUTCOME_UNKNOWN",
+        }
+        and (
+            draft is not None
+            or candidate.generation_route != generation_route
+            or candidate.risk_level != risk_level
+        )
+    ):
+        raise FoundryCatalogError(
+            "candidate_draft_binding_active",
+            "An active AI Draft keeps its route, risk, and version binding",
             status_code=409,
         )
     request.status = "TRIAGED"
@@ -955,7 +1005,9 @@ _DRAFT_EVENT_TYPES = frozenset(
     {
         "AI_DRAFT_QUEUED",
         "AI_DRAFT_DISPATCHED",
+        "AI_DRAFT_DISPATCH_OUTCOME_UNKNOWN",
         "AI_DRAFT_DISPATCH_FAILED",
+        "AI_DRAFT_LEASE_EXPIRED",
         "AI_DRAFT_RESULT_ACCEPTED",
         "AI_DRAFT_RESULT_FAILED",
     }
@@ -977,12 +1029,78 @@ def _draft_run_id(event: FoundryCandidateEvent) -> str:
     return str((event.event_payload or {}).get("draft_run_id") or "")
 
 
+def serialize_ai_draft_run_event(event: FoundryCandidateEvent) -> dict[str, Any]:
+    """Return the stable persisted state for one exact Draft ledger event."""
+
+    payload = dict(event.event_payload or {})
+    state = {
+        "AI_DRAFT_QUEUED": "QUEUED",
+        "AI_DRAFT_DISPATCHED": "DISPATCHED",
+        "AI_DRAFT_DISPATCH_OUTCOME_UNKNOWN": "OUTCOME_UNKNOWN",
+        "AI_DRAFT_DISPATCH_FAILED": "DISPATCH_FAILED",
+        "AI_DRAFT_LEASE_EXPIRED": "TIMED_OUT",
+        "AI_DRAFT_RESULT_ACCEPTED": "COMPLETED",
+        "AI_DRAFT_RESULT_FAILED": "RESULT_FAILED",
+    }.get(event.event_type, "UNKNOWN")
+    retry_after = None
+    if event.event_type == "AI_DRAFT_QUEUED":
+        retry_after = payload.get("lease_expires_at")
+    elif event.event_type in {
+        "AI_DRAFT_DISPATCHED",
+        "AI_DRAFT_DISPATCH_OUTCOME_UNKNOWN",
+    }:
+        active_since = event.created_at
+        if active_since.tzinfo is None:
+            active_since = active_since.replace(tzinfo=timezone.utc)
+        retry_after = (active_since + AI_DRAFT_WORKFLOW_LEASE).isoformat()
+    return {
+        "status": state,
+        "retryable": payload.get("retryable") is True,
+        "failure_class": payload.get("failure_class"),
+        "delivery_uncertain": payload.get("delivery_uncertain") is True,
+        "event_type": event.event_type,
+        "retry_after": retry_after,
+    }
+
+
+async def get_ai_draft_run_state(
+    db: AsyncSession, *, draft_run_id: uuid.UUID
+) -> dict[str, Any]:
+    """Read the latest immutable state bound to one Draft reservation."""
+
+    queued = await db.get(FoundryCandidateEvent, draft_run_id)
+    if queued is None or queued.event_type != "AI_DRAFT_QUEUED":
+        raise FoundryCatalogError(
+            "draft_run_not_found", "AI Draft run not found", status_code=404
+        )
+    lifecycle = list(
+        (
+            await db.execute(
+                select(FoundryCandidateEvent)
+                .where(
+                    FoundryCandidateEvent.candidate_id == queued.candidate_id,
+                    FoundryCandidateEvent.event_type.in_(_DRAFT_EVENT_TYPES),
+                )
+                .order_by(
+                    FoundryCandidateEvent.created_at.asc(),
+                    FoundryCandidateEvent.id.asc(),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    bound = [event for event in lifecycle if _draft_run_id(event) == str(draft_run_id)]
+    return serialize_ai_draft_run_event(bound[-1] if bound else queued)
+
+
 async def queue_ai_draft(
     db: AsyncSession,
     *,
     candidate_id: uuid.UUID,
     actor_kind: str,
     actor_user_id: uuid.UUID | None,
+    now: datetime | None = None,
 ) -> tuple[FoundryCandidateEvent, bool]:
     """Append a durable, privacy-minimized Draft request event.
 
@@ -1055,9 +1173,27 @@ async def queue_ai_draft(
         .scalars()
         .all()
     )
+    attempt_count = int(
+        await db.scalar(
+            select(func.count())
+            .select_from(FoundryCandidateEvent)
+            .where(
+                FoundryCandidateEvent.candidate_id == candidate.id,
+                FoundryCandidateEvent.event_type == "AI_DRAFT_QUEUED",
+            )
+        )
+        or 0
+    )
+    current_time = now or _utc_now()
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=timezone.utc)
     if recent:
         latest = recent[0]
-        if latest.event_type in {"AI_DRAFT_QUEUED", "AI_DRAFT_DISPATCHED"}:
+        if latest.event_type in {
+            "AI_DRAFT_QUEUED",
+            "AI_DRAFT_DISPATCHED",
+            "AI_DRAFT_DISPATCH_OUTCOME_UNKNOWN",
+        }:
             run_id = _draft_run_id(latest)
             queued = next(
                 (
@@ -1068,15 +1204,81 @@ async def queue_ai_draft(
                 ),
                 None,
             )
-            if queued is not None:
+            if queued is None:
+                raise FoundryCatalogError(
+                    "draft_run_binding_missing",
+                    "The active AI Draft has no immutable queued reservation",
+                    status_code=409,
+                )
+            active_since = latest.created_at
+            if active_since.tzinfo is None:
+                active_since = active_since.replace(tzinfo=timezone.utc)
+            lease = (
+                AI_DRAFT_DISPATCH_LEASE
+                if latest.event_type == "AI_DRAFT_QUEUED"
+                else AI_DRAFT_WORKFLOW_LEASE
+            )
+            retry_after = active_since + lease
+            if current_time < retry_after:
                 return queued, False
-        if latest.event_type == "AI_DRAFT_RESULT_ACCEPTED":
+            attempt_number = int(
+                (queued.event_payload or {}).get("attempt_number")
+                or attempt_count
+                or 1
+            )
+            retryable = attempt_number < AI_DRAFT_MAX_ATTEMPTS
+            await _append_event(
+                db,
+                candidate_id=candidate.id,
+                event_type="AI_DRAFT_LEASE_EXPIRED",
+                actor_kind="CONTROL_PLANE",
+                actor_user_id=None,
+                payload={
+                    "draft_run_id": str(queued.id),
+                    "attempt_number": attempt_number,
+                    "max_attempts": AI_DRAFT_MAX_ATTEMPTS,
+                    "expired_state": latest.event_type,
+                    "timeout_seconds": int(lease.total_seconds()),
+                    "retryable": retryable,
+                },
+            )
+            if not retryable:
+                await db.commit()
+                raise FoundryCatalogError(
+                    "draft_attempts_exhausted",
+                    "AI Draft reached the bounded attempt limit",
+                    status_code=409,
+                )
+        elif latest.event_type == "AI_DRAFT_RESULT_ACCEPTED":
             raise FoundryCatalogError(
                 "candidate_draft_already_accepted",
                 "The current candidate already has an accepted immutable draft version",
                 status_code=409,
             )
+        elif (
+            latest.event_type == "AI_DRAFT_DISPATCH_FAILED"
+            and (latest.event_payload or {}).get("retryable") is not True
+        ):
+            if attempt_count >= AI_DRAFT_MAX_ATTEMPTS:
+                raise FoundryCatalogError(
+                    "draft_attempts_exhausted",
+                    "AI Draft reached the bounded attempt limit",
+                    status_code=409,
+                )
+            raise FoundryCatalogError(
+                "draft_dispatch_not_retryable",
+                "The latest Draft dispatch failed permanently and cannot be retried in place",
+                status_code=409,
+            )
+    if attempt_count >= AI_DRAFT_MAX_ATTEMPTS:
+        await db.commit()
+        raise FoundryCatalogError(
+            "draft_attempts_exhausted",
+            "AI Draft reached the bounded attempt limit",
+            status_code=409,
+        )
 
+    attempt_number = attempt_count + 1
     event = await _append_event(
         db,
         candidate_id=candidate.id,
@@ -1091,6 +1293,17 @@ async def queue_ai_draft(
             "gap_descriptor": descriptor,
             "generation_route": candidate.generation_route,
             "risk_level": candidate.risk_level,
+            "attempt_number": attempt_number,
+            "max_attempts": AI_DRAFT_MAX_ATTEMPTS,
+            "dispatch_lease_seconds": int(
+                AI_DRAFT_DISPATCH_LEASE.total_seconds()
+            ),
+            "workflow_lease_seconds": int(
+                AI_DRAFT_WORKFLOW_LEASE.total_seconds()
+            ),
+            "lease_expires_at": (
+                current_time + AI_DRAFT_DISPATCH_LEASE
+            ).isoformat(),
         },
     )
     candidate.status = "BUILDING"
@@ -1106,22 +1319,65 @@ async def record_ai_draft_dispatch(
     dispatched: bool,
     failure_class: str | None = None,
     retryable: bool = False,
+    delivery_uncertain: bool = False,
 ) -> FoundryCandidateEvent:
     """Append the sanitized GitHub dispatch outcome for one queued Draft."""
 
+    if dispatched and delivery_uncertain:
+        raise FoundryCatalogError(
+            "draft_dispatch_outcome_invalid",
+            "A successful Draft dispatch cannot also have an uncertain outcome",
+            status_code=409,
+        )
     queued = await db.get(FoundryCandidateEvent, draft_run_id)
     if queued is None or queued.event_type != "AI_DRAFT_QUEUED":
         raise FoundryCatalogError(
             "draft_run_not_found", "AI Draft run not found", status_code=404
         )
-    outcomes = list(
+    raw_attempt_number = (queued.event_payload or {}).get("attempt_number")
+    attempt_number = int(
+        raw_attempt_number
+        or await db.scalar(
+            select(func.count())
+            .select_from(FoundryCandidateEvent)
+            .where(
+                FoundryCandidateEvent.candidate_id == queued.candidate_id,
+                FoundryCandidateEvent.event_type == "AI_DRAFT_QUEUED",
+            )
+        )
+        or 1
+    )
+    effective_retryable = (
+        bool(retryable) and attempt_number < AI_DRAFT_MAX_ATTEMPTS
+    )
+    # Serialize the dispatch receipt with the callback path.  A GitHub run can
+    # finish while the original HTTP request is recovering from an uncertain
+    # response; without this shared lock, a late receipt could overwrite the
+    # callback's VALIDATING state with BUILDING.
+    candidate = await db.scalar(
+        select(FoundryCandidate)
+        .where(FoundryCandidate.id == queued.candidate_id)
+        .with_for_update()
+    )
+    if candidate is None:
+        raise FoundryCatalogError(
+            "candidate_not_found", "Foundry candidate not found", status_code=404
+        )
+    lifecycle = list(
         (
             await db.execute(
                 select(FoundryCandidateEvent)
                 .where(
                     FoundryCandidateEvent.candidate_id == queued.candidate_id,
                     FoundryCandidateEvent.event_type.in_(
-                        {"AI_DRAFT_DISPATCHED", "AI_DRAFT_DISPATCH_FAILED"}
+                        {
+                            "AI_DRAFT_DISPATCHED",
+                            "AI_DRAFT_DISPATCH_OUTCOME_UNKNOWN",
+                            "AI_DRAFT_DISPATCH_FAILED",
+                            "AI_DRAFT_LEASE_EXPIRED",
+                            "AI_DRAFT_RESULT_ACCEPTED",
+                            "AI_DRAFT_RESULT_FAILED",
+                        }
                     ),
                 )
                 .order_by(FoundryCandidateEvent.created_at.desc())
@@ -1130,12 +1386,38 @@ async def record_ai_draft_dispatch(
         .scalars()
         .all()
     )
+    completed = next(
+        (
+            event
+            for event in lifecycle
+            if _draft_run_id(event) == str(draft_run_id)
+            and event.event_type
+            in {
+                "AI_DRAFT_LEASE_EXPIRED",
+                "AI_DRAFT_RESULT_ACCEPTED",
+                "AI_DRAFT_RESULT_FAILED",
+            }
+        ),
+        None,
+    )
+    if completed is not None:
+        # The authenticated callback is stronger delivery evidence than the
+        # late control-plane receipt.  Keep the terminal event and aggregate
+        # state untouched.
+        await db.commit()
+        return completed
     existing = next(
-        (event for event in outcomes if _draft_run_id(event) == str(draft_run_id)),
+        (event for event in lifecycle if _draft_run_id(event) == str(draft_run_id)),
         None,
     )
     expected_type = (
-        "AI_DRAFT_DISPATCHED" if dispatched else "AI_DRAFT_DISPATCH_FAILED"
+        "AI_DRAFT_DISPATCHED"
+        if dispatched
+        else (
+            "AI_DRAFT_DISPATCH_OUTCOME_UNKNOWN"
+            if delivery_uncertain
+            else "AI_DRAFT_DISPATCH_FAILED"
+        )
     )
     sanitized_failure = None
     if not dispatched:
@@ -1147,19 +1429,19 @@ async def record_ai_draft_dispatch(
             existing.event_type != expected_type
             or (existing.event_payload or {}).get("failure_class")
             != sanitized_failure
+            or bool((existing.event_payload or {}).get("delivery_uncertain"))
+            != bool(delivery_uncertain)
+            or bool((existing.event_payload or {}).get("retryable"))
+            != (effective_retryable if not dispatched else False)
         ):
             raise FoundryCatalogError(
                 "draft_dispatch_outcome_conflict",
                 "The Draft dispatch outcome is already recorded differently",
                 status_code=409,
             )
+        await db.commit()
         return existing
 
-    candidate = await db.scalar(
-        select(FoundryCandidate)
-        .where(FoundryCandidate.id == queued.candidate_id)
-        .with_for_update()
-    )
     event = await _append_event(
         db,
         candidate_id=queued.candidate_id,
@@ -1169,11 +1451,13 @@ async def record_ai_draft_dispatch(
         payload={
             "draft_run_id": str(draft_run_id),
             "failure_class": sanitized_failure,
-            "retryable": bool(retryable) if not dispatched else False,
+            "retryable": effective_retryable if not dispatched else False,
+            "delivery_uncertain": bool(delivery_uncertain),
+            "attempt_number": attempt_number,
+            "max_attempts": AI_DRAFT_MAX_ATTEMPTS,
         },
     )
-    if candidate is not None:
-        candidate.status = "BUILDING"
+    candidate.status = "BUILDING"
     await db.commit()
     await db.refresh(event)
     return event
@@ -1279,6 +1563,7 @@ async def record_ai_draft_result(
     draft_result: dict[str, Any],
     expected_repository: str | None = None,
     expected_base_commit: str | None = None,
+    authenticated_callback_proof: bool = False,
 ) -> tuple[FoundryCandidateVersion | None, FoundryCandidateEvent]:
     """Append one host-ingested Draft result and, on success, one AI version."""
 
@@ -1346,7 +1631,9 @@ async def record_ai_draft_result(
                     FoundryCandidateEvent.event_type.in_(
                         {
                             "AI_DRAFT_DISPATCHED",
+                            "AI_DRAFT_DISPATCH_OUTCOME_UNKNOWN",
                             "AI_DRAFT_DISPATCH_FAILED",
+                            "AI_DRAFT_LEASE_EXPIRED",
                             "AI_DRAFT_RESULT_ACCEPTED",
                             "AI_DRAFT_RESULT_FAILED",
                         }
@@ -1386,16 +1673,30 @@ async def record_ai_draft_result(
             else None
         )
         return version, completed
-    if not any(event.event_type == "AI_DRAFT_DISPATCHED" for event in bound_events):
-        raise FoundryCatalogError(
-            "draft_result_not_dispatched",
-            "AI Draft result cannot be ingested before a successful dispatch",
-            status_code=409,
-        )
     if any(event.event_type == "AI_DRAFT_DISPATCH_FAILED" for event in bound_events):
         raise FoundryCatalogError(
             "draft_result_after_failed_dispatch",
             "A failed Draft dispatch must be retried with a new run id",
+            status_code=409,
+        )
+    if any(event.event_type == "AI_DRAFT_LEASE_EXPIRED" for event in bound_events):
+        raise FoundryCatalogError(
+            "draft_result_after_lease_expired",
+            "The AI Draft lease expired and a late result cannot create a version",
+            status_code=409,
+        )
+    # The internal route may supply an independently authenticated callback as
+    # delivery proof.  This covers a control-plane crash after GitHub accepted
+    # workflow_dispatch but before the outcome event was appended.  All other
+    # service callers remain fail closed by default.
+    if not any(
+        event.event_type
+        in {"AI_DRAFT_DISPATCHED", "AI_DRAFT_DISPATCH_OUTCOME_UNKNOWN"}
+        for event in bound_events
+    ) and not authenticated_callback_proof:
+        raise FoundryCatalogError(
+            "draft_result_not_dispatched",
+            "AI Draft result cannot be ingested before a dispatch attempt",
             status_code=409,
         )
 
@@ -1658,6 +1959,150 @@ async def record_ai_draft_result(
     await db.refresh(version)
     await db.refresh(event)
     return version, event
+
+
+async def reconcile_expired_ai_draft_runs(
+    db: AsyncSession,
+    *,
+    now: datetime | None = None,
+    limit: int = 100,
+) -> int:
+    """Close stale Draft reservations so a bounded retry can be requested."""
+
+    current_time = now or _utc_now()
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=timezone.utc)
+    dispatch_cutoff = current_time - AI_DRAFT_DISPATCH_LEASE
+    workflow_cutoff = current_time - AI_DRAFT_WORKFLOW_LEASE
+    latest_draft = (
+        select(
+            FoundryCandidateEvent.candidate_id.label("candidate_id"),
+            func.max(FoundryCandidateEvent.created_at).label("latest_created_at"),
+        )
+        .where(FoundryCandidateEvent.event_type.in_(_DRAFT_EVENT_TYPES))
+        .group_by(FoundryCandidateEvent.candidate_id)
+        .subquery()
+    )
+    candidate_ids = list(
+        (
+            await db.execute(
+                select(FoundryCandidateEvent.candidate_id)
+                .join(
+                    latest_draft,
+                    and_(
+                        latest_draft.c.candidate_id
+                        == FoundryCandidateEvent.candidate_id,
+                        latest_draft.c.latest_created_at
+                        == FoundryCandidateEvent.created_at,
+                    ),
+                )
+                .where(
+                    or_(
+                        and_(
+                            FoundryCandidateEvent.event_type
+                            == "AI_DRAFT_QUEUED",
+                            FoundryCandidateEvent.created_at <= dispatch_cutoff,
+                        ),
+                        and_(
+                            FoundryCandidateEvent.event_type.in_(
+                                {
+                                    "AI_DRAFT_DISPATCHED",
+                                    "AI_DRAFT_DISPATCH_OUTCOME_UNKNOWN",
+                                }
+                            ),
+                            FoundryCandidateEvent.created_at <= workflow_cutoff,
+                        ),
+                    )
+                )
+                .distinct()
+                .order_by(FoundryCandidateEvent.candidate_id)
+                .limit(max(1, min(int(limit), 1000)))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    reconciled = 0
+    for candidate_id in candidate_ids:
+        candidate = await db.scalar(
+            select(FoundryCandidate)
+            .where(FoundryCandidate.id == candidate_id)
+            .with_for_update()
+        )
+        if candidate is None:
+            await db.rollback()
+            continue
+        lifecycle = list(
+            (
+                await db.execute(
+                    select(FoundryCandidateEvent)
+                    .where(
+                        FoundryCandidateEvent.candidate_id == candidate.id,
+                        FoundryCandidateEvent.event_type.in_(_DRAFT_EVENT_TYPES),
+                    )
+                    .order_by(
+                        FoundryCandidateEvent.created_at.desc(),
+                        FoundryCandidateEvent.id.desc(),
+                    )
+                    .limit(100)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not lifecycle or lifecycle[0].event_type not in {
+            "AI_DRAFT_QUEUED",
+            "AI_DRAFT_DISPATCHED",
+            "AI_DRAFT_DISPATCH_OUTCOME_UNKNOWN",
+        }:
+            await db.rollback()
+            continue
+        active = lifecycle[0]
+        run_id = _draft_run_id(active)
+        queued = next(
+            (
+                event
+                for event in lifecycle
+                if event.event_type == "AI_DRAFT_QUEUED"
+                and str(event.id) == run_id
+            ),
+            None,
+        )
+        if queued is None:
+            await db.rollback()
+            continue
+        active_since = active.created_at
+        if active_since.tzinfo is None:
+            active_since = active_since.replace(tzinfo=timezone.utc)
+        lease = (
+            AI_DRAFT_DISPATCH_LEASE
+            if active.event_type == "AI_DRAFT_QUEUED"
+            else AI_DRAFT_WORKFLOW_LEASE
+        )
+        if current_time < active_since + lease:
+            await db.rollback()
+            continue
+        attempt_number = int(
+            (queued.event_payload or {}).get("attempt_number") or 1
+        )
+        await _append_event(
+            db,
+            candidate_id=candidate.id,
+            event_type="AI_DRAFT_LEASE_EXPIRED",
+            actor_kind="CONTROL_PLANE",
+            actor_user_id=None,
+            payload={
+                "draft_run_id": str(queued.id),
+                "attempt_number": attempt_number,
+                "max_attempts": AI_DRAFT_MAX_ATTEMPTS,
+                "expired_state": active.event_type,
+                "timeout_seconds": int(lease.total_seconds()),
+                "retryable": attempt_number < AI_DRAFT_MAX_ATTEMPTS,
+            },
+        )
+        await db.commit()
+        reconciled += 1
+    return reconciled
 
 
 async def ai_draft_validation_binding(

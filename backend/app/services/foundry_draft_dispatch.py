@@ -49,10 +49,17 @@ _DESCRIPTOR_KEYS = frozenset(
 class FoundryDraftDispatchError(RuntimeError):
     """Stable, secret-free dispatch error suitable for an event ledger."""
 
-    def __init__(self, failure_class: str, *, retryable: bool) -> None:
+    def __init__(
+        self,
+        failure_class: str,
+        *,
+        retryable: bool,
+        delivery_uncertain: bool = False,
+    ) -> None:
         super().__init__(failure_class)
         self.failure_class = failure_class
         self.retryable = retryable
+        self.delivery_uncertain = delivery_uncertain
 
 
 def _uuid(value: uuid.UUID | str, field: str) -> str:
@@ -214,19 +221,37 @@ async def dispatch_candidate_draft(
                 },
             },
         )
-    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
+        # These failures occur before a request can be delivered, so a fresh
+        # run id may be retried without risking a duplicate GitHub workflow.
         raise FoundryDraftDispatchError(
-            "draft_dispatch_unavailable", retryable=True
+            "draft_dispatch_unavailable",
+            retryable=True,
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise FoundryDraftDispatchError(
+            "draft_dispatch_outcome_unknown",
+            retryable=True,
+            delivery_uncertain=True,
         ) from exc
     finally:
         if owns_client:
             await request_client.aclose()
+    if response.status_code >= 500:
+        # workflow_dispatch is not idempotent and GitHub may have accepted the
+        # run before returning a provider error.  Preserve the reserved run id
+        # so its authenticated callback can prove the actual outcome.
+        raise FoundryDraftDispatchError(
+            "draft_dispatch_outcome_unknown",
+            retryable=True,
+            delivery_uncertain=True,
+        )
     if response.status_code != 204:
         # Never persist GitHub's response body: it may echo repository details
         # or provider diagnostics that do not belong in the Candidate ledger.
         raise FoundryDraftDispatchError(
             "draft_dispatch_rejected",
-            retryable=response.status_code == 429 or response.status_code >= 500,
+            retryable=response.status_code == 429,
         )
 
 
