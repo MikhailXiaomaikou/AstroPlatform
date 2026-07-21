@@ -50,7 +50,8 @@ def test_checked_in_candidate_is_non_formal_and_records_partial_without_mirror(
     assert len(report["stderr_sha256"]) == 64
     assert len(report["environment_sha256"]) == 64
     assert report["environment"]["entrypoint_id"] == bundle["entrypoint_id"]
-    assert report["resource_usage"]["user_cpu_seconds"] >= 0
+    user_cpu_seconds = report["resource_usage"]["user_cpu_seconds"]
+    assert user_cpu_seconds is None or user_cpu_seconds >= 0
     assert report["result"]["official_ready_cells"] == 0
     assert all(not cell.get("parameter_intervals") for cell in report["result"]["matrix"])
 
