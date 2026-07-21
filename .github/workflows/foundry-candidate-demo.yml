@@ -8,6 +8,10 @@ on:
         required: true
         default: desi_dr2_official_chain_summary_v1
         type: string
+      validation_run_id:
+        description: Durable Foundry validation-run UUID to receive this DemoReport
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -22,10 +26,14 @@ jobs:
       - name: Validate candidate key
         env:
           CANDIDATE: ${{ inputs.candidate }}
+          VALIDATION_RUN_ID: ${{ inputs.validation_run_id }}
         shell: bash
         run: |
           set -euo pipefail
           [[ "$CANDIDATE" =~ ^[a-z][a-z0-9_]{2,96}$ ]]
+          if [[ -n "$VALIDATION_RUN_ID" ]]; then
+            [[ "$VALIDATION_RUN_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
+          fi
           test -f "backend/foundry_candidates/$CANDIDATE.json"
 
       - name: Build no-secrets candidate runner
@@ -78,7 +86,33 @@ jobs:
           assert len(report["demo_report_sha256"]) == 64
           PY
 
+      # The untrusted candidate container has already exited. Only this host
+      # step sees the narrowly scoped ingestion credential; candidate code had
+      # no network and never received it. Manual smoke runs may omit a durable
+      # validation id and intentionally skip ingestion.
+      - name: Append DemoReport to the durable Candidate ledger
+        if: ${{ inputs.validation_run_id != '' }}
+        env:
+          CALLBACK_URL: ${{ secrets.FOUNDRY_VALIDATION_CALLBACK_URL }}
+          RESULT_SECRET: ${{ secrets.FOUNDRY_VALIDATION_RESULT_SECRET }}
+          VALIDATION_RUN_ID: ${{ inputs.validation_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CALLBACK_URL"
+          test -n "$RESULT_SECRET"
+          callback="${CALLBACK_URL%/}/api/internal/foundry/validation-runs/${VALIDATION_RUN_ID}/demo-report"
+          curl --fail-with-body --silent --show-error \
+            --proto '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --connect-timeout 10 --max-time 60 \
+            -H "Authorization: Bearer $RESULT_SECRET" \
+            -H "Content-Type: application/json" \
+            --data-binary @foundry-output/demo-report.json \
+            "$callback"
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ always() }}
         with:
           name: foundry-demo-${{ inputs.candidate }}-${{ github.sha }}
           path: foundry-output/demo-report.json
