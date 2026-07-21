@@ -340,6 +340,60 @@ def test_release_loader_merges_signed_composition_from_mapping_and_file(tmp_path
     assert from_file.to_dict() == loaded.to_dict()
 
 
+def test_activated_worker_binding_records_outer_registry_signature(
+    monkeypatch,
+):
+    import app.services.workflow_registry_v2 as registry_module
+
+    candidate = _candidate_payload()
+    entry = validate_candidate_registration(
+        candidate["workflow"],
+        candidate["workflow_hash"],
+        "sha256:" + "d" * 64,
+        candidate_id="candidate-release-trust",
+        candidate_version=1,
+        candidate_version_hash=candidate["candidate_hash"],
+        approved_candidate_version_hash=candidate["candidate_hash"],
+        tool_specs=candidate["tools"],
+        reviews=candidate["reviews"],
+    )
+    private_key, public_key = _signing_keys()
+    signed = build_signed_registry_snapshot(
+        [entry], private_key, "registry-trust-key", epoch="2026-07-21.trust"
+    )
+    monkeypatch.setattr(registry_module, "_SNAPSHOT", registry_module._SNAPSHOT)
+    monkeypatch.setattr(
+        registry_module,
+        "_WORKFLOWS_BY_IDENTITY",
+        registry_module._WORKFLOWS_BY_IDENTITY,
+    )
+    monkeypatch.setattr(
+        registry_module, "_WORKFLOWS_BY_ID", registry_module._WORKFLOWS_BY_ID
+    )
+    monkeypatch.setattr(
+        registry_module,
+        "_TOOLS_BY_ENTRYPOINT",
+        registry_module._TOOLS_BY_ENTRYPOINT,
+    )
+    monkeypatch.setattr(
+        registry_module,
+        "_ACTIVE_RELEASE_TRUST",
+        registry_module._ACTIVE_RELEASE_TRUST,
+    )
+    monkeypatch.setattr(registry_module, "_REGISTRY_LOOKUP_STARTED", False)
+    monkeypatch.setattr(registry_module, "_REGISTRY_ACTIVATED", False)
+    activate_verified_registry_release(
+        signed, {"registry-trust-key": public_key}
+    )
+
+    binding = get_worker_execution_binding(UNION3_REPRODUCTION_WORKFLOW_ID)
+    assert binding["registry_release_kind"] == "signed_registry_release"
+    assert binding["registry_release_signature_algorithm"] == "ed25519"
+    assert binding["registry_release_key_id"] == "registry-trust-key"
+    assert binding["registry_release_payload_sha256"] == signed["payload_sha256"]
+    assert binding["registry_hash"].startswith("sha256:")
+
+
 def test_release_loader_defaults_to_defensive_builtins():
     loaded = load_verified_registry_release()
     loaded.workflow_entry_hashes["forged"] = "sha256:" + "0" * 64

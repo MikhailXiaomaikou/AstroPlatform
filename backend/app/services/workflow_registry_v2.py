@@ -811,6 +811,12 @@ _WORKFLOWS_BY_IDENTITY, _WORKFLOWS_BY_ID = _workflow_indexes(_SNAPSHOT)
 _TOOLS_BY_ENTRYPOINT = {item.entrypoint_id: item for item in _SNAPSHOT.tools}
 _REGISTRY_LOOKUP_STARTED = False
 _REGISTRY_ACTIVATED = False
+_ACTIVE_RELEASE_TRUST: dict[str, Any] = {
+    "release_kind": "builtin_code_registry",
+    "signature_algorithm": None,
+    "signature_key_id": None,
+    "signed_payload_sha256": None,
+}
 
 
 def _active_registry() -> tuple[
@@ -1005,6 +1011,15 @@ def get_worker_execution_binding(
             "approval_attestation_hash"
         ),
         "build_attestation_hash": release_binding.get("build_attestation_hash"),
+        "registry_hash": snapshot.registry_hash,
+        "registry_release_kind": _ACTIVE_RELEASE_TRUST["release_kind"],
+        "registry_release_signature_algorithm": _ACTIVE_RELEASE_TRUST[
+            "signature_algorithm"
+        ],
+        "registry_release_key_id": _ACTIVE_RELEASE_TRUST["signature_key_id"],
+        "registry_release_payload_sha256": _ACTIVE_RELEASE_TRUST[
+            "signed_payload_sha256"
+        ],
     }
 
 
@@ -1761,6 +1776,7 @@ def activate_verified_registry_release(
     """
 
     global _REGISTRY_ACTIVATED
+    global _ACTIVE_RELEASE_TRUST
     global _REGISTRY_LOOKUP_STARTED
     global _SNAPSHOT
     global _TOOLS_BY_ENTRYPOINT
@@ -1787,6 +1803,25 @@ def activate_verified_registry_release(
         _WORKFLOWS_BY_IDENTITY = workflows_by_identity
         _WORKFLOWS_BY_ID = workflows_by_id
         _TOOLS_BY_ENTRYPOINT = tools_by_entrypoint
+        if release_source is None:
+            release_trust = {
+                "release_kind": "builtin_code_registry",
+                "signature_algorithm": None,
+                "signature_key_id": None,
+                "signed_payload_sha256": None,
+            }
+        else:
+            signed_release = _read_signed_registry_release(release_source)
+            signature = signed_release.get("signature")
+            if not isinstance(signature, Mapping):
+                raise WorkflowRegistryError("registry_snapshot_signature_missing")
+            release_trust = {
+                "release_kind": "signed_registry_release",
+                "signature_algorithm": signature.get("algorithm"),
+                "signature_key_id": signature.get("key_id"),
+                "signed_payload_sha256": signed_release.get("payload_sha256"),
+            }
+        _ACTIVE_RELEASE_TRUST = release_trust
         _REGISTRY_ACTIVATED = True
         return copy.deepcopy(snapshot)
 

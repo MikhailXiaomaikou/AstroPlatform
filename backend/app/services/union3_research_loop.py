@@ -997,6 +997,15 @@ def _validated_registry_binding(
         "candidate_version_hash": binding.get("candidate_version_hash"),
         "approval_attestation_hash": binding.get("approval_attestation_hash"),
         "build_attestation_hash": binding.get("build_attestation_hash"),
+        "registry_hash": binding.get("registry_hash"),
+        "registry_release_kind": binding.get("registry_release_kind"),
+        "registry_release_signature_algorithm": binding.get(
+            "registry_release_signature_algorithm"
+        ),
+        "registry_release_key_id": binding.get("registry_release_key_id"),
+        "registry_release_payload_sha256": binding.get(
+            "registry_release_payload_sha256"
+        ),
     }
     for record in (audit, primary_job, attempt):
         for field_name, expected in receipt.items():
