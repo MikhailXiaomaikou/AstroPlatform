@@ -79,6 +79,15 @@ class ResearchJob(Base):
         UUIDType(), ForeignKey("research_workspaces.id"), nullable=True, index=True
     )
     workflow_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    # v2 formal-registry binding. ``workflow_key`` remains for backwards
+    # compatibility; these columns identify the exact signed release used by
+    # a new job and are never reconstructed from browser input.
+    workflow_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    workflow_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    registry_epoch: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    registry_entry_hash: Mapped[str | None] = mapped_column(String(71), nullable=True)
+    entrypoint_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    runner_image_digest: Mapped[str | None] = mapped_column(String(71), nullable=True)
     capability_requirements: Mapped[dict] = mapped_column(
         JSONType(), nullable=False, default=dict
     )
