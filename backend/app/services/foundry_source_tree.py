@@ -62,7 +62,16 @@ def assert_clean_checkout(
     repo_root: str | Path, *, allow_staged_changes: bool = False
 ) -> None:
     repo = Path(repo_root).resolve()
-    status = _git(repo, "status", "--porcelain=v1", "-z")
+    # Pin untracked-file visibility instead of trusting the repository-local
+    # ``status.showUntrackedFiles`` setting.  Otherwise a checkout can look
+    # clean while untracked Python source remains outside the source receipt.
+    status = _git(
+        repo,
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+    )
     if not status:
         return
     if allow_staged_changes:

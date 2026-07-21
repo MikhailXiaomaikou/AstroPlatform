@@ -478,6 +478,13 @@ def verify_recorded(args: argparse.Namespace) -> int:
         raise ValueError("recorded_demo_report_self_hash_mismatch")
     if _sha256_json(report.get("environment")) != report.get("environment_sha256"):
         raise ValueError("recorded_environment_hash_mismatch")
+    if (
+        report.get("evidence_class") != "NON_FORMAL_DEMO"
+        or report.get("publication_ready") is not False
+        or report.get("claim_eligible") is not False
+        or report.get("evidence_pack_allowed") is not False
+    ):
+        raise ValueError("recorded_demo_report_scope_invalid")
 
     envelope = version_receipt.get("envelope")
     if not isinstance(envelope, dict) or envelope.get("schema_version") != 1:
@@ -618,10 +625,12 @@ def verify_recorded(args: argparse.Namespace) -> int:
         or final_payload.get("demo_run_id") != report.get("demo_run_id")
         or final_payload.get("demo_report_sha256") != declared_report_hash
         or final_payload.get("status") != report.get("status")
-        or final_payload.get("evidence_class") != "NON_FORMAL_DEMO"
-        or final_payload.get("publication_ready") is not False
-        or final_payload.get("claim_eligible") is not False
-        or final_payload.get("evidence_pack_allowed") is not False
+        or final_payload.get("evidence_class") != report.get("evidence_class")
+        or final_payload.get("publication_ready")
+        is not report.get("publication_ready")
+        or final_payload.get("claim_eligible") is not report.get("claim_eligible")
+        or final_payload.get("evidence_pack_allowed")
+        is not report.get("evidence_pack_allowed")
     ):
         raise ValueError("recorded_final_event_report_mismatch")
 
@@ -642,6 +651,14 @@ def verify_recorded(args: argparse.Namespace) -> int:
     if (
         demo.get("demo_run_id") != report["demo_run_id"]
         or demo.get("demo_report_sha256") != declared_report_hash
+        or demo.get("status") != report.get("status")
+        or demo.get("failure_class") != report.get("failure_class")
+        or demo.get("evidence_class") != report.get("evidence_class")
+        or demo.get("publication_ready") is not report.get("publication_ready")
+        or demo.get("claim_eligible") is not report.get("claim_eligible")
+        or demo.get("evidence_pack_allowed")
+        is not report.get("evidence_pack_allowed")
+        or demo.get("validation_run_id") != final_payload.get("validation_run_id")
         or ledger.get("candidate", {}).get("candidate_version_hash")
         != report["candidate_version_sha256"]
         or final_envelope.get("event_type") != "DEMO_RECORDED"

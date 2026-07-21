@@ -140,13 +140,18 @@ def test_public_wrapper_replays_current_checkout_with_new_identity(
     )
 
 
-def test_public_wrapper_rejects_dirty_checkout(
+def test_public_wrapper_rejects_dirty_checkout_when_git_config_hides_untracked(
     clean_replay_repo: Path,
     tmp_path: Path,
 ) -> None:
     output = tmp_path / "dirty-replay"
-    marker = clean_replay_repo / "untracked-replay-marker.txt"
-    marker.write_text("dirty checkout\n", encoding="utf-8")
+    marker = clean_replay_repo / "backend" / "untracked_runtime.py"
+    subprocess.run(
+        ["git", "config", "status.showUntrackedFiles", "no"],
+        cwd=clean_replay_repo,
+        check=True,
+    )
+    marker.write_text("raise RuntimeError('must not execute')\n", encoding="utf-8")
     try:
         completed = _run(
             [str(clean_replay_repo / _WRAPPER_RELATIVE), str(output)],
@@ -155,6 +160,11 @@ def test_public_wrapper_rejects_dirty_checkout(
         )
     finally:
         marker.unlink()
+        subprocess.run(
+            ["git", "config", "--unset", "status.showUntrackedFiles"],
+            cwd=clean_replay_repo,
+            check=True,
+        )
 
     assert completed.returncode != 0
     assert "source_checkout_not_clean" in completed.stderr
@@ -276,6 +286,105 @@ def test_recorded_verifier_rejects_rehashed_event_tampering(tmp_path: Path) -> N
 
     assert completed.returncode != 0
     assert "recorded_final_event_report_mismatch" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("field", "tampered_value"),
+    [
+        ("evidence_class", "FORMAL_EVIDENCE"),
+        ("publication_ready", True),
+        ("claim_eligible", True),
+        ("evidence_pack_allowed", True),
+    ],
+)
+def test_recorded_verifier_rejects_rehashed_report_policy_tampering(
+    tmp_path: Path,
+    field: str,
+    tampered_value: object,
+) -> None:
+    repo, kit = _standalone_verifier_fixture(tmp_path)
+    report = json.loads(
+        (kit / "demo-report.sanitized.json").read_text(encoding="utf-8")
+    )
+    report[field] = tampered_value
+    report.pop("demo_report_sha256")
+    report_hash = hashlib.sha256(canonical_json(report)).hexdigest()
+    report["demo_report_sha256"] = report_hash
+    (kit / "demo-report.sanitized.json").write_text(
+        json.dumps(report, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    events = json.loads((kit / "ledger-events.json").read_text(encoding="utf-8"))
+    final_event = events["events"][-1]
+    final_event["envelope"]["payload"]["demo_report_sha256"] = report_hash
+    final_event["event_hash"] = hashlib.sha256(
+        canonical_json(final_event["envelope"])
+    ).hexdigest()
+    (kit / "ledger-events.json").write_text(
+        json.dumps(events, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    ledger = json.loads(
+        (kit / "ledger-summary.sanitized.json").read_text(encoding="utf-8")
+    )
+    ledger["demo"]["demo_report_sha256"] = report_hash
+    ledger["event_chain"][-1]["event_hash"] = final_event["event_hash"]
+    (kit / "ledger-summary.sanitized.json").write_text(
+        json.dumps(ledger, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    for relative in (
+        "demo-report.sanitized.json",
+        "ledger-events.json",
+        "ledger-summary.sanitized.json",
+    ):
+        _rewrite_manifest_digest(kit, relative)
+
+    completed = _run(
+        [
+            sys.executable,
+            str(_REPO / "backend/scripts/run_public_foundry_candidate_replay.py"),
+            "verify-recorded",
+            "--kit-dir",
+            str(kit),
+        ],
+        cwd=repo,
+    )
+
+    assert completed.returncode != 0
+    assert "recorded_demo_report_scope_invalid" in completed.stderr
+
+
+def test_recorded_verifier_rejects_rehashed_ledger_policy_mismatch(
+    tmp_path: Path,
+) -> None:
+    repo, kit = _standalone_verifier_fixture(tmp_path)
+    ledger = json.loads(
+        (kit / "ledger-summary.sanitized.json").read_text(encoding="utf-8")
+    )
+    ledger["demo"]["claim_eligible"] = True
+    (kit / "ledger-summary.sanitized.json").write_text(
+        json.dumps(ledger, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    _rewrite_manifest_digest(kit, "ledger-summary.sanitized.json")
+
+    completed = _run(
+        [
+            sys.executable,
+            str(_REPO / "backend/scripts/run_public_foundry_candidate_replay.py"),
+            "verify-recorded",
+            "--kit-dir",
+            str(kit),
+        ],
+        cwd=repo,
+    )
+
+    assert completed.returncode != 0
+    assert "recorded_demo_ledger_link_mismatch" in completed.stderr
 
 
 def test_recorded_verifier_rejects_manifest_with_missing_entry(
