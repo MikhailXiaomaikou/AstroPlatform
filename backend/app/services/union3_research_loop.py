@@ -1700,6 +1700,14 @@ async def verify_union3_attempt(
         result=verifier_job.result,
         background_backend=verifier_job.background_backend,
         completed_at=verifier_job.completed_at,
+        formal_workflow_binding={
+            "workflow_id": verifier_job.workflow_id,
+            "workflow_version": verifier_job.workflow_version,
+            "registry_epoch": verifier_job.registry_epoch,
+            "registry_entry_hash": verifier_job.registry_entry_hash,
+            "entrypoint_id": verifier_job.entrypoint_id,
+            "runner_image_digest": verifier_job.runner_image_digest,
+        },
     )
 
     audit.lifecycle_status = "COMPLETED"

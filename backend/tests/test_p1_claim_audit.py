@@ -539,6 +539,104 @@ async def test_server_owned_ready_job_can_support_exact_current_run_value(
         assert rejected_body["normalized_claims"][0]["parse_coverage"] == expected_coverage
 
 
+async def test_generic_audit_cannot_finalize_an_r3_registered_run(
+    app_client,
+    db_session,
+    monkeypatch,
+    tmp_path,
+):
+    from app.services.workflow_registry_v2 import (
+        UNION3_REPRODUCTION_WORKFLOW_ID,
+        get_worker_execution_binding,
+    )
+
+    _enable_claim_audit(monkeypatch, tmp_path)
+    headers = await _register(app_client, "audit-r3-result-gate")
+    profile = await app_client.get("/api/auth/me", headers=headers)
+    owner_id = uuid.UUID(profile.json()["id"])
+    binding = get_worker_execution_binding(UNION3_REPRODUCTION_WORKFLOW_ID)
+    now = datetime.now(timezone.utc)
+    job = ResearchJob(
+        job_id="formal-r3-generic-audit-job",
+        user_id=owner_id,
+        tool_name=binding["entrypoint_id"],
+        workflow_key=binding["workflow_id"],
+        workflow_id=binding["workflow_id"],
+        workflow_version=binding["workflow_version"],
+        registry_epoch=binding["registry_epoch"],
+        registry_entry_hash=binding["registry_entry_hash"],
+        entrypoint_id=binding["entrypoint_id"],
+        runner_image_digest=binding["approved_worker_image_digest"],
+        inputs_hash="7" * 64,
+        args={},
+        args_replayable=True,
+        status="completed",
+        result={
+            "success": True,
+            "analysis_status": "COMPLETED",
+            "publication_ready": True,
+            "__do_not_claim__": False,
+            "parameters": {"H0": {"median": 70.0, "hdi_94": [69.0, 71.0]}},
+            "datasets_used": [{"key": "union3", "version": "v1"}],
+        },
+        background_backend="https_worker",
+        created_at=now,
+        started_at=now,
+        completed_at=now,
+        updated_at=now,
+    )
+    formal_binding = {
+        "workflow_id": job.workflow_id,
+        "workflow_version": job.workflow_version,
+        "registry_epoch": job.registry_epoch,
+        "registry_entry_hash": job.registry_entry_hash,
+        "entrypoint_id": job.entrypoint_id,
+        "runner_image_digest": job.runner_image_digest,
+    }
+    job.attestation = build_research_job_attestation(
+        job_id=job.job_id,
+        owner_id=job.user_id,
+        session_id=job.session_id,
+        tool_name=job.tool_name,
+        inputs_hash=job.inputs_hash,
+        args=job.args,
+        args_replayable=job.args_replayable,
+        result=job.result,
+        background_backend=job.background_backend,
+        completed_at=job.completed_at,
+        formal_workflow_binding=formal_binding,
+    )
+    db_session.add(job)
+    await db_session.commit()
+
+    response = await app_client.post(
+        "/api/research/claim-audits",
+        json={
+            "claim_text": "H0 = 70 km/s/Mpc",
+            "source": {"kind": "doi", "value": "10.0000/r3-result-gate"},
+            "evidence_input_refs": [job.job_id],
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["scientific_verdict"] == "WITHHELD"
+    assert body["normalized_claims"][0]["supporting_evidence_ids"] == []
+    assert body["normalized_claims"][0]["withheld_reason"] == (
+        "independent_recomputation_and_human_result_review_required"
+    )
+    downloaded = await app_client.get(
+        body["evidence_pack"]["download_url"], headers=headers
+    )
+    with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        formal = manifest["tool_records"][0]["formal_workflow_binding"]
+        assert formal["workflow_id"] == UNION3_REPRODUCTION_WORKFLOW_ID
+        assert formal["risk_level"] == "R3"
+        assert formal["result_finalizer_required"] is True
+
+
 async def test_more_than_32_claim_units_is_rejected_before_execution(
     app_client,
     monkeypatch,
