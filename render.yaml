@@ -153,6 +153,27 @@ services:
         value: "false"
       - key: LOCAL_SCIENCE_WORKER_ENABLED
         value: "false"
+      - key: WORKFLOW_REGISTRY_V2_ENABLED
+        value: "false"
+      - key: FOUNDRY_GAP_TRACKING_ENABLED
+        value: "false"
+      - key: FOUNDRY_AI_DRAFTING_ENABLED
+        value: "false"
+      - key: FOUNDRY_AUTO_DEMO_ENABLED
+        value: "false"
+      - key: FOUNDRY_CANDIDATE_CATALOG_ENABLED
+        value: "false"
+      - key: FOUNDRY_REGISTRATION_ENABLED
+        value: "false"
+      - key: FOUNDRY_VALIDATION_RESULT_SECRET
+        # Narrow result-ingestion secret. Never reuse another trust-domain key.
+        sync: false
+      - key: WORKFLOW_REGISTRY_SIGNING_KEY_ID
+        sync: false
+      - key: WORKFLOW_REGISTRY_SIGNING_PUBLIC_KEY
+        sync: false
+      - key: WORKFLOW_REGISTRY_VERIFICATION_KEYS
+        sync: false
       - key: CLAIM_AUDIT_EXECUTION_MODE
         value: https_worker
       - key: CLAIM_AUDIT_REGISTERED_TIMEOUT_SECONDS
