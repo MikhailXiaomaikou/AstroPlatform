@@ -27,6 +27,7 @@ from typing import Any, Callable
 
 from app.services.foundry_evidence_policy import (
     NON_FORMAL_EVIDENCE_CLASS,
+    candidate_bundle_contains_formal_claim_escape,
     contains_formal_claim_escape,
     contains_formal_claim_escape_text,
 )
@@ -614,7 +615,7 @@ def validate_candidate_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
         "evidence_pack_allowed": False,
     }:
         raise FoundryDemoContractError("candidate_output_policy_not_non_formal")
-    if contains_formal_claim_escape(bundle):
+    if candidate_bundle_contains_formal_claim_escape(bundle):
         raise FoundryDemoContractError("candidate_bundle_formal_claim_escape")
     if str(bundle.get("entrypoint_id") or "") not in _ENTRYPOINTS:
         raise FoundryDemoContractError("candidate_entrypoint_not_allowlisted")

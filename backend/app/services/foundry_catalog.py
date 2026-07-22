@@ -36,6 +36,7 @@ from app.models.foundry_records import (
 from app.services.foundry_candidate_identity import candidate_version_sha256
 from app.services.foundry_evidence_policy import (
     NON_FORMAL_EVIDENCE_CLASS,
+    candidate_bundle_contains_formal_claim_escape,
     contains_formal_claim_escape,
     demo_report_contract_issue,
 )
@@ -360,10 +361,10 @@ def _normalize_candidate_bundle(value: Any) -> dict[str, Any]:
         )
     _require_sha256(value.get("dependency_lock_sha256"), "dependency_lock_sha256")
     _require_sha256(value.get("runner_definition_sha256"), "runner_definition_sha256")
-    if contains_formal_claim_escape(value.get("workflow_spec")):
+    if candidate_bundle_contains_formal_claim_escape(value):
         raise FoundryCatalogError(
             "candidate_formal_claim_forbidden",
-            "Candidate workflow specs cannot claim formal scientific support",
+            "Candidate bundles cannot claim formal scientific support",
         )
     return json.loads(canonical_json(value))
 

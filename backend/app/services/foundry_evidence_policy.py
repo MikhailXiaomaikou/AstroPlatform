@@ -409,6 +409,31 @@ def contains_formal_claim_escape(
     return False
 
 
+def candidate_bundle_contains_formal_claim_escape(value: Any) -> bool:
+    """Scan every candidate text leaf except explicitly negative claim labels.
+
+    ``workflow_spec.forbidden_claims`` is a declarative deny-list and may name
+    reserved formal states verbatim.  It is safe only in that exact, labelled
+    location.  All other bundle text—including limitations, generation
+    metadata, source pins, allowed claims, and workflow notes—is untrusted and
+    must fail closed before the candidate version is persisted or executed.
+    """
+
+    if not isinstance(value, dict):
+        return contains_formal_claim_escape(value, scan_text_leaves=True)
+    policy_view = dict(value)
+    workflow_spec = value.get("workflow_spec")
+    if isinstance(workflow_spec, dict):
+        workflow_policy_view = dict(workflow_spec)
+        forbidden_claims = workflow_spec.get("forbidden_claims")
+        if isinstance(forbidden_claims, list) and all(
+            isinstance(item, str) for item in forbidden_claims
+        ):
+            workflow_policy_view["forbidden_claims"] = []
+        policy_view["workflow_spec"] = workflow_policy_view
+    return contains_formal_claim_escape(policy_view, scan_text_leaves=True)
+
+
 def contains_formal_claim_escape_text(value: bytes | str) -> bool:
     """Detect formal-evidence fields printed through untrusted text streams."""
 
@@ -450,6 +475,7 @@ def contains_formal_claim_escape_text(value: bytes | str) -> bool:
 __all__ = [
     "DEMO_REPORT_FIELDS_V1",
     "NON_FORMAL_EVIDENCE_CLASS",
+    "candidate_bundle_contains_formal_claim_escape",
     "contains_formal_claim_escape",
     "contains_formal_claim_escape_text",
     "demo_report_contract_issue",

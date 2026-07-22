@@ -367,6 +367,34 @@ def test_candidate_bundle_cannot_embed_formal_claim_signal() -> None:
         validate_candidate_bundle(forged)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("limitations", ["scientific verdict: SUPPORTED"]),
+        ("generation", {"note": "evidence_pack_id=pack-1"}),
+        ("workflow_spec", {"note": "scientific verdict: SUPP0RTED"}),
+        ("source_pins", [{"note": "evidence_pack_id=pack-1"}]),
+    ],
+)
+def test_candidate_bundle_cannot_hide_formal_signal_in_text_leaves(
+    field: str,
+    value: object,
+) -> None:
+    bundle = load_candidate_bundle(_CANDIDATE)
+    forged = copy.deepcopy(bundle)
+    if field in {"generation", "workflow_spec"}:
+        assert isinstance(value, dict)
+        forged[field].update(value)
+    else:
+        forged[field] = value
+
+    with pytest.raises(
+        FoundryDemoContractError,
+        match="candidate_bundle_formal_claim_escape",
+    ):
+        validate_candidate_bundle(forged)
+
+
 def test_formal_claim_escape_is_erased(monkeypatch: pytest.MonkeyPatch) -> None:
     bundle = load_candidate_bundle(_CANDIDATE)
     _use_child_scenario(monkeypatch, "formal_policy")
