@@ -166,6 +166,8 @@ def validate_candidate_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
         "evidence_pack_allowed": False,
     }:
         raise FoundryDemoContractError("candidate_output_policy_not_non_formal")
+    if contains_formal_claim_escape(bundle):
+        raise FoundryDemoContractError("candidate_bundle_formal_claim_escape")
     if str(bundle.get("entrypoint_id") or "") not in _ENTRYPOINTS:
         raise FoundryDemoContractError("candidate_entrypoint_not_allowlisted")
     return json.loads(_canonical_json(bundle))

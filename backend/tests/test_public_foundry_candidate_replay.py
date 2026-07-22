@@ -410,6 +410,7 @@ def _standalone_verifier_fixture(tmp_path: Path) -> tuple[Path, Path]:
         Path("backend/app/__init__.py"),
         Path("backend/app/services/__init__.py"),
         Path("backend/app/services/foundry_candidate_identity.py"),
+        Path("backend/app/services/foundry_demo_runner.py"),
         Path("backend/app/services/foundry_evidence_policy.py"),
     ):
         target = repo / relative
@@ -463,6 +464,100 @@ def _rewrite_report_receipt_links(
     )
 
     for relative in (
+        "demo-report.sanitized.json",
+        "ledger-events.json",
+        "ledger-summary.sanitized.json",
+    ):
+        _rewrite_manifest_digest(kit, relative)
+
+
+def _rewrite_candidate_bundle_receipt_chain(
+    kit: Path,
+    bundle: dict[str, object],
+) -> None:
+    bundle_hash = hashlib.sha256(canonical_json(bundle)).hexdigest()
+    workflow_hash = hashlib.sha256(
+        canonical_json(bundle["workflow_spec"])
+    ).hexdigest()
+    (kit / "candidate-bundle.json").write_text(
+        json.dumps(bundle, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    version_receipt = json.loads(
+        (kit / "candidate-version-envelope.json").read_text(encoding="utf-8")
+    )
+    envelope = version_receipt["envelope"]
+    envelope["candidate_bundle_sha256"] = bundle_hash
+    envelope["workflow_spec_sha256"] = workflow_hash
+    envelope_kwargs = dict(envelope)
+    envelope_kwargs.pop("schema_version")
+    version_hash = candidate_version_sha256(**envelope_kwargs)
+    version_receipt["candidate_version_sha256"] = version_hash
+    (kit / "candidate-version-envelope.json").write_text(
+        json.dumps(version_receipt, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    report = json.loads(
+        (kit / "demo-report.sanitized.json").read_text(encoding="utf-8")
+    )
+    report["candidate_bundle_sha256"] = bundle_hash
+    report["workflow_spec_sha256"] = workflow_hash
+    report["candidate_version_sha256"] = version_hash
+    report.pop("demo_report_sha256")
+    report_hash = hashlib.sha256(canonical_json(report)).hexdigest()
+    report["demo_report_sha256"] = report_hash
+    (kit / "demo-report.sanitized.json").write_text(
+        json.dumps(report, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    events = json.loads((kit / "ledger-events.json").read_text(encoding="utf-8"))
+    previous_hash: str | None = None
+    for event in events["events"]:
+        event_envelope = event["envelope"]
+        event_type = event_envelope["event_type"]
+        payload = event_envelope["payload"]
+        if event_type == "CANDIDATE_VERSION_CREATED":
+            payload["candidate_bundle_hash"] = bundle_hash
+            payload["version_hash"] = version_hash
+        elif event_type == "VALIDATION_QUEUED":
+            payload["candidate_version_hash"] = version_hash
+        elif event_type == "DEMO_RECORDED":
+            payload["demo_report_sha256"] = report_hash
+        event_envelope["previous_event_hash"] = previous_hash
+        event["event_hash"] = hashlib.sha256(
+            canonical_json(event_envelope)
+        ).hexdigest()
+        previous_hash = event["event_hash"]
+    (kit / "ledger-events.json").write_text(
+        json.dumps(events, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    ledger = json.loads(
+        (kit / "ledger-summary.sanitized.json").read_text(encoding="utf-8")
+    )
+    ledger["candidate"]["candidate_version_hash"] = version_hash
+    ledger["candidate"]["workflow_spec_hash"] = workflow_hash
+    ledger["demo"]["demo_report_sha256"] = report_hash
+    ledger["event_chain"] = [
+        {
+            "event_hash": event["event_hash"],
+            "event_type": event["envelope"]["event_type"],
+            "previous_event_hash": event["envelope"]["previous_event_hash"],
+        }
+        for event in events["events"]
+    ]
+    (kit / "ledger-summary.sanitized.json").write_text(
+        json.dumps(ledger, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    for relative in (
+        "candidate-bundle.json",
+        "candidate-version-envelope.json",
         "demo-report.sanitized.json",
         "ledger-events.json",
         "ledger-summary.sanitized.json",
@@ -758,6 +853,31 @@ def test_recorded_verifier_rejects_rehashed_candidate_bundle_tampering(
 
     assert completed.returncode != 0
     assert "recorded_candidate_bundle_hash_mismatch" in completed.stderr
+
+
+def test_recorded_verifier_rejects_fully_rehashed_formal_candidate_claim(
+    tmp_path: Path,
+) -> None:
+    repo, kit = _standalone_verifier_fixture(tmp_path)
+    bundle = json.loads((kit / "candidate-bundle.json").read_text(encoding="utf-8"))
+    bundle["workflow_spec"]["forged_verdict"] = {
+        "scientific_verdict": "SUPPORTED"
+    }
+    _rewrite_candidate_bundle_receipt_chain(kit, bundle)
+
+    completed = _run(
+        [
+            sys.executable,
+            str(_REPO / "backend/scripts/run_public_foundry_candidate_replay.py"),
+            "verify-recorded",
+            "--kit-dir",
+            str(kit),
+        ],
+        cwd=repo,
+    )
+
+    assert completed.returncode != 0
+    assert "recorded_candidate_bundle_policy_invalid" in completed.stderr
 
 
 def test_recorded_verifier_rejects_rehashed_runner_descriptor_tampering(

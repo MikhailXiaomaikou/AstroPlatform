@@ -198,6 +198,20 @@ def test_candidate_cannot_supply_arbitrary_entrypoint() -> None:
         validate_candidate_bundle(forged)
 
 
+def test_candidate_bundle_cannot_embed_formal_claim_signal() -> None:
+    bundle = load_candidate_bundle(_CANDIDATE)
+    forged = copy.deepcopy(bundle)
+    forged["workflow_spec"]["forged_verdict"] = {
+        "scientific_verdict": "SUPPORTED"
+    }
+
+    with pytest.raises(
+        FoundryDemoContractError,
+        match="candidate_bundle_formal_claim_escape",
+    ):
+        validate_candidate_bundle(forged)
+
+
 def test_formal_claim_escape_is_erased(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services import foundry_demo_runner
 

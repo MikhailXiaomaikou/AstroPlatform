@@ -492,6 +492,10 @@ def verify_recorded(args: argparse.Namespace) -> int:
     from app.services.foundry_evidence_policy import (  # noqa: PLC0415
         contains_formal_claim_escape,
     )
+    from app.services.foundry_demo_runner import (  # noqa: PLC0415
+        FoundryDemoContractError,
+        validate_candidate_bundle,
+    )
 
     _verify_sha256sums(kit_dir)
     report = _read_json(kit_dir / "demo-report.sanitized.json")
@@ -500,6 +504,11 @@ def verify_recorded(args: argparse.Namespace) -> int:
     version_receipt = _read_json(kit_dir / "candidate-version-envelope.json")
     runner_receipt = _read_json(kit_dir / "runner-descriptor.json")
     event_receipt = _read_json(kit_dir / "ledger-events.json")
+
+    try:
+        validate_candidate_bundle(candidate_bundle)
+    except FoundryDemoContractError as exc:
+        raise ValueError("recorded_candidate_bundle_policy_invalid") from exc
 
     declared_report_hash = str(report.get("demo_report_sha256") or "")
     unsigned_report = dict(report)
