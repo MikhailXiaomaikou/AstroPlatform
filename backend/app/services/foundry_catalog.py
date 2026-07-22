@@ -3004,8 +3004,16 @@ async def record_demo_report(
         or report.get("publication_ready") is not False
         or report.get("claim_eligible") is not False
         or report.get("evidence_pack_allowed") is not False
-        or contains_formal_claim_escape(report.get("result"))
-        or contains_formal_claim_escape(report.get("validation_summary"))
+        or contains_formal_claim_escape(
+            {
+                "artifact_manifest": report.get("artifact_manifest"),
+                "failure_class": report.get("failure_class"),
+                "limitations": report.get("limitations"),
+                "result": report.get("result"),
+                "validation_summary": report.get("validation_summary"),
+            },
+            scan_text_leaves=True,
+        )
     ):
         raise FoundryCatalogError(
             "candidate_formal_claim_forbidden",
@@ -4778,8 +4786,16 @@ async def record_validation_result(
         raise FoundryCatalogError("invalid_demo_status", "Unsupported Demo status")
     if completed_at < started_at:
         raise FoundryCatalogError("invalid_demo_time", "Demo completion precedes its start")
-    if contains_formal_claim_escape(structured_result) or contains_formal_claim_escape(
-        validation_summary
+    if contains_formal_claim_escape(
+        {
+            "artifact_manifest": artifact_manifest,
+            "failure_class": failure_class,
+            "limitations": limitations,
+            "resource_usage": resource_usage,
+            "result": structured_result,
+            "validation_summary": validation_summary,
+        },
+        scan_text_leaves=True,
     ):
         raise FoundryCatalogError(
             "candidate_formal_claim_forbidden",

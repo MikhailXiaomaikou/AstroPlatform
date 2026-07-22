@@ -27,14 +27,28 @@ _FORMAL_TEXT_PATTERNS = tuple(
 )
 
 
-def contains_formal_claim_escape(value: Any) -> bool:
+def contains_formal_claim_escape(
+    value: Any,
+    *,
+    scan_text_leaves: bool = False,
+) -> bool:
     """Return whether nested candidate output impersonates formal evidence."""
 
+    if isinstance(value, (bytes, str)):
+        return scan_text_leaves and contains_formal_claim_escape_text(value)
     if isinstance(value, (list, tuple)):
-        return any(contains_formal_claim_escape(item) for item in value)
+        return any(
+            contains_formal_claim_escape(
+                item,
+                scan_text_leaves=scan_text_leaves,
+            )
+            for item in value
+        )
     if not isinstance(value, dict):
         return False
     for raw_key, item in value.items():
+        if scan_text_leaves and contains_formal_claim_escape_text(str(raw_key)):
+            return True
         key = str(raw_key).strip().lower()
         if key in {
             "publication_ready",
@@ -54,7 +68,10 @@ def contains_formal_claim_escape(value: Any) -> bool:
             "formal_evidence_pack",
         } and item:
             return True
-        if contains_formal_claim_escape(item):
+        if contains_formal_claim_escape(
+            item,
+            scan_text_leaves=scan_text_leaves,
+        ):
             return True
     return False
 

@@ -940,11 +940,13 @@ def test_recorded_verifier_rejects_rehashed_ledger_boundary_tampering(
         {"evidence_class": "FORMAL_EVIDENCE"},
         {"evidence_class": "model_adequacy"},
         {"evidence_class": "A_READY"},
+        "Result is SUPPORTED",
+        {"Result is SUPPORTED": None},
     ],
 )
 def test_recorded_verifier_rejects_rehashed_nested_formal_signal(
     tmp_path: Path,
-    formal_signal: dict[str, object],
+    formal_signal: object,
 ) -> None:
     repo, kit = _standalone_verifier_fixture(tmp_path)
     report = json.loads(

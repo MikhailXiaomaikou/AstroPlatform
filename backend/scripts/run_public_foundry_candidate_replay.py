@@ -265,7 +265,10 @@ def _validate_report(
     require(report.get("publication_ready") is False, "publication_ready")
     require(report.get("claim_eligible") is False, "claim_eligible")
     require(report.get("evidence_pack_allowed") is False, "evidence_pack_allowed")
-    require(not contains_formal_claim_escape(report), "formal_claim_escape")
+    require(
+        not contains_formal_claim_escape(report, scan_text_leaves=True),
+        "formal_claim_escape",
+    )
     require(
         report.get("candidate_bundle_sha256")
         == expected["candidate_bundle_sha256"],
@@ -620,7 +623,7 @@ def verify_recorded(args: argparse.Namespace) -> int:
         or report.get("publication_ready") is not False
         or report.get("claim_eligible") is not False
         or report.get("evidence_pack_allowed") is not False
-        or contains_formal_claim_escape(report)
+        or contains_formal_claim_escape(report, scan_text_leaves=True)
     ):
         raise ValueError("recorded_demo_report_scope_invalid")
     if (
@@ -850,7 +853,7 @@ def verify_recorded(args: argparse.Namespace) -> int:
             "account and is included because changing it would invalidate the "
             "event hashes."
         )
-        or contains_formal_claim_escape(event_receipt)
+        or contains_formal_claim_escape(event_receipt, scan_text_leaves=True)
     ):
         raise ValueError("recorded_event_chain_scope_invalid")
     expected_event_types = [

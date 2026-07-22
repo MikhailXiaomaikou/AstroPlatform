@@ -613,15 +613,28 @@ async def test_demo_callback_is_hash_bound_idempotent_and_non_formal(db_session)
             "media_type": "text/plain; charset=utf-8",
         },
     ]
-    forged = dict(report)
-    forged["result"] = {"scientific_verdict": "SUPPORTED"}
-    forged["demo_report_sha256"] = sha256_json(
-        {key: value for key, value in forged.items() if key != "demo_report_sha256"}
-    )
-    with pytest.raises(FoundryCatalogError, match="non-formal"):
-        await record_demo_report(
-            db_session, validation_run_id=run.id, demo_report=forged
+    for escaped_result, escaped_failure_class in (
+        ({"scientific_verdict": "SUPPORTED"}, None),
+        ({"message": "Result is SUPPORTED"}, None),
+        ({"Result is SUPPORTED": None}, None),
+        ({}, "Result is SUPPORTED"),
+    ):
+        forged = dict(report)
+        forged["result"] = escaped_result
+        forged["failure_class"] = escaped_failure_class
+        forged["demo_report_sha256"] = sha256_json(
+            {
+                key: value
+                for key, value in forged.items()
+                if key != "demo_report_sha256"
+            }
         )
+        with pytest.raises(FoundryCatalogError, match="non-formal"):
+            await record_demo_report(
+                db_session,
+                validation_run_id=run.id,
+                demo_report=forged,
+            )
 
     version.workflow_version = "mutated"
     with pytest.raises(ValueError, match="append-only"):
