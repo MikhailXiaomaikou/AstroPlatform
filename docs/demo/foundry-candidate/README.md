@@ -50,6 +50,7 @@ SQLite database and local services; production was not used.
 - `candidate-version-envelope.json`: the exact historical bootstrap identity envelope and its explicit provenance limits.
 - `runner-descriptor.json`: the exact local descriptor whose SHA-256 produced the historical `runner_image_digest`.
 - `ledger-events.json`: every canonical event envelope needed to recompute the append-only event chain.
+- `stdout.log` and `stderr.log`: the exact empty streams recorded by the historical run.
 - `run-candidate-demo.sh`: repository-relative replay command.
 - `SHA256SUMS`: hashes for every published file except itself.
 

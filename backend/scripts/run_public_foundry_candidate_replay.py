@@ -251,6 +251,10 @@ def _validate_report(
     bundle: dict[str, Any],
     identity: dict[str, Any],
 ) -> None:
+    from app.services.foundry_evidence_policy import (  # noqa: PLC0415
+        contains_formal_claim_escape,
+    )
+
     expected = identity["candidate_version_envelope"]
 
     def require(condition: bool, message: str) -> None:
@@ -261,6 +265,7 @@ def _validate_report(
     require(report.get("publication_ready") is False, "publication_ready")
     require(report.get("claim_eligible") is False, "claim_eligible")
     require(report.get("evidence_pack_allowed") is False, "evidence_pack_allowed")
+    require(not contains_formal_claim_escape(report), "formal_claim_escape")
     require(
         report.get("candidate_bundle_sha256")
         == expected["candidate_bundle_sha256"],
@@ -326,6 +331,106 @@ def _validate_report(
     require(_sha256_json(unsigned) == declared_hash, "demo_report_self_hash")
 
     status = report.get("status")
+    failure_class = report.get("failure_class")
+    matrix_receipt = status in {"PARTIAL", "PASSED"} or (
+        status == "FAILED"
+        and failure_class == "official_chain_mirror_integrity_failed"
+    )
+    ready_cells = summary.get("ready_cells")
+    withheld_cells = summary.get("withheld_cells")
+    if matrix_receipt:
+        require(summary.get("registry_integrity") is True, "registry_integrity")
+        require(
+            summary.get("numeric_claim_gate") == "NON_FORMAL_DEMO",
+            "matrix_numeric_claim_gate",
+        )
+        require(
+            isinstance(ready_cells, int)
+            and not isinstance(ready_cells, bool)
+            and ready_cells >= 0,
+            "matrix_ready_cells",
+        )
+        require(
+            isinstance(withheld_cells, int)
+            and not isinstance(withheld_cells, bool)
+            and withheld_cells >= 0,
+            "matrix_withheld_cells",
+        )
+        result = report.get("result")
+        require(isinstance(result, dict), "matrix_result")
+        require(
+            result.get("official_ready_cells") == ready_cells,
+            "matrix_ready_cells_link",
+        )
+        require(
+            result.get("official_withheld_cells") == withheld_cells,
+            "matrix_withheld_cells_link",
+        )
+        require(
+            result.get("parameter_intervals_are_non_formal") is True,
+            "matrix_non_formal_result",
+        )
+        matrix = result.get("matrix")
+        require(isinstance(matrix, list), "matrix_cells")
+        require(len(matrix) == ready_cells + withheld_cells, "matrix_cell_count")
+        for cell in matrix:
+            require(isinstance(cell, dict), "matrix_cell_shape")
+            cell_status = cell.get("status")
+            require(
+                cell_status in {"COMPLETED", "WITHHELD"},
+                "matrix_cell_status",
+            )
+            cell_reasons = cell.get("withheld_reasons", [])
+            require(
+                isinstance(cell_reasons, list)
+                and all(
+                    isinstance(reason, str) and bool(reason.strip())
+                    for reason in cell_reasons
+                ),
+                "matrix_cell_withheld_reasons",
+            )
+            if cell_status == "COMPLETED":
+                require(not cell_reasons, "matrix_ready_cell_withheld_reasons")
+            else:
+                require(bool(cell_reasons), "matrix_withheld_cell_reasons")
+        require(
+            sum(
+                cell.get("status") == "COMPLETED"
+                for cell in matrix
+            )
+            == ready_cells,
+            "matrix_ready_cell_count",
+        )
+        require(
+            sum(
+                cell.get("status") == "WITHHELD"
+                for cell in matrix
+            )
+            == withheld_cells,
+            "matrix_withheld_cell_count",
+        )
+        withheld_reasons = summary.get("withheld_reasons")
+        require(
+            isinstance(withheld_reasons, list)
+            and all(
+                isinstance(reason, str) and bool(reason.strip())
+                for reason in withheld_reasons
+            ),
+            "matrix_withheld_reasons",
+        )
+        expected_withheld_reasons = sorted(
+            {
+                str(reason)
+                for cell in matrix
+                if cell.get("status") == "WITHHELD"
+                for reason in cell.get("withheld_reasons") or []
+                if str(reason).strip()
+            }
+        )
+        require(
+            withheld_reasons == expected_withheld_reasons,
+            "matrix_withheld_reasons_link",
+        )
     if status == "PARTIAL":
         require(
             report.get("failure_class") == "official_chain_mirror_unavailable",
@@ -337,39 +442,31 @@ def _validate_report(
             "partial_mirror_configuration",
         )
         require(summary.get("official_mirror_verified") is False, "partial_mirror")
-        require(summary.get("ready_cells") == 0, "partial_ready_cells")
-        require(
-            isinstance(summary.get("withheld_cells"), int)
-            and summary["withheld_cells"] > 0,
-            "partial_withheld_cells",
-        )
+        require(ready_cells == 0, "partial_ready_cells")
+        require(withheld_cells > 0, "partial_withheld_cells")
     elif status == "PASSED":
         require(report.get("failure_class") is None, "passed_failure_class")
         require(summary.get("registry_integrity") is True, "registry_integrity")
         require(summary.get("official_mirror_configured") is True, "passed_mirror")
         require(summary.get("official_mirror_verified") is True, "passed_mirror")
         require(
-            isinstance(summary.get("ready_cells"), int)
-            and summary["ready_cells"] > 0,
+            ready_cells > 0,
             "passed_ready_cells",
         )
-        require(summary.get("withheld_cells") == 0, "passed_withheld_cells")
+        require(withheld_cells == 0, "passed_withheld_cells")
     elif status == "FAILED":
-        if report.get("failure_class") == "official_chain_mirror_integrity_failed":
+        if failure_class == "official_chain_mirror_integrity_failed":
             require(
                 summary.get("official_mirror_configured") is True,
                 "failed_mirror_configuration",
             )
+            expected_mirror_verified = ready_cells > 0
             require(
-                summary.get("official_mirror_verified") is False,
+                summary.get("official_mirror_verified")
+                is expected_mirror_verified,
                 "failed_mirror_verification",
             )
-            require(summary.get("ready_cells") == 0, "failed_ready_cells")
-            require(
-                isinstance(summary.get("withheld_cells"), int)
-                and summary["withheld_cells"] > 0,
-                "failed_withheld_cells",
-            )
+            require(withheld_cells > 0, "failed_withheld_cells")
             require(bool(summary.get("withheld_reasons")), "failed_withheld_reasons")
     else:
         raise ValueError(f"replay_report_invalid:unexpected_status:{status!r}")
@@ -491,6 +588,7 @@ def verify_recorded(args: argparse.Namespace) -> int:
     )
     from app.services.foundry_evidence_policy import (  # noqa: PLC0415
         contains_formal_claim_escape,
+        contains_formal_claim_escape_text,
     )
     from app.services.foundry_demo_runner import (  # noqa: PLC0415
         FoundryDemoContractError,
@@ -522,10 +620,52 @@ def verify_recorded(args: argparse.Namespace) -> int:
         or report.get("publication_ready") is not False
         or report.get("claim_eligible") is not False
         or report.get("evidence_pack_allowed") is not False
-        or contains_formal_claim_escape(report.get("result"))
-        or contains_formal_claim_escape(report.get("validation_summary"))
+        or contains_formal_claim_escape(report)
     ):
         raise ValueError("recorded_demo_report_scope_invalid")
+    if (
+        report.get("schema_version") != 1
+        or report.get("candidate_id") != candidate_bundle.get("candidate_id")
+        or report.get("candidate_version")
+        != candidate_bundle.get("candidate_version")
+        or report.get("source_pins") != candidate_bundle.get("source_pins")
+        or report.get("fixture_hashes") != candidate_bundle.get("fixture_hashes")
+        or report.get("generation") != candidate_bundle.get("generation")
+        or report.get("limitations") != candidate_bundle.get("limitations")
+        or report.get("environment", {}).get("entrypoint_id")
+        != candidate_bundle.get("entrypoint_id")
+    ):
+        raise ValueError("recorded_demo_report_candidate_link_mismatch")
+    expected_artifact_manifest = [
+        {
+            "bytes": report.get("stdout_bytes"),
+            "kind": "STDOUT",
+            "path": "stdout.log",
+            "sha256": report.get("stdout_sha256"),
+        },
+        {
+            "bytes": report.get("stderr_bytes"),
+            "kind": "STDERR",
+            "path": "stderr.log",
+            "sha256": report.get("stderr_sha256"),
+        },
+    ]
+    if report.get("artifact_manifest") != expected_artifact_manifest:
+        raise ValueError("recorded_demo_report_artifact_manifest_mismatch")
+    for artifact in expected_artifact_manifest:
+        artifact_path = kit_dir / artifact["path"]
+        if not artifact_path.is_file() or artifact_path.is_symlink():
+            raise ValueError("recorded_demo_log_missing")
+        artifact_bytes = artifact_path.read_bytes()
+        if (
+            len(artifact_bytes) != artifact["bytes"]
+            or _sha256_bytes(artifact_bytes) != artifact["sha256"]
+        ):
+            raise ValueError("recorded_demo_log_receipt_mismatch")
+        if contains_formal_claim_escape_text(artifact_bytes):
+            raise ValueError("recorded_demo_log_scope_invalid")
+        if artifact_bytes:
+            raise ValueError("recorded_historical_demo_log_not_empty")
 
     envelope = version_receipt.get("envelope")
     if not isinstance(envelope, dict) or envelope.get("schema_version") != 1:
@@ -576,6 +716,35 @@ def verify_recorded(args: argparse.Namespace) -> int:
         != _sha256_bytes(b"local-demo-sbom-not-generated")
     ):
         raise ValueError("recorded_bootstrap_placeholder_hash_mismatch")
+    expected_version_receipt = {
+        "candidate_version_sha256": recomputed_version,
+        "environment_closure": "BOOTSTRAP_DESCRIPTOR_ONLY",
+        "envelope": envelope,
+        "formal_registry_eligible": False,
+        "historical_provenance_complete": False,
+        "identity_kind": "HISTORICAL_BOOTSTRAP_CANDIDATE_VERSION",
+        "provenance_limitations": [
+            (
+                "The CandidateVersion envelope and its hash are mathematically "
+                "reproducible."
+            ),
+            (
+                "The historical code_tree_sha256 covered one runner source file, "
+                "not the complete tracked Git source tree."
+            ),
+            (
+                "The historical patch_sha256 and sbom_sha256 are bootstrap "
+                "placeholders, not a captured patch or generated SBOM."
+            ),
+            (
+                "This receipt therefore proves internal identity consistency, "
+                "not a complete historical environment closure."
+            ),
+        ],
+        "schema_version": 1,
+    }
+    if version_receipt != expected_version_receipt:
+        raise ValueError("recorded_candidate_version_receipt_mismatch")
     for report_key, envelope_key in (
         ("candidate_bundle_sha256", "candidate_bundle_sha256"),
         ("workflow_spec_sha256", "workflow_spec_sha256"),
@@ -594,40 +763,176 @@ def verify_recorded(args: argparse.Namespace) -> int:
         raise ValueError("recorded_runner_descriptor_missing")
     descriptor_sha256 = hashlib.sha256(canonical_json(descriptor)).hexdigest()
     expected_runner_digest = f"sha256:{descriptor_sha256}"
+    expected_descriptor = {
+        "git_commit": report.get("environment", {}).get("tool_version"),
+        "mode": "local_python_without_container",
+        "python": report.get("environment", {}).get("python_version"),
+        "warning": (
+            "This is not a signed OCI image digest and cannot be promoted."
+        ),
+    }
     if (
-        runner_receipt.get("descriptor_sha256") != descriptor_sha256
-        or runner_receipt.get("validation_runner_image_digest")
-        != expected_runner_digest
+        descriptor != expected_descriptor
+        or runner_receipt
+        != {
+            "descriptor": expected_descriptor,
+            "descriptor_sha256": descriptor_sha256,
+            "digest_kind": "LOCAL_DESCRIPTOR_SHA256",
+            "environment_closure": "DESCRIPTOR_ONLY",
+            "formal_registry_eligible": False,
+            "is_signed_oci_image_digest": False,
+            "schema_version": 1,
+            "validation_runner_image_digest": expected_runner_digest,
+        }
         or report.get("runner_image_digest") != expected_runner_digest
-        or runner_receipt.get("is_signed_oci_image_digest") is not False
-        or runner_receipt.get("formal_registry_eligible") is not False
-        or runner_receipt.get("digest_kind") != "LOCAL_DESCRIPTOR_SHA256"
-        or runner_receipt.get("environment_closure") != "DESCRIPTOR_ONLY"
-        or descriptor.get("git_commit")
-        != report.get("environment", {}).get("tool_version")
-        or descriptor.get("python")
-        != report.get("environment", {}).get("python_version")
         or ledger.get("local_runner_descriptor") != descriptor
     ):
         raise ValueError("recorded_runner_descriptor_hash_mismatch")
+    historical_summary = report.get("validation_summary")
+    historical_result = report.get("result")
+    historical_matrix = (
+        historical_result.get("matrix")
+        if isinstance(historical_result, dict)
+        else None
+    )
+    if (
+        report.get("status") != "PARTIAL"
+        or report.get("failure_class") != "official_chain_mirror_unavailable"
+        or historical_summary
+        != {
+            "numeric_claim_gate": "NON_FORMAL_DEMO",
+            "official_mirror_verified": False,
+            "ready_cells": 0,
+            "registry_integrity": True,
+            "withheld_cells": 1,
+        }
+        or not isinstance(historical_result, dict)
+        or historical_result.get("analysis_status")
+        != "DARK_ENERGY_EVIDENCE_MATRIX_PARTIAL"
+        or historical_result.get("official_ready_cells") != 0
+        or historical_result.get("official_withheld_cells") != 1
+        or historical_result.get("parameter_intervals_are_non_formal") is not True
+        or not isinstance(historical_matrix, list)
+        or len(historical_matrix) != 1
+        or not isinstance(historical_matrix[0], dict)
+        or historical_matrix[0].get("status") != "WITHHELD"
+        or historical_matrix[0].get("evidence_tier") != "withheld"
+        or historical_matrix[0].get("publication_ready") is not False
+        or historical_matrix[0].get("parameter_intervals") != {}
+        or not historical_matrix[0].get("withheld_reasons")
+    ):
+        raise ValueError("recorded_historical_demo_outcome_mismatch")
 
     events = event_receipt.get("events")
     if not isinstance(events, list) or not events:
         raise ValueError("recorded_event_chain_missing")
     if (
-        event_receipt.get("scope") != "DISPOSABLE_LOCAL_NON_PRODUCTION_DEMO"
+        set(event_receipt)
+        != {
+            "environment_closure",
+            "events",
+            "formal_registry_eligible",
+            "historical_provenance_complete",
+            "note",
+            "schema_version",
+            "scope",
+        }
+        or event_receipt.get("schema_version") != 1
+        or event_receipt.get("scope")
+        != "DISPOSABLE_LOCAL_NON_PRODUCTION_DEMO"
         or event_receipt.get("environment_closure")
         != "BOOTSTRAP_DESCRIPTOR_ONLY"
         or event_receipt.get("historical_provenance_complete") is not False
         or event_receipt.get("formal_registry_eligible") is not False
+        or event_receipt.get("note")
+        != (
+            "The actor UUID belongs to the disposable synthetic local demo "
+            "account and is included because changing it would invalidate the "
+            "event hashes."
+        )
+        or contains_formal_claim_escape(event_receipt)
     ):
         raise ValueError("recorded_event_chain_scope_invalid")
+    expected_event_types = [
+        "CANDIDATE_CREATED",
+        "CAPABILITY_REQUEST_LINKED",
+        "CANDIDATE_VERSION_CREATED",
+        "REQUEST_TRIAGED",
+        "VALIDATION_QUEUED",
+        "VALIDATION_DISPATCHED",
+        "DEMO_RECORDED",
+    ]
+    expected_payload_keys = {
+        "CANDIDATE_CREATED": {"gap_fingerprint", "status"},
+        "CAPABILITY_REQUEST_LINKED": {"gap_id", "request_id"},
+        "CANDIDATE_VERSION_CREATED": {
+            "candidate_bundle_hash",
+            "version_hash",
+            "version_number",
+            "workflow_id",
+            "workflow_version",
+        },
+        "REQUEST_TRIAGED": {"generation_route", "request_id", "risk_level"},
+        "VALIDATION_QUEUED": {
+            "attempt_number",
+            "candidate_version_hash",
+            "dispatch_lease_seconds",
+            "max_attempts",
+            "validation_run_id",
+            "workflow_lease_seconds",
+        },
+        "VALIDATION_DISPATCHED": {
+            "attempt_number",
+            "delivery_uncertain",
+            "failure_class",
+            "max_attempts",
+            "retry_after",
+            "retryable",
+            "status",
+            "validation_run_id",
+        },
+        "DEMO_RECORDED": {
+            "attempt_number",
+            "claim_eligible",
+            "demo_report_sha256",
+            "demo_run_id",
+            "evidence_class",
+            "evidence_pack_allowed",
+            "max_attempts",
+            "publication_ready",
+            "status",
+            "validation_run_id",
+        },
+    }
+    if [event.get("envelope", {}).get("event_type") for event in events] != (
+        expected_event_types
+    ):
+        raise ValueError("recorded_event_sequence_invalid")
     previous_hash: str | None = None
     candidate_id: str | None = None
     for index, event in enumerate(events):
         if not isinstance(event, dict) or not isinstance(event.get("envelope"), dict):
             raise ValueError(f"recorded_event_envelope_invalid:{index}")
         event_envelope = event["envelope"]
+        event_type = event_envelope.get("event_type")
+        if (
+            set(event) != {"envelope", "event_hash"}
+            or set(event_envelope)
+            != {
+                "actor_kind",
+                "actor_user_id",
+                "candidate_id",
+                "candidate_version_id",
+                "event_type",
+                "occurred_at",
+                "payload",
+                "previous_event_hash",
+            }
+            or not isinstance(event_envelope.get("payload"), dict)
+            or set(event_envelope["payload"])
+            != expected_payload_keys[event_type]
+        ):
+            raise ValueError(f"recorded_event_shape_invalid:{index}")
         event_hash = hashlib.sha256(canonical_json(event_envelope)).hexdigest()
         if event_hash != event.get("event_hash"):
             raise ValueError(f"recorded_event_hash_mismatch:{index}")
@@ -638,6 +943,65 @@ def verify_recorded(args: argparse.Namespace) -> int:
         elif event_envelope.get("candidate_id") != candidate_id:
             raise ValueError(f"recorded_event_candidate_mismatch:{index}")
         previous_hash = event_hash
+
+    event_envelopes = [event["envelope"] for event in events]
+    created, linked, versioned, triaged, queued, dispatched, finalized = (
+        event_envelopes
+    )
+    version_id = versioned.get("candidate_version_id")
+    actor_user_id = linked.get("actor_user_id")
+    validation_run_id = queued["payload"].get("validation_run_id")
+    if (
+        [event.get("actor_kind") for event in event_envelopes]
+        != [
+            "SYSTEM",
+            "USER",
+            "HUMAN_ADMIN",
+            "HUMAN_ADMIN",
+            "HUMAN_ADMIN",
+            "CONTROL_PLANE",
+            "VALIDATION_RUNNER",
+        ]
+        or created.get("actor_user_id") is not None
+        or dispatched.get("actor_user_id") is not None
+        or finalized.get("actor_user_id") is not None
+        or not actor_user_id
+        or any(
+            event.get("actor_user_id") != actor_user_id
+            for event in (versioned, triaged, queued)
+        )
+        or created.get("candidate_version_id") is not None
+        or linked.get("candidate_version_id") is not None
+        or not candidate_id
+        or not version_id
+        or any(
+            event.get("candidate_version_id") != version_id
+            for event in (triaged, queued, dispatched, finalized)
+        )
+        or created["payload"].get("status") != "DRAFT"
+        or linked["payload"].get("request_id")
+        != triaged["payload"].get("request_id")
+        or triaged["payload"].get("generation_route") != "COMPOSITION"
+        or triaged["payload"].get("risk_level")
+        != candidate_bundle.get("risk_level")
+        or queued["payload"].get("candidate_version_hash")
+        != recomputed_version
+        or queued["payload"].get("attempt_number") != 1
+        or queued["payload"].get("max_attempts") != 3
+        or not validation_run_id
+        or dispatched["payload"].get("validation_run_id")
+        != validation_run_id
+        or dispatched["payload"].get("attempt_number") != 1
+        or dispatched["payload"].get("max_attempts") != 3
+        or dispatched["payload"].get("delivery_uncertain") is not False
+        or dispatched["payload"].get("failure_class") is not None
+        or dispatched["payload"].get("retryable") is not False
+        or dispatched["payload"].get("status") != "DISPATCHED"
+        or finalized["payload"].get("validation_run_id") != validation_run_id
+        or finalized["payload"].get("attempt_number") != 1
+        or finalized["payload"].get("max_attempts") != 3
+    ):
+        raise ValueError("recorded_event_contract_invalid")
 
     version_events = [
         event["envelope"]
@@ -654,6 +1018,10 @@ def verify_recorded(args: argparse.Namespace) -> int:
         != envelope.get("candidate_bundle_sha256")
         or version_payload.get("workflow_id")
         != candidate_bundle.get("proposed_workflow_id")
+        or version_payload.get("version_number")
+        != candidate_bundle.get("candidate_version")
+        or version_payload.get("workflow_version")
+        != candidate_bundle.get("workflow_spec", {}).get("workflow_version")
     ):
         raise ValueError("recorded_candidate_version_event_mismatch")
 
@@ -679,11 +1047,11 @@ def verify_recorded(args: argparse.Namespace) -> int:
     if not isinstance(event_summary, list) or len(event_summary) != len(events):
         raise ValueError("recorded_event_summary_mismatch")
     for summary, event in zip(event_summary, events, strict=True):
-        envelope = event["envelope"]
+        event_envelope = event["envelope"]
         if summary != {
             "event_hash": event["event_hash"],
-            "event_type": envelope["event_type"],
-            "previous_event_hash": envelope["previous_event_hash"],
+            "event_type": event_envelope["event_type"],
+            "previous_event_hash": event_envelope["previous_event_hash"],
         }:
             raise ValueError("recorded_event_summary_mismatch")
     demo = ledger.get("demo")
@@ -705,6 +1073,67 @@ def verify_recorded(args: argparse.Namespace) -> int:
         or final_envelope.get("event_type") != "DEMO_RECORDED"
     ):
         raise ValueError("recorded_demo_ledger_link_mismatch")
+
+    expected_event_summary = [
+        {
+            "event_hash": event["event_hash"],
+            "event_type": event["envelope"]["event_type"],
+            "previous_event_hash": event["envelope"]["previous_event_hash"],
+        }
+        for event in events
+    ]
+    expected_ledger = {
+        "acceptance": {
+            "candidate_status_is_demo_recorded": True,
+            "cannot_emit_evidence_pack": True,
+            "cannot_publish": True,
+            "cannot_support_claim": True,
+            "demo_is_non_formal": True,
+            "event_chain_ends_in_demo_recorded": True,
+        },
+        "candidate": {
+            "candidate_key": candidate_bundle["candidate_id"],
+            "candidate_version_hash": report["candidate_version_sha256"],
+            "status": "DEMO_RECORDED",
+            "version_number": candidate_bundle["candidate_version"],
+            "workflow_id": candidate_bundle["proposed_workflow_id"],
+            "workflow_spec_hash": envelope["workflow_spec_sha256"],
+            "workflow_version": candidate_bundle["workflow_spec"][
+                "workflow_version"
+            ],
+        },
+        "demo": {
+            "claim_eligible": report["claim_eligible"],
+            "demo_report_sha256": declared_report_hash,
+            "demo_run_id": report["demo_run_id"],
+            "evidence_class": report["evidence_class"],
+            "evidence_pack_allowed": report["evidence_pack_allowed"],
+            "failure_class": report["failure_class"],
+            "publication_ready": report["publication_ready"],
+            "status": report["status"],
+            "validation_run_id": final_payload["validation_run_id"],
+        },
+        "event_chain": expected_event_summary,
+        "git_commit": descriptor["git_commit"],
+        "local_runner_descriptor": descriptor,
+        "provenance": {
+            "candidate_bundle_receipt": "candidate-bundle.json",
+            "candidate_version_receipt": "candidate-version-envelope.json",
+            "environment_closure": "BOOTSTRAP_DESCRIPTOR_ONLY",
+            "event_envelopes": "ledger-events.json",
+            "historical_provenance_complete": False,
+            "limitation": (
+                "Hashes and the event chain are internally verifiable, but the "
+                "bootstrap run did not capture a complete source tree, patch, "
+                "SBOM, or signed container environment."
+            ),
+            "runner_receipt": "runner-descriptor.json",
+        },
+        "scope": "disposable_local_non_production_demo",
+        "scientific_verdict_at_entry": "CAPABILITY_GAP",
+    }
+    if ledger != expected_ledger:
+        raise ValueError("recorded_ledger_summary_mismatch")
 
     print(json.dumps({
         "candidate_version_sha256": report["candidate_version_sha256"],

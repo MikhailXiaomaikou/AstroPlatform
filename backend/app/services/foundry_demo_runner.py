@@ -23,6 +23,7 @@ from typing import Any, Callable
 from app.services.foundry_evidence_policy import (
     NON_FORMAL_EVIDENCE_CLASS,
     contains_formal_claim_escape,
+    contains_formal_claim_escape_text,
 )
 
 try:  # ``resource`` is unavailable on native Windows Python.
@@ -343,16 +344,24 @@ def run_candidate_demo(
     if status not in DEMO_STATUSES:
         raise FoundryDemoContractError("candidate_demo_status_invalid")
     result = outcome.get("result") if isinstance(outcome.get("result"), dict) else {}
-    if contains_formal_claim_escape(result) or contains_formal_claim_escape(
-        outcome.get("validation_summary")
+    stdout_bytes = stdout_buffer.get_bytes()
+    stderr_bytes = stderr_buffer.get_bytes()
+    stream_escape = contains_formal_claim_escape_text(
+        stdout_bytes
+    ) or contains_formal_claim_escape_text(stderr_bytes)
+    if (
+        contains_formal_claim_escape(result)
+        or contains_formal_claim_escape(outcome.get("validation_summary"))
+        or stream_escape
     ):
         status = "FAILED"
         result = {}
         outcome["failure_class"] = "candidate_formal_claim_escape_blocked"
         outcome["validation_summary"] = {"formal_claim_escape_blocked": True}
+        if stream_escape:
+            stdout_bytes = b""
+            stderr_bytes = b"candidate stream quarantined: claim escape blocked\n"
     completed = _utc_now()
-    stdout_bytes = stdout_buffer.get_bytes()
-    stderr_bytes = stderr_buffer.get_bytes()
     if captured_streams is not None:
         captured_streams.clear()
         captured_streams.update(

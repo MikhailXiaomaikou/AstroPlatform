@@ -30,6 +30,20 @@ _REPORT_SCHEMA = (
 )
 
 
+def _rehash_demo_report(report: dict[str, object]) -> None:
+    unsigned = dict(report)
+    unsigned.pop("demo_report_sha256", None)
+    report["demo_report_sha256"] = hashlib.sha256(
+        json.dumps(
+            unsigned,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def test_demo_artifacts_are_host_readable_and_never_overwritten(
     tmp_path: Path,
 ) -> None:
@@ -174,6 +188,88 @@ def test_configured_but_invalid_mirror_fails_closed(
     assert report["validation_summary"]["withheld_reasons"]
 
 
+def test_mixed_mirror_coverage_preserves_a_failed_public_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from app.services.cosmology_likelihoods import (
+        analysis_registry,
+        dark_energy_matrix,
+    )
+
+    monkeypatch.setattr(analysis_registry, "audit_cosmology_analysis_registry", lambda: [])
+    monkeypatch.setattr(
+        dark_energy_matrix,
+        "run_dark_energy_evidence_matrix",
+        lambda **_kwargs: {
+            "analysis_status": "WITHHELD",
+            "official_ready_cells": 1,
+            "official_withheld_cells": 1,
+            "matrix": [
+                {
+                    "dataset": "union3",
+                    "status": "COMPLETED",
+                    "withheld_reasons": [],
+                },
+                {
+                    "dataset": "pantheon_plus",
+                    "status": "WITHHELD",
+                    "withheld_reasons": ["official_chain_checksum_mismatch"],
+                },
+            ],
+            "provenance": {"source": "mixed-mirror-test"},
+        },
+    )
+    bundle = copy.deepcopy(load_candidate_bundle(_CANDIDATE))
+    bundle["workflow_spec"]["demo_inputs"]["supernova_sets"] = [
+        "union3",
+        "pantheon_plus",
+    ]
+
+    report = run_candidate_demo(bundle, cache_root=tmp_path)
+
+    assert report["status"] == "FAILED"
+    assert report["failure_class"] == "official_chain_mirror_integrity_failed"
+    assert report["validation_summary"]["official_mirror_verified"] is True
+    assert report["validation_summary"]["ready_cells"] == 1
+    assert report["validation_summary"]["withheld_cells"] == 1
+
+    replay_script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "run_public_foundry_candidate_replay.py"
+    )
+    validate_report = runpy.run_path(str(replay_script))["_validate_report"]
+    identity = {
+        "candidate_version_envelope": {
+            "candidate_bundle_sha256": report["candidate_bundle_sha256"],
+            "workflow_spec_sha256": report["workflow_spec_sha256"],
+            "dependency_lock_sha256": report["dependency_lock_sha256"],
+        },
+        "candidate_version_sha256": report["candidate_version_sha256"],
+        "runner_image_digest": report["runner_image_digest"],
+        "runner_descriptor": {
+            "git_commit": report["environment"]["tool_version"],
+        },
+    }
+
+    validate_report(report, bundle=bundle, identity=identity)
+
+    forged_status = copy.deepcopy(report)
+    forged_status["result"]["matrix"][1]["status"] = "SUPPORTED"
+    _rehash_demo_report(forged_status)
+    with pytest.raises(ValueError, match="formal_claim_escape"):
+        validate_report(forged_status, bundle=bundle, identity=identity)
+
+    forged_reasons = copy.deepcopy(report)
+    forged_reasons["result"]["matrix"][1]["withheld_reasons"] = (
+        "official_chain_checksum_mismatch"
+    )
+    _rehash_demo_report(forged_reasons)
+    with pytest.raises(ValueError, match="matrix_cell_withheld_reasons"):
+        validate_report(forged_reasons, bundle=bundle, identity=identity)
+
+
 def test_candidate_cannot_upgrade_its_output_policy() -> None:
     bundle = load_candidate_bundle(_CANDIDATE)
     forged = copy.deepcopy(bundle)
@@ -265,6 +361,69 @@ def test_nested_formal_claim_escape_is_erased(
     assert report["status"] == "FAILED"
     assert report["failure_class"] == "candidate_formal_claim_escape_blocked"
     assert report["result"] == {}
+
+
+def test_supported_matrix_status_is_erased(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import foundry_demo_runner
+
+    bundle = load_candidate_bundle(_CANDIDATE)
+
+    def forged_entrypoint(*_args: object, **_kwargs: object) -> dict:
+        return {
+            "status": "PASSED",
+            "result": {
+                "matrix": [
+                    {
+                        "status": "SUPPORTED",
+                        "withheld_reasons": ["forged_non_formal_reason"],
+                    }
+                ]
+            },
+            "validation_summary": {},
+        }
+
+    monkeypatch.setitem(
+        foundry_demo_runner._ENTRYPOINTS,  # noqa: SLF001
+        bundle["entrypoint_id"],
+        forged_entrypoint,
+    )
+    report = run_candidate_demo(bundle)
+    assert report["status"] == "FAILED"
+    assert report["failure_class"] == "candidate_formal_claim_escape_blocked"
+    assert report["result"] == {}
+
+
+def test_formal_claim_in_stream_is_quarantined(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import foundry_demo_runner
+
+    bundle = load_candidate_bundle(_CANDIDATE)
+
+    def forged_entrypoint(*_args: object, **_kwargs: object) -> dict:
+        print("Result is SUPPORTED")
+        return {
+            "status": "PARTIAL",
+            "failure_class": "fixture_only",
+            "result": {},
+            "validation_summary": {"numeric_claim_gate": "NON_FORMAL_DEMO"},
+        }
+
+    monkeypatch.setitem(
+        foundry_demo_runner._ENTRYPOINTS,  # noqa: SLF001
+        bundle["entrypoint_id"],
+        forged_entrypoint,
+    )
+    streams: dict[str, bytes] = {}
+    report = run_candidate_demo(bundle, captured_streams=streams)
+
+    assert report["status"] == "FAILED"
+    assert report["failure_class"] == "candidate_formal_claim_escape_blocked"
+    assert report["result"] == {}
+    assert streams["stdout.log"] == b""
+    assert b"SUPPORTED" not in streams["stderr.log"]
 
 
 def test_candidate_stream_capture_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:

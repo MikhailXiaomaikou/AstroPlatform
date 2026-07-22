@@ -399,6 +399,69 @@ def test_public_wrapper_verifies_historical_receipt(
     )
 
 
+def test_recorded_verifier_binds_the_actual_demo_logs(tmp_path: Path) -> None:
+    repo, kit = _standalone_verifier_fixture(tmp_path)
+    (kit / "stdout.log").write_text(
+        "scientific_verdict=SUPPORTED\n",
+        encoding="utf-8",
+    )
+    _rewrite_manifest_digest(kit, "stdout.log")
+
+    completed = _run(
+        [
+            sys.executable,
+            str(_REPO / "backend/scripts/run_public_foundry_candidate_replay.py"),
+            "verify-recorded",
+            "--kit-dir",
+            str(kit),
+        ],
+        cwd=repo,
+    )
+
+    assert completed.returncode != 0
+    assert "recorded_demo_log_receipt_mismatch" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_error"),
+    [
+        (b"scientific_verdict=SUPPORTED\n", "recorded_demo_log_scope_invalid"),
+        (b"ordinary candidate debug line\n", "recorded_historical_demo_log_not_empty"),
+    ],
+)
+def test_recorded_verifier_rejects_fully_rehashed_historical_logs(
+    tmp_path: Path,
+    payload: bytes,
+    expected_error: str,
+) -> None:
+    repo, kit = _standalone_verifier_fixture(tmp_path)
+    (kit / "stdout.log").write_bytes(payload)
+    report = json.loads(
+        (kit / "demo-report.sanitized.json").read_text(encoding="utf-8")
+    )
+    payload_hash = hashlib.sha256(payload).hexdigest()
+    report["stdout_bytes"] = len(payload)
+    report["stdout_sha256"] = payload_hash
+    report["artifact_manifest"][0]["bytes"] = len(payload)
+    report["artifact_manifest"][0]["sha256"] = payload_hash
+    _rewrite_report_receipt_links(kit, report)
+    _rewrite_manifest_digest(kit, "stdout.log")
+
+    completed = _run(
+        [
+            sys.executable,
+            str(_REPO / "backend/scripts/run_public_foundry_candidate_replay.py"),
+            "verify-recorded",
+            "--kit-dir",
+            str(kit),
+        ],
+        cwd=repo,
+    )
+
+    assert completed.returncode != 0
+    assert expected_error in completed.stderr
+
+
 def _standalone_verifier_fixture(tmp_path: Path) -> tuple[Path, Path]:
     repo = tmp_path / "repo"
     kit = repo / "docs/demo/foundry-candidate"
@@ -565,6 +628,41 @@ def _rewrite_candidate_bundle_receipt_chain(
         _rewrite_manifest_digest(kit, relative)
 
 
+def _rewrite_event_chain_receipts(
+    kit: Path,
+    events: dict[str, object],
+) -> None:
+    previous_hash: str | None = None
+    for event in events["events"]:
+        event["envelope"]["previous_event_hash"] = previous_hash
+        event["event_hash"] = hashlib.sha256(
+            canonical_json(event["envelope"])
+        ).hexdigest()
+        previous_hash = event["event_hash"]
+    (kit / "ledger-events.json").write_text(
+        json.dumps(events, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    ledger = json.loads(
+        (kit / "ledger-summary.sanitized.json").read_text(encoding="utf-8")
+    )
+    ledger["event_chain"] = [
+        {
+            "event_hash": event["event_hash"],
+            "event_type": event["envelope"]["event_type"],
+            "previous_event_hash": event["envelope"]["previous_event_hash"],
+        }
+        for event in events["events"]
+    ]
+    (kit / "ledger-summary.sanitized.json").write_text(
+        json.dumps(ledger, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    _rewrite_manifest_digest(kit, "ledger-events.json")
+    _rewrite_manifest_digest(kit, "ledger-summary.sanitized.json")
+
+
 def test_recorded_verifier_rejects_rehashed_event_tampering(tmp_path: Path) -> None:
     repo, kit = _standalone_verifier_fixture(tmp_path)
     events = json.loads((kit / "ledger-events.json").read_text(encoding="utf-8"))
@@ -590,7 +688,39 @@ def test_recorded_verifier_rejects_rehashed_event_tampering(tmp_path: Path) -> N
     )
 
     assert completed.returncode != 0
-    assert "recorded_final_event_report_mismatch" in completed.stderr
+    assert "recorded_event_chain_scope_invalid" in completed.stderr
+
+
+@pytest.mark.parametrize("tampering", ["formal_payload", "actor_kind"])
+def test_recorded_verifier_rejects_fully_rehashed_event_contract_tampering(
+    tmp_path: Path,
+    tampering: str,
+) -> None:
+    repo, kit = _standalone_verifier_fixture(tmp_path)
+    events = json.loads((kit / "ledger-events.json").read_text(encoding="utf-8"))
+    if tampering == "formal_payload":
+        events["events"][3]["envelope"]["payload"]["scientific_verdict"] = (
+            "SUPPORTED"
+        )
+        expected_error = "recorded_event_chain_scope_invalid"
+    else:
+        events["events"][-1]["envelope"]["actor_kind"] = "HUMAN_ADMIN"
+        expected_error = "recorded_event_contract_invalid"
+    _rewrite_event_chain_receipts(kit, events)
+
+    completed = _run(
+        [
+            sys.executable,
+            str(_REPO / "backend/scripts/run_public_foundry_candidate_replay.py"),
+            "verify-recorded",
+            "--kit-dir",
+            str(kit),
+        ],
+        cwd=repo,
+    )
+
+    assert completed.returncode != 0
+    assert expected_error in completed.stderr
 
 
 @pytest.mark.parametrize(
@@ -692,6 +822,113 @@ def test_recorded_verifier_rejects_rehashed_ledger_policy_mismatch(
     assert "recorded_demo_ledger_link_mismatch" in completed.stderr
 
 
+def test_recorded_verifier_rejects_fully_rehashed_passed_outcome(
+    tmp_path: Path,
+) -> None:
+    repo, kit = _standalone_verifier_fixture(tmp_path)
+    report = json.loads(
+        (kit / "demo-report.sanitized.json").read_text(encoding="utf-8")
+    )
+    report["status"] = "PASSED"
+    report["failure_class"] = None
+    report["validation_summary"] = {
+        "numeric_claim_gate": "NON_FORMAL_DEMO",
+        "official_mirror_configured": True,
+        "official_mirror_verified": True,
+        "ready_cells": 1,
+        "registry_integrity": True,
+        "withheld_cells": 0,
+        "withheld_reasons": [],
+    }
+    report["result"]["analysis_status"] = "COMPLETED"
+    report["result"]["official_ready_cells"] = 1
+    report["result"]["official_withheld_cells"] = 0
+    report["result"]["matrix"][0]["status"] = "COMPLETED"
+    report["result"]["matrix"][0]["evidence_tier"] = "candidate"
+    report["result"]["matrix"][0]["withheld_reasons"] = []
+    _rewrite_report_receipt_links(kit, report)
+
+    events = json.loads((kit / "ledger-events.json").read_text(encoding="utf-8"))
+    events["events"][-1]["envelope"]["payload"]["status"] = "PASSED"
+    _rewrite_event_chain_receipts(kit, events)
+    ledger = json.loads(
+        (kit / "ledger-summary.sanitized.json").read_text(encoding="utf-8")
+    )
+    ledger["demo"]["status"] = "PASSED"
+    ledger["demo"]["failure_class"] = None
+    (kit / "ledger-summary.sanitized.json").write_text(
+        json.dumps(ledger, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    _rewrite_manifest_digest(kit, "ledger-summary.sanitized.json")
+
+    completed = _run(
+        [
+            sys.executable,
+            str(_REPO / "backend/scripts/run_public_foundry_candidate_replay.py"),
+            "verify-recorded",
+            "--kit-dir",
+            str(kit),
+        ],
+        cwd=repo,
+    )
+
+    assert completed.returncode != 0
+    assert "recorded_historical_demo_outcome_mismatch" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "tampering",
+    [
+        "scientific_verdict",
+        "acceptance",
+        "candidate_key",
+        "scope",
+        "provenance",
+        "extra_field",
+    ],
+)
+def test_recorded_verifier_rejects_rehashed_ledger_boundary_tampering(
+    tmp_path: Path,
+    tampering: str,
+) -> None:
+    repo, kit = _standalone_verifier_fixture(tmp_path)
+    ledger = json.loads(
+        (kit / "ledger-summary.sanitized.json").read_text(encoding="utf-8")
+    )
+    if tampering == "scientific_verdict":
+        ledger["scientific_verdict_at_entry"] = "SUPPORTED"
+    elif tampering == "acceptance":
+        ledger["acceptance"]["cannot_support_claim"] = False
+    elif tampering == "candidate_key":
+        ledger["candidate"]["candidate_key"] = "forged_formal_candidate"
+    elif tampering == "scope":
+        ledger["scope"] = "formal_registry"
+    elif tampering == "provenance":
+        ledger["provenance"]["historical_provenance_complete"] = True
+    else:
+        ledger["formal_registry_eligible"] = True
+    (kit / "ledger-summary.sanitized.json").write_text(
+        json.dumps(ledger, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    _rewrite_manifest_digest(kit, "ledger-summary.sanitized.json")
+
+    completed = _run(
+        [
+            sys.executable,
+            str(_REPO / "backend/scripts/run_public_foundry_candidate_replay.py"),
+            "verify-recorded",
+            "--kit-dir",
+            str(kit),
+        ],
+        cwd=repo,
+    )
+
+    assert completed.returncode != 0
+    assert "recorded_ledger_summary_mismatch" in completed.stderr
+
+
 @pytest.mark.parametrize(
     "formal_signal",
     [
@@ -714,6 +951,31 @@ def test_recorded_verifier_rejects_rehashed_nested_formal_signal(
         (kit / "demo-report.sanitized.json").read_text(encoding="utf-8")
     )
     report["result"]["forged_nested_signal"] = formal_signal
+    _rewrite_report_receipt_links(kit, report)
+
+    completed = _run(
+        [
+            sys.executable,
+            str(_REPO / "backend/scripts/run_public_foundry_candidate_replay.py"),
+            "verify-recorded",
+            "--kit-dir",
+            str(kit),
+        ],
+        cwd=repo,
+    )
+
+    assert completed.returncode != 0
+    assert "recorded_demo_report_scope_invalid" in completed.stderr
+
+
+def test_recorded_verifier_rejects_rehashed_formal_report_metadata(
+    tmp_path: Path,
+) -> None:
+    repo, kit = _standalone_verifier_fixture(tmp_path)
+    report = json.loads(
+        (kit / "demo-report.sanitized.json").read_text(encoding="utf-8")
+    )
+    report["generation"]["scientific_verdict"] = "SUPPORTED"
     _rewrite_report_receipt_links(kit, report)
 
     completed = _run(
@@ -878,6 +1140,37 @@ def test_recorded_verifier_rejects_fully_rehashed_formal_candidate_claim(
 
     assert completed.returncode != 0
     assert "recorded_candidate_bundle_policy_invalid" in completed.stderr
+
+
+def test_recorded_verifier_rejects_rehashed_version_limitation_tampering(
+    tmp_path: Path,
+) -> None:
+    repo, kit = _standalone_verifier_fixture(tmp_path)
+    receipt = json.loads(
+        (kit / "candidate-version-envelope.json").read_text(encoding="utf-8")
+    )
+    receipt["provenance_limitations"][-1] = (
+        "This receipt proves a complete signed environment closure."
+    )
+    (kit / "candidate-version-envelope.json").write_text(
+        json.dumps(receipt, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    _rewrite_manifest_digest(kit, "candidate-version-envelope.json")
+
+    completed = _run(
+        [
+            sys.executable,
+            str(_REPO / "backend/scripts/run_public_foundry_candidate_replay.py"),
+            "verify-recorded",
+            "--kit-dir",
+            str(kit),
+        ],
+        cwd=repo,
+    )
+
+    assert completed.returncode != 0
+    assert "recorded_candidate_version_receipt_mismatch" in completed.stderr
 
 
 def test_recorded_verifier_rejects_rehashed_runner_descriptor_tampering(
