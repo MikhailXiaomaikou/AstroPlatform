@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import stat
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -23,14 +25,56 @@ class FoundrySourceTreeError(ValueError):
     """The checkout cannot produce a safe, canonical source receipt."""
 
 
+def _repository_git_dir(repo: Path) -> Path:
+    marker = repo / ".git"
+    if marker.is_dir() and not marker.is_symlink():
+        return marker.resolve()
+    if not marker.is_file() or marker.is_symlink():
+        raise FoundrySourceTreeError("source_git_metadata_invalid")
+    try:
+        raw = marker.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise FoundrySourceTreeError("source_git_metadata_invalid") from exc
+    prefix = "gitdir: "
+    if not raw.startswith(prefix) or "\n" in raw:
+        raise FoundrySourceTreeError("source_git_metadata_invalid")
+    git_dir = Path(raw[len(prefix) :])
+    if not git_dir.is_absolute():
+        git_dir = marker.parent / git_dir
+    git_dir = git_dir.resolve()
+    if not git_dir.is_dir():
+        raise FoundrySourceTreeError("source_git_metadata_invalid")
+    return git_dir
+
+
 def _git(repo: Path, *args: str, input_bytes: bytes | None = None) -> bytes:
+    git_dir = _repository_git_dir(repo)
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.upper().startswith("GIT_")
+    }
     try:
         completed = subprocess.run(
-            ["git", "-C", str(repo), *args],
+            [
+                "git",
+                "--no-replace-objects",
+                f"--git-dir={git_dir}",
+                f"--work-tree={repo}",
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                "core.untrackedCache=false",
+                "-c",
+                "core.ignoreStat=false",
+                *args,
+            ],
             input=input_bytes,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             check=False,
+            cwd=repo,
+            env=environment,
             timeout=60,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -62,6 +106,9 @@ def assert_clean_checkout(
     repo_root: str | Path, *, allow_staged_changes: bool = False
 ) -> None:
     repo = Path(repo_root).resolve()
+    manifest = tracked_source_manifest(repo)
+    _assert_worktree_matches_index(repo, manifest)
+    _assert_index_flags_safe(repo, manifest)
     # Pin untracked-file visibility instead of trusting the repository-local
     # ``status.showUntrackedFiles`` setting.  Otherwise a checkout can look
     # clean while untracked Python source remains outside the source receipt.
@@ -86,6 +133,59 @@ def assert_clean_checkout(
         ):
             return
     raise FoundrySourceTreeError("source_checkout_not_clean")
+
+
+def _assert_index_flags_safe(repo: Path, manifest: dict[str, Any]) -> None:
+    raw = _git(repo, "ls-files", "-v", "-z")
+    paths: set[str] = set()
+    for record in (item for item in raw.split(b"\0") if item):
+        if len(record) < 3 or record[1:2] != b" ":
+            raise FoundrySourceTreeError("source_index_flags_invalid")
+        # ``H`` is the ordinary cached-entry marker.  Lower-case tags indicate
+        # assume-unchanged and ``S`` indicates skip-worktree; both can hide
+        # modified runtime bytes from status and must fail closed.
+        if record[:1] != b"H":
+            raise FoundrySourceTreeError("source_index_flags_unsafe")
+        try:
+            path = record[2:].decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise FoundrySourceTreeError("source_index_flags_invalid") from exc
+        if path in paths:
+            raise FoundrySourceTreeError("source_index_flags_invalid")
+        paths.add(path)
+    expected_paths = {str(item["path"]) for item in manifest["entries"]}
+    if paths != expected_paths:
+        raise FoundrySourceTreeError("source_index_flags_invalid")
+
+
+def _assert_worktree_matches_index(repo: Path, manifest: dict[str, Any]) -> None:
+    for entry in manifest["entries"]:
+        path = repo / str(entry["path"])
+        mode = str(entry["mode"])
+        try:
+            metadata = path.lstat()
+            if mode == "120000":
+                if not stat.S_ISLNK(metadata.st_mode):
+                    raise FoundrySourceTreeError("source_worktree_mismatch")
+                target = os.readlink(os.fsencode(path))
+                content = target if isinstance(target, bytes) else os.fsencode(target)
+            else:
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise FoundrySourceTreeError("source_worktree_mismatch")
+                content = path.read_bytes()
+                if os.name != "nt" and bool(metadata.st_mode & 0o111) != (
+                    mode == "100755"
+                ):
+                    raise FoundrySourceTreeError("source_worktree_mismatch")
+        except FoundrySourceTreeError:
+            raise
+        except OSError as exc:
+            raise FoundrySourceTreeError("source_worktree_mismatch") from exc
+        if (
+            len(content) != entry["bytes"]
+            or hashlib.sha256(content).hexdigest() != entry["sha256"]
+        ):
+            raise FoundrySourceTreeError("source_worktree_mismatch")
 
 
 def tracked_source_manifest(repo_root: str | Path) -> dict[str, Any]:

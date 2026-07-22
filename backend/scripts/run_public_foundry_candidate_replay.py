@@ -51,8 +51,20 @@ def _sha256_json(value: Any) -> str:
     return _sha256_bytes(_canonical_json(value))
 
 
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"recorded_json_duplicate_key:{key}")
+        value[key] = item
+    return value
+
+
 def _read_json(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
+    value = json.loads(
+        path.read_text(encoding="utf-8"),
+        object_pairs_hook=_reject_duplicate_keys,
+    )
     if not isinstance(value, dict):
         raise ValueError(f"expected JSON object: {path}")
     return value
@@ -130,6 +142,7 @@ def _runtime_identity(
         backend_root / "scripts" / "run_public_foundry_candidate_replay.py",
         backend_root / "scripts" / "run_foundry_candidate_demo.py",
         backend_root / "app" / "services" / "foundry_demo_runner.py",
+        backend_root / "app" / "services" / "foundry_evidence_policy.py",
         backend_root / "app" / "services" / "foundry_candidate_identity.py",
         backend_root
         / "app"
@@ -456,11 +469,14 @@ def _verify_sha256sums(kit_dir: Path) -> None:
 
 def verify_recorded(args: argparse.Namespace) -> int:
     kit_dir = Path(args.kit_dir).resolve()
-    repo_root = kit_dir.parents[2]
-    sys.path.insert(0, str(repo_root / "backend"))
+    backend_root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(backend_root))
     from app.services.foundry_candidate_identity import (  # noqa: PLC0415
         candidate_version_sha256,
         canonical_json,
+    )
+    from app.services.foundry_evidence_policy import (  # noqa: PLC0415
+        contains_formal_claim_escape,
     )
 
     _verify_sha256sums(kit_dir)
@@ -483,6 +499,8 @@ def verify_recorded(args: argparse.Namespace) -> int:
         or report.get("publication_ready") is not False
         or report.get("claim_eligible") is not False
         or report.get("evidence_pack_allowed") is not False
+        or contains_formal_claim_escape(report.get("result"))
+        or contains_formal_claim_escape(report.get("validation_summary"))
     ):
         raise ValueError("recorded_demo_report_scope_invalid")
 

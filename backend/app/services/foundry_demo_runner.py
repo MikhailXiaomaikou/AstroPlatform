@@ -20,6 +20,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from app.services.foundry_evidence_policy import (
+    NON_FORMAL_EVIDENCE_CLASS,
+    contains_formal_claim_escape,
+)
+
 try:  # ``resource`` is unavailable on native Windows Python.
     import resource as _resource
 except ImportError:  # pragma: no cover - exercised by Windows CI/clients
@@ -27,7 +32,6 @@ except ImportError:  # pragma: no cover - exercised by Windows CI/clients
 
 
 CANDIDATE_SCHEMA_VERSION = 1
-NON_FORMAL_EVIDENCE_CLASS = "NON_FORMAL_DEMO"
 DEMO_STATUSES = frozenset({"PASSED", "PARTIAL", "FAILED"})
 _CANDIDATE_ID = re.compile(r"^[a-z][a-z0-9_]{2,96}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -95,30 +99,6 @@ def _sha256(value: Any) -> str:
 
 def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
-
-
-def _contains_formal_claim_escape(value: Any) -> bool:
-    """Detect formal-evidence fields at any depth in candidate output."""
-
-    if isinstance(value, list):
-        return any(_contains_formal_claim_escape(item) for item in value)
-    if not isinstance(value, dict):
-        return False
-    for raw_key, item in value.items():
-        key = str(raw_key).strip().lower()
-        if key in {"publication_ready", "claim_eligible"} and item is True:
-            return True
-        if key == "scientific_verdict" and str(item).upper() == "SUPPORTED":
-            return True
-        if key in {
-            "evidence_pack",
-            "evidence_pack_id",
-            "formal_evidence_pack",
-        } and item:
-            return True
-        if _contains_formal_claim_escape(item):
-            return True
-    return False
 
 
 def _utc_now() -> datetime:
@@ -361,7 +341,7 @@ def run_candidate_demo(
     if status not in DEMO_STATUSES:
         raise FoundryDemoContractError("candidate_demo_status_invalid")
     result = outcome.get("result") if isinstance(outcome.get("result"), dict) else {}
-    if _contains_formal_claim_escape(result) or _contains_formal_claim_escape(
+    if contains_formal_claim_escape(result) or contains_formal_claim_escape(
         outcome.get("validation_summary")
     ):
         status = "FAILED"

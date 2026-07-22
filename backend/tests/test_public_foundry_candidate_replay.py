@@ -14,7 +14,11 @@ from app.services.foundry_candidate_identity import (
     candidate_version_sha256,
     canonical_json,
 )
-from app.services.foundry_source_tree import tracked_source_tree_hash
+from app.services.foundry_source_tree import (
+    FoundrySourceTreeError,
+    assert_clean_checkout,
+    tracked_source_tree_hash,
+)
 
 
 _REPO = Path(__file__).resolve().parents[2]
@@ -87,6 +91,21 @@ def _replay_environment(repo: Path) -> dict[str, str]:
     return environment
 
 
+def _tiny_source_repo(path: Path) -> tuple[Path, Path]:
+    path.mkdir()
+    runtime = path / "runtime.py"
+    runtime.write_text("VALUE = 'committed'\n", encoding="utf-8")
+    for command in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.email", "source-gate-test@invalid.example"],
+        ["git", "config", "user.name", "Source Gate Test"],
+        ["git", "add", "runtime.py"],
+        ["git", "commit", "-qm", "source gate fixture"],
+    ):
+        subprocess.run(command, cwd=path, check=True)
+    return path, runtime
+
+
 def test_public_wrapper_replays_current_checkout_with_new_identity(
     clean_replay_repo: Path,
     tmp_path: Path,
@@ -123,6 +142,10 @@ def test_public_wrapper_replays_current_checkout_with_new_identity(
     assert report["workflow_spec_sha256"] == envelope["workflow_spec_sha256"]
     assert envelope["code_tree_sha256"] == source_tree_sha256
     assert envelope["patch_sha256"] == hashlib.sha256(b"").hexdigest()
+    policy_path = Path("backend/app/services/foundry_evidence_policy.py")
+    assert identity["runner_descriptor"]["runtime_files"][policy_path.as_posix()] == (
+        hashlib.sha256((clean_replay_repo / policy_path).read_bytes()).hexdigest()
+    )
     assert identity["historical_demo_version_reused"] is False
     assert identity["ledger_recorded"] is False
     assert identity["runner_digest_kind"] == "LOCAL_DESCRIPTOR_SHA256"
@@ -169,6 +192,107 @@ def test_public_wrapper_rejects_dirty_checkout_when_git_config_hides_untracked(
     assert completed.returncode != 0
     assert "source_checkout_not_clean" in completed.stderr
     assert not output.exists()
+
+
+def test_source_gate_ignores_external_git_worktree_overrides(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actual, runtime = _tiny_source_repo(tmp_path / "actual")
+    decoy = tmp_path / "decoy"
+    decoy.mkdir()
+    shutil.copy2(runtime, decoy / runtime.name)
+    runtime.write_text("VALUE = 'unreceipted runtime edit'\n", encoding="utf-8")
+
+    monkeypatch.setenv("GIT_DIR", str(actual / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(decoy))
+
+    with pytest.raises(
+        FoundrySourceTreeError,
+        match="source_worktree_mismatch",
+    ):
+        assert_clean_checkout(actual)
+
+
+@pytest.mark.parametrize(
+    "index_flag",
+    ["--assume-unchanged", "--skip-worktree"],
+)
+def test_source_gate_compares_flagged_worktree_bytes_to_index(
+    tmp_path: Path,
+    index_flag: str,
+) -> None:
+    repo, runtime = _tiny_source_repo(tmp_path / "flagged")
+    subprocess.run(
+        ["git", "update-index", index_flag, runtime.name],
+        cwd=repo,
+        check=True,
+    )
+    runtime.write_text("VALUE = 'hidden runtime edit'\n", encoding="utf-8")
+
+    with pytest.raises(
+        FoundrySourceTreeError,
+        match="source_worktree_mismatch",
+    ):
+        assert_clean_checkout(repo)
+
+
+@pytest.mark.parametrize(
+    "index_flag",
+    ["--assume-unchanged", "--skip-worktree"],
+)
+def test_source_gate_rejects_unsafe_index_flags_without_content_change(
+    tmp_path: Path,
+    index_flag: str,
+) -> None:
+    repo, runtime = _tiny_source_repo(tmp_path / "flagged-clean")
+    subprocess.run(
+        ["git", "update-index", index_flag, runtime.name],
+        cwd=repo,
+        check=True,
+    )
+
+    with pytest.raises(
+        FoundrySourceTreeError,
+        match="source_index_flags_unsafe",
+    ):
+        assert_clean_checkout(repo)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Git executable bits are POSIX-only")
+def test_source_gate_compares_worktree_executable_mode(tmp_path: Path) -> None:
+    repo, runtime = _tiny_source_repo(tmp_path / "mode-change")
+    runtime.chmod(runtime.stat().st_mode | 0o111)
+
+    with pytest.raises(
+        FoundrySourceTreeError,
+        match="source_worktree_mismatch",
+    ):
+        assert_clean_checkout(repo)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink creation needs extra privileges")
+def test_source_gate_compares_symlink_target_bytes(tmp_path: Path) -> None:
+    repo = tmp_path / "symlink-change"
+    repo.mkdir()
+    link = repo / "runtime-link"
+    link.symlink_to("committed-target")
+    for command in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.email", "source-gate-test@invalid.example"],
+        ["git", "config", "user.name", "Source Gate Test"],
+        ["git", "add", link.name],
+        ["git", "commit", "-qm", "symlink fixture"],
+    ):
+        subprocess.run(command, cwd=repo, check=True)
+    link.unlink()
+    link.symlink_to("unreceipted-target")
+
+    with pytest.raises(
+        FoundrySourceTreeError,
+        match="source_worktree_mismatch",
+    ):
+        assert_clean_checkout(repo)
 
 
 def test_public_wrapper_fails_for_configured_invalid_mirror(
@@ -243,6 +367,7 @@ def _standalone_verifier_fixture(tmp_path: Path) -> tuple[Path, Path]:
         Path("backend/app/__init__.py"),
         Path("backend/app/services/__init__.py"),
         Path("backend/app/services/foundry_candidate_identity.py"),
+        Path("backend/app/services/foundry_evidence_policy.py"),
     ):
         target = repo / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -258,6 +383,48 @@ def _rewrite_manifest_digest(kit: Path, relative: str) -> None:
         for line in lines
     ]
     (kit / "SHA256SUMS").write_text("\n".join(rewritten) + "\n", encoding="utf-8")
+
+
+def _rewrite_report_receipt_links(
+    kit: Path,
+    report: dict[str, object],
+) -> None:
+    report.pop("demo_report_sha256", None)
+    report_hash = hashlib.sha256(canonical_json(report)).hexdigest()
+    report["demo_report_sha256"] = report_hash
+    (kit / "demo-report.sanitized.json").write_text(
+        json.dumps(report, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    events = json.loads((kit / "ledger-events.json").read_text(encoding="utf-8"))
+    final_event = events["events"][-1]
+    final_event["envelope"]["payload"]["demo_report_sha256"] = report_hash
+    final_event_hash = hashlib.sha256(
+        canonical_json(final_event["envelope"])
+    ).hexdigest()
+    final_event["event_hash"] = final_event_hash
+    (kit / "ledger-events.json").write_text(
+        json.dumps(events, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    ledger = json.loads(
+        (kit / "ledger-summary.sanitized.json").read_text(encoding="utf-8")
+    )
+    ledger["demo"]["demo_report_sha256"] = report_hash
+    ledger["event_chain"][-1]["event_hash"] = final_event_hash
+    (kit / "ledger-summary.sanitized.json").write_text(
+        json.dumps(ledger, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    for relative in (
+        "demo-report.sanitized.json",
+        "ledger-events.json",
+        "ledger-summary.sanitized.json",
+    ):
+        _rewrite_manifest_digest(kit, relative)
 
 
 def test_recorded_verifier_rejects_rehashed_event_tampering(tmp_path: Path) -> None:
@@ -385,6 +552,76 @@ def test_recorded_verifier_rejects_rehashed_ledger_policy_mismatch(
 
     assert completed.returncode != 0
     assert "recorded_demo_ledger_link_mismatch" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "formal_signal",
+    [
+        {"publication_ready": True},
+        {"claim_eligible": True},
+        {"scientific_verdict": "SUPPORTED"},
+        {"evidence_pack_allowed": True},
+        {"evidence_pack_id": "forged-pack"},
+        {"evidence_class": "FORMAL_EVIDENCE"},
+        {"evidence_class": "model_adequacy"},
+        {"evidence_class": "A_READY"},
+    ],
+)
+def test_recorded_verifier_rejects_rehashed_nested_formal_signal(
+    tmp_path: Path,
+    formal_signal: dict[str, object],
+) -> None:
+    repo, kit = _standalone_verifier_fixture(tmp_path)
+    report = json.loads(
+        (kit / "demo-report.sanitized.json").read_text(encoding="utf-8")
+    )
+    report["result"]["forged_nested_signal"] = formal_signal
+    _rewrite_report_receipt_links(kit, report)
+
+    completed = _run(
+        [
+            sys.executable,
+            str(_REPO / "backend/scripts/run_public_foundry_candidate_replay.py"),
+            "verify-recorded",
+            "--kit-dir",
+            str(kit),
+        ],
+        cwd=repo,
+    )
+
+    assert completed.returncode != 0
+    assert "recorded_demo_report_scope_invalid" in completed.stderr
+
+
+def test_recorded_verifier_rejects_duplicate_json_keys(tmp_path: Path) -> None:
+    repo, kit = _standalone_verifier_fixture(tmp_path)
+    report_path = kit / "demo-report.sanitized.json"
+    raw = report_path.read_text(encoding="utf-8")
+    marker = '  "publication_ready": false,\n'
+    assert marker in raw
+    report_path.write_text(
+        raw.replace(
+            marker,
+            '  "publication_ready": true,\n' + marker,
+            1,
+        ),
+        encoding="utf-8",
+    )
+    _rewrite_manifest_digest(kit, "demo-report.sanitized.json")
+
+    completed = _run(
+        [
+            sys.executable,
+            str(_REPO / "backend/scripts/run_public_foundry_candidate_replay.py"),
+            "verify-recorded",
+            "--kit-dir",
+            str(kit),
+        ],
+        cwd=repo,
+    )
+
+    assert completed.returncode != 0
+    assert "recorded_json_duplicate_key:publication_ready" in completed.stderr
 
 
 def test_recorded_verifier_rejects_manifest_with_missing_entry(

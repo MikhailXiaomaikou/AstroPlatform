@@ -34,6 +34,10 @@ from app.models.foundry_records import (
     WorkflowRegistryRelease,
 )
 from app.services.foundry_candidate_identity import candidate_version_sha256
+from app.services.foundry_evidence_policy import (
+    NON_FORMAL_EVIDENCE_CLASS,
+    contains_formal_claim_escape,
+)
 
 
 CANDIDATE_STATUSES = frozenset(
@@ -57,7 +61,6 @@ RISK_LEVELS = frozenset({"R0", "R1", "R2", "R3"})
 DEMO_STATUSES = frozenset({"PASSED", "PARTIAL", "FAILED"})
 REVIEW_DECISIONS = frozenset({"APPROVED", "REJECTED", "CHANGES_REQUESTED"})
 REVIEW_SCOPES = frozenset({"ENGINEERING", "SCIENTIFIC"})
-NON_FORMAL_EVIDENCE_CLASS = "NON_FORMAL_DEMO"
 AI_DRAFT_MAX_ATTEMPTS = 3
 AI_DRAFT_DISPATCH_LEASE = timedelta(minutes=5)
 AI_DRAFT_WORKFLOW_LEASE = timedelta(hours=1)
@@ -291,26 +294,6 @@ def _validate_formal_release_audit(
     return aggregate_hash, json.loads(canonical_json(value))
 
 
-def _contains_formal_claim_escape(value: Any) -> bool:
-    """Reject nested candidate output that impersonates formal evidence."""
-
-    if isinstance(value, list):
-        return any(_contains_formal_claim_escape(item) for item in value)
-    if not isinstance(value, dict):
-        return False
-    for raw_key, item in value.items():
-        key = str(raw_key).strip().lower()
-        if key in {"publication_ready", "claim_eligible"} and item is True:
-            return True
-        if key == "scientific_verdict" and str(item).upper() == "SUPPORTED":
-            return True
-        if key in {"evidence_pack", "evidence_pack_id", "formal_evidence_pack"} and item:
-            return True
-        if _contains_formal_claim_escape(item):
-            return True
-    return False
-
-
 def _normalize_candidate_bundle(value: Any) -> dict[str, Any]:
     """Validate the data-only bundle consumed by the isolated Demo runner."""
 
@@ -376,7 +359,7 @@ def _normalize_candidate_bundle(value: Any) -> dict[str, Any]:
         )
     _require_sha256(value.get("dependency_lock_sha256"), "dependency_lock_sha256")
     _require_sha256(value.get("runner_definition_sha256"), "runner_definition_sha256")
-    if _contains_formal_claim_escape(value.get("workflow_spec")):
+    if contains_formal_claim_escape(value.get("workflow_spec")):
         raise FoundryCatalogError(
             "candidate_formal_claim_forbidden",
             "Candidate workflow specs cannot claim formal scientific support",
@@ -3021,8 +3004,8 @@ async def record_demo_report(
         or report.get("publication_ready") is not False
         or report.get("claim_eligible") is not False
         or report.get("evidence_pack_allowed") is not False
-        or _contains_formal_claim_escape(report.get("result"))
-        or _contains_formal_claim_escape(report.get("validation_summary"))
+        or contains_formal_claim_escape(report.get("result"))
+        or contains_formal_claim_escape(report.get("validation_summary"))
     ):
         raise FoundryCatalogError(
             "candidate_formal_claim_forbidden",
@@ -4795,7 +4778,7 @@ async def record_validation_result(
         raise FoundryCatalogError("invalid_demo_status", "Unsupported Demo status")
     if completed_at < started_at:
         raise FoundryCatalogError("invalid_demo_time", "Demo completion precedes its start")
-    if _contains_formal_claim_escape(structured_result) or _contains_formal_claim_escape(
+    if contains_formal_claim_escape(structured_result) or contains_formal_claim_escape(
         validation_summary
     ):
         raise FoundryCatalogError(
