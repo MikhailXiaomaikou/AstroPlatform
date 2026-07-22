@@ -1,0 +1,28 @@
+{
+  "candidate_version_sha256": "f4e8fa65deeb0b8662770fe436035596a89085ac33ef53cfb8e974d191268868",
+  "environment_closure": "BOOTSTRAP_DESCRIPTOR_ONLY",
+  "envelope": {
+    "candidate_bundle_sha256": "1206466dc33c8c9f043ada93e7d800783549741089f48e3baa62b896014440eb",
+    "code_tree_sha256": "5e3413ad758636b3a2cebeceb674dadf605a904fe623faa578c07393ad55a54f",
+    "data_hashes": {
+      "desi_dr2_bao_cosmology_chains_v1_manifest": "df78872aa8b2d3473a9e8de78f498180efd7cbcbeb18211ce4787fac52067ee5"
+    },
+    "dependency_lock_sha256": "1ad3021413d90076bfca5105f360cc53c2a716b59b2f828cc95e64715771529d",
+    "fixture_hashes": [],
+    "patch_sha256": "7a7457a28ea37e1d7a1d8424fb3fc5432150e520279996ead7bbc71cae0dce14",
+    "sbom_sha256": "1b32b7d7cb134002477c394dd586e13c2feac9bf2a45d16457f0c529bb426bd0",
+    "schema_version": 1,
+    "validation_runner_image_digest": "sha256:12a937d0522207449e2f3016142e1e7c82ac8abcd6fba6a19a3be372c7ed2f88",
+    "workflow_spec_sha256": "65581b0d72af19313b066a0e7fdaf8f6f569a526e9d086b256424fe016a69869"
+  },
+  "formal_registry_eligible": false,
+  "historical_provenance_complete": false,
+  "identity_kind": "HISTORICAL_BOOTSTRAP_CANDIDATE_VERSION",
+  "provenance_limitations": [
+    "The CandidateVersion envelope and its hash are mathematically reproducible.",
+    "The historical code_tree_sha256 covered one runner source file, not the complete tracked Git source tree.",
+    "The historical patch_sha256 and sbom_sha256 are bootstrap placeholders, not a captured patch or generated SBOM.",
+    "This receipt therefore proves internal identity consistency, not a complete historical environment closure."
+  ],
+  "schema_version": 1
+}

@@ -15,6 +15,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from sqlalchemy import select
+from sqlalchemy.orm.attributes import set_committed_value
 
 import app.services.foundry_materialization as materialization_module
 import app.api.foundry_materialization as materialization_api
@@ -333,8 +334,10 @@ async def _approved_generated_version(
         "generation": bundle["generation"],
         "source_pins": bundle["source_pins"],
         "fixture_hashes": [],
-        "started_at": now.isoformat(),
-        "completed_at": (now + timedelta(seconds=1)).isoformat(),
+        "started_at": now.isoformat().replace("+00:00", "Z"),
+        "completed_at": (now + timedelta(seconds=1))
+        .isoformat()
+        .replace("+00:00", "Z"),
         "duration_ms": 1000,
         "stdout_sha256": EMPTY,
         "stderr_sha256": EMPTY,
@@ -345,7 +348,7 @@ async def _approved_generated_version(
             {"path": "stderr.log", "kind": "STDERR", "sha256": EMPTY, "bytes": 0},
         ],
         "result": {"status": "demo_only"},
-        "limitations": ["Non-formal."],
+        "limitations": bundle["limitations"],
         "validation_summary": {"passed": True},
         "failure_class": None,
         "resource_usage": {},
@@ -366,6 +369,33 @@ async def _approved_generated_version(
     )
     await db_session.refresh(candidate)
     return candidate, version
+
+
+async def test_materialization_rejects_an_approved_version_with_a_tampered_demo(
+    db_session,
+    test_user,
+):
+    reviewer, _token = test_user
+    candidate, origin = await _approved_generated_version(db_session, reviewer.id)
+    demo = await db_session.scalar(
+        select(FoundryDemoRun).where(
+            FoundryDemoRun.candidate_version_id == origin.id
+        )
+    )
+    assert demo is not None
+    # Simulate a legacy/hand-written row that still satisfies the old six-column
+    # PASSED query but no longer matches its immutable DemoReport v1 receipt.
+    set_committed_value(demo, "stdout_bytes", demo.stdout_bytes + 1)
+
+    with pytest.raises(FoundryCatalogError) as exc_info:
+        await request_source_materialization(
+            db_session,
+            candidate_id=candidate.id,
+            candidate_version_id=origin.id,
+            candidate_version_hash=origin.version_hash,
+            actor_user_id=reviewer.id,
+        )
+    assert exc_info.value.error_class == "materialization_review_missing"
 
 
 @pytest.mark.parametrize("dispatch_outcome_unknown", (False, True))
@@ -451,6 +481,22 @@ async def test_materialization_requires_exact_reviewed_version_and_signed_callba
         trusted_public_keys=KEYRING,
     )
     assert pr_attestation.pull_request_number == 42
+    origin_demo = await db_session.scalar(
+        select(FoundryDemoRun).where(
+            FoundryDemoRun.candidate_version_id == origin.id
+        )
+    )
+    assert origin_demo is not None
+    original_stdout_bytes = origin_demo.stdout_bytes
+    set_committed_value(origin_demo, "stdout_bytes", original_stdout_bytes + 1)
+    with pytest.raises(FoundryCatalogError, match="DemoReport v1 receipt"):
+        await request_materialization_finalization(
+            db_session,
+            candidate_id=candidate.id,
+            attestation_id=pr_attestation.id,
+            actor_user_id=reviewer.id,
+        )
+    set_committed_value(origin_demo, "stdout_bytes", original_stdout_bytes)
 
     final_binding, final_request, final_reservation, receipt = (
         await request_materialization_finalization(
@@ -526,6 +572,16 @@ async def test_materialization_requires_exact_reviewed_version_and_signed_callba
                 expected_workflow=FINAL_WORKFLOW,
                 trusted_public_keys=KEYRING,
             )
+    set_committed_value(origin_demo, "stdout_bytes", original_stdout_bytes + 1)
+    with pytest.raises(FoundryCatalogError, match="DemoReport v1 receipt"):
+        await record_materialization_final_receipt(
+            db_session,
+            attestation_bundle=_signed(final_payload),
+            expected_repository=REPOSITORY,
+            expected_workflow=FINAL_WORKFLOW,
+            trusted_public_keys=KEYRING,
+        )
+    set_committed_value(origin_demo, "stdout_bytes", original_stdout_bytes)
     materialization, new_version = await record_materialization_final_receipt(
         db_session,
         attestation_bundle=_signed(final_payload),

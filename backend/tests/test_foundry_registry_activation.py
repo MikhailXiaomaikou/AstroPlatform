@@ -34,6 +34,7 @@ from app.services.foundry_registry_import import (
 from scripts.prepare_foundry_registry_activation import prepare
 from tests.test_foundry_registry_import import (
     _case,
+    _mark_candidate_bundle_legacy_invalid,
     _pending_request,
     _successor_manifest,
 )
@@ -93,6 +94,59 @@ async def _prepared_case(db_session, tmp_path: Path):
         )
     )
     return request, import_receipt, imported, output, result
+
+
+@pytest.mark.asyncio
+async def test_legacy_signed_import_fails_current_policy_at_activation_boundaries(
+    db_session,
+    tmp_path,
+):
+    request, _receipt, imported, output, _result = await _prepared_case(
+        db_session,
+        tmp_path,
+    )
+    _legacy_version = await _mark_candidate_bundle_legacy_invalid(
+        db_session, request
+    )
+
+    with pytest.raises(
+        RegistryActivationError,
+        match="registry_activation_candidate_policy_invalid",
+    ):
+        await export_verified_activation_material(
+            db_session,
+            release_request_id=request.id,
+            release_request_hash=request.manifest_hash,
+            trusted_public_keys={
+                imported.signing_key_id: (
+                    read_packaged_activation(
+                        output / "activation-manifest.json"
+                    ).trusted_keyring[imported.signing_key_id]
+                )
+            },
+        )
+
+    with pytest.raises(
+        RegistryActivationError,
+        match="registry_activation_candidate_policy_invalid",
+    ):
+        await preflight_registry_activation(
+            db_session,
+            release_request_id=request.id,
+            release_request_hash=request.manifest_hash,
+            registry_snapshot_hash=imported.registry_snapshot_hash,
+            target_git_commit=COMMIT,
+        )
+
+    packaged = read_packaged_activation(output / "activation-manifest.json")
+    with pytest.raises(
+        RegistryActivationError,
+        match="registry_activation_candidate_policy_invalid",
+    ):
+        await assert_persisted_activation_not_rollback(
+            db_session,
+            packaged=packaged,
+        )
 
 
 @pytest.mark.asyncio

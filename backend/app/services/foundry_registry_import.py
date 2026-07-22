@@ -37,6 +37,9 @@ from app.services.foundry_catalog import (
     registry_release_request_chain,
     sha256_json,
 )
+from app.services.foundry_evidence_policy import (
+    candidate_bundle_contains_formal_claim_escape,
+)
 from app.services.workflow_registry_v2 import (
     WorkflowRegistryError,
     build_registry_status_entry,
@@ -434,6 +437,64 @@ async def _replay_request(
     return [entries[key] for key in sorted(entries)]
 
 
+async def _require_current_candidate_policy(
+    db: AsyncSession,
+    entries: Any,
+) -> None:
+    """Revalidate every executable entry against today's Candidate policy.
+
+    Historical UPSERT operations remain in the append-only release chain even
+    after a corrective SUSPEND or REVOKE.  Gate the final executable state so
+    an invalid legacy candidate cannot become REGISTERED while still allowing
+    operators to publish a release that removes it from execution.
+    """
+
+    if not isinstance(entries, list):
+        raise RegistryReleaseImportError(
+            "registry_release_candidate_policy_unverifiable",
+            status_code=409,
+        )
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            raise RegistryReleaseImportError(
+                "registry_release_candidate_policy_unverifiable",
+                status_code=409,
+            )
+        workflow = entry.get("workflow")
+        if not isinstance(workflow, Mapping):
+            raise RegistryReleaseImportError(
+                "registry_release_candidate_policy_unverifiable",
+                status_code=409,
+            )
+        if str(workflow.get("state") or "") != "REGISTERED":
+            continue
+        row = await _catalog_entry_by_identity(db, _identity(entry))
+        version = await db.get(FoundryCandidateVersion, row.candidate_version_id)
+        if (
+            version is None
+            or version.candidate_id != row.candidate_id
+            or version.version_hash != row.candidate_version_hash
+        ):
+            raise RegistryReleaseImportError(
+                "registry_release_candidate_policy_unverifiable",
+                status_code=409,
+            )
+        try:
+            policy_invalid = candidate_bundle_contains_formal_claim_escape(
+                version.candidate_bundle
+            )
+        except Exception as exc:
+            raise RegistryReleaseImportError(
+                "registry_release_candidate_policy_unverifiable",
+                status_code=409,
+            ) from exc
+        if policy_invalid:
+            raise RegistryReleaseImportError(
+                "registry_release_candidate_policy_invalid",
+                status_code=409,
+            )
+
+
 def _public_key_fingerprint(public_key: str) -> str:
     try:
         raw = base64.b64decode(public_key, validate=True)
@@ -480,6 +541,8 @@ async def export_pending_registry_release_request(
         raise RegistryReleaseImportError(
             "registry_release_request_not_chain_head", status_code=409
         )
+    expected_entries = await _replay_request(db, manifest)
+    await _require_current_candidate_policy(db, expected_entries)
     return {
         "schema_version": "standard_astro_registry_release_export_v1",
         "release_request_id": str(request.id),
@@ -569,6 +632,7 @@ async def record_signed_registry_release_import(
             "registry_release_request_snapshot_mismatch", status_code=409
         )
     expected_entries = await _replay_request(db, manifest)
+    await _require_current_candidate_policy(db, expected_entries)
     if not _json_equal(signed_payload.get("entries"), expected_entries):
         raise RegistryReleaseImportError(
             "registry_release_signed_entries_mismatch", status_code=409
@@ -757,6 +821,7 @@ async def reconcile_active_registry_projection(
         raise RegistryReleaseImportError(
             "registry_runtime_signed_entries_invalid", status_code=503
         )
+    await _require_current_candidate_policy(db, signed_entries)
     updated = 0
     reconciled_at = _utc_now()
     for signed_entry in signed_entries:

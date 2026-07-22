@@ -10,15 +10,27 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import importlib
-import io
 import json
 import os
 import platform
 import re
+import signal
+import subprocess
+import sys
+import tempfile
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+
+from app.services.foundry_evidence_policy import (
+    NON_FORMAL_EVIDENCE_CLASS,
+    candidate_bundle_contains_formal_claim_escape,
+    contains_formal_claim_escape,
+    contains_formal_claim_escape_text,
+)
 
 try:  # ``resource`` is unavailable on native Windows Python.
     import resource as _resource
@@ -27,53 +39,468 @@ except ImportError:  # pragma: no cover - exercised by Windows CI/clients
 
 
 CANDIDATE_SCHEMA_VERSION = 1
-NON_FORMAL_EVIDENCE_CLASS = "NON_FORMAL_DEMO"
 DEMO_STATUSES = frozenset({"PASSED", "PARTIAL", "FAILED"})
 _CANDIDATE_ID = re.compile(r"^[a-z][a-z0-9_]{2,96}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _STREAM_CAPTURE_LIMIT_BYTES = 1024 * 1024
+_CONTROL_RESULT_LIMIT_BYTES = 8 * 1024 * 1024
+_CANDIDATE_EXECUTION_TIMEOUT_SECONDS = 300.0
+_CHILD_EXIT_GRACE_SECONDS = 1.0
+_STREAM_DRAIN_GRACE_SECONDS = 2.0
+_CANDIDATE_CHILD_MODULE = "app.services.foundry_demo_runner"
+_CANDIDATE_CHILD_ACTIVE = False
 
 
 class FoundryDemoContractError(ValueError):
     """A candidate or result attempted to leave the non-formal lane."""
 
 
-class _BoundedTextCapture(io.TextIOBase):
-    """Capture at most one UTF-8 byte budget while accepting further writes.
+def _candidate_subprocess_identity() -> dict[str, object]:
+    """Return the optional container-only uid/gid drop for candidate code."""
 
-    Candidate output is untrusted.  ``StringIO`` grows without a limit, so a
-    noisy candidate could exhaust the Validation Runner before the container
-    resource limit terminates it.  This sink keeps a deterministic prefix and
-    separately counts all bytes the candidate attempted to write.
-    """
+    raw_uid = os.getenv("FOUNDRY_CANDIDATE_UID")
+    raw_gid = os.getenv("FOUNDRY_CANDIDATE_GID")
+    if raw_uid is None and raw_gid is None:
+        return {}
+    if raw_uid is None or raw_gid is None or os.name != "posix":
+        raise FoundryDemoContractError("candidate_identity_configuration_invalid")
+    try:
+        uid = int(raw_uid)
+        gid = int(raw_gid)
+    except ValueError as exc:
+        raise FoundryDemoContractError(
+            "candidate_identity_configuration_invalid"
+        ) from exc
+    if uid <= 0 or gid <= 0 or os.geteuid() != 0:
+        raise FoundryDemoContractError("candidate_identity_configuration_invalid")
+    return {"user": uid, "group": gid, "extra_groups": ()}
+
+
+def _assert_candidate_subprocess_identity() -> None:
+    """Fail before candidate imports if the configured privilege drop failed."""
+
+    raw_uid = os.getenv("FOUNDRY_CANDIDATE_UID")
+    raw_gid = os.getenv("FOUNDRY_CANDIDATE_GID")
+    if raw_uid is None and raw_gid is None:
+        return
+    try:
+        uid = int(str(raw_uid))
+        gid = int(str(raw_gid))
+    except ValueError as exc:
+        raise FoundryDemoContractError("candidate_identity_drop_failed") from exc
+    if (
+        os.getuid() != uid
+        or os.geteuid() != uid
+        or os.getgid() != gid
+        or os.getegid() != gid
+        or os.getgroups()
+    ):
+        raise FoundryDemoContractError("candidate_identity_drop_failed")
+    try:
+        status_lines = Path("/proc/self/status").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        effective = next(
+            int(line.partition(":")[2].strip(), 16)
+            for line in status_lines
+            if line.startswith("CapEff:")
+        )
+    except (OSError, StopIteration, ValueError) as exc:
+        raise FoundryDemoContractError(
+            "candidate_capability_state_unavailable"
+        ) from exc
+    if effective != 0:
+        raise FoundryDemoContractError("candidate_capability_drop_failed")
+
+
+class _BoundedFdCapture:
+    """Drain one OS pipe while retaining only a deterministic byte prefix."""
 
     def __init__(self, limit_bytes: int = _STREAM_CAPTURE_LIMIT_BYTES) -> None:
         super().__init__()
         self._limit_bytes = limit_bytes
         self._captured = bytearray()
+        self._stop = threading.Event()
         self.observed_bytes = 0
         self.truncated = False
+        self.eof_seen = False
+        self.error: str | None = None
+        self.forced_stop = False
 
-    @property
-    def encoding(self) -> str:  # pragma: no cover - TextIO protocol metadata
-        return "utf-8"
-
-    def writable(self) -> bool:
-        return True
-
-    def write(self, value: str) -> int:
-        text = str(value)
-        encoded = text.encode("utf-8", errors="replace")
-        self.observed_bytes += len(encoded)
+    def _append(self, value: bytes) -> None:
+        self.observed_bytes += len(value)
         remaining = self._limit_bytes - len(self._captured)
         if remaining > 0:
-            self._captured.extend(encoded[:remaining])
-        if len(encoded) > remaining:
+            self._captured.extend(value[:remaining])
+        if len(value) > remaining:
             self.truncated = True
-        return len(text)
+
+    def consume(self, descriptor: int) -> None:
+        """Drain until EOF, or stop promptly if a descendant holds the pipe."""
+
+        try:
+            os.set_blocking(descriptor, False)
+            while not self._stop.is_set():
+                try:
+                    chunk = os.read(descriptor, 64 * 1024)
+                except BlockingIOError:
+                    self._stop.wait(0.01)
+                    continue
+                except OSError as exc:
+                    self.error = exc.__class__.__name__
+                    break
+                if not chunk:
+                    self.eof_seen = True
+                    break
+                self._append(chunk)
+        except OSError as exc:
+            self.error = exc.__class__.__name__
+        finally:
+            try:
+                os.close(descriptor)
+            except OSError as exc:
+                if self.error is None:
+                    self.error = exc.__class__.__name__
+
+    def stop(self) -> None:
+        self.forced_stop = True
+        self._stop.set()
+
+    @property
+    def capture_complete(self) -> bool:
+        return self.eof_seen and self.error is None and not self.forced_stop
 
     def get_bytes(self) -> bytes:
         return bytes(self._captured)
+
+
+def _failure_outcome(failure_class: str) -> dict[str, Any]:
+    return {
+        "status": "FAILED",
+        "failure_class": failure_class,
+        "result": {},
+        "validation_summary": {"isolated_execution_complete": False},
+    }
+
+
+def _write_all(descriptor: int, payload: bytes) -> None:
+    remaining = memoryview(payload)
+    while remaining:
+        written = os.write(descriptor, remaining)
+        if written <= 0:
+            raise OSError("candidate control pipe stopped accepting bytes")
+        remaining = remaining[written:]
+
+
+def _terminate_candidate_group(pid: int, *, leader_exited: bool = False) -> bool:
+    """Best-effort process-group cleanup without leaking host exceptions."""
+
+    try:
+        os.killpg(pid, signal.SIGKILL)
+        return True
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        # macOS can report EPERM for a group whose leader is already a zombie.
+        # ``waitid(WNOWAIT)`` proved that this exact reserved PID exited; the
+        # outer one-Demo container remains the descendant cleanup boundary.
+        if platform.system() == "Darwin" and leader_exited:
+            return True
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return True
+        except (OSError, PermissionError):
+            return False
+        return False
+    except OSError:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return True
+        except (OSError, PermissionError):
+            return False
+        return False
+
+
+def _wait_child(
+    pid: int,
+    *,
+    timeout: float | None,
+) -> tuple[int | None, Any]:
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while True:
+        try:
+            if hasattr(os, "wait4"):
+                waited_pid, status, usage = os.wait4(pid, os.WNOHANG)
+            else:  # pragma: no cover - supported POSIX runners expose wait4
+                waited_pid, status = os.waitpid(pid, os.WNOHANG)
+                usage = None
+        except InterruptedError:
+            continue
+        except ChildProcessError:
+            return None, None
+        if waited_pid == pid:
+            return status, usage
+        if deadline is not None and time.monotonic() >= deadline:
+            return None, None
+        time.sleep(0.005)
+
+
+def _wait_child_exit_without_reaping(pid: int, timeout: float) -> bool:
+    """Wait for a child to exit while keeping its PID/PGID reserved."""
+
+    if not all(
+        hasattr(os, name)
+        for name in ("waitid", "P_PID", "WEXITED", "WNOHANG", "WNOWAIT")
+    ):
+        return False
+    deadline = time.monotonic() + timeout
+    flags = os.WEXITED | os.WNOHANG | os.WNOWAIT
+    while time.monotonic() < deadline:
+        try:
+            if os.waitid(os.P_PID, pid, flags) is not None:
+                return True
+        except InterruptedError:
+            continue
+        except ChildProcessError:
+            return False
+        time.sleep(0.005)
+    return False
+
+
+def _drain_capture_threads(
+    captures: tuple[_BoundedFdCapture, ...],
+    threads: tuple[threading.Thread, ...],
+) -> None:
+    deadline = time.monotonic() + _STREAM_DRAIN_GRACE_SECONDS
+    for thread in threads:
+        thread.join(timeout=max(0.0, deadline - time.monotonic()))
+    for capture, thread in zip(captures, threads):
+        if thread.is_alive():
+            capture.stop()
+    for capture, thread in zip(captures, threads):
+        thread.join(timeout=0.1)
+        if thread.is_alive():
+            capture.error = "collector_thread_did_not_stop"
+
+
+def _decode_candidate_control(
+    capture: _BoundedFdCapture,
+) -> tuple[dict[str, Any] | None, str | None]:
+    payload = capture.get_bytes()
+    if capture.truncated:
+        return None, "candidate_control_result_too_large"
+    if len(payload) < 8:
+        return None, "candidate_control_result_incomplete"
+    expected_size = int.from_bytes(payload[:8], "big")
+    if expected_size > _CONTROL_RESULT_LIMIT_BYTES:
+        return None, "candidate_control_result_too_large"
+    if len(payload) < expected_size + 8:
+        return None, "candidate_control_result_incomplete"
+    if len(payload) != expected_size + 8:
+        return None, "candidate_control_result_trailing_data"
+    encoded = payload[8:]
+    try:
+        decoded = json.loads(encoded)
+        canonical = _canonical_json(decoded)
+    except Exception:
+        # Python's JSON decoder can also raise ValueError for the configured
+        # integer-digit limit and RecursionError for adversarial nesting.
+        return None, "candidate_control_result_invalid"
+    if canonical != encoded:
+        return None, "candidate_control_result_not_canonical"
+    if not isinstance(decoded, dict):
+        return None, "candidate_control_result_not_object"
+    return decoded, None
+
+
+def _execute_candidate_isolated(
+    *,
+    bundle: dict[str, Any],
+    cache_root: str | Path | None,
+) -> tuple[dict[str, Any], _BoundedFdCapture, _BoundedFdCapture, Any]:
+    """Run a candidate in a fresh interpreter and capture all visible output.
+
+    The production CLI is PID 1 in a one-Demo Docker container.  This process
+    group provides prompt local cleanup; destroying that container/PID
+    namespace is the final boundary for descendants that deliberately detach.
+    """
+
+    if _CANDIDATE_CHILD_ACTIVE:
+        raise FoundryDemoContractError("candidate_nested_demo_execution_forbidden")
+    if os.name != "posix" or not hasattr(os, "killpg"):
+        raise FoundryDemoContractError("candidate_process_isolation_unavailable")
+    request = _canonical_json(
+        {
+            "bundle": bundle,
+            "cache_root": (
+                str(Path(cache_root).resolve()) if cache_root is not None else None
+            ),
+            "generated_module_roots": _generated_module_roots(),
+        }
+    )
+    if len(request) > _CONTROL_RESULT_LIMIT_BYTES:
+        raise FoundryDemoContractError("candidate_request_too_large")
+
+    stdout_capture = _BoundedFdCapture()
+    stderr_capture = _BoundedFdCapture()
+    control_capture = _BoundedFdCapture(_CONTROL_RESULT_LIMIT_BYTES + 8)
+    captures = (stdout_capture, stderr_capture, control_capture)
+    threads: list[threading.Thread] = []
+    open_descriptors: set[int] = set()
+    process: subprocess.Popen[bytes] | None = None
+    child_status: int | None = None
+    child_usage: Any = None
+    failure_class: str | None = None
+    group_cleanup_ok = True
+    leader_exited = False
+    candidate_identity = _candidate_subprocess_identity()
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="standard-astro-foundry-") as temp:
+            request_path = Path(temp) / "request.json"
+            request_path.write_bytes(request)
+            if candidate_identity:
+                Path(temp).chmod(0o711)
+                request_path.chmod(0o444)
+            else:
+                request_path.chmod(0o400)
+            control_read, control_write = os.pipe()
+            open_descriptors.update((control_read, control_write))
+            environment = os.environ.copy()
+            environment["PYTHONUNBUFFERED"] = "1"
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    _CANDIDATE_CHILD_MODULE,
+                    "--candidate-child",
+                    "--request",
+                    str(request_path),
+                    "--control-fd",
+                    str(control_write),
+                ],
+                cwd=Path(__file__).resolve().parents[2],
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                close_fds=True,
+                pass_fds=(control_write,),
+                start_new_session=True,
+                **candidate_identity,
+            )
+            os.close(control_write)
+            open_descriptors.discard(control_write)
+            if process.stdout is None or process.stderr is None:  # pragma: no cover
+                failure_class = "candidate_stream_pipe_unavailable"
+                raise RuntimeError(failure_class)
+            stdout_read = os.dup(process.stdout.fileno())
+            open_descriptors.add(stdout_read)
+            stderr_read = os.dup(process.stderr.fileno())
+            open_descriptors.add(stderr_read)
+            process.stdout.close()
+            process.stderr.close()
+            for capture, descriptor in zip(
+                captures,
+                (stdout_read, stderr_read, control_read),
+                strict=True,
+            ):
+                thread = threading.Thread(
+                    target=capture.consume,
+                    args=(descriptor,),
+                    daemon=True,
+                )
+                thread.start()
+                threads.append(thread)
+                # The collector now owns and closes this descriptor.
+                open_descriptors.discard(descriptor)
+
+            deadline = time.monotonic() + _CANDIDATE_EXECUTION_TIMEOUT_SECONDS
+            frame_complete = False
+            while failure_class is None and not frame_complete:
+                if stdout_capture.truncated or stderr_capture.truncated:
+                    failure_class = "candidate_stream_limit_exceeded"
+                    break
+                control = control_capture.get_bytes()
+                if len(control) >= 8:
+                    expected_size = int.from_bytes(control[:8], "big")
+                    if expected_size > _CONTROL_RESULT_LIMIT_BYTES:
+                        failure_class = "candidate_control_result_too_large"
+                        break
+                    frame_complete = len(control) >= expected_size + 8
+                if control_capture.eof_seen and not frame_complete:
+                    failure_class = "candidate_control_result_incomplete"
+                    break
+                if time.monotonic() >= deadline:
+                    failure_class = "candidate_execution_timeout"
+                    break
+                if not frame_complete:
+                    time.sleep(0.005)
+
+            if frame_complete and failure_class is None:
+                leader_exited = _wait_child_exit_without_reaping(
+                    process.pid,
+                    _CHILD_EXIT_GRACE_SECONDS,
+                )
+                if not leader_exited:
+                    failure_class = "candidate_process_did_not_exit"
+            group_cleanup_ok = _terminate_candidate_group(
+                process.pid,
+                leader_exited=leader_exited,
+            )
+            child_status, child_usage = _wait_child(
+                process.pid,
+                timeout=_CHILD_EXIT_GRACE_SECONDS,
+            )
+            if child_status is not None:
+                process.returncode = os.waitstatus_to_exitcode(child_status)
+            elif failure_class is None:
+                failure_class = "candidate_process_reap_failed"
+    except FoundryDemoContractError:
+        raise
+    except Exception as exc:
+        failure_class = failure_class or f"candidate_runner_{exc.__class__.__name__}"
+    finally:
+        if process is not None:
+            for stream in (process.stdout, process.stderr):
+                if stream is not None:
+                    with contextlib.suppress(OSError):
+                        stream.close()
+        if process is not None and process.returncode is None:
+            group_cleanup_ok = _terminate_candidate_group(
+                process.pid,
+                leader_exited=leader_exited,
+            ) and group_cleanup_ok
+            status, usage = _wait_child(
+                process.pid,
+                timeout=_CHILD_EXIT_GRACE_SECONDS,
+            )
+            if status is not None:
+                child_status = status
+                child_usage = child_usage or usage
+                process.returncode = os.waitstatus_to_exitcode(status)
+        for descriptor in tuple(open_descriptors):
+            with contextlib.suppress(OSError):
+                os.close(descriptor)
+        _drain_capture_threads(captures, tuple(threads))
+
+    if not group_cleanup_ok:
+        failure_class = failure_class or "candidate_process_group_cleanup_failed"
+    if any(not capture.capture_complete for capture in captures):
+        failure_class = failure_class or "candidate_stream_capture_incomplete"
+    if child_status is None:
+        failure_class = failure_class or "candidate_child_status_missing"
+    elif not os.WIFEXITED(child_status) or os.WEXITSTATUS(child_status) != 0:
+        failure_class = failure_class or "candidate_child_exit_failed"
+    outcome, control_failure = _decode_candidate_control(control_capture)
+    failure_class = failure_class or control_failure
+    if failure_class is not None:
+        outcome = _failure_outcome(failure_class)
+    if outcome is None:
+        outcome = _failure_outcome("candidate_control_result_missing")
+    return outcome, stdout_capture, stderr_capture, child_usage
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -89,6 +516,23 @@ def _canonical_json(value: Any) -> bytes:
         raise FoundryDemoContractError("candidate_payload_not_canonical_json") from exc
 
 
+def _generated_module_roots() -> list[str]:
+    """Serialize trusted package roots for the fresh candidate interpreter."""
+
+    package = importlib.import_module("app.services.foundry_generated")
+    roots: list[str] = []
+    for raw_root in package.__path__:
+        root = Path(raw_root).resolve()
+        if root.name != "foundry_generated" or not root.is_dir():
+            raise FoundryDemoContractError("candidate_generated_root_invalid")
+        value = str(root)
+        if value not in roots:
+            roots.append(value)
+    if not roots:
+        raise FoundryDemoContractError("candidate_generated_root_missing")
+    return roots
+
+
 def _sha256(value: Any) -> str:
     return hashlib.sha256(_canonical_json(value)).hexdigest()
 
@@ -97,36 +541,21 @@ def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def _contains_formal_claim_escape(value: Any) -> bool:
-    """Detect formal-evidence fields at any depth in candidate output."""
-
-    if isinstance(value, list):
-        return any(_contains_formal_claim_escape(item) for item in value)
-    if not isinstance(value, dict):
-        return False
-    for raw_key, item in value.items():
-        key = str(raw_key).strip().lower()
-        if key in {"publication_ready", "claim_eligible"} and item is True:
-            return True
-        if key == "scientific_verdict" and str(item).upper() == "SUPPORTED":
-            return True
-        if key in {
-            "evidence_pack",
-            "evidence_pack_id",
-            "formal_evidence_pack",
-        } and item:
-            return True
-        if _contains_formal_claim_escape(item):
-            return True
-    return False
-
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
 def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _max_rss_kib(usage: Any) -> int | None:
+    if usage is None:
+        return None
+    raw = int(usage.ru_maxrss)
+    if platform.system() == "Darwin":
+        return (raw + 1023) // 1024
+    return raw
 
 
 def validate_candidate_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
@@ -186,6 +615,8 @@ def validate_candidate_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
         "evidence_pack_allowed": False,
     }:
         raise FoundryDemoContractError("candidate_output_policy_not_non_formal")
+    if candidate_bundle_contains_formal_claim_escape(bundle):
+        raise FoundryDemoContractError("candidate_bundle_formal_claim_escape")
     if str(bundle.get("entrypoint_id") or "") not in _ENTRYPOINTS:
         raise FoundryDemoContractError("candidate_entrypoint_not_allowlisted")
     return json.loads(_canonical_json(bundle))
@@ -228,6 +659,7 @@ def _run_desi_dr2_official_chain_summary(
     workflow_spec = bundle["workflow_spec"]
     inputs = workflow_spec.get("demo_inputs") or {}
     prior_root = os.environ.get("DESI_DR2_OFFICIAL_CHAIN_ROOT")
+    configured_root = cache_root if cache_root is not None else prior_root
     if cache_root is not None:
         os.environ["DESI_DR2_OFFICIAL_CHAIN_ROOT"] = str(cache_root)
     try:
@@ -245,8 +677,30 @@ def _run_desi_dr2_official_chain_summary(
 
     ready_cells = int(matrix.get("official_ready_cells") or 0)
     withheld_cells = int(matrix.get("official_withheld_cells") or 0)
-    status = "PASSED" if ready_cells > 0 and withheld_cells == 0 else "PARTIAL"
-    failure_class = None if status == "PASSED" else "official_chain_mirror_unavailable"
+    mirror_was_configured = bool(str(configured_root or "").strip())
+    withheld_reasons = sorted(
+        {
+            str(reason)
+            for cell in matrix.get("matrix") or []
+            if isinstance(cell, dict)
+            for reason in cell.get("withheld_reasons") or []
+            if str(reason).strip()
+        }
+    )
+    if ready_cells > 0 and withheld_cells == 0:
+        status = "PASSED"
+        failure_class = None
+    elif mirror_was_configured:
+        # A configured cache that is missing, corrupt, schema-incompatible, or
+        # scientifically invalid is not equivalent to the operator declining
+        # to provide a mirror.  Preserve the failed receipt, but make the public
+        # wrapper return non-zero so an integrity failure cannot look like the
+        # expected no-mirror demonstration.
+        status = "FAILED"
+        failure_class = "official_chain_mirror_integrity_failed"
+    else:
+        status = "PARTIAL"
+        failure_class = "official_chain_mirror_unavailable"
     return {
         "status": status,
         "failure_class": failure_class,
@@ -261,8 +715,10 @@ def _run_desi_dr2_official_chain_summary(
         "validation_summary": {
             "registry_integrity": True,
             "official_mirror_verified": ready_cells > 0,
+            "official_mirror_configured": mirror_was_configured,
             "ready_cells": ready_cells,
             "withheld_cells": withheld_cells,
+            "withheld_reasons": withheld_reasons,
             "numeric_claim_gate": "NON_FORMAL_DEMO",
         },
     }
@@ -303,6 +759,109 @@ _ENTRYPOINTS: dict[
 }
 
 
+def _candidate_child_main(arguments: list[str]) -> int:
+    """Trusted wrapper used only by the fresh Validation subprocess."""
+
+    import argparse
+
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--candidate-child", action="store_true", required=True)
+    parser.add_argument("--request", required=True)
+    parser.add_argument("--control-fd", required=True, type=int)
+    args = parser.parse_args(arguments)
+    control_fd = int(args.control_fd)
+    exit_immediately = os._exit
+    global _CANDIDATE_CHILD_ACTIVE
+    try:
+        _assert_candidate_subprocess_identity()
+        os.set_inheritable(control_fd, False)
+        request_path = Path(args.request)
+        if request_path.stat().st_size > _CONTROL_RESULT_LIMIT_BYTES:
+            raise FoundryDemoContractError("candidate_request_too_large")
+        request = json.loads(request_path.read_bytes())
+        if not isinstance(request, dict) or set(request) != {
+            "bundle",
+            "cache_root",
+            "generated_module_roots",
+        }:
+            raise FoundryDemoContractError("candidate_request_invalid")
+        bundle = validate_candidate_bundle(request["bundle"])
+        cache_root = request.get("cache_root")
+        if cache_root is not None and not isinstance(cache_root, str):
+            raise FoundryDemoContractError("candidate_cache_root_invalid")
+        generated_module_roots = request.get("generated_module_roots")
+        if (
+            not isinstance(generated_module_roots, list)
+            or not generated_module_roots
+            or any(
+                not isinstance(root, str)
+                or not Path(root).is_absolute()
+                or Path(root).name != "foundry_generated"
+                or not Path(root).is_dir()
+                for root in generated_module_roots
+            )
+        ):
+            raise FoundryDemoContractError("candidate_generated_root_invalid")
+        generated_package = importlib.import_module(
+            "app.services.foundry_generated"
+        )
+        for root in generated_module_roots:
+            if root not in generated_package.__path__:
+                generated_package.__path__.append(root)
+        entrypoint = _ENTRYPOINTS[bundle["entrypoint_id"]]
+        _CANDIDATE_CHILD_ACTIVE = True
+        try:
+            outcome = entrypoint(bundle, cache_root=cache_root)
+            if not isinstance(outcome, dict):
+                outcome = _failure_outcome("candidate_result_not_object")
+        except BaseException as exc:
+            outcome = _failure_outcome(exc.__class__.__name__)
+        try:
+            payload = _canonical_json(outcome)
+        except FoundryDemoContractError:
+            payload = _canonical_json(
+                _failure_outcome("candidate_result_not_canonical_json")
+            )
+        if len(payload) > _CONTROL_RESULT_LIMIT_BYTES:
+            payload = _canonical_json(
+                _failure_outcome("candidate_control_result_too_large")
+            )
+        sys.stdout.flush()
+        sys.stderr.flush()
+        _write_all(control_fd, len(payload).to_bytes(8, "big") + payload)
+        os.close(control_fd)
+    except BaseException:
+        with contextlib.suppress(BaseException):
+            payload = _canonical_json(_failure_outcome("candidate_child_setup_failed"))
+            _write_all(control_fd, len(payload).to_bytes(8, "big") + payload)
+            os.close(control_fd)
+    finally:
+        exit_immediately(0)
+
+
+def _normalize_candidate_outcome(outcome: Any) -> dict[str, Any]:
+    required = {"status", "failure_class", "result", "validation_summary"}
+    if not isinstance(outcome, dict) or set(outcome) != required:
+        return _failure_outcome("candidate_demo_outcome_shape_invalid")
+    status = outcome.get("status")
+    if not isinstance(status, str) or status not in DEMO_STATUSES:
+        return _failure_outcome("candidate_demo_status_invalid")
+    failure_class = outcome.get("failure_class")
+    if failure_class is not None and (
+        not isinstance(failure_class, str) or not failure_class.strip()
+    ):
+        return _failure_outcome("candidate_demo_failure_class_invalid")
+    if status == "PASSED" and failure_class is not None:
+        return _failure_outcome("candidate_demo_failure_class_invalid")
+    if status != "PASSED" and failure_class is None:
+        return _failure_outcome("candidate_demo_failure_class_required")
+    if not isinstance(outcome.get("result"), dict):
+        return _failure_outcome("candidate_demo_result_invalid")
+    if not isinstance(outcome.get("validation_summary"), dict):
+        return _failure_outcome("candidate_demo_validation_summary_invalid")
+    return outcome
+
+
 def run_candidate_demo(
     bundle: dict[str, Any],
     *,
@@ -317,45 +876,67 @@ def run_candidate_demo(
     normalized = validate_candidate_bundle(bundle)
     started = started_at or _utc_now()
     demo_run_id = str(uuid.uuid4())
-    entrypoint = _ENTRYPOINTS[normalized["entrypoint_id"]]
-    stdout_buffer = _BoundedTextCapture()
-    stderr_buffer = _BoundedTextCapture()
-    with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(
-        stderr_buffer
-    ):
-        try:
-            outcome = entrypoint(normalized, cache_root=cache_root)
-        except Exception as exc:  # fail closed; never expose a Python traceback
-            outcome = {
-                "status": "FAILED",
-                "failure_class": exc.__class__.__name__,
-                "result": {},
-                "validation_summary": {"runner_exception": True},
-            }
-    status = str(outcome.get("status") or "FAILED").upper()
-    if status not in DEMO_STATUSES:
-        raise FoundryDemoContractError("candidate_demo_status_invalid")
-    result = outcome.get("result") if isinstance(outcome.get("result"), dict) else {}
-    if _contains_formal_claim_escape(result) or _contains_formal_claim_escape(
-        outcome.get("validation_summary")
-    ):
+    outcome, stdout_capture, stderr_capture, usage = (
+        _execute_candidate_isolated(
+            bundle=normalized,
+            cache_root=cache_root,
+        )
+    )
+    outcome = _normalize_candidate_outcome(outcome)
+    status = outcome["status"]
+    result = outcome["result"]
+    stdout_bytes = stdout_capture.get_bytes()
+    stderr_bytes = stderr_capture.get_bytes()
+    stream_escape = contains_formal_claim_escape_text(
+        stdout_bytes
+    ) or contains_formal_claim_escape_text(stderr_bytes)
+    stream_capture_incomplete = (
+        not stdout_capture.capture_complete
+        or not stderr_capture.capture_complete
+    )
+    stream_limit_exceeded = stdout_capture.truncated or stderr_capture.truncated
+    candidate_output = {
+        "failure_class": outcome.get("failure_class"),
+        "result": result,
+        "validation_summary": outcome.get("validation_summary"),
+    }
+    if contains_formal_claim_escape(
+        candidate_output,
+        scan_text_leaves=True,
+    ) or stream_escape:
         status = "FAILED"
         result = {}
         outcome["failure_class"] = "candidate_formal_claim_escape_blocked"
         outcome["validation_summary"] = {"formal_claim_escape_blocked": True}
+        if stream_escape:
+            stdout_bytes = b""
+            stderr_bytes = b"candidate stream quarantined: claim escape blocked\n"
+    elif stream_limit_exceeded:
+        status = "FAILED"
+        result = {}
+        outcome["failure_class"] = "candidate_stream_limit_exceeded"
+        outcome["validation_summary"] = {"stream_limit_exceeded": True}
+        stdout_bytes = b""
+        stderr_bytes = b"candidate stream quarantined: capture limit exceeded\n"
+    elif stream_capture_incomplete:
+        status = "FAILED"
+        result = {}
+        upstream_failure = outcome.get("failure_class")
+        outcome["failure_class"] = (
+            upstream_failure or "candidate_stream_capture_incomplete"
+        )
+        outcome["validation_summary"] = {
+            "stream_capture_complete": False,
+            "upstream_failure_class": upstream_failure,
+        }
+        stdout_bytes = b""
+        stderr_bytes = b"candidate stream quarantined: capture incomplete\n"
     completed = _utc_now()
-    stdout_bytes = stdout_buffer.get_bytes()
-    stderr_bytes = stderr_buffer.get_bytes()
     if captured_streams is not None:
         captured_streams.clear()
         captured_streams.update(
             {"stdout.log": stdout_bytes, "stderr.log": stderr_bytes}
         )
-    usage = (
-        _resource.getrusage(_resource.RUSAGE_SELF)
-        if _resource is not None
-        else None
-    )
     environment = {
         "python_version": platform.python_version(),
         "python_implementation": platform.python_implementation(),
@@ -411,9 +992,8 @@ def run_candidate_demo(
             },
         ],
         "resource_usage": {
-            "max_rss_kib_platform_value": (
-                int(usage.ru_maxrss) if usage is not None else None
-            ),
+            "max_rss_kib": _max_rss_kib(usage),
+            "measurement_scope": "direct_candidate_subprocess_wait4",
             "user_cpu_seconds": (
                 round(float(usage.ru_utime), 6) if usage is not None else None
             ),
@@ -421,10 +1001,10 @@ def run_candidate_demo(
                 round(float(usage.ru_stime), 6) if usage is not None else None
             ),
             "stream_capture_limit_bytes": _STREAM_CAPTURE_LIMIT_BYTES,
-            "stdout_observed_bytes": stdout_buffer.observed_bytes,
-            "stderr_observed_bytes": stderr_buffer.observed_bytes,
-            "stdout_truncated": stdout_buffer.truncated,
-            "stderr_truncated": stderr_buffer.truncated,
+            "stdout_observed_bytes": stdout_capture.observed_bytes,
+            "stderr_observed_bytes": stderr_capture.observed_bytes,
+            "stdout_truncated": stdout_capture.truncated,
+            "stderr_truncated": stderr_capture.truncated,
         },
         "failure_class": outcome.get("failure_class"),
         "validation_summary": outcome.get("validation_summary") or {},
@@ -444,3 +1024,7 @@ __all__ = [
     "run_candidate_demo",
     "validate_candidate_bundle",
 ]
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised through parent tests
+    _candidate_child_main(sys.argv[1:])

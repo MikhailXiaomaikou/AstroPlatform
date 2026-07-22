@@ -191,8 +191,10 @@ jobs:
           --tag standard-astro-foundry-demo:ci
           control-source/backend
 
-      # The candidate finally executes here: no network, no credentials,
-      # read-only root, non-root uid, bounded CPU/memory/processes/output.
+      # Root PID 1 is a tiny trusted supervisor with only SETUID/SETGID/KILL.
+      # It drops the candidate child to capability-free uid 10002 and writes
+      # only to an internal anonymous volume. The host final directory does not
+      # exist until Docker has stopped and destroyed the candidate PID namespace.
       - name: Run candidate in the isolated Validation container
         env:
           CANDIDATE: ${{ inputs.candidate_key }}
@@ -203,8 +205,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p foundry-output
-          chmod 0777 foundry-output
+          test ! -e foundry-output
           runner_digest="$(docker image inspect --format '{{.Id}}' standard-astro-foundry-demo:ci)"
           candidate_mount=()
           version_args=()
@@ -213,27 +214,52 @@ jobs:
             version_args=(--candidate-version-sha256 "$CANDIDATE_VERSION_SHA256")
           fi
           if [[ "$AI_DRAFT" = "true" ]]; then
-            candidate_mount=(--volume "$PWD/foundry-validation-input/${CANDIDATE}.json:/app/foundry_candidates/${CANDIDATE}.json:ro")
+            candidate_mount=(
+              --mount
+              "type=bind,source=$PWD/foundry-validation-input/${CANDIDATE}.json,destination=/app/foundry_candidates/${CANDIDATE}.json,readonly"
+            )
           fi
-          docker run --rm \
+          container="foundry-demo-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            if [[ -n "${container:-}" ]] && docker inspect "$container" >/dev/null 2>&1; then
+              docker kill "$container" >/dev/null 2>&1 || true
+              docker rm --force --volumes "$container" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+          docker create \
+            --name "$container" \
             --network none \
             --read-only \
             --log-driver none \
             --tmpfs /tmp:rw,noexec,nosuid,nodev,size=67108864 \
             --cap-drop ALL \
+            --cap-add SETUID \
+            --cap-add SETGID \
+            --cap-add KILL \
             --security-opt no-new-privileges \
             --pids-limit 64 \
             --cpus 2 \
             --memory 6g \
             --ulimit fsize=67108864:67108864 \
-            --user 10002:10002 \
-            --volume "$PWD/foundry-output:/out:rw" \
+            --mount type=volume,destination=/trusted-output \
             "${candidate_mount[@]}" \
             standard-astro-foundry-demo:ci \
             --candidate "$CANDIDATE" \
-            --output /out/demo-report.json \
             --runner-image-digest "$runner_digest" \
             "${version_args[@]}"
+          docker start --attach "$container"
+
+          # `docker cp` is intentionally impossible until PID 1 has exited and
+          # Docker reports no process left in the container PID namespace.
+          state="$(docker inspect --format '{{.State.Status}}|{{.State.Running}}|{{.State.Pid}}|{{.State.ExitCode}}' "$container")"
+          test "$state" = "exited|false|0|0"
+          test ! -e foundry-output
+          install -d -m 0700 foundry-output
+          docker cp "$container:/trusted-output/." foundry-output/
+          docker rm --volumes "$container"
+          container=""
+          trap - EXIT
 
       - name: Enforce the non-formal report contract
         run: |

@@ -26,14 +26,13 @@ from app.models.foundry_records import (
     FoundryCandidate,
     FoundryCandidateEvent,
     FoundryCandidateVersion,
-    FoundryDemoRun,
     FoundryReview,
 )
 from app.services.foundry_catalog import (
-    NON_FORMAL_EVIDENCE_CLASS,
     FoundryCatalogError,
     _append_event,
     _review_requirements_satisfied,
+    _strict_passed_demo_v1,
     ai_draft_validation_binding,
     append_candidate_version,
     canonical_json,
@@ -539,16 +538,7 @@ async def _approved_origin(
             "Only an AI Draft with an immutable non-empty allowlisted patch can enter this lane",
             status_code=409,
         )
-    demo = await db.scalar(
-        select(FoundryDemoRun.id).where(
-            FoundryDemoRun.candidate_version_id == version.id,
-            FoundryDemoRun.status == "PASSED",
-            FoundryDemoRun.evidence_class == NON_FORMAL_EVIDENCE_CLASS,
-            FoundryDemoRun.publication_ready.is_(False),
-            FoundryDemoRun.claim_eligible.is_(False),
-            FoundryDemoRun.evidence_pack_allowed.is_(False),
-        )
-    )
+    demo = await _strict_passed_demo_v1(db, version)
     reviews = list(
         (
             await db.execute(
@@ -1072,6 +1062,12 @@ async def request_materialization_finalization(
             "The reviewed origin version changed before merge finalization",
             status_code=409,
         )
+    if await _strict_passed_demo_v1(db, origin) is None:
+        raise FoundryCatalogError(
+            "materialization_demo_receipt_invalid",
+            "Merge finalization requires the origin's exact immutable DemoReport v1 receipt",
+            status_code=409,
+        )
     receipt = await db.scalar(
         select(FoundryMaterializationReceipt).where(
             FoundryMaterializationReceipt.materialization_attestation_id == attestation.id
@@ -1235,6 +1231,12 @@ async def record_materialization_final_receipt(
     ):
         raise FoundryCatalogError(
             "materialization_final_binding_mismatch", "Final receipt is not bound to the current reviewed origin", status_code=409
+        )
+    if await _strict_passed_demo_v1(db, origin) is None:
+        raise FoundryCatalogError(
+            "materialization_demo_receipt_invalid",
+            "A final materialization receipt requires the origin's exact immutable DemoReport v1 receipt",
+            status_code=409,
         )
     finalization_request = await db.scalar(
         select(FoundryCandidateEvent).where(

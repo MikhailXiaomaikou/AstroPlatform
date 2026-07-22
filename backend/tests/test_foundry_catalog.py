@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import hashlib
 import json
 import sys
@@ -17,7 +18,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm.attributes import set_committed_value
 
+import app.services.foundry_catalog as foundry_catalog_service
 from app.auth import create_access_token
 from app.config import settings
 from app.models.claim_audit_records import ClaimAudit
@@ -36,10 +39,13 @@ from app.services.foundry_catalog import (
     FoundryCatalogError,
     _append_event,
     _formal_build_source_binding,
+    _has_strict_demo_report_v1_receipt,
     _pending_registry_release_request,
+    _strict_passed_demo_v1,
     append_candidate_version,
     ensure_validation_run,
     record_demo_report,
+    record_validation_result,
     record_validation_dispatch,
     record_validation_workflow_failure,
     reconcile_expired_validation_runs,
@@ -613,20 +619,191 @@ async def test_demo_callback_is_hash_bound_idempotent_and_non_formal(db_session)
             "media_type": "text/plain; charset=utf-8",
         },
     ]
-    forged = dict(report)
-    forged["result"] = {"scientific_verdict": "SUPPORTED"}
-    forged["demo_report_sha256"] = sha256_json(
-        {key: value for key, value in forged.items() if key != "demo_report_sha256"}
+    for escaped_result, escaped_failure_class in (
+        ({"scientific_verdict": "SUPPORTED"}, None),
+        ({"message": "Result is SUPPORTED"}, None),
+        ({"Result is SUPPORTED": None}, None),
+        ({"message": "evidence_pack_id=pack-123"}, None),
+        ({"Evidence Pack ID": "pack-123"}, None),
+        ({}, "Result is SUPPORTED"),
+    ):
+        forged = dict(report)
+        forged["result"] = escaped_result
+        forged["failure_class"] = escaped_failure_class
+        forged["demo_report_sha256"] = sha256_json(
+            {
+                key: value
+                for key, value in forged.items()
+                if key != "demo_report_sha256"
+            }
+        )
+        with pytest.raises(
+            FoundryCatalogError,
+            match="non-formal|violates schema",
+        ):
+            await record_demo_report(
+                db_session,
+                validation_run_id=run.id,
+                demo_report=forged,
+            )
+
+    forged_extra = copy.deepcopy(report)
+    forged_extra["extraReceiptData"] = {
+        "publicationReady": True,
+        "evidenceClass": "FORMAL",
+    }
+    forged_extra["demo_report_sha256"] = sha256_json(
+        {
+            key: value
+            for key, value in forged_extra.items()
+            if key != "demo_report_sha256"
+        }
     )
-    with pytest.raises(FoundryCatalogError, match="non-formal"):
+    with pytest.raises(FoundryCatalogError, match="violates schema"):
         await record_demo_report(
-            db_session, validation_run_id=run.id, demo_report=forged
+            db_session,
+            validation_run_id=run.id,
+            demo_report=forged_extra,
+        )
+
+    for field, value in (
+        ("status", "passed"),
+        ("result", [["official_ready_cells", 1]]),
+        ("validation_summary", [["checks_passed", 4]]),
+        ("duration_ms", True),
+    ):
+        forged_type = copy.deepcopy(report)
+        forged_type[field] = value
+        forged_type["demo_report_sha256"] = sha256_json(
+            {
+                key: item
+                for key, item in forged_type.items()
+                if key != "demo_report_sha256"
+            }
+        )
+        with pytest.raises(FoundryCatalogError, match="violates schema"):
+            await record_demo_report(
+                db_session,
+                validation_run_id=run.id,
+                demo_report=forged_type,
+            )
+
+    await record_validation_dispatch(
+        db_session, validation_run_id=wrong_run.id, dispatched=True
+    )
+    forged_limitations = copy.deepcopy(report)
+    forged_limitations["demo_run_id"] = str(uuid.uuid4())
+    forged_limitations["limitations"] = ["Original warnings removed."]
+    forged_limitations["demo_report_sha256"] = sha256_json(
+        {
+            key: value
+            for key, value in forged_limitations.items()
+            if key != "demo_report_sha256"
+        }
+    )
+    with pytest.raises(FoundryCatalogError, match="immutable candidate bundle"):
+        await record_demo_report(
+            db_session,
+            validation_run_id=wrong_run.id,
+            demo_report=forged_limitations,
         )
 
     version.workflow_version = "mutated"
     with pytest.raises(ValueError, match="append-only"):
         await db_session.flush()
     await db_session.rollback()
+
+
+async def test_legacy_validation_writer_is_permanently_disabled(db_session) -> None:
+    now = datetime.now(timezone.utc)
+    with pytest.raises(
+        FoundryCatalogError,
+        match="immutable DemoReport v1 contract",
+    ) as exc_info:
+        await record_validation_result(
+            db_session,
+            validation_run_id=uuid.uuid4(),
+            status="PASSED",
+            runner_image_digest=VALIDATION_IMAGE,
+            stdout_sha256="a" * 64,
+            stderr_sha256="b" * 64,
+            structured_result={},
+            limitations=["legacy"],
+            validation_summary={},
+            failure_class=None,
+            resource_usage={},
+            artifact_manifest=[],
+            started_at=now,
+            completed_at=now,
+        )
+    assert exc_info.value.status_code == 410
+
+
+async def test_self_consistent_demo_without_validation_lineage_cannot_unlock_review(
+    db_session,
+    test_user,
+) -> None:
+    reviewer, _token = test_user
+    candidate, version, _run, demo, _report = await _candidate_with_demo(
+        db_session,
+        suffix="legacy_demo_gate",
+    )
+    assert _has_strict_demo_report_v1_receipt(demo, version) is True
+
+    # A row can have a fully self-consistent public hash and field binding yet
+    # still be hand-written rather than accepted from a ValidationRun.  The
+    # formal gates must require that separate durable lineage.
+    set_committed_value(demo, "validation_run_id", None)
+    assert _has_strict_demo_report_v1_receipt(demo, version) is True
+
+    with pytest.raises(FoundryCatalogError, match="PASSED Demo"):
+        await review_candidate_version(
+            db_session,
+            candidate_id=candidate.id,
+            candidate_version_id=version.id,
+            candidate_version_hash=version.version_hash,
+            reviewer_user_id=reviewer.id,
+            review_scope="ENGINEERING",
+            decision="APPROVED",
+            comment="A legacy receipt must not unlock review.",
+        )
+
+
+async def test_legacy_candidate_text_escape_fails_current_shared_gate(
+    db_session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate, version, _run, _demo, _report = await _candidate_with_demo(
+        db_session,
+        suffix="legacy_bundle_policy",
+    )
+    legacy_bundle = copy.deepcopy(version.candidate_bundle)
+    legacy_bundle["workflow_spec"]["note"] = "scientific_verdict=SUPP٠RTED"
+    set_committed_value(version, "candidate_bundle", legacy_bundle)
+
+    def receipt_must_not_be_consulted(*_args, **_kwargs):
+        raise AssertionError("invalid persisted bundles must fail before receipt trust")
+
+    monkeypatch.setattr(
+        foundry_catalog_service,
+        "_has_strict_demo_report_v1_receipt",
+        receipt_must_not_be_consulted,
+    )
+    assert await _strict_passed_demo_v1(db_session, version) is None
+
+    with pytest.raises(
+        FoundryCatalogError,
+        match="current non-formal evidence policy",
+    ):
+        await ensure_validation_run(
+            db_session,
+            candidate_id=candidate.id,
+            candidate_version_id=version.id,
+            candidate_version_hash=version.version_hash,
+            actor_kind="HUMAN_ADMIN",
+            actor_user_id=None,
+            reuse_terminal=True,
+        )
 
 
 async def test_old_version_demo_is_recorded_without_overwriting_new_version_status(
@@ -1672,6 +1849,44 @@ async def test_formal_build_is_protected_and_registration_stays_pending(
     )
     assert str(reviewer.id) not in json.dumps(release.manifest, sort_keys=True)
     assert static_gate_calls == [entry.release_entry]
+    replay_entry, replay_release = await register_candidate_version(
+        db_session,
+        candidate_id=candidate.id,
+        candidate_version_id=version.id,
+        candidate_version_hash=version.version_hash,
+        build_attestation_id=attestation.id,
+        registrar_user_id=reviewer.id,
+    )
+    assert replay_entry.id == entry.id
+    assert replay_release.id == release.id
+    assert static_gate_calls == [entry.release_entry, entry.release_entry]
+
+    next_bundle = copy.deepcopy(version.candidate_bundle)
+    next_bundle["candidate_version"] = 2
+    await append_candidate_version(
+        db_session,
+        candidate=candidate,
+        draft={
+            "candidate_bundle": next_bundle,
+            "validation_runner_image_digest": version.validation_runner_image_digest,
+            "code_tree_hash": version.code_tree_hash,
+            "patch_hash": version.patch_hash,
+            "sbom_hash": version.sbom_hash,
+        },
+        actor_kind="AI_SERVICE",
+        actor_user_id=None,
+    )
+    await db_session.commit()
+    with pytest.raises(FoundryCatalogError) as stale_replay:
+        await register_candidate_version(
+            db_session,
+            candidate_id=candidate.id,
+            candidate_version_id=version.id,
+            candidate_version_hash=version.version_hash,
+            build_attestation_id=attestation.id,
+            registrar_user_id=reviewer.id,
+        )
+    assert stale_replay.value.error_class == "candidate_registration_binding_mismatch"
 
 
 async def test_formal_build_callback_verifies_signature_and_workflow_identity(
