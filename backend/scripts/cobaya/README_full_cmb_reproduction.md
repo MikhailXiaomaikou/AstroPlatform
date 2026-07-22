@@ -31,30 +31,45 @@ The offline dependency lock is `w0wa_exact_requirements.txt`. It is deliberately
 separate from the web application's requirements and Render deployment. Build
 a dedicated Python 3.14.5 exact environment from the committed 52-wheel
 closure, retaining the original archives because preflight re-hashes them.
-Revision 2 must use new paths: never create, update, remove, or install into the
-revision-1 `exact-venv`, `wheels`, `isolated-venv`, `backend/packages`, receipt,
-or chain paths. Do not reuse the backend web/test environment either; its extra
-packages and startup hooks are outside the frozen scientific closure.
+Amendment 003 must use the `r2-a003` paths below. Never create, update, remove,
+or install into revision-1 state or the initial Amendment-002 `r2` state,
+including `exact-venv-r2`, `wheelhouse-r2`, `packages-r2`, `primary-r2`,
+`isolated-venv-r2`, `isolated-r2`, or the `w0wa_exact_*_r2` chain prefixes.
+Those paths are historical and read-only. Do not reuse the backend web/test
+environment either; its extra packages and startup hooks are outside the
+frozen scientific closure.
 
-The following setup deliberately fails if any revision-2 destination already
+The names below are the registered defaults. A custom destination may use a
+different name only when it resolves outside every historical lane. Output and
+receipt files must not exist, adequacy output directories must be absent or
+empty non-symlink directories, and both chain and map prefix namespaces must
+contain no existing `prefix` or `prefix.*` path. The CLI checks freshness before
+runtime setup, analysis, or writes; `--force` does not waive this rule.
+
+Source-state preflight also requires the clean execution commit to descend from
+the frozen pre-Amendment-003 `main` commit
+`ebb2f8d8eef202dbe8a8a85b0cb753829f3899a2`. Branch names do not establish
+trust; the ancestry check and required-file byte inventory do.
+
+The following setup deliberately fails if any Amendment-003 destination already
 exists (including a symlink). An interrupted attempt must be inspected and
-archived before an operator chooses another fresh revision-2 destination; do
-not work around the guard by touching revision-1 state:
+archived before an operator chooses another fresh `r2-a003` destination; do
+not work around the guard by touching revision-1 or Amendment-002 state:
 
 ```bash
 set -eu
 
 export EXACT_R2_ROOT=../.local/w0wa-strict-a-readiness
-export EXACT_VENV="$EXACT_R2_ROOT/exact-venv-r2"
-export EXACT_WHEELHOUSE="$EXACT_R2_ROOT/wheelhouse-r2"
-export EXACT_PACKAGES="$EXACT_R2_ROOT/packages-r2"
-export EXACT_PRIMARY="$EXACT_R2_ROOT/primary-r2"
-export EXACT_PRIMARY_PREFLIGHT="$EXACT_PRIMARY/preflight-r2.json"
-export EXACT_PRIMARY_GENERATION="$EXACT_PRIMARY/generation-r2.json"
-export EXACT_PRIMARY_ANALYSIS="$EXACT_PRIMARY/analysis-r2.json"
-export EXACT_PRIMARY_ADEQUACY="$EXACT_PRIMARY/model-adequacy-r2.json"
-export EXACT_HIDDEN_ANSWER="$EXACT_PRIMARY/hidden-answer-r2.json"
-export EXACT_PRIMARY_GRADE="$EXACT_PRIMARY/grade-r2.json"
+export EXACT_VENV="$EXACT_R2_ROOT/exact-venv-r2-a003"
+export EXACT_WHEELHOUSE="$EXACT_R2_ROOT/wheelhouse-r2-a003"
+export EXACT_PACKAGES="$EXACT_R2_ROOT/packages-r2-a003"
+export EXACT_PRIMARY="$EXACT_R2_ROOT/primary-r2-a003"
+export EXACT_PRIMARY_PREFLIGHT="$EXACT_PRIMARY/preflight-r2-a003.json"
+export EXACT_PRIMARY_GENERATION="$EXACT_PRIMARY/generation-r2-a003.json"
+export EXACT_PRIMARY_ANALYSIS="$EXACT_PRIMARY/analysis-r2-a003.json"
+export EXACT_PRIMARY_ADEQUACY="$EXACT_PRIMARY/model-adequacy-r2-a003.json"
+export EXACT_HIDDEN_ANSWER="$EXACT_PRIMARY/hidden-answer-r2-a003.json"
+export EXACT_PRIMARY_GRADE="$EXACT_PRIMARY/grade-r2-a003.json"
 
 for path in "$EXACT_VENV" "$EXACT_WHEELHOUSE" "$EXACT_PACKAGES" "$EXACT_PRIMARY"; do
   if [ -e "$path" ] || [ -L "$path" ]; then
@@ -82,10 +97,10 @@ manifest_path = Path(sys.argv[1])
 lock_path = Path(sys.argv[2])
 wheelhouse = Path(sys.argv[3])
 expected_manifest_hash = (
-    "sha256:e45ea8e098a3470622cd26cd7ed5061262859a09a6f84f93d97eaf49e56541bc"
+    "sha256:37c9926fae0ebb49e833f6ecfd51001a11a96470a5631dfae8d58fb09d3bcb36"
 )
 expected_lock_hash = (
-    "sha256:6d40a07a26b021b3cab6de36dbec3df446115718998a25b68abf08bde0a7f833"
+    "sha256:cd1f2fef709506ca19a7eda578f392e72fe5d81fa8a3ea83729df3935b84f8a3"
 )
 
 def sha256(path: Path) -> str:
@@ -173,7 +188,7 @@ preflight -> generate -> run -> analyze -> grade
 Each stage validates and binds the preceding receipt. Config, data, reference,
 artifact, Git source-tree or receipt drift closes the next gate. Formal
 preflight must run from a globally clean commit descended from frozen base
-`f9efb4ac6f7850d4c7739ac038d08beb37ea785e`; it records the Git HEAD/tree and
+`ebb2f8d8eef202dbe8a8a85b0cb753829f3899a2`; it records the Git HEAD/tree and
 re-hashes every acceptance-critical source/config file for external checkout.
 Branch names are not trusted state: clean descendants on any branch and a
 detached HEAD are both accepted.
@@ -192,9 +207,10 @@ non-isolated interpreter, a non-empty `PYTHONPATH`, or an untrusted startup-hook
 closure; isolating only the Cobaya child is not sufficient.
 
 Every new receipt binds
-`docs/DESI_W0WA_A_READINESS_AMENDMENT_002.md`. It carries forward the
+`docs/DESI_W0WA_A_READINESS_AMENDMENT_003.md`. It carries forward the
 known-target disclosure and stricter paper-fidelity `bulk ESS >= 1000` overlay
-from amendment 001, and freezes the security-only environment revision 2.
+from amendment 001, preserves amendment 002 as history, and freezes the
+current security-only environment revision 2 closure.
 Revision 2 remains
 `WITHHELD_PENDING_FRESH_PREFLIGHT_AND_SCIENCE_REGRESSION` until a later
 immutable amendment records the required validation. Historical revision-1
@@ -232,9 +248,9 @@ frozen covariance in memory, so a stale or poisoned cache cannot be consumed.
 "$EXACT_VENV/bin/python" -I scripts/cobaya/canonical_full_likelihood_evidence.py generate \
   --preflight-report "$EXACT_PRIMARY_PREFLIGHT" \
   --packages-path "$EXACT_PACKAGES" \
-  --free-output "$EXACT_PRIMARY/free-map-r2.yaml" \
-  --fixed-output "$EXACT_PRIMARY/fixed-map-r2.yaml" \
-  --adequacy-output-dir "$EXACT_PRIMARY/adequacy-r2" \
+  --free-output "$EXACT_PRIMARY/free-map-r2-a003.yaml" \
+  --fixed-output "$EXACT_PRIMARY/fixed-map-r2-a003.yaml" \
+  --adequacy-output-dir "$EXACT_PRIMARY/adequacy-r2-a003" \
   --output "$EXACT_PRIMARY_GENERATION"
 ```
 
@@ -252,8 +268,8 @@ non-citable:
   scripts/cobaya/canonical_full_likelihood_evidence.py run \
   --kind chain --evidence-class non_citable_smoke \
   --run-id w0wa-exact-smoke-YYYYMMDD \
-  --config "$EXACT_PRIMARY/adequacy-r2/non_citable_smoke.yaml" \
-  --prefix cobaya_runs/w0wa_exact_smoke_r2 \
+  --config "$EXACT_PRIMARY/adequacy-r2-a003/non_citable_smoke.yaml" \
+  --prefix cobaya_runs/w0wa_exact_smoke_r2_a003 \
   --packages-path "$EXACT_PACKAGES" \
   --preflight-report "$EXACT_PRIMARY_PREFLIGHT" \
   --generation-report "$EXACT_PRIMARY_GENERATION" \
@@ -271,7 +287,7 @@ formal or model-adequacy completion requires the durable
   --kind chain --evidence-class formal_candidate \
   --run-id w0wa-exact-formal-YYYYMMDD \
   --config scripts/cobaya/w0wa_desi_cmb_pantheonplus_exact.yaml \
-  --prefix cobaya_runs/w0wa_exact_formal_r2 \
+  --prefix cobaya_runs/w0wa_exact_formal_r2_a003 \
   --packages-path "$EXACT_PACKAGES" \
   --preflight-report "$EXACT_PRIMARY_PREFLIGHT" \
   --generation-report "$EXACT_PRIMARY_GENERATION" \
@@ -303,12 +319,12 @@ Supply every physical claim-support artifact explicitly:
 
 ```bash
 "$EXACT_VENV/bin/python" -I scripts/cobaya/canonical_full_likelihood_evidence.py analyze \
-  --chain-prefix cobaya_runs/w0wa_exact_formal_r2 \
+  --chain-prefix cobaya_runs/w0wa_exact_formal_r2_a003 \
   --packages-path "$EXACT_PACKAGES" \
   --preflight-report "$EXACT_PRIMARY_PREFLIGHT" \
   --generation-report "$EXACT_PRIMARY_GENERATION" \
-  --support-path "$EXACT_PRIMARY/protocol-r2.json" \
-  --support-path "$EXACT_PRIMARY/diagnostic-report-r2.json" \
+  --support-path "$EXACT_PRIMARY/protocol-r2-a003.json" \
+  --support-path "$EXACT_PRIMARY/diagnostic-report-r2-a003.json" \
   --output "$EXACT_PRIMARY_ANALYSIS"
 ```
 
@@ -338,8 +354,8 @@ however, compares binary/build identity without absolute paths:
 ```bash
 set -eu
 
-export EXACT_ISOLATED_VENV="$EXACT_R2_ROOT/isolated-venv-r2"
-export EXACT_ISOLATED="$EXACT_R2_ROOT/isolated-r2"
+export EXACT_ISOLATED_VENV="$EXACT_R2_ROOT/isolated-venv-r2-a003"
+export EXACT_ISOLATED="$EXACT_R2_ROOT/isolated-r2-a003"
 
 for path in "$EXACT_ISOLATED_VENV" "$EXACT_ISOLATED"; do
   if [ -e "$path" ] || [ -L "$path" ]; then
@@ -360,24 +376,24 @@ mkdir -p "$EXACT_ISOLATED"
   scripts/cobaya/canonical_full_likelihood_evidence.py preflight \
   --packages-path "$EXACT_PACKAGES" \
   --wheels-path "$EXACT_WHEELHOUSE" \
-  --output "$EXACT_ISOLATED/preflight-r2.json"
+  --output "$EXACT_ISOLATED/preflight-r2-a003.json"
 "$EXACT_ISOLATED_VENV/bin/python" -I \
   scripts/cobaya/canonical_full_likelihood_evidence.py generate \
-  --preflight-report "$EXACT_ISOLATED/preflight-r2.json" \
+  --preflight-report "$EXACT_ISOLATED/preflight-r2-a003.json" \
   --packages-path "$EXACT_PACKAGES" \
-  --free-output "$EXACT_ISOLATED/free-map-r2.yaml" \
-  --fixed-output "$EXACT_ISOLATED/fixed-map-r2.yaml" \
-  --adequacy-output-dir "$EXACT_ISOLATED/adequacy-r2" \
-  --output "$EXACT_ISOLATED/generation-r2.json"
+  --free-output "$EXACT_ISOLATED/free-map-r2-a003.yaml" \
+  --fixed-output "$EXACT_ISOLATED/fixed-map-r2-a003.yaml" \
+  --adequacy-output-dir "$EXACT_ISOLATED/adequacy-r2-a003" \
+  --output "$EXACT_ISOLATED/generation-r2-a003.json"
 "$EXACT_ISOLATED_VENV/bin/python" -I \
   scripts/cobaya/canonical_full_likelihood_evidence.py run \
   --kind chain --evidence-class model_adequacy \
   --run-id w0wa-exact-isolated-YYYYMMDD \
-  --config "$EXACT_ISOLATED/adequacy-r2/independent_reproduction.yaml" \
-  --prefix cobaya_runs/w0wa_exact_isolated_r2 \
+  --config "$EXACT_ISOLATED/adequacy-r2-a003/independent_reproduction.yaml" \
+  --prefix cobaya_runs/w0wa_exact_isolated_r2_a003 \
   --packages-path "$EXACT_PACKAGES" \
-  --preflight-report "$EXACT_ISOLATED/preflight-r2.json" \
-  --generation-report "$EXACT_ISOLATED/generation-r2.json" \
+  --preflight-report "$EXACT_ISOLATED/preflight-r2-a003.json" \
+  --generation-report "$EXACT_ISOLATED/generation-r2-a003.json" \
   --mpi 4
 ```
 
@@ -387,13 +403,13 @@ canonical analyzer):
 ```bash
 "$EXACT_ISOLATED_VENV/bin/python" -I \
   scripts/cobaya/independent_w0wa_postprocess.py \
-  --chain-prefix cobaya_runs/w0wa_exact_isolated_r2 \
-  --updated-config cobaya_runs/w0wa_exact_isolated_r2.updated.yaml \
+  --chain-prefix cobaya_runs/w0wa_exact_isolated_r2_a003 \
+  --updated-config cobaya_runs/w0wa_exact_isolated_r2_a003.updated.yaml \
   --run-id w0wa-exact-isolated-YYYYMMDD \
   --primary-execution-fingerprint sha256:<primary-execution-fingerprint> \
   --environment-fingerprint sha256:<isolated-environment-fingerprint> \
-  --environment-preflight "$EXACT_ISOLATED/preflight-r2.json" \
-  --output "$EXACT_ISOLATED/independent-postprocess-r2.json"
+  --environment-preflight "$EXACT_ISOLATED/preflight-r2-a003.json" \
+  --output "$EXACT_ISOLATED/independent-postprocess-r2-a003.json"
 ```
 
 The independent postprocessor does not trust the environment fingerprint as a

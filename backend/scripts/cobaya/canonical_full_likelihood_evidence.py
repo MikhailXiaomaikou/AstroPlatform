@@ -70,6 +70,7 @@ from app.services.w0wa_exact_contract import (  # noqa: E402
     EXACT_CLAIM_SCOPE,
     EXACT_EVIDENCE_SIGNING_KEY_ID,
     EXACT_EVIDENCE_SIGNING_KEY_SHA256,
+    EXACT_ENVIRONMENT_PENDING_REASON,
     EXACT_ENVIRONMENT_REVISION,
     EXACT_HOST_EXECUTION_TRUST_BOUNDARY,
     EXACT_PROFILE_ID,
@@ -92,6 +93,7 @@ from app.services.w0wa_exact_contract import (  # noqa: E402
     TRUSTED_REFERENCE_SPEC_SHA256,
     TRUSTED_SOURCE_BASE_COMMIT,
     TRUSTED_WHEEL_MANIFEST_SHA256,
+    exact_environment_validated_for_formal_execution,
 )
 
 
@@ -175,7 +177,7 @@ PAPER_FIDELITY_AMENDMENT = {
 }
 
 PROTOCOL_AMENDMENT_PATH = (
-    BACKEND_ROOT.parent / "docs" / "DESI_W0WA_A_READINESS_AMENDMENT_002.md"
+    BACKEND_ROOT.parent / "docs" / "DESI_W0WA_A_READINESS_AMENDMENT_003.md"
 )
 TRUSTED_DATA_MANIFEST_PATH = (
     Path(__file__).resolve().parent / "w0wa_exact_data_manifest.json"
@@ -4638,6 +4640,13 @@ def run_cobaya_with_attestation(
     evidence_class: str = "formal_candidate",
     run_id: str | None = None,
 ) -> int:
+    existing_prefix_paths = _run_prefix_existing_paths(prefix)
+    if existing_prefix_paths:
+        raise ValueError(
+            "Run prefix must be new and fresh for chain and map execution; existing "
+            "artifacts cannot be overwritten: "
+            + ", ".join(path.name for path in existing_prefix_paths)
+        )
     if protocol_amendment_record().get("valid") is not True:
         raise ValueError("The immutable public protocol amendment is missing or drifted")
     if evidence_class in CONVERGED_EVIDENCE_CLASSES and not str(run_id or "").strip():
@@ -4656,18 +4665,6 @@ def run_cobaya_with_attestation(
             )
         if os.environ.get("PYTHONPATH"):
             raise ValueError("Converged exact evidence forbids non-empty PYTHONPATH")
-    if kind == "chain":
-        prefix_path = Path(prefix)
-        existing = sorted(
-            path
-            for path in prefix_path.parent.glob(prefix_path.name + ".*")
-            if path.exists()
-        )
-        if existing:
-            raise ValueError(
-                "Chain prefix must be new; existing artifacts cannot be resumed: "
-                + ", ".join(path.name for path in existing)
-            )
     if kind == "chain" and mpi_processes != REQUIRED_CHAIN_COUNT:
         raise ValueError("The canonical chain run requires exactly four MPI processes")
     if evidence_class in CONVERGED_EVIDENCE_CLASSES and force:
@@ -5670,6 +5667,8 @@ def build_conclusion_attestations(
     path on its own.
     """
 
+    if not exact_environment_validated_for_formal_execution():
+        return []
     if map_comparison.get("significance_ready") is not True:
         return []
     method = map_comparison.get("method")
@@ -5853,17 +5852,36 @@ def build_evidence_manifest(
         ):
             map_comparison.pop(key, None)
 
-    publication_ready = posterior_ready and map_comparison.get("passed") is True
+    numerical_checks_passed = (
+        posterior_ready and map_comparison.get("passed") is True
+    )
+    environment_revision_validated = (
+        exact_environment_validated_for_formal_execution()
+    )
+    publication_ready = numerical_checks_passed and environment_revision_validated
     failures = [
         *[f"posterior:{reason}" for reason in posterior["reasons"]],
         *[f"map:{reason}" for reason in map_comparison["reasons"]],
+        *(
+            []
+            if environment_revision_validated
+            else [f"environment:{EXACT_ENVIRONMENT_PENDING_REASON}"]
+        ),
     ]
     manifest: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "artifact_type": "canonical_full_likelihood_w0wa_evidence",
         "created_at": _utc_now(),
-        "status": "PASS" if publication_ready else "FAIL",
+        "status": (
+            "PASS"
+            if publication_ready
+            else "WITHHELD"
+            if not environment_revision_validated
+            else "FAIL"
+        ),
+        "numerical_checks_passed": numerical_checks_passed,
         "publication_ready": publication_ready,
+        "claim_eligible": publication_ready,
         # Set below only after a versioned, calibrated, hash-bound conclusion
         # attestation has been constructed from this same manifest branch.
         "significance_ready": False,
@@ -5874,12 +5892,29 @@ def build_evidence_manifest(
             if publication_ready
             else "none"
         ),
-        "limitations": (
-            [str(map_comparison["significance_withheld_reason"])]
-            if map_comparison.get("significance_withheld_reason")
-            else []
-        ),
+        "limitations": [
+            *(
+                [str(map_comparison["significance_withheld_reason"])]
+                if map_comparison.get("significance_withheld_reason")
+                else []
+            ),
+            *(
+                []
+                if environment_revision_validated
+                else [EXACT_ENVIRONMENT_PENDING_REASON]
+            ),
+        ],
         "failures": failures,
+        "environment_revision": copy.deepcopy(EXACT_ENVIRONMENT_REVISION),
+        "environment_revision_gate": {
+            "passed": environment_revision_validated,
+            "status": EXACT_ENVIRONMENT_REVISION.get("status"),
+            "reason": (
+                None
+                if environment_revision_validated
+                else EXACT_ENVIRONMENT_PENDING_REASON
+            ),
+        },
         "configuration": {
             "canonical": {
                 "path": str(canonical_config_path),
@@ -5912,11 +5947,15 @@ def build_evidence_manifest(
         )
         or ""
     )
-    conclusion_attestations = build_conclusion_attestations(
-        map_comparison=map_comparison,
-        data_fingerprint=str(inventory.get("fingerprint") or ""),
-        likelihood_fingerprint=likelihood_fingerprint,
-        evidence_manifest_sha256=evidence_manifest_sha256,
+    conclusion_attestations = (
+        build_conclusion_attestations(
+            map_comparison=map_comparison,
+            data_fingerprint=str(inventory.get("fingerprint") or ""),
+            likelihood_fingerprint=likelihood_fingerprint,
+            evidence_manifest_sha256=evidence_manifest_sha256,
+        )
+        if publication_ready
+        else []
     )
     manifest["conclusion_attestations"] = conclusion_attestations
     manifest["significance_ready"] = bool(conclusion_attestations)
@@ -7367,25 +7406,25 @@ def grade_exact_analysis(
 def _default_paths() -> dict[str, Path]:
     script_dir = Path(__file__).resolve().parent
     local_dir = BACKEND_ROOT.parent / ".local" / "w0wa-strict-a-readiness"
-    primary_dir = local_dir / "primary-r2"
+    primary_dir = local_dir / "primary-r2-a003"
     return {
         "canonical": script_dir / "w0wa_desi_cmb_pantheonplus_exact.yaml",
-        "packages": local_dir / "packages-r2",
-        "free_map_config": primary_dir / "free-map-r2.yaml",
-        "fixed_map_config": primary_dir / "fixed-map-r2.yaml",
+        "packages": local_dir / "packages-r2-a003",
+        "free_map_config": primary_dir / "free-map-r2-a003.yaml",
+        "fixed_map_config": primary_dir / "fixed-map-r2-a003.yaml",
         "dependency_lock": script_dir / "w0wa_exact_requirements.txt",
         "reference_values": script_dir / "w0wa_exact_reference_cases.json",
         "data_manifest": script_dir / "w0wa_exact_data_manifest.json",
-        "wheels": local_dir / "wheelhouse-r2",
-        "preflight": primary_dir / "preflight-r2.json",
-        "generation": primary_dir / "generation-r2.json",
-        "analysis": primary_dir / "analysis-r2.json",
-        "adequacy_output_dir": primary_dir / "adequacy-r2",
-        "adequacy": primary_dir / "model-adequacy-r2.json",
-        "grade": primary_dir / "grade-r2.json",
-        "hidden_answer": primary_dir / "hidden-answer-r2.json",
+        "wheels": local_dir / "wheelhouse-r2-a003",
+        "preflight": primary_dir / "preflight-r2-a003.json",
+        "generation": primary_dir / "generation-r2-a003.json",
+        "analysis": primary_dir / "analysis-r2-a003.json",
+        "adequacy_output_dir": primary_dir / "adequacy-r2-a003",
+        "adequacy": primary_dir / "model-adequacy-r2-a003.json",
+        "grade": primary_dir / "grade-r2-a003.json",
+        "hidden_answer": primary_dir / "hidden-answer-r2-a003.json",
         "formal_chain_prefix": (
-            BACKEND_ROOT / "cobaya_runs" / "w0wa_exact_formal_r2"
+            BACKEND_ROOT / "cobaya_runs" / "w0wa_exact_formal_r2_a003"
         ),
     }
 
@@ -7423,34 +7462,155 @@ def _revision_1_state_locations() -> tuple[tuple[Path, ...], tuple[Path, ...]]:
     return protected_directories, protected_files
 
 
-def _path_is_revision_1_state(value: str | Path) -> bool:
-    """Identify an exact revision-1 state path, including symlink aliases."""
+def _amendment_002_state_locations() -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+    """Return Amendment-002 revision-2 state that Amendment 003 cannot reuse."""
 
-    candidate = Path(value).expanduser().resolve()
-    protected_directories, protected_files = _revision_1_state_locations()
-    if candidate in {path.resolve() for path in protected_files}:
-        return True
-    if any(
-        candidate == directory.resolve()
-        or candidate.is_relative_to(directory.resolve())
-        for directory in protected_directories
-    ):
-        return True
-    chain_root = BACKEND_ROOT / "cobaya_runs"
-    for name in (
-        "w0wa_exact_formal",
-        "w0wa_exact_smoke",
-        "w0wa_exact_isolated",
-    ):
-        prefix = (chain_root / name).resolve()
-        if candidate == prefix or (
-            candidate.is_relative_to(prefix)
-        ) or (
-            candidate.parent == prefix.parent
-            and candidate.name.startswith(prefix.name + ".")
+    local_dir = BACKEND_ROOT.parent / ".local" / "w0wa-strict-a-readiness"
+    protected_directories = tuple(
+        local_dir / name
+        for name in (
+            "exact-venv-r2",
+            "wheelhouse-r2",
+            "packages-r2",
+            "primary-r2",
+            "isolated-venv-r2",
+            "isolated-r2",
+        )
+    )
+    return protected_directories, ()
+
+
+def _path_is_historical_exact_state(value: str | Path) -> bool:
+    """Identify old state by both its lexical namespace and resolved target."""
+
+    # ``resolve`` alone loses the caller-visible namespace.  In particular, a
+    # symlink named under ``primary-r2`` can resolve to a fresh Amendment-003
+    # artifact and would otherwise bypass the historical-state guard.  Build a
+    # normalized absolute path without following symlinks first, then retain the
+    # resolved check to catch aliases outside the protected namespace.
+    lexical_candidate = Path(
+        os.path.abspath(os.fspath(Path(value).expanduser()))
+    )
+    revision_1_directories, revision_1_files = _revision_1_state_locations()
+    amendment_002_directories, amendment_002_files = (
+        _amendment_002_state_locations()
+    )
+    protected_directories = (
+        *revision_1_directories,
+        *amendment_002_directories,
+    )
+    protected_files = (*revision_1_files, *amendment_002_files)
+    candidates_and_normalizers = (
+        (
+            lexical_candidate,
+            lambda path: Path(os.path.abspath(os.fspath(path.expanduser()))),
+        ),
+        (lexical_candidate.resolve(), lambda path: path.resolve()),
+    )
+    for candidate, normalize in candidates_and_normalizers:
+        if candidate in {normalize(path) for path in protected_files}:
+            return True
+        normalized_directories = tuple(
+            normalize(directory) for directory in protected_directories
+        )
+        if any(
+            candidate == directory or candidate.is_relative_to(directory)
+            for directory in normalized_directories
         ):
             return True
+        chain_root = BACKEND_ROOT / "cobaya_runs"
+        for name in (
+            "w0wa_exact_formal",
+            "w0wa_exact_smoke",
+            "w0wa_exact_isolated",
+            "w0wa_exact_formal_r2",
+            "w0wa_exact_smoke_r2",
+            "w0wa_exact_isolated_r2",
+        ):
+            prefix = normalize(chain_root / name)
+            if candidate == prefix or candidate.is_relative_to(prefix) or (
+                candidate.parent == prefix.parent
+                and candidate.name.startswith(prefix.name + ".")
+            ):
+                return True
     return False
+
+
+def _path_is_revision_1_state(value: str | Path) -> bool:
+    """Backward-compatible name for the complete historical-state guard."""
+
+    return _path_is_historical_exact_state(value)
+
+
+def _path_exists_or_is_symlink(path: Path) -> bool:
+    """Treat broken symlinks as occupied output destinations."""
+
+    return path.exists() or path.is_symlink()
+
+
+def _run_prefix_existing_paths(value: str | Path) -> list[Path]:
+    """Return every existing path in one Cobaya prefix namespace."""
+
+    prefix = Path(value).expanduser().absolute()
+    existing = [prefix] if _path_exists_or_is_symlink(prefix) else []
+    parent = prefix.parent
+    if not parent.exists():
+        return existing
+    if not parent.is_dir() or parent.is_symlink():
+        return [*existing, parent]
+    try:
+        siblings = list(parent.iterdir())
+    except OSError:
+        return [*existing, parent]
+    existing.extend(
+        path for path in siblings if path.name.startswith(prefix.name + ".")
+    )
+    return sorted(set(existing), key=lambda path: path.as_posix())
+
+
+_COMMAND_OUTPUT_FILES: dict[str, tuple[str, ...]] = {
+    "preflight": ("output",),
+    "generate": ("free_output", "fixed_output", "output"),
+    "analyze": ("output",),
+    "grade": ("output",),
+}
+_COMMAND_OUTPUT_DIRECTORIES: dict[str, tuple[str, ...]] = {
+    "generate": ("adequacy_output_dir",),
+}
+
+
+def _output_freshness_violations(
+    args: argparse.Namespace,
+) -> list[tuple[str, Path, str]]:
+    """Reject output reuse before runtime checks, analysis, or writes."""
+
+    violations: list[tuple[str, Path, str]] = []
+    command = str(args.command)
+    for field in _COMMAND_OUTPUT_FILES.get(command, ()):
+        path = Path(getattr(args, field)).expanduser().absolute()
+        if _path_exists_or_is_symlink(path):
+            violations.append((field, path, "output_file_already_exists"))
+    for field in _COMMAND_OUTPUT_DIRECTORIES.get(command, ()):
+        path = Path(getattr(args, field)).expanduser().absolute()
+        if path.is_symlink():
+            violations.append((field, path, "output_directory_is_symlink"))
+            continue
+        if not path.exists():
+            continue
+        if not path.is_dir():
+            violations.append((field, path, "output_directory_is_not_directory"))
+            continue
+        try:
+            occupied = next(path.iterdir(), None) is not None
+        except OSError:
+            occupied = True
+        if occupied:
+            violations.append((field, path, "output_directory_not_empty"))
+    if command == "run":
+        prefix = Path(args.prefix).expanduser().absolute()
+        for path in _run_prefix_existing_paths(prefix):
+            violations.append(("prefix", path, "run_prefix_namespace_not_fresh"))
+    return violations
 
 
 _COMMAND_PATH_ARGUMENTS: dict[str, tuple[str, ...]] = {
@@ -7477,13 +7637,13 @@ _COMMAND_PATH_ARGUMENTS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _revision_1_state_argument_violations(
+def _historical_state_argument_violations(
     args: argparse.Namespace,
 ) -> list[tuple[str, Path]]:
-    """Find forbidden historical-state paths before any command can write."""
+    """Find forbidden revision-1/r2 paths before any command can write."""
 
     violations: list[tuple[str, Path]] = []
-    if _path_is_revision_1_state(sys.executable):
+    if _path_is_historical_exact_state(sys.executable):
         violations.append(("python_executable", Path(sys.executable).resolve()))
     for field in _COMMAND_PATH_ARGUMENTS.get(str(args.command), ()):
         raw_value = getattr(args, field, None)
@@ -7491,9 +7651,17 @@ def _revision_1_state_argument_violations(
             raw_value = shutil.which(str(raw_value)) or raw_value
         values = raw_value if isinstance(raw_value, list) else [raw_value]
         for value in values:
-            if value is not None and _path_is_revision_1_state(value):
+            if value is not None and _path_is_historical_exact_state(value):
                 violations.append((field, Path(value).expanduser().resolve()))
     return violations
+
+
+def _revision_1_state_argument_violations(
+    args: argparse.Namespace,
+) -> list[tuple[str, Path]]:
+    """Backward-compatible alias for the complete historical-state guard."""
+
+    return _historical_state_argument_violations(args)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -7638,11 +7806,19 @@ def _require_isolated_exact_cli_runtime() -> dict[str, Any]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    revision_1_violations = _revision_1_state_argument_violations(args)
-    if revision_1_violations:
-        for field, path in revision_1_violations:
+    historical_violations = _historical_state_argument_violations(args)
+    if historical_violations:
+        for field, path in historical_violations:
             print(
-                f"revision-1 state path forbidden for {field}: {path}",
+                f"historical exact state path forbidden for {field}: {path}",
+                file=sys.stderr,
+            )
+        return 2
+    freshness_violations = _output_freshness_violations(args)
+    if freshness_violations:
+        for field, path, reason in freshness_violations:
+            print(
+                f"output destination not fresh for {field}: {path} ({reason})",
                 file=sys.stderr,
             )
         return 2

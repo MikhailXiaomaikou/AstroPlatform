@@ -15,7 +15,7 @@ EXACT_CLAIM_SCOPE = "parameter_interval_reproduction_only"
 PREREGISTERED_TARGET_COMMITMENT = (
     "sha256:3ff17dead8bc529f19262d6db745f13cb6a284af161c6ce9b44f1fe0925a5029"
 )
-TRUSTED_SOURCE_BASE_COMMIT = "f9efb4ac6f7850d4c7739ac038d08beb37ea785e"
+TRUSTED_SOURCE_BASE_COMMIT = "ebb2f8d8eef202dbe8a8a85b0cb753829f3899a2"
 
 # Exact evidence is anchored to one pre-provisioned local signing-key identity.
 # The secret key is deliberately not stored in the repository; producers and
@@ -59,11 +59,11 @@ EXACT_MAX_READINESS_STATUS = "A_READY_PENDING_EXTERNAL_REVIEW"
 # immutable amendment must change this status; ordinary CI cannot activate it.
 EXACT_ENVIRONMENT_REVISION = {
     "schema_version": 1,
-    "revision_id": "w0wa-exact-environment-r2-security-20260721",
+    "revision_id": "w0wa-exact-environment-r2-security-20260722",
     "status": "WITHHELD_PENDING_FRESH_PREFLIGHT_AND_SCIENCE_REGRESSION",
     "scientific_contract_changed": False,
     "supersedes_dependency_lock_sha256": (
-        "sha256:f4cfe85aa7a7f08084eb1c8092784143e3fe711e44ed8379cd689278a119793d"
+        "sha256:6d40a07a26b021b3cab6de36dbec3df446115718998a25b68abf08bde0a7f833"
     ),
     "validation_requirements": [
         "fresh_exact_preflight",
@@ -131,6 +131,7 @@ REQUIRED_SOURCE_STATE_PATHS = (
     "backend/scripts/cobaya/w0wa_exact_wheel_manifest.json",
     "docs/DESI_W0WA_A_READINESS_AMENDMENT_001.md",
     "docs/DESI_W0WA_A_READINESS_AMENDMENT_002.md",
+    "docs/DESI_W0WA_A_READINESS_AMENDMENT_003.md",
     "docs/DESI_W0WA_A_READINESS_PROTOCOL.md",
 )
 
@@ -147,19 +148,19 @@ TRUSTED_ADEQUACY_DATA_INVENTORY_SHA256 = (
     "sha256:c039846636769d8d04779180371806de5fd31c7e041fc2bc6e5991aa39cb55c9"
 )
 TRUSTED_DEPENDENCY_LOCK_SHA256 = (
-    "sha256:6d40a07a26b021b3cab6de36dbec3df446115718998a25b68abf08bde0a7f833"
+    "sha256:cd1f2fef709506ca19a7eda578f392e72fe5d81fa8a3ea83729df3935b84f8a3"
 )
 TRUSTED_REFERENCE_SPEC_SHA256 = (
     "sha256:f2714ff4ff89bbf431638cab93da0222a0d4784a75f83da4a51bebdccbe166ac"
 )
 TRUSTED_LIKELIHOOD_CODE_MANIFEST_SHA256 = (
-    "sha256:780f6bbd14d4c79a494f80cd1a6ec0f3fff535e815455e54f1a58afc51a078cf"
+    "sha256:2ac837fce8fc5d7114f49af41c3541dc7e1085289141453b15c9feb81a584b31"
 )
 TRUSTED_WHEEL_MANIFEST_SHA256 = (
-    "sha256:e45ea8e098a3470622cd26cd7ed5061262859a09a6f84f93d97eaf49e56541bc"
+    "sha256:37c9926fae0ebb49e833f6ecfd51001a11a96470a5631dfae8d58fb09d3bcb36"
 )
 TRUSTED_PROTOCOL_AMENDMENT_SHA256 = (
-    "sha256:fc8fb56ae5009bc80723ee347ade47cb1c0e1cc7fffc75f3ce80015833d9b7af"
+    "sha256:4ce9bea6bd412b22047bbe605f8068d7691bb204754cd2902cfce23d3b139378"
 )
 TRUSTED_NATIVE_RUNTIME_FINGERPRINT = (
     "sha256:6412e4f362e566dc66ff53d9090b18d12cbe1cfdb03e6c05ab9f3c7adff518e1"
@@ -177,10 +178,10 @@ TRUSTED_NATIVE_RUNTIME_SHA256 = {
 # The canonical producer hash is refreshed after changes to that producer.
 TRUSTED_CODE_SHA256 = {
     "canonical_full_likelihood_evidence.py": (
-        "sha256:f8d99598629ef2aabd936195c6ae444399e455dbca585d2cfcc81a4d6fa10004"
+        "sha256:8bdcb81691f08e89162f7772dc70063194346af61f149b932713b6d6ccab3893"
     ),
     "independent_w0wa_postprocess.py": (
-        "sha256:42b7dcb4ef085db7b54d4deb12065d2959f4d8e51f4a77ba5b76e96047140755"
+        "sha256:731a7840f8d92e7a3dfa210169a78a68ae6f043b50e12328306b82fbc11dd64e"
     ),
 }
 
