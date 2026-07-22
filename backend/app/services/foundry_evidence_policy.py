@@ -83,6 +83,7 @@ _FORMAL_TEXT_PATTERNS = tuple(
     )
 )
 _SUPPORTED_TOKEN = re.compile(r"\bsupported\b", re.IGNORECASE)
+_FORMAL_RESERVED_TOKEN = "supported"
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _CANDIDATE_ID = re.compile(r"[a-z][a-z0-9_]{2,96}")
 _INVISIBLE_CODEPOINTS = frozenset(
@@ -171,6 +172,54 @@ def _normalized_text(value: Any) -> str:
             # non-ASCII text while removing only explicitly invisible fillers.
             shadow.append(" ")
     return "".join(shadow)
+
+
+def _contains_confusable_supported_token(value: Any) -> bool:
+    """Reject Unicode-letter substitutions in the reserved SUPPORTED token.
+
+    NFKC handles compatibility glyphs and ``_ASCII_CONFUSABLES`` handles the
+    common Greek/Cyrillic lookalikes.  Some phonetic letters, such as the small
+    capital U in ``SᴜPPORTED``, intentionally survive NFKC.  At this trust
+    boundary, a same-length word that otherwise spells the reserved formal
+    verdict is therefore rejected when any remaining non-ASCII *letter*
+    occupies one of its character positions.  This is deliberately
+    fail-closed without treating ordinary non-ASCII scientific text as a
+    verdict.
+    """
+
+    normalized = unicodedata.normalize("NFKC", str(value)).translate(
+        _ASCII_CONFUSABLES
+    )
+    token: list[str] = []
+
+    def matches_reserved(candidate: list[str]) -> bool:
+        if len(candidate) != len(_FORMAL_RESERVED_TOKEN):
+            return False
+        saw_non_ascii_letter = False
+        for character, expected in zip(
+            candidate,
+            _FORMAL_RESERVED_TOKEN,
+            strict=True,
+        ):
+            if character.isascii():
+                if character.casefold() != expected:
+                    return False
+                continue
+            if not unicodedata.category(character).startswith("L"):
+                return False
+            saw_non_ascii_letter = True
+        return saw_non_ascii_letter
+
+    for character in normalized:
+        if _visually_ignorable(character):
+            continue
+        if character.isalnum():
+            token.append(character)
+            continue
+        if matches_reserved(token):
+            return True
+        token = []
+    return matches_reserved(token)
 
 
 def _canonical_key(value: Any) -> str:
@@ -328,6 +377,7 @@ def contains_formal_claim_escape(
             return True
         if key in {"scientificverdict", "status"} and (
             _normalized_text(item).strip().casefold() == "supported"
+            or _contains_confusable_supported_token(item)
         ):
             return True
         if key == "evidenceclass" and item != NON_FORMAL_EVIDENCE_CLASS:
@@ -361,6 +411,8 @@ def contains_formal_claim_escape_text(value: bytes | str) -> bool:
         if isinstance(value, bytes)
         else str(value)
     )
+    if _contains_confusable_supported_token(raw_text):
+        return True
     if any(
         (ord(character) < 0x20 and character not in {"\n", "\r", "\t"})
         or 0x7F <= ord(character) <= 0x9F

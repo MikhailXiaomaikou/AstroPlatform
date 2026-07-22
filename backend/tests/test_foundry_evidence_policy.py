@@ -24,6 +24,8 @@ from app.services.foundry_evidence_policy import (
         "scientific verdict: SUP\u3164PORTED",
         "scientific verdict: SUP\uffa0PORTED",
         "scientific verdict: SUP\u2800PORTED",
+        "scientific verdict: SᴜPPORTED",
+        "scientific verdict: SᴜΡΡΟRΤΕD",
         "publicationReady=t\u200brue",
         "publication.ready=true",
         "publication/ready=true",
@@ -70,6 +72,7 @@ def test_text_policy_does_not_reject_plain_field_discussion(value: str) -> None:
         {"evidenceClass": "FORMAL"},
         {"evidencePack": {"id": "pack-123"}},
         {"scientificVerdict": "SUP\u200bPORTED"},
+        {"scientificVerdict": "SᴜPPORTED"},
     ],
 )
 def test_nested_policy_rejects_evidence_pack_identifier_keys_and_values(
@@ -84,9 +87,16 @@ def test_nested_policy_rejects_evidence_pack_identifier_keys_and_values(
         {"evidence_pack_id": None},
         {"Evidence Pack ID": ""},
         {"message": "The evidence_pack_id field is reserved."},
+        {"message": "The Ωm profile fit completed without a formal verdict."},
     ],
 )
 def test_nested_policy_allows_absent_ids_and_plain_discussion(
     value: dict[str, object],
 ) -> None:
     assert contains_formal_claim_escape(value, scan_text_leaves=True) is False
+
+
+def test_structured_verdict_rejects_confusable_without_text_leaf_scan() -> None:
+    assert contains_formal_claim_escape(
+        {"scientificVerdict": "SᴜPPORTED"}
+    ) is True
