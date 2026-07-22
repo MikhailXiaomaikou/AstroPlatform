@@ -84,6 +84,12 @@ _FORMAL_TEXT_PATTERNS = tuple(
 )
 _SUPPORTED_TOKEN = re.compile(r"\bsupported\b", re.IGNORECASE)
 _FORMAL_RESERVED_TOKEN = "supported"
+_ASCII_DIGIT_CONFUSABLES = {
+    "0": "o",
+    "3": "e",
+    "5": "s",
+    "7": "t",
+}
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _CANDIDATE_ID = re.compile(r"[a-z][a-z0-9_]{2,96}")
 _INVISIBLE_CODEPOINTS = frozenset(
@@ -175,16 +181,16 @@ def _normalized_text(value: Any) -> str:
 
 
 def _contains_confusable_supported_token(value: Any) -> bool:
-    """Reject Unicode-letter substitutions in the reserved SUPPORTED token.
+    """Reject visual substitutions in the reserved SUPPORTED token.
 
     NFKC handles compatibility glyphs and ``_ASCII_CONFUSABLES`` handles the
     common Greek/Cyrillic lookalikes.  Some phonetic letters, such as the small
     capital U in ``SᴜPPORTED``, intentionally survive NFKC.  At this trust
     boundary, a same-length word that otherwise spells the reserved formal
-    verdict is therefore rejected when any remaining non-ASCII *letter*
-    occupies one of its character positions.  This is deliberately
-    fail-closed without treating ordinary non-ASCII scientific text as a
-    verdict.
+    verdict is rejected when a remaining non-ASCII letter or a common ASCII
+    digit lookalike (for example ``SUPP0RTED``) occupies one of its character
+    positions.  This is deliberately fail-closed without treating ordinary
+    non-ASCII scientific text as a verdict.
     """
 
     normalized = unicodedata.normalize("NFKC", str(value)).translate(
@@ -195,20 +201,26 @@ def _contains_confusable_supported_token(value: Any) -> bool:
     def matches_reserved(candidate: list[str]) -> bool:
         if len(candidate) != len(_FORMAL_RESERVED_TOKEN):
             return False
-        saw_non_ascii_letter = False
+        saw_confusable = False
         for character, expected in zip(
             candidate,
             _FORMAL_RESERVED_TOKEN,
             strict=True,
         ):
             if character.isascii():
-                if character.casefold() != expected:
+                folded = _ASCII_DIGIT_CONFUSABLES.get(
+                    character,
+                    character.casefold(),
+                )
+                if folded != expected:
                     return False
+                if character in _ASCII_DIGIT_CONFUSABLES:
+                    saw_confusable = True
                 continue
             if not unicodedata.category(character).startswith("L"):
                 return False
-            saw_non_ascii_letter = True
-        return saw_non_ascii_letter
+            saw_confusable = True
+        return saw_confusable
 
     for character in normalized:
         if _visually_ignorable(character):
