@@ -287,21 +287,23 @@ def test_exact_profile_matches_paper_stack_and_contains_no_answer_key():
     assert "w" not in bao["point"] and "wa" not in bao["point"]
 
 
-def test_revision_2_parser_defaults_are_isolated_from_revision_1() -> None:
+def test_amendment_003_parser_defaults_are_isolated_from_prior_state() -> None:
     defaults = pipeline._default_paths()
     local_root = _REPO_ROOT / ".local" / "w0wa-strict-a-readiness"
-    primary_root = local_root / "primary-r2"
-    assert defaults["packages"] == local_root / "packages-r2"
-    assert defaults["wheels"] == local_root / "wheelhouse-r2"
-    assert defaults["preflight"] == primary_root / "preflight-r2.json"
-    assert defaults["generation"] == primary_root / "generation-r2.json"
-    assert defaults["analysis"] == primary_root / "analysis-r2.json"
-    assert defaults["adequacy_output_dir"] == primary_root / "adequacy-r2"
-    assert defaults["adequacy"] == primary_root / "model-adequacy-r2.json"
-    assert defaults["hidden_answer"] == primary_root / "hidden-answer-r2.json"
-    assert defaults["grade"] == primary_root / "grade-r2.json"
+    primary_root = local_root / "primary-r2-a003"
+    assert defaults["packages"] == local_root / "packages-r2-a003"
+    assert defaults["wheels"] == local_root / "wheelhouse-r2-a003"
+    assert defaults["preflight"] == primary_root / "preflight-r2-a003.json"
+    assert defaults["generation"] == primary_root / "generation-r2-a003.json"
+    assert defaults["analysis"] == primary_root / "analysis-r2-a003.json"
+    assert defaults["adequacy_output_dir"] == primary_root / "adequacy-r2-a003"
+    assert defaults["adequacy"] == primary_root / "model-adequacy-r2-a003.json"
+    assert defaults["hidden_answer"] == (
+        primary_root / "hidden-answer-r2-a003.json"
+    )
+    assert defaults["grade"] == primary_root / "grade-r2-a003.json"
     assert defaults["formal_chain_prefix"] == (
-        _REPO_ROOT / "backend" / "cobaya_runs" / "w0wa_exact_formal_r2"
+        _REPO_ROOT / "backend" / "cobaya_runs" / "w0wa_exact_formal_r2_a003"
     )
 
     parser = pipeline._build_parser()
@@ -319,7 +321,7 @@ def test_revision_2_parser_defaults_are_isolated_from_revision_1() -> None:
         parser.parse_args(["grade", "--target-hash", "sha256:" + "0" * 64]),
     )
     assert all(
-        pipeline._revision_1_state_argument_violations(namespace) == []
+        pipeline._historical_state_argument_violations(namespace) == []
         for namespace in parsed
     )
 
@@ -379,7 +381,222 @@ def test_revision_2_cli_rejects_revision_1_state_without_writes(
     )
     assert pipeline.main(["preflight"]) == 2
     assert {name: path.read_bytes() for name, path in sentinels.items()} == original
-    assert not (local_root / "primary-r2").exists()
+    assert not (local_root / "primary-r2-a003").exists()
+
+
+def test_amendment_003_cli_rejects_amendment_002_state_without_writes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    backend_root = tmp_path / "repo" / "backend"
+    local_root = tmp_path / "repo" / ".local" / "w0wa-strict-a-readiness"
+    chain_root = backend_root / "cobaya_runs"
+    monkeypatch.setattr(pipeline, "BACKEND_ROOT", backend_root)
+    sentinels = {
+        "package": local_root / "packages-r2" / "package.dat",
+        "wheel": local_root / "wheelhouse-r2" / "wheel.whl",
+        "preflight": local_root / "primary-r2" / "preflight-r2.json",
+        "generation": local_root / "primary-r2" / "generation-r2.json",
+        "analysis": local_root / "primary-r2" / "analysis-r2.json",
+        "grade": local_root / "primary-r2" / "grade-r2.json",
+        "runner": local_root / "exact-venv-r2" / "bin" / "cobaya-run",
+        "chain": chain_root / "w0wa_exact_formal_r2.1.txt",
+        "isolated_chain": chain_root / "w0wa_exact_isolated_r2.1.txt",
+    }
+    for name, path in sentinels.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f"amendment-002-{name}\n".encode())
+    alias = tmp_path / "preflight-alias.json"
+    alias.symlink_to(sentinels["preflight"])
+    original = {name: path.read_bytes() for name, path in sentinels.items()}
+
+    def unexpected_runtime_check() -> dict:
+        raise AssertionError("historical guard did not run before exact CLI setup")
+
+    monkeypatch.setattr(
+        pipeline, "_require_isolated_exact_cli_runtime", unexpected_runtime_check
+    )
+    cases = (
+        ["preflight", "--output", str(alias)],
+        ["preflight", "--packages-path", str(sentinels["package"].parent)],
+        ["preflight", "--wheels-path", str(sentinels["wheel"].parent)],
+        ["generate", "--output", str(sentinels["generation"])],
+        [
+            "run", "--kind", "chain", "--config", str(EXACT_CONFIG),
+            "--prefix", str(chain_root / "w0wa_exact_formal_r2"),
+            "--run-id", "amendment-002-prefix-rejection-test",
+        ],
+        [
+            "run", "--kind", "chain", "--config", str(EXACT_CONFIG),
+            "--prefix", str(chain_root / "w0wa_exact_formal_r2_a003"),
+            "--run-id", "amendment-002-runner-rejection-test",
+            "--cobaya-run", str(sentinels["runner"]),
+        ],
+        [
+            "analyze",
+            "--chain-prefix", str(chain_root / "w0wa_exact_isolated_r2"),
+        ],
+        [
+            "grade", "--manifest", str(sentinels["analysis"]),
+            "--target-hash", "sha256:" + "0" * 64,
+        ],
+    )
+    for argv in cases:
+        assert pipeline.main(argv) == 2
+
+    monkeypatch.setattr(
+        pipeline.sys,
+        "executable",
+        str(local_root / "isolated-venv-r2" / "bin" / "python"),
+    )
+    assert pipeline.main(["preflight"]) == 2
+    assert {name: path.read_bytes() for name, path in sentinels.items()} == original
+    assert alias.is_symlink()
+    assert not (local_root / "primary-r2-a003").exists()
+
+
+def test_amendment_003_cli_rejects_historical_symlink_name_to_fresh_state(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    backend_root = repo_root / "backend"
+    local_root = repo_root / ".local" / "w0wa-strict-a-readiness"
+    fresh_target = local_root / "primary-r2-a003" / "preflight-r2-a003.json"
+    fresh_target.parent.mkdir(parents=True)
+    fresh_target.write_bytes(b"fresh-amendment-003-preflight\n")
+    historical_alias = local_root / "primary-r2" / "preflight-r2.json"
+    historical_alias.parent.mkdir()
+    historical_alias.symlink_to(
+        Path("../primary-r2-a003/preflight-r2-a003.json")
+    )
+    monkeypatch.setattr(pipeline, "BACKEND_ROOT", backend_root)
+    monkeypatch.chdir(repo_root)
+
+    def unexpected_runtime_check() -> dict:
+        raise AssertionError("lexical historical guard did not run first")
+
+    monkeypatch.setattr(
+        pipeline, "_require_isolated_exact_cli_runtime", unexpected_runtime_check
+    )
+    raw_argument = Path(
+        ".local/w0wa-strict-a-readiness/primary-r2/preflight-r2.json"
+    )
+    assert raw_argument.resolve() == fresh_target
+    assert pipeline._path_is_historical_exact_state(raw_argument) is True
+    assert pipeline.main(
+        ["generate", "--preflight-report", str(raw_argument)]
+    ) == 2
+    assert fresh_target.read_bytes() == b"fresh-amendment-003-preflight\n"
+    assert historical_alias.is_symlink()
+    assert not (fresh_target.parent / "generation-r2-a003.json").exists()
+
+
+def test_cli_rejects_arbitrary_preexisting_outputs_without_side_effects(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output_root = tmp_path / "custom-output-lane"
+    output_root.mkdir()
+    sentinels = {
+        "preflight": output_root / "preflight.json",
+        "free": output_root / "free.yaml",
+        "fixed": output_root / "fixed.yaml",
+        "generation": output_root / "generation.json",
+        "analysis": output_root / "analysis.json",
+        "grade": output_root / "grade.json",
+        "chain_log": output_root / "custom-chain.runner.log",
+        "map_attestation": output_root / "custom-map.attestation.json",
+        "adequacy_entry": output_root / "adequacy" / "existing.yaml",
+    }
+    for name, path in sentinels.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f"existing-{name}\n".encode())
+    output_alias = tmp_path / "output-alias.json"
+    output_alias.symlink_to(sentinels["preflight"])
+    broken_prefix_alias = output_root / "custom-broken.attestation.json"
+    broken_prefix_alias.symlink_to(tmp_path / "missing-attestation.json")
+    original = {name: path.read_bytes() for name, path in sentinels.items()}
+
+    def unexpected_runtime_check() -> dict:
+        raise AssertionError("freshness guard did not run before runtime setup")
+
+    monkeypatch.setattr(
+        pipeline, "_require_isolated_exact_cli_runtime", unexpected_runtime_check
+    )
+    cases = (
+        ["preflight", "--output", str(sentinels["preflight"])],
+        ["preflight", "--output", str(output_alias)],
+        ["generate", "--free-output", str(sentinels["free"])],
+        ["generate", "--fixed-output", str(sentinels["fixed"])],
+        ["generate", "--output", str(sentinels["generation"])],
+        [
+            "generate",
+            "--adequacy-output-dir", str(sentinels["adequacy_entry"].parent),
+        ],
+        [
+            "run", "--kind", "chain", "--config", str(EXACT_CONFIG),
+            "--prefix", str(output_root / "custom-chain"),
+            "--run-id", "occupied-chain-prefix",
+        ],
+        [
+            "run", "--kind", "map", "--config", str(EXACT_CONFIG),
+            "--prefix", str(output_root / "custom-map"),
+            "--run-id", "occupied-map-prefix",
+        ],
+        [
+            "run", "--kind", "map", "--config", str(EXACT_CONFIG),
+            "--prefix", str(output_root / "custom-broken"),
+            "--run-id", "broken-prefix-symlink",
+        ],
+        ["analyze", "--output", str(sentinels["analysis"])],
+        [
+            "grade", "--output", str(sentinels["grade"]),
+            "--target-hash", "sha256:" + "0" * 64,
+        ],
+    )
+    for argv in cases:
+        assert pipeline.main(argv) == 2
+
+    with pytest.raises(ValueError, match="prefix must be new and fresh"):
+        pipeline.run_cobaya_with_attestation(
+            kind="map",
+            config_path=EXACT_CONFIG,
+            prefix=output_root / "custom-map",
+            packages_path=tmp_path / "unused-packages",
+            cobaya_run=None,
+            mpi_processes=1,
+            force=False,
+            run_id="direct-map-prefix-guard",
+        )
+
+    assert {name: path.read_bytes() for name, path in sentinels.items()} == original
+    assert output_alias.is_symlink()
+    assert broken_prefix_alias.is_symlink()
+
+
+def test_custom_output_names_are_allowed_only_when_fresh() -> None:
+    parser = pipeline._build_parser()
+    root = Path("custom-clean-output-lane")
+    empty_adequacy = root / "empty-adequacy"
+    parsed_generate = parser.parse_args(
+        [
+            "generate",
+            "--free-output", str(root / "free.yaml"),
+            "--fixed-output", str(root / "fixed.yaml"),
+            "--adequacy-output-dir", str(empty_adequacy),
+            "--output", str(root / "generation.json"),
+        ]
+    )
+    parsed_run = parser.parse_args(
+        [
+            "run", "--kind", "map", "--config", str(EXACT_CONFIG),
+            "--prefix", str(root / "map-prefix"),
+            "--run-id", "fresh-custom-path-test",
+        ]
+    )
+    assert pipeline._output_freshness_violations(parsed_generate) == []
+    assert pipeline._output_freshness_violations(parsed_run) == []
 
 
 def test_revision_2_path_guard_allows_shared_tracked_inputs() -> None:
@@ -1243,6 +1460,51 @@ def test_adequacy_inventory_excludes_untrusted_generated_camspec_cache(tmp_path)
     assert all("_covinv_" not in item["path"] for item in files)
 
 
+def test_security_roll_forward_pins_patched_setuptools_and_stays_withheld():
+    lock_pins, lock_reasons = pipeline._parse_exact_version_lock(DEPENDENCY_LOCK)
+    assert lock_reasons == []
+    assert lock_pins["setuptools"] == "83.0.0"
+
+    payload = json.loads(WHEEL_MANIFEST.read_text(encoding="utf-8"))
+    setuptools_records = [
+        record for record in payload["wheels"] if record["project"] == "setuptools"
+    ]
+    assert setuptools_records == [
+        {
+            "filename": "setuptools-83.0.0-py3-none-any.whl",
+            "project": "setuptools",
+            "sha256": (
+                "sha256:29b23c360f22f414dc7336bb39178cc7"
+                "bcbf6021ed2733cde173f09dba19abb3"
+            ),
+            "size_bytes": 1_008_090,
+            "source_api": "https://pypi.org/pypi/setuptools/83.0.0/json",
+            "upload_time_iso_8601": "2026-07-04T15:31:20.885481Z",
+            "url": (
+                "https://files.pythonhosted.org/packages/5d/40/"
+                "e1e72872c6354b306daef1703549e8e83b4d43cfea356311bf722a043752/"
+                "setuptools-83.0.0-py3-none-any.whl"
+            ),
+            "version": "83.0.0",
+        }
+    ]
+    assert pipeline.EXACT_ENVIRONMENT_REVISION["status"] == (
+        "WITHHELD_PENDING_FRESH_PREFLIGHT_AND_SCIENCE_REGRESSION"
+    )
+
+
+def test_trusted_producer_hashes_bind_canonical_and_independent_scripts():
+    from app.services.w0wa_exact_contract import TRUSTED_CODE_SHA256
+
+    for filename in (
+        "canonical_full_likelihood_evidence.py",
+        "independent_w0wa_postprocess.py",
+    ):
+        assert pipeline._hash_file(_SCRIPT_DIR / filename) == (
+            TRUSTED_CODE_SHA256[filename]
+        )
+
+
 def test_wheel_manifest_freezes_complete_lock_and_missing_archives_fail_closed(
     tmp_path, monkeypatch
 ):
@@ -1460,6 +1722,20 @@ def test_source_state_inventory_binds_scoped_git_tree_and_fails_closed_when_dirt
     else:
         assert state["passed"] is False
         assert state["reasons"]
+
+
+def test_amendment_003_source_base_is_current_ancestor_and_old_base_is_rejected():
+    expected_base = "ebb2f8d8eef202dbe8a8a85b0cb753829f3899a2"
+    unrelated_old_base = "f9efb4ac6f7850d4c7739ac038d08beb37ea785e"
+    assert pipeline.TRUSTED_SOURCE_BASE_COMMIT == expected_base
+    assert pipeline.TRUSTED_SOURCE_BASE_COMMIT != unrelated_old_base
+    assert subprocess.run(
+        [
+            "git", "-C", str(_REPO_ROOT), "merge-base", "--is-ancestor",
+            expected_base, "HEAD",
+        ],
+        check=False,
+    ).returncode == 0
 
 
 def test_source_state_accepts_clean_descendant_branch_and_detached_head(

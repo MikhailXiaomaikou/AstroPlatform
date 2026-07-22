@@ -15,12 +15,12 @@ def test_revision_2_readme_uses_fresh_fail_closed_environment_paths() -> None:
     text = _README.read_text(encoding="utf-8")
 
     for path in (
-        "exact-venv-r2",
-        "wheelhouse-r2",
-        "packages-r2",
-        "primary-r2",
-        "isolated-venv-r2",
-        "isolated-r2",
+        "exact-venv-r2-a003",
+        "wheelhouse-r2-a003",
+        "packages-r2-a003",
+        "primary-r2-a003",
+        "isolated-venv-r2-a003",
+        "isolated-r2-a003",
     ):
         assert path in text
 
@@ -36,13 +36,14 @@ def test_revision_2_readme_uses_fresh_fail_closed_environment_paths() -> None:
         assert revision_1_path not in text
 
     assert text.count('if [ -e "$path" ] || [ -L "$path" ]; then') == 2
-    assert "never create, update, remove, or install into the\nrevision-1" in text
+    assert "Never create, update, remove,\nor install into revision-1 state" in text
+    assert "initial Amendment-002 `r2` state" in text
 
 
 def test_revision_2_readme_isolates_the_likelihood_data_closure() -> None:
     text = _README.read_text(encoding="utf-8")
 
-    assert 'export EXACT_PACKAGES="$EXACT_R2_ROOT/packages-r2"' in text
+    assert 'export EXACT_PACKAGES="$EXACT_R2_ROOT/packages-r2-a003"' in text
     assert (
         'for path in "$EXACT_VENV" "$EXACT_WHEELHOUSE" '
         '"$EXACT_PACKAGES" "$EXACT_PRIMARY"; do'
@@ -56,6 +57,11 @@ def test_revision_2_readme_isolates_the_likelihood_data_closure() -> None:
     assert "without trusting or modifying revision-1\n`backend/packages`" in text
     assert "Each environment independently re-hashes the tree" in text
     assert "--packages-path packages" not in text
+    assert "w0wa_exact_formal_r2_a003" in text
+    assert "w0wa_exact_isolated_r2_a003" in text
+    assert "w0wa_exact_smoke_r2_a003" in text
+    assert "--prefix cobaya_runs/w0wa_exact_formal_r2 \\\n" not in text
+    assert "--chain-prefix cobaya_runs/w0wa_exact_isolated_r2 \\\n" not in text
 
 
 def test_revision_2_readme_verifies_then_installs_the_frozen_wheelhouse() -> None:
@@ -65,7 +71,7 @@ def test_revision_2_readme_verifies_then_installs_the_frozen_wheelhouse() -> Non
 
     assert verification < offline_install
     assert (
-        "e45ea8e098a3470622cd26cd7ed5061262859a09a6f84f93d97eaf49e56541bc"
+        "37c9926fae0ebb49e833f6ecfd51001a11a96470a5631dfae8d58fb09d3bcb36"
         in text
     )
     assert "dependency lock hash does not match revision 2" in text
@@ -85,3 +91,5 @@ def test_revision_2_readme_never_relies_on_legacy_receipt_defaults() -> None:
     assert '--wheels-path "$EXACT_WHEELHOUSE"' in text
     assert "They do **not** produce\nthe hidden-answer or combined model-adequacy manifests" in text
     assert '--hidden-answer "$EXACT_HIDDEN_ANSWER"' in text
+    assert "ebb2f8d8eef202dbe8a8a85b0cb753829f3899a2" in text
+    assert "f9efb4ac6f7850d4c7739ac038d08beb37ea785e" not in text
