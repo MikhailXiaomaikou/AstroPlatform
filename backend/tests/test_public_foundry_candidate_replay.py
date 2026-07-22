@@ -155,6 +155,7 @@ def test_public_wrapper_replays_current_checkout_with_new_identity(
     )
 
     assert completed.returncode == 0, completed.stderr
+    replay_summary = json.loads(completed.stdout)
     report = json.loads((output / "demo-report.json").read_text(encoding="utf-8"))
     identity = json.loads(
         (output / "replay-identity.json").read_text(encoding="utf-8")
@@ -166,6 +167,8 @@ def test_public_wrapper_replays_current_checkout_with_new_identity(
 
     assert report["status"] == "PARTIAL"
     assert report["failure_class"] == "official_chain_mirror_unavailable"
+    assert replay_summary["formal_claim_escape_blocked"] is False
+    assert replay_summary["failure_class"] == report["failure_class"]
     assert report["candidate_version_sha256"] != _HISTORICAL_VERSION
     assert report["candidate_version_sha256"] == candidate_version_sha256(
         **envelope_kwargs
@@ -349,11 +352,14 @@ def test_public_wrapper_fails_for_configured_invalid_mirror(
     )
 
     assert completed.returncode != 0
+    replay_summary = json.loads(completed.stdout)
     report = json.loads((output / "demo-report.json").read_text(encoding="utf-8"))
     assert report["status"] == "FAILED"
     assert report["failure_class"] == "official_chain_mirror_integrity_failed"
     assert report["validation_summary"]["official_mirror_configured"] is True
     assert report["validation_summary"]["official_mirror_verified"] is False
+    assert replay_summary["formal_claim_escape_blocked"] is False
+    assert replay_summary["failure_class"] == report["failure_class"]
 
 
 def test_public_wrapper_propagates_python_startup_failure(

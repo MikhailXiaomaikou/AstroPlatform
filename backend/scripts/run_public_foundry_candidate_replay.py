@@ -303,6 +303,17 @@ def _validate_report(
     require(isinstance(limitations, list) and bool(limitations), "limitations")
     summary = report.get("validation_summary")
     require(isinstance(summary, dict), "validation_summary")
+    failure_escape_marker = (
+        report.get("failure_class") == "candidate_formal_claim_escape_blocked"
+    )
+    summary_escape_marker = summary.get("formal_claim_escape_blocked") is True
+    require(
+        failure_escape_marker == summary_escape_marker,
+        "formal_claim_escape_marker",
+    )
+    if failure_escape_marker:
+        require(report.get("status") == "FAILED", "formal_claim_escape_status")
+        require(report.get("result") == {}, "formal_claim_escape_result_erasure")
     require(
         summary.get("numeric_claim_gate") == "NON_FORMAL_DEMO"
         or report.get("status") == "FAILED",
@@ -423,13 +434,16 @@ def run_replay(args: argparse.Namespace) -> int:
     _write_exclusive(output_dir / "stderr.log", captured_streams["stderr.log"])
     _write_exclusive(output_dir / "demo-report.json", report_bytes)
 
+    formal_claim_escape_blocked = (
+        report.get("failure_class") == "candidate_formal_claim_escape_blocked"
+    )
     print(json.dumps({
         "candidate_id": report["candidate_id"],
         "candidate_version_sha256": report["candidate_version_sha256"],
         "demo_report_sha256": report["demo_report_sha256"],
         "demo_run_id": report["demo_run_id"],
         "failure_class": report.get("failure_class"),
-        "formal_claim_escape_blocked": True,
+        "formal_claim_escape_blocked": formal_claim_escape_blocked,
         "historical_demo_version_reused": False,
         "ledger_recorded": False,
         "replay_identity_sha256": identity["replay_identity_sha256"],

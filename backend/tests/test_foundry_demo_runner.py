@@ -222,6 +222,7 @@ def test_formal_claim_escape_is_erased(monkeypatch: pytest.MonkeyPatch) -> None:
     report = run_candidate_demo(bundle)
     assert report["status"] == "FAILED"
     assert report["failure_class"] == "candidate_formal_claim_escape_blocked"
+    assert report["validation_summary"] == {"formal_claim_escape_blocked": True}
     assert report["result"] == {}
     assert report["publication_ready"] is False
     assert report["claim_eligible"] is False
