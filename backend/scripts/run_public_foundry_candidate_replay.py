@@ -253,6 +253,7 @@ def _validate_report(
 ) -> None:
     from app.services.foundry_evidence_policy import (  # noqa: PLC0415
         contains_formal_claim_escape,
+        demo_report_contract_issue,
     )
 
     expected = identity["candidate_version_envelope"]
@@ -261,6 +262,7 @@ def _validate_report(
         if not condition:
             raise ValueError(f"replay_report_invalid:{message}")
 
+    require(demo_report_contract_issue(report) is None, "report_contract")
     require(report.get("evidence_class") == "NON_FORMAL_DEMO", "evidence_class")
     require(report.get("publication_ready") is False, "publication_ready")
     require(report.get("claim_eligible") is False, "claim_eligible")
@@ -308,7 +310,7 @@ def _validate_report(
         "environment_sha256",
     )
     limitations = report.get("limitations")
-    require(isinstance(limitations, list) and bool(limitations), "limitations")
+    require(limitations == bundle.get("limitations"), "limitations")
     summary = report.get("validation_summary")
     require(isinstance(summary, dict), "validation_summary")
     failure_escape_marker = (
@@ -592,6 +594,7 @@ def verify_recorded(args: argparse.Namespace) -> int:
     from app.services.foundry_evidence_policy import (  # noqa: PLC0415
         contains_formal_claim_escape,
         contains_formal_claim_escape_text,
+        demo_report_contract_issue,
     )
     from app.services.foundry_demo_runner import (  # noqa: PLC0415
         FoundryDemoContractError,
@@ -605,6 +608,10 @@ def verify_recorded(args: argparse.Namespace) -> int:
     version_receipt = _read_json(kit_dir / "candidate-version-envelope.json")
     runner_receipt = _read_json(kit_dir / "runner-descriptor.json")
     event_receipt = _read_json(kit_dir / "ledger-events.json")
+
+    contract_issue = demo_report_contract_issue(report)
+    if contract_issue is not None:
+        raise ValueError(f"recorded_demo_report_contract_invalid:{contract_issue}")
 
     try:
         validate_candidate_bundle(candidate_bundle)

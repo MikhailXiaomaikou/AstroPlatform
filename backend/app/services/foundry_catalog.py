@@ -37,6 +37,7 @@ from app.services.foundry_candidate_identity import candidate_version_sha256
 from app.services.foundry_evidence_policy import (
     NON_FORMAL_EVIDENCE_CLASS,
     contains_formal_claim_escape,
+    demo_report_contract_issue,
 )
 
 
@@ -2991,6 +2992,12 @@ async def record_demo_report(
 
     if not isinstance(demo_report, dict):
         raise FoundryCatalogError("invalid_demo_report", "DemoReport must be an object")
+    contract_issue = demo_report_contract_issue(demo_report)
+    if contract_issue is not None:
+        raise FoundryCatalogError(
+            "invalid_demo_report",
+            f"DemoReport violates schema version 1: {contract_issue}",
+        )
     report = json.loads(canonical_json(demo_report))
     declared_report_hash = str(report.pop("demo_report_sha256", ""))
     if _require_sha256(declared_report_hash, "demo_report_sha256") != sha256_json(report):
@@ -3004,24 +3011,13 @@ async def record_demo_report(
         or report.get("publication_ready") is not False
         or report.get("claim_eligible") is not False
         or report.get("evidence_pack_allowed") is not False
-        or contains_formal_claim_escape(
-            {
-                "artifact_manifest": report.get("artifact_manifest"),
-                "failure_class": report.get("failure_class"),
-                "limitations": report.get("limitations"),
-                "result": report.get("result"),
-                "validation_summary": report.get("validation_summary"),
-            },
-            scan_text_leaves=True,
-        )
+        or contains_formal_claim_escape(report, scan_text_leaves=True)
     ):
         raise FoundryCatalogError(
             "candidate_formal_claim_forbidden",
             "DemoReport attempted to cross the non-formal evidence boundary",
         )
-    status = str(report.get("status") or "").upper()
-    if status not in DEMO_STATUSES:
-        raise FoundryCatalogError("invalid_demo_status", "Unsupported Demo status")
+    status = str(report["status"])
     try:
         report_demo_id = uuid.UUID(str(report.get("demo_run_id")))
     except ValueError as exc:
@@ -3095,6 +3091,7 @@ async def record_demo_report(
         or report.get("generation") != version.candidate_bundle.get("generation")
         or report.get("source_pins") != version.candidate_bundle.get("source_pins")
         or report.get("fixture_hashes") != version.candidate_bundle.get("fixture_hashes")
+        or report.get("limitations") != version.candidate_bundle.get("limitations")
     ):
         raise FoundryCatalogError(
             "candidate_version_binding_mismatch",
@@ -3264,6 +3261,200 @@ async def record_demo_report(
     return demo
 
 
+def _demo_time(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _has_strict_demo_report_v1_receipt(
+    demo: FoundryDemoRun,
+    version: FoundryCandidateVersion,
+) -> bool:
+    """Verify that a stored row reconstructs the exact accepted v1 receipt."""
+
+    expected_artifacts = [
+        {
+            "path": "stdout.log",
+            "kind": "STDOUT",
+            "sha256": demo.stdout_sha256,
+            "bytes": demo.stdout_bytes,
+        },
+        {
+            "path": "stderr.log",
+            "kind": "STDERR",
+            "sha256": demo.stderr_sha256,
+            "bytes": demo.stderr_bytes,
+        },
+    ]
+    started = demo.started_at
+    completed = demo.completed_at
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    if completed.tzinfo is None:
+        completed = completed.replace(tzinfo=timezone.utc)
+    measured_duration = max(
+        0,
+        int((completed - started).total_seconds() * 1000),
+    )
+    body = {
+        "schema_version": 1,
+        "candidate_id": demo.candidate_key,
+        "candidate_version": version.version_number,
+        "demo_run_id": str(demo.id),
+        "status": demo.status,
+        "evidence_class": demo.evidence_class,
+        "publication_ready": demo.publication_ready,
+        "claim_eligible": demo.claim_eligible,
+        "evidence_pack_allowed": demo.evidence_pack_allowed,
+        "candidate_bundle_sha256": demo.candidate_bundle_hash,
+        "candidate_version_sha256": demo.candidate_version_hash,
+        "workflow_spec_sha256": demo.workflow_spec_hash,
+        "dependency_lock_sha256": demo.dependency_lock_hash,
+        "runner_definition_sha256": demo.runner_definition_hash,
+        "runner_image_digest": demo.runner_image_digest,
+        "environment": dict(demo.environment or {}),
+        "environment_sha256": demo.environment_sha256,
+        "generation": dict(demo.generation or {}),
+        "source_pins": list(demo.source_pins or []),
+        "fixture_hashes": list(demo.fixture_hashes or []),
+        "started_at": _demo_time(demo.started_at),
+        "completed_at": _demo_time(demo.completed_at),
+        "duration_ms": demo.duration_ms,
+        "stdout_sha256": demo.stdout_sha256,
+        "stderr_sha256": demo.stderr_sha256,
+        "stdout_bytes": demo.stdout_bytes,
+        "stderr_bytes": demo.stderr_bytes,
+        "artifact_manifest": list(demo.artifact_manifest or []),
+        "resource_usage": dict(demo.resource_usage or {}),
+        "failure_class": demo.failure_class,
+        "validation_summary": dict(demo.validation_summary or {}),
+        "limitations": list(demo.limitations or []),
+        "result": dict(demo.structured_result or {}),
+    }
+    complete = {**body, "demo_report_sha256": demo.demo_report_hash}
+    expected_bundle_hash = sha256_json(version.candidate_bundle)
+    return bool(
+        demo.candidate_version_id == version.id
+        and demo.candidate_id == version.candidate_id
+        and demo.candidate_key == version.candidate_key
+        and demo.candidate_version_hash == version.version_hash
+        and demo.candidate_bundle_hash == expected_bundle_hash
+        and demo.workflow_spec_hash == version.workflow_spec_hash
+        and demo.code_tree_hash == version.code_tree_hash
+        and demo.dependency_lock_hash == version.dependency_lock_hash
+        and demo.runner_definition_hash
+        == version.candidate_bundle.get("runner_definition_sha256")
+        and demo.sbom_hash == version.sbom_hash
+        and demo.runner_image_digest == version.validation_runner_image_digest
+        and demo.fixture_hashes == version.fixture_hashes
+        and demo.fixture_hashes
+        == version.candidate_bundle.get("fixture_hashes")
+        and demo.generation == version.candidate_bundle.get("generation")
+        and demo.source_pins == version.candidate_bundle.get("source_pins")
+        and demo.limitations == version.candidate_bundle.get("limitations")
+        and demo.artifact_manifest == expected_artifacts
+        and demo.duration_ms == measured_duration
+        and demo.environment_sha256 == sha256_json(body["environment"])
+        and demo_report_contract_issue(complete) is None
+        and not contains_formal_claim_escape(
+            complete,
+            scan_text_leaves=True,
+        )
+        and hmac.compare_digest(demo.demo_report_hash, sha256_json(body))
+    )
+
+
+async def _has_demo_validation_lineage(
+    db: AsyncSession,
+    demo: FoundryDemoRun,
+    version: FoundryCandidateVersion,
+) -> bool:
+    """Bind a self-consistent report row to its accepted run and ledger event."""
+
+    if demo.validation_run_id is None:
+        return False
+    run = await db.get(FoundryValidationRun, demo.validation_run_id)
+    if run is None or run.started_at is None or run.completed_at is None:
+        return False
+    run_summary = dict(run.validation_summary or {})
+    if not (
+        run.candidate_id == version.candidate_id
+        and run.candidate_version_id == version.id
+        and run.candidate_version_hash == version.version_hash
+        and run.status == demo.status
+        and run.runner_image_digest == demo.runner_image_digest
+        and run.failure_class == demo.failure_class
+        and _demo_time(run.started_at) == _demo_time(demo.started_at)
+        and _demo_time(run.completed_at) == _demo_time(demo.completed_at)
+        and run_summary.get("phase") == demo.status
+        and run_summary.get("retryable") is False
+        and run_summary.get("retry_after") is None
+        and run_summary.get("demo_report_sha256") == demo.demo_report_hash
+        and run_summary.get("demo_validation") == demo.validation_summary
+    ):
+        return False
+    events = list(
+        (
+            await db.execute(
+                select(FoundryCandidateEvent).where(
+                    FoundryCandidateEvent.candidate_id == version.candidate_id,
+                    FoundryCandidateEvent.candidate_version_id == version.id,
+                    FoundryCandidateEvent.event_type == "DEMO_RECORDED",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return any(
+        event.actor_kind == "VALIDATION_RUNNER"
+        and (event.event_payload or {}).get("demo_run_id") == str(demo.id)
+        and (event.event_payload or {}).get("validation_run_id")
+        == str(run.id)
+        and (event.event_payload or {}).get("demo_report_sha256")
+        == demo.demo_report_hash
+        and (event.event_payload or {}).get("status") == demo.status
+        and (event.event_payload or {}).get("evidence_class")
+        == NON_FORMAL_EVIDENCE_CLASS
+        and (event.event_payload or {}).get("publication_ready") is False
+        and (event.event_payload or {}).get("claim_eligible") is False
+        and (event.event_payload or {}).get("evidence_pack_allowed") is False
+        for event in events
+    )
+
+
+async def _strict_passed_demo_v1(
+    db: AsyncSession,
+    version: FoundryCandidateVersion,
+) -> FoundryDemoRun | None:
+    rows = list(
+        (
+            await db.execute(
+                select(FoundryDemoRun)
+                .where(
+                    FoundryDemoRun.candidate_version_id == version.id,
+                    FoundryDemoRun.status == "PASSED",
+                    FoundryDemoRun.evidence_class == NON_FORMAL_EVIDENCE_CLASS,
+                    FoundryDemoRun.publication_ready.is_(False),
+                    FoundryDemoRun.claim_eligible.is_(False),
+                    FoundryDemoRun.evidence_pack_allowed.is_(False),
+                )
+                .order_by(FoundryDemoRun.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for row in rows:
+        if _has_strict_demo_report_v1_receipt(
+            row,
+            version,
+        ) and await _has_demo_validation_lineage(db, row, version):
+            return row
+    return None
+
+
 async def record_formal_build_attestation(
     db: AsyncSession,
     *,
@@ -3425,16 +3616,7 @@ async def record_formal_build_attestation(
             "Formal builds require the exact approved current candidate version",
             status_code=409,
         )
-    passed_demo = await db.scalar(
-        select(FoundryDemoRun.id).where(
-            FoundryDemoRun.candidate_version_id == version.id,
-            FoundryDemoRun.status == "PASSED",
-            FoundryDemoRun.evidence_class == NON_FORMAL_EVIDENCE_CLASS,
-            FoundryDemoRun.publication_ready.is_(False),
-            FoundryDemoRun.claim_eligible.is_(False),
-            FoundryDemoRun.evidence_pack_allowed.is_(False),
-        )
-    )
+    passed_demo = await _strict_passed_demo_v1(db, version)
     reviews = list(
         (
             await db.execute(
@@ -4052,16 +4234,7 @@ async def request_formal_build_dispatch(
             "Formal build requires the exact approved current candidate version",
             status_code=409,
         )
-    passed_demo = await db.scalar(
-        select(FoundryDemoRun.id).where(
-            FoundryDemoRun.candidate_version_id == version.id,
-            FoundryDemoRun.status == "PASSED",
-            FoundryDemoRun.evidence_class == NON_FORMAL_EVIDENCE_CLASS,
-            FoundryDemoRun.publication_ready.is_(False),
-            FoundryDemoRun.claim_eligible.is_(False),
-            FoundryDemoRun.evidence_pack_allowed.is_(False),
-        )
-    )
+    passed_demo = await _strict_passed_demo_v1(db, version)
     reviews = list(
         (
             await db.execute(
@@ -4781,6 +4954,12 @@ async def record_validation_result(
     own result channel.
     """
 
+    raise FoundryCatalogError(
+        "legacy_validation_result_disabled",
+        "Legacy validation receipts cannot satisfy the immutable DemoReport v1 contract",
+        status_code=410,
+    )
+
     status = status.upper()
     if status not in DEMO_STATUSES:
         raise FoundryCatalogError("invalid_demo_status", "Unsupported Demo status")
@@ -5060,15 +5239,7 @@ async def review_candidate_version(
             "A candidate author cannot approve the same candidate version",
             status_code=403,
         )
-    passed_demo = await db.scalar(
-        select(FoundryDemoRun.id).where(
-            FoundryDemoRun.candidate_version_id == version.id,
-            FoundryDemoRun.status == "PASSED",
-            FoundryDemoRun.evidence_class == NON_FORMAL_EVIDENCE_CLASS,
-            FoundryDemoRun.publication_ready.is_(False),
-            FoundryDemoRun.claim_eligible.is_(False),
-        )
-    )
+    passed_demo = await _strict_passed_demo_v1(db, version)
     if passed_demo is None:
         raise FoundryCatalogError(
             "passed_demo_required",
@@ -5611,68 +5782,6 @@ async def register_candidate_version(
 ) -> tuple[WorkflowRegistryEntry, WorkflowRegistryRelease]:
     """Create an unsigned release request without modifying the runtime registry."""
 
-    existing = await db.scalar(
-        select(WorkflowRegistryEntry).where(
-            WorkflowRegistryEntry.candidate_version_id == candidate_version_id
-        )
-    )
-    if existing is not None:
-        if existing.formal_build_attestation_id != build_attestation_id:
-            raise FoundryCatalogError(
-                "candidate_registration_attestation_conflict",
-                "This candidate version already has a different formal-build request",
-                status_code=409,
-            )
-        existing_version = await db.get(
-            FoundryCandidateVersion, existing.candidate_version_id
-        )
-        existing_attestation = await db.get(
-            FoundryFormalBuildAttestation, existing.formal_build_attestation_id
-        )
-        if existing_version is None or existing_attestation is None:
-            raise FoundryCatalogError(
-                "formal_build_attestation_binding_mismatch",
-                "Pending registration lost its exact source or build receipt",
-                status_code=409,
-            )
-        await _validate_formal_source_provenance(
-            db,
-            version=existing_version,
-            source_commit=existing_attestation.git_commit,
-            source_tree_hash=existing_attestation.source_tree_hash,
-            dependency_lock_hash=existing_attestation.dependency_lock_hash,
-        )
-        releases = list(
-            (
-                await db.execute(
-                    select(WorkflowRegistryRelease).order_by(
-                        WorkflowRegistryRelease.created_at.desc()
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        release = next(
-            (
-                row
-                for row in releases
-                if any(
-                    entry.get("candidate_version_hash")
-                    == existing.candidate_version_hash
-                    for entry in (row.manifest or {}).get("entries", [])
-                    if isinstance(entry, dict)
-                )
-            ),
-            None,
-        )
-        if release is None:
-            raise FoundryCatalogError(
-                "workflow_registry_release_missing",
-                "Pending registry entry has no release-request receipt",
-                status_code=409,
-            )
-        return existing, release
     candidate = await db.scalar(
         select(FoundryCandidate)
         .where(FoundryCandidate.id == candidate_id)
@@ -5742,16 +5851,7 @@ async def register_candidate_version(
             "A candidate author cannot register the same version",
             status_code=403,
         )
-    passed_demo = await db.scalar(
-        select(FoundryDemoRun).where(
-            FoundryDemoRun.candidate_version_id == version.id,
-            FoundryDemoRun.status == "PASSED",
-            FoundryDemoRun.evidence_class == NON_FORMAL_EVIDENCE_CLASS,
-            FoundryDemoRun.publication_ready.is_(False),
-            FoundryDemoRun.claim_eligible.is_(False),
-            FoundryDemoRun.evidence_pack_allowed.is_(False),
-        )
-    )
+    passed_demo = await _strict_passed_demo_v1(db, version)
     if passed_demo is None:
         raise FoundryCatalogError(
             "passed_demo_required",
@@ -5807,6 +5907,74 @@ async def register_candidate_version(
         raise _registry_error(exc) from exc
 
     workflow = dict(release_entry["workflow"])
+    existing = await db.scalar(
+        select(WorkflowRegistryEntry).where(
+            WorkflowRegistryEntry.candidate_version_id == version.id
+        )
+    )
+    if existing is not None:
+        if existing.formal_build_attestation_id != build_attestation.id:
+            raise FoundryCatalogError(
+                "candidate_registration_attestation_conflict",
+                "This candidate version already has a different formal-build request",
+                status_code=409,
+            )
+        if not (
+            existing.candidate_id == candidate.id
+            and existing.candidate_version_hash == version.version_hash
+            and existing.workflow_id == str(workflow["workflow_id"])
+            and existing.workflow_version == str(workflow["version"])
+            and existing.registry_entry_hash
+            == str(release_entry["registry_entry_hash"])
+            and existing.workflow_spec == version.workflow_spec
+            and existing.release_entry == release_entry
+            and existing.risk_level == str(candidate.risk_level)
+            and existing.worker_image_digest == image_digest
+        ):
+            raise FoundryCatalogError(
+                "candidate_registration_receipt_conflict",
+                "Pending registration no longer matches the exact validated release entry",
+                status_code=409,
+            )
+        releases = list(
+            (
+                await db.execute(
+                    select(WorkflowRegistryRelease).order_by(
+                        WorkflowRegistryRelease.created_at.desc()
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        release = next(
+            (
+                row
+                for row in releases
+                if isinstance(row.manifest, dict)
+                if row.manifest_hash
+                == "sha256:" + sha256_json(row.manifest)
+                and isinstance(row.manifest.get("context"), dict)
+                and row.manifest["context"].get(
+                    "formal_build_attestation_id"
+                )
+                == str(build_attestation.id)
+                and isinstance(row.manifest.get("entries"), list)
+                and any(
+                    item == release_entry
+                    for item in row.manifest["entries"]
+                    if isinstance(item, dict)
+                )
+            ),
+            None,
+        )
+        if release is None:
+            raise FoundryCatalogError(
+                "workflow_registry_release_missing",
+                "Pending registry entry has no exact release-request receipt",
+                status_code=409,
+            )
+        return existing, release
     release_chain = await _locked_registry_release_request_chain(db)
     requested_states = _requested_registry_states(release_chain)
     prior_entries = list(

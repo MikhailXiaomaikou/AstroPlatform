@@ -3,6 +3,9 @@ FROM python:3.11-slim@sha256:e031123e3d85762b141ad1cbc56452ba69c6e722ebf2f042cc0
 ARG TOOL_VERSION=""
 ENV TOOL_VERSION=${TOOL_VERSION} \
     GIT_COMMIT=${TOOL_VERSION} \
+    FOUNDRY_TRUSTED_SUPERVISOR=1 \
+    FOUNDRY_CANDIDATE_UID=10002 \
+    FOUNDRY_CANDIDATE_GID=10002 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HOME=/nonexistent
@@ -28,11 +31,17 @@ COPY requirements.txt requirements.lock ./
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
 RUN addgroup --system --gid 10002 foundry \
-    && adduser --system --uid 10002 --ingroup foundry --home /nonexistent foundry
+    && adduser --system --uid 10002 --ingroup foundry --home /nonexistent foundry \
+    && install -d --owner=root --group=root --mode=0700 /trusted-output
 
 COPY app ./app
 COPY foundry_candidates ./foundry_candidates
 COPY --chmod=0555 scripts/run_foundry_candidate_demo.py ./scripts/run_foundry_candidate_demo.py
 
-USER foundry
+# The trusted CLI remains root/PID 1 only long enough to supervise a separate
+# uid-10002 candidate child and publish its already-finalized artifacts.
+# Runtime caps are reduced to SETUID/SETGID/KILL; the child drops all groups
+# and capabilities and cannot signal or inspect the root supervisor.
+# `/trusted-output` is internal, never a host final-output bind mount.
+USER root
 ENTRYPOINT ["python", "/app/scripts/run_foundry_candidate_demo.py"]

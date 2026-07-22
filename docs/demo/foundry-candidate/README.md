@@ -106,9 +106,27 @@ From any clean Standard Astro checkout with backend dependencies installed:
   /tmp/standard-astro-foundry-replay
 ```
 
-The script looks for `backend/venv`, then `backend/.venv`, and finally
-`python3`. Use `PYTHON=/path/to/python` when dependencies are installed in a
-different environment.
+The wrapper accepts only the canonical `backend/venv/bin/python`, or a
+supported interpreter path supplied explicitly with
+`PYTHON=/absolute/path/to/bin/python`. It deliberately does **not** fall back
+to the retired `backend/.venv` or an ambient `python3`.
+
+The preflight requires isolated CPython 3.11–3.14, compatible NumPy and PyYAML
+installed under the selected interpreter prefix, and imports of the replay
+modules from this exact checkout. The implicit canonical interpreter must also
+be a real virtual environment; an explicit `PYTHON` path supports managed CI
+Python installations after they pass the same interpreter, dependency, and
+project-origin checks. The gate fails before creating the output directory if
+anything is missing or incompatible, so an import failure cannot be saved as a
+Demo receipt. To create the canonical environment from a supported CPython
+3.11 installation:
+
+```bash
+cd backend
+python3.11 -m venv venv
+./venv/bin/python -m pip install --require-hashes -r requirements.lock
+cd ..
+```
 
 The checkout must be clean. The replay refuses tracked or untracked source
 changes before binding `TOOL_VERSION` to the current commit, so a modified
@@ -128,13 +146,27 @@ binary, and local descriptor. The output `replay-identity.json` explicitly says
 `historical_demo_version_reused=false`, `ledger_recorded=false`,
 `environment_closure=DESCRIPTOR_ONLY`, and `formal_registry_eligible=false`.
 
-脚本依次查找 `backend/venv`、`backend/.venv` 和 `python3`。如果依赖安装在
-其他环境，请设置 `PYTHON=/path/to/python`。仓库还必须处于干净状态；脚本会在把
-`TOOL_VERSION` 绑定到当前提交之前拒绝已跟踪或未跟踪的源码改动，避免把修改过的
-运行环境误写成由某个提交固定。包装脚本只接受两种符合合同的成功结果：没有配置官方
-镜像时为 `PARTIAL`，完整验证已配置镜像后为 `PASSED`。如果配置了镜像但文件缺失、损坏
-或哈希不匹配，则结果为 `FAILED` 并以非零状态退出；依赖错误、Runner 异常、Registry
-失败和摘要格式错误也同样失败。
+包装脚本只接受规范环境 `backend/venv/bin/python`，或通过
+`PYTHON=/绝对路径/bin/python` 明确指定的受支持解释器；它不会回退到已经停用的
+`backend/.venv` 或系统 `python3`。预检要求隔离运行的 CPython 3.11–3.14、安装在所选
+解释器前缀内且版本兼容的 NumPy/PyYAML，以及从当前仓库准确导入的重跑模块。隐式选择
+的规范解释器还必须是真实虚拟环境；显式 `PYTHON` 可用于 CI 管理的 Python，但仍要通过
+相同的解释器、依赖和项目来源检查。任何一项缺失或不兼容，都会在创建输出目录之前
+直接失败，因此导入错误不会被保存成 Demo 收据。可用受支持的 CPython 3.11 按下面方式
+创建规范环境：
+
+```bash
+cd backend
+python3.11 -m venv venv
+./venv/bin/python -m pip install --require-hashes -r requirements.lock
+cd ..
+```
+
+仓库还必须处于干净状态；脚本会在把 `TOOL_VERSION` 绑定到当前提交之前拒绝已跟踪或
+未跟踪的源码改动，避免把修改过的运行环境误写成由某个提交固定。包装脚本只接受两种
+符合合同的成功结果：没有配置官方镜像时为 `PARTIAL`，完整验证已配置镜像后为
+`PASSED`。如果配置了镜像但文件缺失、损坏或哈希不匹配，则结果为 `FAILED` 并以非零
+状态退出；依赖错误、Runner 异常、Registry 失败和摘要格式错误也同样失败。
 
 当前重跑绝不会复用历史 `f4e8fa…` CandidateVersion。它会用当前规范化源码树、空 patch、
 依赖锁、已安装包清单、运行文件、Python 二进制和本地描述符生成全新身份。输出的

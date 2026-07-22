@@ -312,7 +312,7 @@ def test_source_gate_compares_worktree_executable_mode(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(os.name == "nt", reason="symlink creation needs extra privileges")
-def test_source_gate_compares_symlink_target_bytes(tmp_path: Path) -> None:
+def test_source_gate_rejects_tracked_symlinks(tmp_path: Path) -> None:
     repo = tmp_path / "symlink-change"
     repo.mkdir()
     link = repo / "runtime-link"
@@ -325,12 +325,40 @@ def test_source_gate_compares_symlink_target_bytes(tmp_path: Path) -> None:
         ["git", "commit", "-qm", "symlink fixture"],
     ):
         subprocess.run(command, cwd=repo, check=True)
-    link.unlink()
-    link.symlink_to("unreceipted-target")
+    with pytest.raises(
+        FoundrySourceTreeError,
+        match="source_index_mode_unsupported",
+    ):
+        assert_clean_checkout(repo)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink creation needs extra privileges")
+def test_source_gate_rejects_symlink_to_mutable_external_runtime(tmp_path: Path) -> None:
+    repo = tmp_path / "external-symlink"
+    repo.mkdir()
+    outside = tmp_path / "outside.py"
+    outside.write_text("VALUE = 'one'\n", encoding="utf-8")
+    link = repo / "runtime.py"
+    link.symlink_to(outside)
+    for command in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.email", "source-gate-test@invalid.example"],
+        ["git", "config", "user.name", "Source Gate Test"],
+        ["git", "add", link.name],
+        ["git", "commit", "-qm", "external symlink fixture"],
+    ):
+        subprocess.run(command, cwd=repo, check=True)
 
     with pytest.raises(
         FoundrySourceTreeError,
-        match="source_worktree_mismatch",
+        match="source_index_mode_unsupported",
+    ):
+        tracked_source_tree_hash(repo)
+
+    outside.write_text("VALUE = 'two'\n", encoding="utf-8")
+    with pytest.raises(
+        FoundrySourceTreeError,
+        match="source_index_mode_unsupported",
     ):
         assert_clean_checkout(repo)
 
@@ -791,7 +819,7 @@ def test_recorded_verifier_rejects_rehashed_report_policy_tampering(
     )
 
     assert completed.returncode != 0
-    assert "recorded_demo_report_scope_invalid" in completed.stderr
+    assert "recorded_demo_report_contract_invalid" in completed.stderr
 
 
 def test_recorded_verifier_rejects_rehashed_ledger_policy_mismatch(
@@ -996,6 +1024,59 @@ def test_recorded_verifier_rejects_rehashed_formal_report_metadata(
 
     assert completed.returncode != 0
     assert "recorded_demo_report_scope_invalid" in completed.stderr
+
+
+def test_recorded_verifier_rejects_rehashed_extra_report_fields(
+    tmp_path: Path,
+) -> None:
+    repo, kit = _standalone_verifier_fixture(tmp_path)
+    report = json.loads(
+        (kit / "demo-report.sanitized.json").read_text(encoding="utf-8")
+    )
+    report["extraReceiptData"] = {
+        "publicationReady": True,
+        "evidenceClass": "FORMAL",
+    }
+    _rewrite_report_receipt_links(kit, report)
+
+    completed = _run(
+        [
+            sys.executable,
+            str(_REPO / "backend/scripts/run_public_foundry_candidate_replay.py"),
+            "verify-recorded",
+            "--kit-dir",
+            str(kit),
+        ],
+        cwd=repo,
+    )
+
+    assert completed.returncode != 0
+    assert "recorded_demo_report_contract_invalid:report_shape" in completed.stderr
+
+
+def test_recorded_verifier_binds_limitations_to_candidate_version(
+    tmp_path: Path,
+) -> None:
+    repo, kit = _standalone_verifier_fixture(tmp_path)
+    report = json.loads(
+        (kit / "demo-report.sanitized.json").read_text(encoding="utf-8")
+    )
+    report["limitations"] = ["Original limitations removed."]
+    _rewrite_report_receipt_links(kit, report)
+
+    completed = _run(
+        [
+            sys.executable,
+            str(_REPO / "backend/scripts/run_public_foundry_candidate_replay.py"),
+            "verify-recorded",
+            "--kit-dir",
+            str(kit),
+        ],
+        cwd=repo,
+    )
+
+    assert completed.returncode != 0
+    assert "recorded_demo_report_candidate_link_mismatch" in completed.stderr
 
 
 def test_recorded_verifier_rejects_duplicate_json_keys(tmp_path: Path) -> None:

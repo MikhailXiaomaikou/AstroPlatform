@@ -403,6 +403,10 @@ def _validate_patch_paths(patch: bytes) -> list[str]:
     for raw_line in patch.splitlines():
         if any(raw_line.startswith(prefix) for prefix in forbidden_headers):
             raise ValueError("draft_patch_extended_header_forbidden")
+        if raw_line.startswith((b"old mode ", b"new mode ", b"deleted file mode ")):
+            raise ValueError("draft_patch_unsafe_type")
+        if raw_line.startswith(b"new file mode ") and raw_line != b"new file mode 100644":
+            raise ValueError("draft_patch_unsafe_type")
         if raw_line.startswith(b"diff --git "):
             finish_current()
             saw_old = False

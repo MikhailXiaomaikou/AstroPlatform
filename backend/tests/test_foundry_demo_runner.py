@@ -79,7 +79,7 @@ def test_demo_artifacts_are_host_readable_and_never_overwritten(
         write_exclusive(output, b"replacement")
 
 
-def test_cli_records_contract_valid_failed_report_before_host_callback(
+def test_legacy_cli_publishes_failed_report_and_captured_streams(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -98,10 +98,18 @@ def test_cli_records_contract_valid_failed_report_before_host_callback(
         "artifact_manifest": [],
     }
     monkeypatch.setattr(foundry_demo_runner, "load_candidate_bundle", lambda _path: {})
+    def fake_run_candidate_demo(
+        *_args: object,
+        captured_streams: dict[str, bytes],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        captured_streams.update({"stdout.log": b"", "stderr.log": b""})
+        return failed_report
+
     monkeypatch.setattr(
         foundry_demo_runner,
         "run_candidate_demo",
-        lambda *_args, **_kwargs: failed_report,
+        fake_run_candidate_demo,
     )
     output = tmp_path / "demo-report.json"
     monkeypatch.setattr(
@@ -120,6 +128,8 @@ def test_cli_records_contract_valid_failed_report_before_host_callback(
 
     assert exit_code == 0
     assert json.loads(output.read_text(encoding="utf-8"))["status"] == "FAILED"
+    assert (tmp_path / "stdout.log").read_bytes() == b""
+    assert (tmp_path / "stderr.log").read_bytes() == b""
 
 
 def test_checked_in_candidate_binds_current_demo_runner_definition() -> None:
@@ -279,6 +289,30 @@ def test_mixed_mirror_coverage_preserves_a_failed_public_receipt(
     }
 
     validate_report(report, bundle=bundle, identity=identity)
+
+    forged_extra = copy.deepcopy(report)
+    forged_extra["extraReceiptData"] = {"publicationReady": True}
+    _rehash_demo_report(forged_extra)
+    with pytest.raises(ValueError, match="report_contract"):
+        validate_report(forged_extra, bundle=bundle, identity=identity)
+
+    forged_limitations = copy.deepcopy(report)
+    forged_limitations["limitations"] = ["Original warnings removed."]
+    _rehash_demo_report(forged_limitations)
+    with pytest.raises(ValueError, match="limitations"):
+        validate_report(forged_limitations, bundle=bundle, identity=identity)
+
+    for field, value in (
+        ("status", "passed"),
+        ("result", [["publication_ready", True]]),
+        ("validation_summary", [["numeric_claim_gate", "NON_FORMAL_DEMO"]]),
+        ("duration_ms", True),
+    ):
+        forged_type = copy.deepcopy(report)
+        forged_type[field] = value
+        _rehash_demo_report(forged_type)
+        with pytest.raises(ValueError, match="report_contract"):
+            validate_report(forged_type, bundle=bundle, identity=identity)
 
     forged_status = copy.deepcopy(report)
     forged_status["result"]["matrix"][1]["status"] = "SUPPORTED"
@@ -644,7 +678,7 @@ def test_hung_candidate_is_killed_and_recorded(
     assert report["failure_class"] == "candidate_execution_timeout"
 
 
-def test_macos_style_group_cleanup_permission_error_does_not_escape(
+def test_group_cleanup_permission_error_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.services import foundry_demo_runner
@@ -652,15 +686,16 @@ def test_macos_style_group_cleanup_permission_error_does_not_escape(
     bundle = load_candidate_bundle(_CANDIDATE)
     _use_child_scenario(monkeypatch, "valid_partial")
 
-    def deny_group_signal(*_args: object, **_kwargs: object) -> None:
-        raise PermissionError("simulated macOS zombie group")
-
-    monkeypatch.setattr(foundry_demo_runner.os, "killpg", deny_group_signal)
+    monkeypatch.setattr(
+        foundry_demo_runner,
+        "_terminate_candidate_group",
+        lambda *_args, **_kwargs: False,
+    )
 
     report = run_candidate_demo(bundle)
 
-    assert report["status"] == "PARTIAL"
-    assert report["failure_class"] == "fixture_only"
+    assert report["status"] == "FAILED"
+    assert report["failure_class"] == "candidate_process_group_cleanup_failed"
 
 
 def test_subprocess_start_failure_returns_a_fail_closed_report(

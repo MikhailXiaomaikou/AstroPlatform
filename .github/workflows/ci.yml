@@ -161,6 +161,63 @@ jobs:
           --build-arg TOOL_VERSION="$GITHUB_SHA"
           --file backend/Dockerfile.foundry-demo
           -t standard-astro-foundry-demo:ci backend
+      - name: Prove detached candidate cannot alter trusted Demo artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          container="foundry-boundary-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          output="$RUNNER_TEMP/foundry-boundary-output"
+          cleanup() {
+            docker rm --force --volumes "$container" >/dev/null 2>&1 || true
+            rm -rf "$output"
+          }
+          trap cleanup EXIT
+          test ! -e "$output"
+          docker create \
+            --name "$container" \
+            --network none \
+            --read-only \
+            --log-driver none \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=67108864 \
+            --cap-drop ALL \
+            --cap-add SETUID \
+            --cap-add SETGID \
+            --cap-add KILL \
+            --security-opt no-new-privileges \
+            --pids-limit 64 \
+            --cpus 2 \
+            --memory 6g \
+            --ulimit fsize=67108864:67108864 \
+            --mount type=volume,destination=/trusted-output \
+            --mount "type=bind,source=$PWD/backend/tests/fixtures/foundry_escape_probe_v1.py,destination=/app/app/services/foundry_generated/foundry_escape_probe_v1.py,readonly" \
+            --mount "type=bind,source=$PWD/backend/tests/fixtures/foundry_escape_probe_v1.json,destination=/app/foundry_candidates/foundry_escape_probe_v1.json,readonly" \
+            standard-astro-foundry-demo:ci \
+            --candidate foundry_escape_probe_v1
+          docker start --attach "$container"
+          state="$(docker inspect --format '{{.State.Status}}|{{.State.Running}}|{{.State.Pid}}|{{.State.ExitCode}}' "$container")"
+          test "$state" = "exited|false|0|0"
+          install -d -m 0700 "$output"
+          docker cp "$container:/trusted-output/." "$output/"
+          mapfile -t names < <(find "$output" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
+          test "${names[*]}" = "demo-report.json stderr.log stdout.log"
+          python - "$output" <<'PY'
+          import hashlib
+          import json
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          report = json.loads((root / "demo-report.json").read_text())
+          assert report["status"] == "PASSED"
+          assert report["evidence_class"] == "NON_FORMAL_DEMO"
+          assert report["publication_ready"] is False
+          assert report["claim_eligible"] is False
+          assert report["evidence_pack_allowed"] is False
+          for artifact in report["artifact_manifest"]:
+              payload = (root / artifact["path"]).read_bytes()
+              assert len(payload) == artifact["bytes"]
+              assert hashlib.sha256(payload).hexdigest() == artifact["sha256"]
+          PY
       - name: Build frontend image
         run: >-
           docker build --pull

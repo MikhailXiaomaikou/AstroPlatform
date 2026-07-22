@@ -54,6 +54,64 @@ class FoundryDemoContractError(ValueError):
     """A candidate or result attempted to leave the non-formal lane."""
 
 
+def _candidate_subprocess_identity() -> dict[str, object]:
+    """Return the optional container-only uid/gid drop for candidate code."""
+
+    raw_uid = os.getenv("FOUNDRY_CANDIDATE_UID")
+    raw_gid = os.getenv("FOUNDRY_CANDIDATE_GID")
+    if raw_uid is None and raw_gid is None:
+        return {}
+    if raw_uid is None or raw_gid is None or os.name != "posix":
+        raise FoundryDemoContractError("candidate_identity_configuration_invalid")
+    try:
+        uid = int(raw_uid)
+        gid = int(raw_gid)
+    except ValueError as exc:
+        raise FoundryDemoContractError(
+            "candidate_identity_configuration_invalid"
+        ) from exc
+    if uid <= 0 or gid <= 0 or os.geteuid() != 0:
+        raise FoundryDemoContractError("candidate_identity_configuration_invalid")
+    return {"user": uid, "group": gid, "extra_groups": ()}
+
+
+def _assert_candidate_subprocess_identity() -> None:
+    """Fail before candidate imports if the configured privilege drop failed."""
+
+    raw_uid = os.getenv("FOUNDRY_CANDIDATE_UID")
+    raw_gid = os.getenv("FOUNDRY_CANDIDATE_GID")
+    if raw_uid is None and raw_gid is None:
+        return
+    try:
+        uid = int(str(raw_uid))
+        gid = int(str(raw_gid))
+    except ValueError as exc:
+        raise FoundryDemoContractError("candidate_identity_drop_failed") from exc
+    if (
+        os.getuid() != uid
+        or os.geteuid() != uid
+        or os.getgid() != gid
+        or os.getegid() != gid
+        or os.getgroups()
+    ):
+        raise FoundryDemoContractError("candidate_identity_drop_failed")
+    try:
+        status_lines = Path("/proc/self/status").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        effective = next(
+            int(line.partition(":")[2].strip(), 16)
+            for line in status_lines
+            if line.startswith("CapEff:")
+        )
+    except (OSError, StopIteration, ValueError) as exc:
+        raise FoundryDemoContractError(
+            "candidate_capability_state_unavailable"
+        ) from exc
+    if effective != 0:
+        raise FoundryDemoContractError("candidate_capability_drop_failed")
+
+
 class _BoundedFdCapture:
     """Drain one OS pipe while retaining only a deterministic byte prefix."""
 
@@ -133,7 +191,7 @@ def _write_all(descriptor: int, payload: bytes) -> None:
         remaining = remaining[written:]
 
 
-def _terminate_candidate_group(pid: int) -> bool:
+def _terminate_candidate_group(pid: int, *, leader_exited: bool = False) -> bool:
     """Best-effort process-group cleanup without leaking host exceptions."""
 
     try:
@@ -141,11 +199,20 @@ def _terminate_candidate_group(pid: int) -> bool:
         return True
     except ProcessLookupError:
         return True
-    except (OSError, PermissionError):
+    except PermissionError:
         # macOS can report EPERM for a group whose leader is already a zombie.
-        # Fall back to the direct child; incomplete pipes still make the final
-        # report fail closed, while the outer one-Demo Docker container remains
-        # the authoritative PID namespace/cgroup cleanup boundary.
+        # ``waitid(WNOWAIT)`` proved that this exact reserved PID exited; the
+        # outer one-Demo container remains the descendant cleanup boundary.
+        if platform.system() == "Darwin" and leader_exited:
+            return True
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return True
+        except (OSError, PermissionError):
+            return False
+        return False
+    except OSError:
         try:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -269,6 +336,7 @@ def _execute_candidate_isolated(
             "cache_root": (
                 str(Path(cache_root).resolve()) if cache_root is not None else None
             ),
+            "generated_module_roots": _generated_module_roots(),
         }
     )
     if len(request) > _CONTROL_RESULT_LIMIT_BYTES:
@@ -285,12 +353,18 @@ def _execute_candidate_isolated(
     child_usage: Any = None
     failure_class: str | None = None
     group_cleanup_ok = True
+    leader_exited = False
+    candidate_identity = _candidate_subprocess_identity()
 
     try:
         with tempfile.TemporaryDirectory(prefix="standard-astro-foundry-") as temp:
             request_path = Path(temp) / "request.json"
             request_path.write_bytes(request)
-            request_path.chmod(0o400)
+            if candidate_identity:
+                Path(temp).chmod(0o711)
+                request_path.chmod(0o444)
+            else:
+                request_path.chmod(0o400)
             control_read, control_write = os.pipe()
             open_descriptors.update((control_read, control_write))
             environment = os.environ.copy()
@@ -314,6 +388,7 @@ def _execute_candidate_isolated(
                 close_fds=True,
                 pass_fds=(control_write,),
                 start_new_session=True,
+                **candidate_identity,
             )
             os.close(control_write)
             open_descriptors.discard(control_write)
@@ -364,12 +439,16 @@ def _execute_candidate_isolated(
                     time.sleep(0.005)
 
             if frame_complete and failure_class is None:
-                if not _wait_child_exit_without_reaping(
+                leader_exited = _wait_child_exit_without_reaping(
                     process.pid,
                     _CHILD_EXIT_GRACE_SECONDS,
-                ):
+                )
+                if not leader_exited:
                     failure_class = "candidate_process_did_not_exit"
-            group_cleanup_ok = _terminate_candidate_group(process.pid)
+            group_cleanup_ok = _terminate_candidate_group(
+                process.pid,
+                leader_exited=leader_exited,
+            )
             child_status, child_usage = _wait_child(
                 process.pid,
                 timeout=_CHILD_EXIT_GRACE_SECONDS,
@@ -389,7 +468,10 @@ def _execute_candidate_isolated(
                     with contextlib.suppress(OSError):
                         stream.close()
         if process is not None and process.returncode is None:
-            group_cleanup_ok = _terminate_candidate_group(process.pid) and group_cleanup_ok
+            group_cleanup_ok = _terminate_candidate_group(
+                process.pid,
+                leader_exited=leader_exited,
+            ) and group_cleanup_ok
             status, usage = _wait_child(
                 process.pid,
                 timeout=_CHILD_EXIT_GRACE_SECONDS,
@@ -403,9 +485,7 @@ def _execute_candidate_isolated(
                 os.close(descriptor)
         _drain_capture_threads(captures, tuple(threads))
 
-    if not group_cleanup_ok and any(
-        not capture.capture_complete for capture in captures
-    ):
+    if not group_cleanup_ok:
         failure_class = failure_class or "candidate_process_group_cleanup_failed"
     if any(not capture.capture_complete for capture in captures):
         failure_class = failure_class or "candidate_stream_capture_incomplete"
@@ -433,6 +513,23 @@ def _canonical_json(value: Any) -> bytes:
         ).encode("utf-8")
     except (TypeError, ValueError) as exc:
         raise FoundryDemoContractError("candidate_payload_not_canonical_json") from exc
+
+
+def _generated_module_roots() -> list[str]:
+    """Serialize trusted package roots for the fresh candidate interpreter."""
+
+    package = importlib.import_module("app.services.foundry_generated")
+    roots: list[str] = []
+    for raw_root in package.__path__:
+        root = Path(raw_root).resolve()
+        if root.name != "foundry_generated" or not root.is_dir():
+            raise FoundryDemoContractError("candidate_generated_root_invalid")
+        value = str(root)
+        if value not in roots:
+            roots.append(value)
+    if not roots:
+        raise FoundryDemoContractError("candidate_generated_root_missing")
+    return roots
 
 
 def _sha256(value: Any) -> str:
@@ -675,17 +772,41 @@ def _candidate_child_main(arguments: list[str]) -> int:
     exit_immediately = os._exit
     global _CANDIDATE_CHILD_ACTIVE
     try:
+        _assert_candidate_subprocess_identity()
         os.set_inheritable(control_fd, False)
         request_path = Path(args.request)
         if request_path.stat().st_size > _CONTROL_RESULT_LIMIT_BYTES:
             raise FoundryDemoContractError("candidate_request_too_large")
         request = json.loads(request_path.read_bytes())
-        if not isinstance(request, dict) or set(request) != {"bundle", "cache_root"}:
+        if not isinstance(request, dict) or set(request) != {
+            "bundle",
+            "cache_root",
+            "generated_module_roots",
+        }:
             raise FoundryDemoContractError("candidate_request_invalid")
         bundle = validate_candidate_bundle(request["bundle"])
         cache_root = request.get("cache_root")
         if cache_root is not None and not isinstance(cache_root, str):
             raise FoundryDemoContractError("candidate_cache_root_invalid")
+        generated_module_roots = request.get("generated_module_roots")
+        if (
+            not isinstance(generated_module_roots, list)
+            or not generated_module_roots
+            or any(
+                not isinstance(root, str)
+                or not Path(root).is_absolute()
+                or Path(root).name != "foundry_generated"
+                or not Path(root).is_dir()
+                for root in generated_module_roots
+            )
+        ):
+            raise FoundryDemoContractError("candidate_generated_root_invalid")
+        generated_package = importlib.import_module(
+            "app.services.foundry_generated"
+        )
+        for root in generated_module_roots:
+            if root not in generated_package.__path__:
+                generated_package.__path__.append(root)
         entrypoint = _ENTRYPOINTS[bundle["entrypoint_id"]]
         _CANDIDATE_CHILD_ACTIVE = True
         try:

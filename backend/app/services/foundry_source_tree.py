@@ -18,7 +18,7 @@ from typing import Any
 
 
 SOURCE_MANIFEST_SCHEMA = "standard_astro_tracked_source_manifest_v1"
-_ALLOWED_MODES = frozenset({"100644", "100755", "120000"})
+_ALLOWED_MODES = frozenset({"100644", "100755"})
 
 
 class FoundrySourceTreeError(ValueError):
@@ -164,19 +164,13 @@ def _assert_worktree_matches_index(repo: Path, manifest: dict[str, Any]) -> None
         mode = str(entry["mode"])
         try:
             metadata = path.lstat()
-            if mode == "120000":
-                if not stat.S_ISLNK(metadata.st_mode):
-                    raise FoundrySourceTreeError("source_worktree_mismatch")
-                target = os.readlink(os.fsencode(path))
-                content = target if isinstance(target, bytes) else os.fsencode(target)
-            else:
-                if not stat.S_ISREG(metadata.st_mode):
-                    raise FoundrySourceTreeError("source_worktree_mismatch")
-                content = path.read_bytes()
-                if os.name != "nt" and bool(metadata.st_mode & 0o111) != (
-                    mode == "100755"
-                ):
-                    raise FoundrySourceTreeError("source_worktree_mismatch")
+            if not stat.S_ISREG(metadata.st_mode):
+                raise FoundrySourceTreeError("source_worktree_mismatch")
+            content = path.read_bytes()
+            if os.name != "nt" and bool(metadata.st_mode & 0o111) != (
+                mode == "100755"
+            ):
+                raise FoundrySourceTreeError("source_worktree_mismatch")
         except FoundrySourceTreeError:
             raise
         except OSError as exc:

@@ -1556,6 +1556,18 @@ rename to backend/app/services/foundry_generated/other_v1.py
         ),
         (
             """diff --git a/backend/app/services/foundry_generated/demo_v1.py b/backend/app/services/foundry_generated/demo_v1.py
+old mode 100644
+new mode 120000
+--- a/backend/app/services/foundry_generated/demo_v1.py
++++ b/backend/app/services/foundry_generated/demo_v1.py
+@@ -1 +1 @@
+-VALUE = 1
++../../../../../../outside.py
+""",
+            "draft_patch_unsafe_type",
+        ),
+        (
+            """diff --git a/backend/app/services/foundry_generated/demo_v1.py b/backend/app/services/foundry_generated/demo_v1.py
 new file mode 100644
 --- /dev/null
 +++ b/backend/app/services/foundry_generated/other_v1.py
@@ -1603,6 +1615,7 @@ def test_science_code_patch_is_inert_until_exact_isolated_validation(
         "def run_demo(bundle, *, cache_root=None):",
         "    return {",
         "        'status': 'PASSED',",
+        "        'failure_class': None,",
         "        'result': {'candidate_code_ran': True},",
         "        'validation_summary': {'science_code_fixture': True},",
         "    }",

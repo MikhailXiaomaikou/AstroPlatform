@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "candidate_id": "foundry_escape_probe_v1",
+  "candidate_version": 1,
+  "proposed_workflow_id": "foundry_escape_probe_workflow_v1",
+  "entrypoint_id": "candidate_generated_python_demo_v1",
+  "risk_level": "R0",
+  "workflow_spec": {
+    "workflow_id": "foundry_escape_probe_workflow_v1",
+    "workflow_version": "1.0.0-candidate.1",
+    "claim_scope": "container_boundary_test_only"
+  },
+  "source_pins": [
+    {
+      "key": "container_boundary_fixture",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    }
+  ],
+  "fixture_hashes": [],
+  "dependency_lock_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+  "runner_definition_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+  "generation": {
+    "kind": "container_security_fixture",
+    "generated_code_executed_by_draft_job": false
+  },
+  "limitations": [
+    "Security fixture only; no scientific claim is produced."
+  ],
+  "output_policy": {
+    "evidence_class": "NON_FORMAL_DEMO",
+    "publication_ready": false,
+    "claim_eligible": false,
+    "evidence_pack_allowed": false
+  }
+}
