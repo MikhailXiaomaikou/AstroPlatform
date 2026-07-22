@@ -149,7 +149,7 @@ def _run_authority_artifact(
     amendment = artifact(
         Path(__file__).resolve().parents[2]
         / "docs"
-        / "DESI_W0WA_A_READINESS_AMENDMENT_001.md"
+        / "DESI_W0WA_A_READINESS_AMENDMENT_002.md"
     )
     preflight_payload = json.loads(Path(auxiliaries["preflight"]["path"]).read_text(encoding="utf-8"))
     generation_payload = json.loads(Path(auxiliaries["generation"]["path"]).read_text(encoding="utf-8"))

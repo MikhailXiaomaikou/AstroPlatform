@@ -44,11 +44,15 @@ and separators `(',', ':')`:
 sha256:3ff17dead8bc529f19262d6db745f13cb6a284af161c6ce9b44f1fe0925a5029
 ```
 
-The pre-run disclosure and stricter paper-fidelity ESS overlay are frozen in
-[`DESI_W0WA_A_READINESS_AMENDMENT_001.md`](./DESI_W0WA_A_READINESS_AMENDMENT_001.md),
+The pre-run disclosure and stricter paper-fidelity ESS overlay were frozen in
+[`DESI_W0WA_A_READINESS_AMENDMENT_001.md`](./DESI_W0WA_A_READINESS_AMENDMENT_001.md).
+The cumulative revision-2 execution contract is frozen in
+[`DESI_W0WA_A_READINESS_AMENDMENT_002.md`](./DESI_W0WA_A_READINESS_AMENDMENT_002.md),
 whose exact file SHA-256 is
-`ad87bb4086697bad543e57715e5c3c42151ac25cb8610529c0f02b0288bba4c1`.
-Every workflow receipt must bind both commitments.
+`fc8fb56ae5009bc80723ee347ade47cb1c0e1cc7fffc75f3ce80015833d9b7af`.
+Every new workflow receipt must bind the target commitment and amendment 002.
+Historical revision-1 receipts retain their original amendment-001 binding and
+are verified with their originating release; they are never rewritten.
 
 The committed hash binds the paper version, dataset combination, model,
 allowed and forbidden claims, four central values and asymmetric 68% interval

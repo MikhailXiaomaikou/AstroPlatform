@@ -407,7 +407,10 @@ def _structured_terms_match(observed: list[str], terms: list[str]) -> str:
 def _execution_ready(
     manifest: Mapping[str, Any], *, expected_run_id: str | None = None
 ) -> bool:
-    from app.services.w0wa_exact_contract import EXACT_PROFILE_ID
+    from app.services.w0wa_exact_contract import (
+        EXACT_PROFILE_ID,
+        exact_environment_validated_for_formal_execution,
+    )
 
     publication_gate = manifest.get("publication_gate")
     adequacy = (
@@ -418,6 +421,7 @@ def _execution_ready(
     return bool(
         _trusted_alpha_manifest(manifest, expected_run_id=expected_run_id)
         and manifest.get("profile_id") == EXACT_PROFILE_ID
+        and exact_environment_validated_for_formal_execution()
         and manifest.get("readiness_status")
         in {"A_READY_PENDING_EXTERNAL_REVIEW", "A"}
         and isinstance(publication_gate, Mapping)

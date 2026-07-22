@@ -522,6 +522,12 @@ def _signed_full_likelihood_specificity_ready(
     from app.services.claim_validator import (
         _full_external_likelihood_ready_available,
     )
+    from app.services.w0wa_exact_contract import (
+        exact_environment_validated_for_formal_execution,
+    )
+
+    if not exact_environment_validated_for_formal_execution():
+        return False
 
     for entry in tool_results:
         result = entry.get("result") if isinstance(entry, dict) else None
