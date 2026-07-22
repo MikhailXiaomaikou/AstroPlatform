@@ -108,23 +108,33 @@ _ASCII_FIELD_END = r"(?![a-z0-9_�])"
 _ASCII_VALUE_START = r"(?<![a-z0-9])"
 _ASCII_VALUE_END = r"(?![a-z0-9])"
 _TEXT_ASSIGNMENT_RELATION = r"[\"']?\s*[:=]\s*"
+_TEXT_LABEL_RELATION = (
+    r"[\"']?(?:\s*(?:[-=]+>|>+)\s*|[ \t\f\v]+(?:-+|\|)"
+    r"[ \t\f\v]+)"
+)
+_TEXT_DIRECT_RELATION = (
+    rf"(?:{_TEXT_LABEL_RELATION}|{_TEXT_ASSIGNMENT_RELATION})"
+)
 _TEXT_IS_RELATION = (
     r"[^a-z0-9]*is"
     + _ASCII_VALUE_END
     + r"[\s_:=\(\[\{\"',;/\-]*"
 )
-_TEXT_VALUE_RELATION = rf"(?:{_TEXT_ASSIGNMENT_RELATION}|{_TEXT_IS_RELATION})"
+_TEXT_VALUE_RELATION = (
+    rf"(?:{_TEXT_LABEL_RELATION}|{_TEXT_ASSIGNMENT_RELATION}|"
+    rf"{_TEXT_IS_RELATION})"
+)
 
 _EVIDENCE_PACK_ID_ASSIGNMENT = re.compile(
     rf"{_ASCII_FIELD_START}{_EVIDENCE_PACK_IDENTIFIER_MARKER}"
-    rf"{_ASCII_FIELD_END}{_TEXT_ASSIGNMENT_RELATION}"
+    rf"{_ASCII_FIELD_END}{_TEXT_DIRECT_RELATION}"
     r"(?P<value>[^\r\n]*)",
     re.IGNORECASE,
 )
 _EVIDENCE_PACK_ASSIGNMENT = re.compile(
     rf"{_ASCII_FIELD_START}(?:{_EVIDENCE_PACK_MARKER}|"
     rf"{_FORMAL_EVIDENCE_PACK_MARKER}){_ASCII_FIELD_END}"
-    rf"{_TEXT_ASSIGNMENT_RELATION}"
+    rf"{_TEXT_DIRECT_RELATION}"
     r"(?P<value>[^\r\n]*)",
     re.IGNORECASE,
 )
@@ -147,7 +157,9 @@ _EVIDENCE_CLASS_RELATION = re.compile(
 )
 _EMPTY_EVIDENCE_PACK_ASSIGNMENT_LINE = re.compile(
     r"(?:\s*|(?:(?:\"\"|'')|(?:[\(\[\{]\s*)?[\"']?"
-    r"(?:false|none|null)[\"']?)\s*(?:[\)\]\}])?\s*[.!?]*\s*)",
+    r"(?:(?:intentionally\s+)?(?:unavailable|not\s+available|"
+    r"not\s+assigned|absent|empty)|false|none|null)[\"']?)"
+    r"\s*(?:[\)\]\}])?\s*[.!?|]*\s*)",
     re.IGNORECASE,
 )
 _EMPTY_EVIDENCE_PACK_PROSE_LINE = re.compile(
@@ -333,14 +345,36 @@ def _normalized_text(
             shadow.append(character)
         elif unicodedata.category(character).startswith("Z"):
             shadow.append(" ")
-        elif unicodedata.category(character).startswith("P"):
-            shadow.append(".")
         else:
-            # Formal state markers are ASCII. Visible Unicode letters, numbers,
-            # symbols, and spacing marks remain observably non-empty (for
-            # example an Evidence Pack ID) and remain part of a larger field
-            # token instead of disappearing into a protected ASCII key.
-            shadow.append("�")
+            category = unicodedata.category(character)
+            unicode_name = unicodedata.name(character, "")
+            if (
+                category == "Pd"
+                or "MINUS SIGN" in unicode_name
+            ):
+                shadow.append("-")
+            elif "BULLET" in unicode_name or "MIDDLE DOT" in unicode_name:
+                shadow.append("|")
+            elif "RIGHT" in unicode_name and "ARROW" in unicode_name:
+                shadow.append("->")
+            elif (
+                "VERTICAL" in unicode_name
+                and (
+                    "LINE" in unicode_name
+                    or "BAR" in unicode_name
+                    or "BOX DRAWINGS" in unicode_name
+                )
+            ):
+                shadow.append("|")
+            elif category.startswith("P"):
+                shadow.append(".")
+            else:
+                # Formal state markers are ASCII. Visible Unicode letters,
+                # numbers, symbols, and spacing marks remain observably
+                # non-empty (for example an Evidence Pack ID) and remain part
+                # of a larger field token instead of disappearing into a
+                # protected ASCII key.
+                shadow.append("�")
     return "".join(shadow)
 
 
@@ -716,7 +750,7 @@ def contains_formal_claim_escape_text(value: bytes | str) -> bool:
                         remainder = tail[scalar.end() :]
             line_remainder = re.split(r"[\r\n]", remainder, maxsplit=1)[0]
             valid_terminator = (
-                re.fullmatch(r"[ \t\f\v,;.!?\)\]\}]*", line_remainder)
+                re.fullmatch(r"[ \t\f\v,;.!?|\)\]\}]*", line_remainder)
                 is not None
             )
             if (
