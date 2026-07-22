@@ -177,7 +177,7 @@ TRUSTED_NATIVE_RUNTIME_SHA256 = {
 # The canonical producer hash is refreshed after changes to that producer.
 TRUSTED_CODE_SHA256 = {
     "canonical_full_likelihood_evidence.py": (
-        "sha256:ad220cb90bc8297e116076085a37ff6844324c80b2362290b1b8548c47c9dd71"
+        "sha256:f8d99598629ef2aabd936195c6ae444399e455dbca585d2cfcc81a4d6fa10004"
     ),
     "independent_w0wa_postprocess.py": (
         "sha256:42b7dcb4ef085db7b54d4deb12065d2959f4d8e51f4a77ba5b76e96047140755"

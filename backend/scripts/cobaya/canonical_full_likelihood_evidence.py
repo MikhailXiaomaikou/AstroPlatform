@@ -7367,21 +7367,133 @@ def grade_exact_analysis(
 def _default_paths() -> dict[str, Path]:
     script_dir = Path(__file__).resolve().parent
     local_dir = BACKEND_ROOT.parent / ".local" / "w0wa-strict-a-readiness"
+    primary_dir = local_dir / "primary-r2"
     return {
         "canonical": script_dir / "w0wa_desi_cmb_pantheonplus_exact.yaml",
-        "free_map_config": local_dir / "w0wa_exact_map.yaml",
-        "fixed_map_config": local_dir / "lcdm_exact_map.yaml",
+        "packages": local_dir / "packages-r2",
+        "free_map_config": primary_dir / "free-map-r2.yaml",
+        "fixed_map_config": primary_dir / "fixed-map-r2.yaml",
         "dependency_lock": script_dir / "w0wa_exact_requirements.txt",
         "reference_values": script_dir / "w0wa_exact_reference_cases.json",
         "data_manifest": script_dir / "w0wa_exact_data_manifest.json",
-        "wheels": local_dir / "wheels",
-        "preflight": local_dir / "preflight.json",
-        "generation": local_dir / "generation.json",
-        "analysis": local_dir / "analysis.json",
-        "adequacy": local_dir / "model_adequacy.json",
-        "grade": local_dir / "grade.json",
-        "hidden_answer": local_dir / "hidden_answer.json",
+        "wheels": local_dir / "wheelhouse-r2",
+        "preflight": primary_dir / "preflight-r2.json",
+        "generation": primary_dir / "generation-r2.json",
+        "analysis": primary_dir / "analysis-r2.json",
+        "adequacy_output_dir": primary_dir / "adequacy-r2",
+        "adequacy": primary_dir / "model-adequacy-r2.json",
+        "grade": primary_dir / "grade-r2.json",
+        "hidden_answer": primary_dir / "hidden-answer-r2.json",
+        "formal_chain_prefix": (
+            BACKEND_ROOT / "cobaya_runs" / "w0wa_exact_formal_r2"
+        ),
     }
+
+
+def _revision_1_state_locations() -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+    """Return historical state directories/files that revision 2 must not touch."""
+
+    local_dir = BACKEND_ROOT.parent / ".local" / "w0wa-strict-a-readiness"
+    protected_directories = (
+        BACKEND_ROOT / "packages",
+        local_dir / "exact-venv",
+        local_dir / "wheels",
+        local_dir / "isolated-venv",
+        local_dir / "isolated",
+        local_dir / "adequacy-configs",
+    )
+    protected_files = tuple(
+        local_dir / name
+        for name in (
+            "w0wa_exact_map.yaml",
+            "lcdm_exact_map.yaml",
+            "preflight.json",
+            "generation.json",
+            "analysis.json",
+            "model_adequacy.json",
+            "hidden_answer.json",
+            "grade.json",
+            "protocol.json",
+            "diagnostic-report.json",
+            "independent-postprocess.json",
+            "isolated-preflight.json",
+            "isolated-generation.json",
+        )
+    )
+    return protected_directories, protected_files
+
+
+def _path_is_revision_1_state(value: str | Path) -> bool:
+    """Identify an exact revision-1 state path, including symlink aliases."""
+
+    candidate = Path(value).expanduser().resolve()
+    protected_directories, protected_files = _revision_1_state_locations()
+    if candidate in {path.resolve() for path in protected_files}:
+        return True
+    if any(
+        candidate == directory.resolve()
+        or candidate.is_relative_to(directory.resolve())
+        for directory in protected_directories
+    ):
+        return True
+    chain_root = BACKEND_ROOT / "cobaya_runs"
+    for name in (
+        "w0wa_exact_formal",
+        "w0wa_exact_smoke",
+        "w0wa_exact_isolated",
+    ):
+        prefix = (chain_root / name).resolve()
+        if candidate == prefix or (
+            candidate.is_relative_to(prefix)
+        ) or (
+            candidate.parent == prefix.parent
+            and candidate.name.startswith(prefix.name + ".")
+        ):
+            return True
+    return False
+
+
+_COMMAND_PATH_ARGUMENTS: dict[str, tuple[str, ...]] = {
+    "preflight": (
+        "canonical", "packages_path", "dependency_lock", "wheels_path",
+        "reference_values", "data_manifest", "output",
+    ),
+    "generate": (
+        "canonical", "free_output", "fixed_output", "packages_path",
+        "preflight_report", "adequacy_output_dir", "output",
+    ),
+    "run": (
+        "config", "prefix", "packages_path", "canonical",
+        "preflight_report", "generation_report", "cobaya_run",
+    ),
+    "analyze": (
+        "canonical", "chain_prefix", "packages_path", "preflight_report",
+        "generation_report", "support_path", "output",
+    ),
+    "grade": (
+        "manifest", "hidden_answer", "adequacy_manifest",
+        "protocol_adjudication", "output",
+    ),
+}
+
+
+def _revision_1_state_argument_violations(
+    args: argparse.Namespace,
+) -> list[tuple[str, Path]]:
+    """Find forbidden historical-state paths before any command can write."""
+
+    violations: list[tuple[str, Path]] = []
+    if _path_is_revision_1_state(sys.executable):
+        violations.append(("python_executable", Path(sys.executable).resolve()))
+    for field in _COMMAND_PATH_ARGUMENTS.get(str(args.command), ()):
+        raw_value = getattr(args, field, None)
+        if field == "cobaya_run" and raw_value:
+            raw_value = shutil.which(str(raw_value)) or raw_value
+        values = raw_value if isinstance(raw_value, list) else [raw_value]
+        for value in values:
+            if value is not None and _path_is_revision_1_state(value):
+                violations.append((field, Path(value).expanduser().resolve()))
+    return violations
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -7393,7 +7505,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "preflight", help="verify exact config, code, data and reference values"
     )
     preflight.add_argument("--canonical", type=Path, default=defaults["canonical"])
-    preflight.add_argument("--packages-path", type=Path, default=Path("packages"))
+    preflight.add_argument(
+        "--packages-path", type=Path, default=defaults["packages"]
+    )
     preflight.add_argument(
         "--dependency-lock", type=Path, default=defaults["dependency_lock"]
     )
@@ -7416,14 +7530,16 @@ def _build_parser() -> argparse.ArgumentParser:
     generate.add_argument(
         "--fixed-output", type=Path, default=defaults["fixed_map_config"]
     )
-    generate.add_argument("--packages-path", type=Path, default=Path("packages"))
+    generate.add_argument(
+        "--packages-path", type=Path, default=defaults["packages"]
+    )
     generate.add_argument(
         "--preflight-report", type=Path, default=defaults["preflight"]
     )
     generate.add_argument(
         "--adequacy-output-dir",
         type=Path,
-        default=defaults["preflight"].parent / "adequacy-configs",
+        default=defaults["adequacy_output_dir"],
     )
     generate.add_argument("--output", type=Path, default=defaults["generation"])
 
@@ -7434,7 +7550,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--config", type=Path, required=True)
     run.add_argument("--prefix", type=Path, required=True)
     run.add_argument("--run-id", required=True)
-    run.add_argument("--packages-path", type=Path, default=Path("packages"))
+    run.add_argument("--packages-path", type=Path, default=defaults["packages"])
     run.add_argument(
         "--cobaya-run",
         default=None,
@@ -7462,9 +7578,9 @@ def _build_parser() -> argparse.ArgumentParser:
     analyze = subparsers.add_parser("analyze", help="analyze the exact formal chains")
     analyze.add_argument("--canonical", type=Path, default=defaults["canonical"])
     analyze.add_argument(
-        "--chain-prefix", type=Path, default=Path("cobaya_runs/w0wa_exact_formal")
+        "--chain-prefix", type=Path, default=defaults["formal_chain_prefix"]
     )
-    analyze.add_argument("--packages-path", type=Path, default=Path("packages"))
+    analyze.add_argument("--packages-path", type=Path, default=defaults["packages"])
     analyze.add_argument(
         "--preflight-report", type=Path, default=defaults["preflight"]
     )
@@ -7522,6 +7638,14 @@ def _require_isolated_exact_cli_runtime() -> dict[str, Any]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+    revision_1_violations = _revision_1_state_argument_violations(args)
+    if revision_1_violations:
+        for field, path in revision_1_violations:
+            print(
+                f"revision-1 state path forbidden for {field}: {path}",
+                file=sys.stderr,
+            )
+        return 2
     try:
         _require_isolated_exact_cli_runtime()
     except ValueError as exc:
