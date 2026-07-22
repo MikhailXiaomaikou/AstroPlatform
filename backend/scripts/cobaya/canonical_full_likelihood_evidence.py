@@ -7481,9 +7481,16 @@ def _amendment_002_state_locations() -> tuple[tuple[Path, ...], tuple[Path, ...]
 
 
 def _path_is_historical_exact_state(value: str | Path) -> bool:
-    """Identify revision-1 or Amendment-002 state, including symlink aliases."""
+    """Identify old state by both its lexical namespace and resolved target."""
 
-    candidate = Path(value).expanduser().resolve()
+    # ``resolve`` alone loses the caller-visible namespace.  In particular, a
+    # symlink named under ``primary-r2`` can resolve to a fresh Amendment-003
+    # artifact and would otherwise bypass the historical-state guard.  Build a
+    # normalized absolute path without following symlinks first, then retain the
+    # resolved check to catch aliases outside the protected namespace.
+    lexical_candidate = Path(
+        os.path.abspath(os.fspath(Path(value).expanduser()))
+    )
     revision_1_directories, revision_1_files = _revision_1_state_locations()
     amendment_002_directories, amendment_002_files = (
         _amendment_002_state_locations()
@@ -7493,31 +7500,39 @@ def _path_is_historical_exact_state(value: str | Path) -> bool:
         *amendment_002_directories,
     )
     protected_files = (*revision_1_files, *amendment_002_files)
-    if candidate in {path.resolve() for path in protected_files}:
-        return True
-    if any(
-        candidate == directory.resolve()
-        or candidate.is_relative_to(directory.resolve())
-        for directory in protected_directories
-    ):
-        return True
-    chain_root = BACKEND_ROOT / "cobaya_runs"
-    for name in (
-        "w0wa_exact_formal",
-        "w0wa_exact_smoke",
-        "w0wa_exact_isolated",
-        "w0wa_exact_formal_r2",
-        "w0wa_exact_smoke_r2",
-        "w0wa_exact_isolated_r2",
-    ):
-        prefix = (chain_root / name).resolve()
-        if candidate == prefix or (
-            candidate.is_relative_to(prefix)
-        ) or (
-            candidate.parent == prefix.parent
-            and candidate.name.startswith(prefix.name + ".")
+    candidates_and_normalizers = (
+        (
+            lexical_candidate,
+            lambda path: Path(os.path.abspath(os.fspath(path.expanduser()))),
+        ),
+        (lexical_candidate.resolve(), lambda path: path.resolve()),
+    )
+    for candidate, normalize in candidates_and_normalizers:
+        if candidate in {normalize(path) for path in protected_files}:
+            return True
+        normalized_directories = tuple(
+            normalize(directory) for directory in protected_directories
+        )
+        if any(
+            candidate == directory or candidate.is_relative_to(directory)
+            for directory in normalized_directories
         ):
             return True
+        chain_root = BACKEND_ROOT / "cobaya_runs"
+        for name in (
+            "w0wa_exact_formal",
+            "w0wa_exact_smoke",
+            "w0wa_exact_isolated",
+            "w0wa_exact_formal_r2",
+            "w0wa_exact_smoke_r2",
+            "w0wa_exact_isolated_r2",
+        ):
+            prefix = normalize(chain_root / name)
+            if candidate == prefix or candidate.is_relative_to(prefix) or (
+                candidate.parent == prefix.parent
+                and candidate.name.startswith(prefix.name + ".")
+            ):
+                return True
     return False
 
 

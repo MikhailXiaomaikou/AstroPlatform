@@ -32,11 +32,13 @@ and grades. The initial Amendment-002 `*-r2` and `w0wa_exact_*_r2` paths are
 historical and read-only.
 
 An explicit custom path need not contain the literal `r2-a003`. It is eligible
-only when its resolved path is not a revision-1/Amendment-002 alias, every
-output file and run-prefix namespace is new, every reused output directory is
-empty and not a symlink, and the custom interpreter passes the full exact
-83.0.0/hash-bound preflight. Existing receipts or artifacts are never
-overwritten.
+only when neither its normalized lexical path nor its resolved target belongs
+to revision-1/Amendment-002 state. A symlink named inside a historical
+namespace remains forbidden even if it points to a fresh `r2-a003` artifact.
+Every output file and run-prefix namespace must be new, every reused output
+directory must be empty and not a symlink, and the custom interpreter must pass
+the full exact 83.0.0/hash-bound preflight. Existing receipts or artifacts are
+never overwritten.
 
 This revision is not eligible for `A_READY_PENDING_EXTERNAL_REVIEW`, `A`, or
 any publication-ready claim. Installing the package or passing ordinary CI is
@@ -83,7 +85,7 @@ contains exactly 52 compatible, non-yanked wheel records.
 dependency_lock_sha256=sha256:cd1f2fef709506ca19a7eda578f392e72fe5d81fa8a3ea83729df3935b84f8a3
 wheel_manifest_sha256=sha256:37c9926fae0ebb49e833f6ecfd51001a11a96470a5631dfae8d58fb09d3bcb36
 likelihood_code_manifest_sha256=sha256:2ac837fce8fc5d7114f49af41c3541dc7e1085289141453b15c9feb81a584b31
-canonical_producer_sha256=sha256:94cc8ba7ee022572783761c815d44520d7182a95cad030b1217e4c98f0f2d063
+canonical_producer_sha256=sha256:8bdcb81691f08e89162f7772dc70063194346af61f149b932713b6d6ccab3893
 independent_postprocessor_sha256=sha256:8b2e519faa67bcdb6234f629f78cdb88a940f8152b294ac9c437776b8f3cd52d
 trusted_source_base_commit=ebb2f8d8eef202dbe8a8a85b0cb753829f3899a2
 wheel_count=52

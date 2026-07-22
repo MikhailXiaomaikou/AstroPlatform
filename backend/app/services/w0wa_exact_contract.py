@@ -160,7 +160,7 @@ TRUSTED_WHEEL_MANIFEST_SHA256 = (
     "sha256:37c9926fae0ebb49e833f6ecfd51001a11a96470a5631dfae8d58fb09d3bcb36"
 )
 TRUSTED_PROTOCOL_AMENDMENT_SHA256 = (
-    "sha256:dff889dcca171e2ca52e75d106bf1262b2be396b87f8f1dc6e669091776a233d"
+    "sha256:822352cf7b13bc8039dd8492aa15d96fd51d1854fec6b1225d1a25a335136c13"
 )
 TRUSTED_NATIVE_RUNTIME_FINGERPRINT = (
     "sha256:6412e4f362e566dc66ff53d9090b18d12cbe1cfdb03e6c05ab9f3c7adff518e1"
@@ -178,7 +178,7 @@ TRUSTED_NATIVE_RUNTIME_SHA256 = {
 # The canonical producer hash is refreshed after changes to that producer.
 TRUSTED_CODE_SHA256 = {
     "canonical_full_likelihood_evidence.py": (
-        "sha256:94cc8ba7ee022572783761c815d44520d7182a95cad030b1217e4c98f0f2d063"
+        "sha256:8bdcb81691f08e89162f7772dc70063194346af61f149b932713b6d6ccab3893"
     ),
     "independent_w0wa_postprocess.py": (
         "sha256:8b2e519faa67bcdb6234f629f78cdb88a940f8152b294ac9c437776b8f3cd52d"

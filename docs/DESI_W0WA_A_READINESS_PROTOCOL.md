@@ -53,7 +53,7 @@ whose exact file SHA-256 is
 The security-only `setuptools` roll-forward is frozen separately in
 [`DESI_W0WA_A_READINESS_AMENDMENT_003.md`](./DESI_W0WA_A_READINESS_AMENDMENT_003.md),
 whose exact file SHA-256 is
-`dff889dcca171e2ca52e75d106bf1262b2be396b87f8f1dc6e669091776a233d`.
+`822352cf7b13bc8039dd8492aa15d96fd51d1854fec6b1225d1a25a335136c13`.
 Every new workflow receipt must bind the target commitment and amendment 003.
 Historical revision-1 and initial revision-2 receipts retain their originating
 amendment bindings and are verified with their originating release; they are
@@ -61,10 +61,10 @@ never rewritten.
 
 Registered Amendment-003 defaults use `*-r2-a003` environment/artifact paths
 and `w0wa_exact_*_r2_a003` chain prefixes. A custom name is allowed only when
-it resolves outside historical state and every output/prefix is fresh. The
-initial Amendment-002 `*-r2` paths, their symlink aliases, and their
-Python/runner binaries are historical and must be rejected before a current
-command performs analysis or writes output.
+both its normalized lexical path and resolved target remain outside historical
+state and every output/prefix is fresh. The initial Amendment-002 `*-r2` paths,
+their symlink aliases, and their Python/runner binaries are historical and must
+be rejected before a current command performs analysis or writes output.
 
 The Amendment-003 source-ancestry root is the clean pre-change `main` commit
 `ebb2f8d8eef202dbe8a8a85b0cb753829f3899a2`. Exact preflight accepts only a

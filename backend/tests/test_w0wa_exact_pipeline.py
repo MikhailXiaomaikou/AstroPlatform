@@ -455,6 +455,43 @@ def test_amendment_003_cli_rejects_amendment_002_state_without_writes(
     assert not (local_root / "primary-r2-a003").exists()
 
 
+def test_amendment_003_cli_rejects_historical_symlink_name_to_fresh_state(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    backend_root = repo_root / "backend"
+    local_root = repo_root / ".local" / "w0wa-strict-a-readiness"
+    fresh_target = local_root / "primary-r2-a003" / "preflight-r2-a003.json"
+    fresh_target.parent.mkdir(parents=True)
+    fresh_target.write_bytes(b"fresh-amendment-003-preflight\n")
+    historical_alias = local_root / "primary-r2" / "preflight-r2.json"
+    historical_alias.parent.mkdir()
+    historical_alias.symlink_to(
+        Path("../primary-r2-a003/preflight-r2-a003.json")
+    )
+    monkeypatch.setattr(pipeline, "BACKEND_ROOT", backend_root)
+    monkeypatch.chdir(repo_root)
+
+    def unexpected_runtime_check() -> dict:
+        raise AssertionError("lexical historical guard did not run first")
+
+    monkeypatch.setattr(
+        pipeline, "_require_isolated_exact_cli_runtime", unexpected_runtime_check
+    )
+    raw_argument = Path(
+        ".local/w0wa-strict-a-readiness/primary-r2/preflight-r2.json"
+    )
+    assert raw_argument.resolve() == fresh_target
+    assert pipeline._path_is_historical_exact_state(raw_argument) is True
+    assert pipeline.main(
+        ["generate", "--preflight-report", str(raw_argument)]
+    ) == 2
+    assert fresh_target.read_bytes() == b"fresh-amendment-003-preflight\n"
+    assert historical_alias.is_symlink()
+    assert not (fresh_target.parent / "generation-r2-a003.json").exists()
+
+
 def test_cli_rejects_arbitrary_preexisting_outputs_without_side_effects(
     tmp_path: Path,
     monkeypatch,
