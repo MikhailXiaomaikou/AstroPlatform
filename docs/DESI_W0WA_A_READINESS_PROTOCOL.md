@@ -53,7 +53,7 @@ whose exact file SHA-256 is
 The security-only `setuptools` roll-forward is frozen separately in
 [`DESI_W0WA_A_READINESS_AMENDMENT_003.md`](./DESI_W0WA_A_READINESS_AMENDMENT_003.md),
 whose exact file SHA-256 is
-`822352cf7b13bc8039dd8492aa15d96fd51d1854fec6b1225d1a25a335136c13`.
+`4ce9bea6bd412b22047bbe605f8068d7691bb204754cd2902cfce23d3b139378`.
 Every new workflow receipt must bind the target commitment and amendment 003.
 Historical revision-1 and initial revision-2 receipts retain their originating
 amendment bindings and are verified with their originating release; they are

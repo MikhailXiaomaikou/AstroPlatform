@@ -751,6 +751,54 @@ def test_independent_cli_rejects_historical_state_before_analysis_or_writes(
     assert not safe_output.exists()
 
 
+def test_independent_cli_rejects_historical_symlink_name_to_fresh_state(
+    tmp_path, monkeypatch
+):
+    repo_root = tmp_path / "repo"
+    backend_root = repo_root / "backend"
+    local_root = repo_root / ".local" / "w0wa-strict-a-readiness"
+    fresh_target = local_root / "isolated-r2-a003" / "preflight-r2-a003.json"
+    fresh_target.parent.mkdir(parents=True)
+    fresh_target.write_bytes(b"fresh-amendment-003-preflight\n")
+    historical_alias = local_root / "isolated-r2" / "preflight-r2.json"
+    historical_alias.parent.mkdir()
+    historical_alias.symlink_to(Path("../isolated-r2-a003/preflight-r2-a003.json"))
+    monkeypatch.setattr(independent, "BACKEND_ROOT", backend_root)
+    monkeypatch.chdir(repo_root)
+
+    def unexpected_postprocess(**_kwargs):
+        raise AssertionError("lexical historical guard did not run first")
+
+    monkeypatch.setattr(
+        independent, "independently_postprocess", unexpected_postprocess
+    )
+    raw_argument = Path(".local/w0wa-strict-a-readiness/isolated-r2/preflight-r2.json")
+    output = fresh_target.parent / "independent-postprocess-r2-a003.json"
+    argv = [
+        "--chain-prefix",
+        str(tmp_path / "safe" / "w0wa_exact_isolated_r2_a003"),
+        "--updated-config",
+        str(tmp_path / "safe" / "isolated-r2-a003.updated.yaml"),
+        "--run-id",
+        "lexical-historical-state-guard-test",
+        "--primary-execution-fingerprint",
+        "sha256:" + "1" * 64,
+        "--environment-fingerprint",
+        "sha256:" + "2" * 64,
+        "--environment-preflight",
+        str(raw_argument),
+        "--output",
+        str(output),
+    ]
+
+    assert raw_argument.resolve() == fresh_target
+    assert independent._path_is_historical_exact_state(raw_argument) is True
+    assert independent.main(argv) == 2
+    assert fresh_target.read_bytes() == b"fresh-amendment-003-preflight\n"
+    assert historical_alias.is_symlink()
+    assert not output.exists()
+
+
 def test_chain_parse_and_hash_share_one_immutable_single_fd_snapshot(
     tmp_path, monkeypatch
 ):
