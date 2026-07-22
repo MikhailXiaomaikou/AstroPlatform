@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 import uuid
@@ -102,29 +103,46 @@ _EVIDENCE_PACK_IDENTIFIER_MARKER = (
     rf"{_EVIDENCE_PACK_MARKER}[^a-z0-9]*s[^a-z0-9]+{_ID_MARKER}|"
     rf"{_EVIDENCE_PACK_MARKER}[^a-z0-9]+{_IDENTIFIER_MARKER})"
 )
+_ASCII_FIELD_START = r"(?<![a-z0-9_�])"
+_ASCII_FIELD_END = r"(?![a-z0-9_�])"
+_ASCII_VALUE_START = r"(?<![a-z0-9])"
+_ASCII_VALUE_END = r"(?![a-z0-9])"
 _TEXT_ASSIGNMENT_RELATION = r"[\"']?\s*[:=]\s*"
-_TEXT_IS_RELATION = r"[^a-z0-9]*is\b[\s:=\(\[\{\"',;/\-]*"
+_TEXT_IS_RELATION = (
+    r"[^a-z0-9]*is"
+    + _ASCII_VALUE_END
+    + r"[\s_:=\(\[\{\"',;/\-]*"
+)
 _TEXT_VALUE_RELATION = rf"(?:{_TEXT_ASSIGNMENT_RELATION}|{_TEXT_IS_RELATION})"
 
 _EVIDENCE_PACK_ID_ASSIGNMENT = re.compile(
-    rf"\b{_EVIDENCE_PACK_IDENTIFIER_MARKER}\b{_TEXT_ASSIGNMENT_RELATION}"
+    rf"{_ASCII_FIELD_START}{_EVIDENCE_PACK_IDENTIFIER_MARKER}"
+    rf"{_ASCII_FIELD_END}{_TEXT_ASSIGNMENT_RELATION}"
     r"(?P<value>[^\r\n]*)",
     re.IGNORECASE,
 )
 _EVIDENCE_PACK_ASSIGNMENT = re.compile(
-    rf"\b(?:{_EVIDENCE_PACK_MARKER}|{_FORMAL_EVIDENCE_PACK_MARKER})\b"
+    rf"{_ASCII_FIELD_START}(?:{_EVIDENCE_PACK_MARKER}|"
+    rf"{_FORMAL_EVIDENCE_PACK_MARKER}){_ASCII_FIELD_END}"
     rf"{_TEXT_ASSIGNMENT_RELATION}"
     r"(?P<value>[^\r\n]*)",
     re.IGNORECASE,
 )
 _EVIDENCE_PACK_ID_PROSE = re.compile(
-    rf"\b{_EVIDENCE_PACK_IDENTIFIER_MARKER}\b{_TEXT_IS_RELATION}"
+    rf"{_ASCII_FIELD_START}{_EVIDENCE_PACK_IDENTIFIER_MARKER}"
+    rf"{_ASCII_FIELD_END}{_TEXT_IS_RELATION}"
     r"(?P<value>[^\r\n]*)",
     re.IGNORECASE,
 )
 _EVIDENCE_PACK_PROSE = re.compile(
-    rf"\b(?:{_EVIDENCE_PACK_MARKER}|{_FORMAL_EVIDENCE_PACK_MARKER})\b"
+    rf"{_ASCII_FIELD_START}(?:{_EVIDENCE_PACK_MARKER}|"
+    rf"{_FORMAL_EVIDENCE_PACK_MARKER}){_ASCII_FIELD_END}"
     rf"{_TEXT_IS_RELATION}(?P<value>[^\r\n]*)",
+    re.IGNORECASE,
+)
+_EVIDENCE_CLASS_RELATION = re.compile(
+    rf"{_ASCII_FIELD_START}{_EVIDENCE_CLASS_MARKER}{_ASCII_FIELD_END}"
+    rf"{_TEXT_VALUE_RELATION}",
     re.IGNORECASE,
 )
 _EMPTY_EVIDENCE_PACK_ASSIGNMENT_LINE = re.compile(
@@ -142,21 +160,23 @@ _EMPTY_EVIDENCE_PACK_PROSE_LINE = re.compile(
 _FORMAL_TEXT_PATTERNS = tuple(
     re.compile(pattern, re.IGNORECASE)
     for pattern in (
-        rf"\b{_SCIENTIFIC_VERDICT_MARKER}\b{_TEXT_VALUE_RELATION}"
-        r"[\"']?supported\b",
-        rf"\b{_STATUS_MARKER}\b{_TEXT_VALUE_RELATION}[\"']?supported\b",
+        rf"{_ASCII_FIELD_START}{_SCIENTIFIC_VERDICT_MARKER}"
+        rf"{_ASCII_FIELD_END}{_TEXT_VALUE_RELATION}"
+        rf"[\"']?supported{_ASCII_VALUE_END}",
+        rf"{_ASCII_FIELD_START}{_STATUS_MARKER}{_ASCII_FIELD_END}"
+        rf"{_TEXT_VALUE_RELATION}[\"']?supported{_ASCII_VALUE_END}",
         (
-            rf"\b(?:{_PUBLICATION_READY_MARKER}|{_CLAIM_ELIGIBLE_MARKER}|"
-            rf"{_EVIDENCE_PACK_ALLOWED_MARKER})\b{_TEXT_VALUE_RELATION}"
-            r"[\"']?(?:true|yes|1)\b"
-        ),
-        (
-            rf"\b{_EVIDENCE_CLASS_MARKER}\b{_TEXT_VALUE_RELATION}[\"']?"
-            rf"(?:formal|registered|{_PUBLICATION_READY_MARKER})\b"
+            rf"{_ASCII_FIELD_START}(?:{_PUBLICATION_READY_MARKER}|"
+            rf"{_CLAIM_ELIGIBLE_MARKER}|{_EVIDENCE_PACK_ALLOWED_MARKER})"
+            rf"{_ASCII_FIELD_END}{_TEXT_VALUE_RELATION}"
+            rf"[\"']?(?:true|yes|1){_ASCII_VALUE_END}"
         ),
     )
 )
-_SUPPORTED_TOKEN = re.compile(r"\bsupported\b", re.IGNORECASE)
+_SUPPORTED_TOKEN = re.compile(
+    rf"{_ASCII_VALUE_START}supported{_ASCII_VALUE_END}",
+    re.IGNORECASE,
+)
 _FORMAL_RESERVED_TOKEN = "supported"
 _PROTECTED_POLICY_KEYS = frozenset(
     {
@@ -313,9 +333,13 @@ def _normalized_text(
             shadow.append(character)
         elif unicodedata.category(character).startswith("Z"):
             shadow.append(" ")
+        elif unicodedata.category(character).startswith("P"):
+            shadow.append(".")
         else:
-            # Formal state markers are ASCII, but a visible Unicode value must
-            # remain observably non-empty (for example an Evidence Pack ID).
+            # Formal state markers are ASCII. Visible Unicode letters, numbers,
+            # symbols, and spacing marks remain observably non-empty (for
+            # example an Evidence Pack ID) and remain part of a larger field
+            # token instead of disappearing into a protected ASCII key.
             shadow.append("�")
     return "".join(shadow)
 
@@ -381,7 +405,12 @@ def _contains_confusable_supported_token(value: Any) -> bool:
 def _canonical_key(value: Any) -> str:
     """Map JSON-key spelling variants to one policy identity."""
 
-    canonical = re.sub(r"[^a-z0-9]+", "", _normalized_text(value).casefold())
+    normalized_key = _normalized_text(value).casefold()
+    canonical = re.sub(
+        r"[^a-z0-9]+",
+        "",
+        normalized_key.replace("�", "x"),
+    )
     if canonical in _PROTECTED_POLICY_KEYS:
         return canonical
     normalized = unicodedata.normalize("NFKC", str(value)).translate(
@@ -635,11 +664,66 @@ def contains_formal_claim_escape_text(value: bytes | str) -> bool:
         for character in raw_text
     ):
         return True
+    duplicate_json_key = False
+
+    def strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        nonlocal duplicate_json_key
+        result: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in result:
+                duplicate_json_key = True
+            result[key] = item
+        return result
+
+    def reject_nonstandard_json_constant(value: str) -> Any:
+        raise ValueError(f"nonstandard JSON constant: {value}")
+
+    try:
+        parsed_json = json.loads(
+            raw_text,
+            object_pairs_hook=strict_json_object,
+            parse_constant=reject_nonstandard_json_constant,
+        )
+    except (json.JSONDecodeError, RecursionError, ValueError):
+        pass
+    else:
+        if duplicate_json_key:
+            return True
+        return contains_formal_claim_escape(
+            parsed_json,
+            scan_text_leaves=True,
+        )
     text = _normalized_text(raw_text)
     boundary_text = _normalized_text(
         raw_text,
         preserve_invisible_boundaries=True,
     )
+    for candidate in (text, boundary_text):
+        for match in _EVIDENCE_CLASS_RELATION.finditer(candidate):
+            tail = candidate[match.end() :].lstrip()
+            evidence_class: str | None = None
+            remainder = ""
+            if tail:
+                if tail[0] in {"\"", "'"}:
+                    closing_quote = tail.find(tail[0], 1)
+                    if closing_quote >= 0:
+                        evidence_class = tail[1:closing_quote]
+                        remainder = tail[closing_quote + 1 :]
+                else:
+                    scalar = re.match(r"[^\s,;.!?\)\]\}]+", tail)
+                    if scalar is not None:
+                        evidence_class = scalar.group(0)
+                        remainder = tail[scalar.end() :]
+            line_remainder = re.split(r"[\r\n]", remainder, maxsplit=1)[0]
+            valid_terminator = (
+                re.fullmatch(r"[ \t\f\v,;.!?\)\]\}]*", line_remainder)
+                is not None
+            )
+            if (
+                evidence_class != NON_FORMAL_EVIDENCE_CLASS
+                or not valid_terminator
+            ):
+                return True
     if any(
         pattern.search(candidate) is not None
         for pattern in _FORMAL_TEXT_PATTERNS
