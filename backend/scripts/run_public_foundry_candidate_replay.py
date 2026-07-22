@@ -461,7 +461,7 @@ def _verify_sha256sums(kit_dir: Path) -> None:
     expected = {
         path.relative_to(kit_dir).as_posix()
         for path in kit_paths
-        if path.is_file() and path.name != "SHA256SUMS"
+        if path.is_file() and path != manifest
     }
     if seen != expected:
         raise ValueError("recorded_sha256sums_coverage_mismatch")

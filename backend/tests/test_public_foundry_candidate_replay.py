@@ -26,6 +26,7 @@ _WRAPPER_RELATIVE = Path("docs/demo/foundry-candidate/run-candidate-demo.sh")
 _HISTORICAL_VERSION = (
     "f4e8fa65deeb0b8662770fe436035596a89085ac33ef53cfb8e974d191268868"
 )
+_COVERAGE_ENV_KEYS = frozenset({"COVERAGE_FILE", "COVERAGE_PROCESS_START"})
 
 
 def _run(
@@ -34,15 +35,51 @@ def _run(
     cwd: Path,
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    # pytest-cov injects COV_CORE_* into this test process so coverage can
+    # follow ordinary subprocesses.  These tests intentionally copy the whole
+    # repository to adversarial temporary checkouts; allowing that injection
+    # makes coverage count each copy as a second application source tree and
+    # roughly doubles the measured denominator.  The replay executable is
+    # covered directly by this module, so isolate only these fixture children.
+    process_env = (os.environ if env is None else env).copy()
+    for key in tuple(process_env):
+        if key.startswith("COV_CORE_") or key in _COVERAGE_ENV_KEYS:
+            process_env.pop(key, None)
     return subprocess.run(
         command,
         cwd=cwd,
-        env=env,
+        env=process_env,
         check=False,
         capture_output=True,
         text=True,
         timeout=180,
     )
+
+
+def test_fixture_subprocess_does_not_inherit_coverage_instrumentation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("COV_CORE_SOURCE", "app")
+    monkeypatch.setenv("COV_CORE_CONFIG", "pytest.ini")
+    monkeypatch.setenv("COVERAGE_PROCESS_START", "pytest.ini")
+    monkeypatch.setenv("COVERAGE_FILE", str(tmp_path / ".coverage"))
+
+    completed = _run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import os; "
+                "raise SystemExit(any(k.startswith('COV_CORE_') or "
+                "k in {'COVERAGE_FILE', 'COVERAGE_PROCESS_START'} "
+                "for k in os.environ))"
+            ),
+        ],
+        cwd=tmp_path,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 @pytest.fixture(scope="module")
@@ -651,6 +688,29 @@ def test_recorded_verifier_rejects_file_missing_from_manifest(
 ) -> None:
     repo, kit = _standalone_verifier_fixture(tmp_path)
     (kit / "unmanifested.txt").write_text("not covered\n", encoding="utf-8")
+
+    completed = _run(
+        [
+            sys.executable,
+            str(_REPO / "backend/scripts/run_public_foundry_candidate_replay.py"),
+            "verify-recorded",
+            "--kit-dir",
+            str(kit),
+        ],
+        cwd=repo,
+    )
+
+    assert completed.returncode != 0
+    assert "recorded_sha256sums_coverage_mismatch" in completed.stderr
+
+
+def test_recorded_verifier_requires_nested_sha256sums_in_manifest(
+    tmp_path: Path,
+) -> None:
+    repo, kit = _standalone_verifier_fixture(tmp_path)
+    nested = kit / "nested" / "SHA256SUMS"
+    nested.parent.mkdir()
+    nested.write_text("nested content must be hashed\n", encoding="utf-8")
 
     completed = _run(
         [
