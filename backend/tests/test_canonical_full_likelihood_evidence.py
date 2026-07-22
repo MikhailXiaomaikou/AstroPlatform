@@ -226,7 +226,22 @@ def test_formal_config_is_strict_and_map_pair_is_generated_from_one_source():
 
 def test_complete_synthetic_evidence_emits_intervals_and_verified_map_delta(tmp_path):
     manifest, _ = _build_synthetic_run(tmp_path)
-    assert manifest["publication_ready"] is True, manifest["failures"]
+    assert manifest["numerical_checks_passed"] is True
+    assert manifest["publication_ready"] is False
+    assert manifest["claim_eligible"] is False
+    assert manifest["status"] == "WITHHELD"
+    assert manifest["environment_revision_gate"] == {
+        "passed": False,
+        "status": "WITHHELD_PENDING_FRESH_PREFLIGHT_AND_SCIENCE_REGRESSION",
+        "reason": (
+            "environment_revision_pending_fresh_preflight_and_science_regression"
+        ),
+    }
+    assert (
+        "environment:"
+        "environment_revision_pending_fresh_preflight_and_science_regression"
+        in manifest["failures"]
+    )
     diagnostics = manifest["posterior"]["diagnostics"]
     assert diagnostics["n_chains"] == 4
     assert all(
@@ -245,9 +260,7 @@ def test_complete_synthetic_evidence_emits_intervals_and_verified_map_delta(tmp_
     assert manifest["map_comparison"]["significance_ready"] is False
     assert manifest["significance_ready"] is False
     assert manifest["conclusion_attestations"] == []
-    assert manifest["claim_scope"] == (
-        "posterior_intervals_and_descriptive_paired_optimizer_differences"
-    )
+    assert manifest["claim_scope"] == "none"
     assert "p_value" not in manifest["map_comparison"]
     assert "equivalent_sigma" not in manifest["map_comparison"]
     assert manifest["map_comparison"]["significance_withheld_reason"] == (
@@ -278,8 +291,30 @@ def test_imbalanced_chain_lengths_fail_before_reporting_intervals(tmp_path):
     assert "intervals_68" not in manifest["posterior"]
 
 
-def test_calibrated_comparison_emits_versioned_conclusion_attestations():
+def test_calibrated_comparison_emits_attestations_only_after_environment_gate(
+    monkeypatch,
+):
     manifest_hash = "sha256:" + "a" * 64
+    pending = evidence.build_conclusion_attestations(
+        map_comparison={
+            "significance_ready": True,
+            "likelihood_only_mle_proven": True,
+            "method": {
+                "wilks_calibration_verified": True,
+                "simulation_calibration_verified": False,
+            },
+        },
+        data_fingerprint="sha256:" + "b" * 64,
+        likelihood_fingerprint="sha256:" + "c" * 64,
+        evidence_manifest_sha256=manifest_hash,
+    )
+    assert pending == []
+
+    monkeypatch.setattr(
+        evidence,
+        "exact_environment_validated_for_formal_execution",
+        lambda: True,
+    )
     attestations = evidence.build_conclusion_attestations(
         map_comparison={
             "significance_ready": True,

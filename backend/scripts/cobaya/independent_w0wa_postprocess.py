@@ -1005,8 +1005,123 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _historical_state_locations() -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+    """Return revision-1 and Amendment-002 state forbidden to new runs."""
+
+    local_dir = BACKEND_ROOT.parent / ".local" / "w0wa-strict-a-readiness"
+    protected_directories = (
+        BACKEND_ROOT / "packages",
+        local_dir / "exact-venv",
+        local_dir / "wheels",
+        local_dir / "isolated-venv",
+        local_dir / "isolated",
+        local_dir / "adequacy-configs",
+        local_dir / "exact-venv-r2",
+        local_dir / "wheelhouse-r2",
+        local_dir / "packages-r2",
+        local_dir / "primary-r2",
+        local_dir / "isolated-venv-r2",
+        local_dir / "isolated-r2",
+    )
+    protected_files = tuple(
+        local_dir / name
+        for name in (
+            "w0wa_exact_map.yaml",
+            "lcdm_exact_map.yaml",
+            "preflight.json",
+            "generation.json",
+            "analysis.json",
+            "model_adequacy.json",
+            "hidden_answer.json",
+            "grade.json",
+            "protocol.json",
+            "diagnostic-report.json",
+            "independent-postprocess.json",
+            "isolated-preflight.json",
+            "isolated-generation.json",
+        )
+    )
+    return protected_directories, protected_files
+
+
+def _path_is_historical_exact_state(value: str | Path) -> bool:
+    """Detect old exact state and symlink aliases without opening its bytes."""
+
+    candidate = Path(value).expanduser().resolve()
+    protected_directories, protected_files = _historical_state_locations()
+    if candidate in {path.resolve() for path in protected_files}:
+        return True
+    if any(
+        candidate == directory.resolve()
+        or candidate.is_relative_to(directory.resolve())
+        for directory in protected_directories
+    ):
+        return True
+    chain_root = BACKEND_ROOT / "cobaya_runs"
+    for name in (
+        "w0wa_exact_formal",
+        "w0wa_exact_smoke",
+        "w0wa_exact_isolated",
+        "w0wa_exact_formal_r2",
+        "w0wa_exact_smoke_r2",
+        "w0wa_exact_isolated_r2",
+    ):
+        prefix = (chain_root / name).resolve()
+        if candidate == prefix or candidate.is_relative_to(prefix) or (
+            candidate.parent == prefix.parent
+            and candidate.name.startswith(prefix.name + ".")
+        ):
+            return True
+    return False
+
+
+def _historical_state_argument_violations(
+    args: argparse.Namespace,
+) -> list[tuple[str, Path]]:
+    """Validate every CLI path before analysis or output creation."""
+
+    violations: list[tuple[str, Path]] = []
+    if _path_is_historical_exact_state(sys.executable):
+        violations.append(("python_executable", Path(sys.executable).resolve()))
+    for field in (
+        "chain_prefix",
+        "updated_config",
+        "environment_preflight",
+        "output",
+    ):
+        value = getattr(args, field, None)
+        if value is not None and _path_is_historical_exact_state(value):
+            violations.append((field, Path(value).expanduser().resolve()))
+    return violations
+
+
+def _output_freshness_violation(args: argparse.Namespace) -> tuple[Path, str] | None:
+    """Reject an existing report or symlink before any chain analysis."""
+
+    output = Path(args.output).expanduser().absolute()
+    if output.exists() or output.is_symlink():
+        return output, "output_file_already_exists"
+    return None
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+    historical_violations = _historical_state_argument_violations(args)
+    if historical_violations:
+        for field, path in historical_violations:
+            print(
+                f"historical exact state path forbidden for {field}: {path}",
+                file=sys.stderr,
+            )
+        return 2
+    freshness_violation = _output_freshness_violation(args)
+    if freshness_violation is not None:
+        path, reason = freshness_violation
+        print(
+            f"output destination not fresh: {path} ({reason})",
+            file=sys.stderr,
+        )
+        return 2
     report = independently_postprocess(
         chain_prefix=args.chain_prefix,
         updated_config_path=args.updated_config,

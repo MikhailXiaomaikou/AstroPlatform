@@ -675,6 +675,82 @@ def test_preflight_pass_cannot_mask_current_nonisolated_execution(
         independent._verify_current_import_policy(recorded)
 
 
+def test_independent_cli_rejects_historical_state_before_analysis_or_writes(
+    tmp_path, monkeypatch
+):
+    backend_root = tmp_path / "repo" / "backend"
+    local_root = tmp_path / "repo" / ".local" / "w0wa-strict-a-readiness"
+    chain_root = backend_root / "cobaya_runs"
+    monkeypatch.setattr(independent, "BACKEND_ROOT", backend_root)
+    sentinels = {
+        "revision_1_output": local_root / "independent-postprocess.json",
+        "r2_preflight": local_root / "isolated-r2" / "preflight-r2.json",
+        "r2_output": (
+            local_root / "isolated-r2" / "independent-postprocess-r2.json"
+        ),
+        "r2_config": chain_root / "w0wa_exact_isolated_r2.updated.yaml",
+        "r2_chain": chain_root / "w0wa_exact_isolated_r2.1.txt",
+        "custom_output": tmp_path / "custom-output" / "existing-report.json",
+    }
+    for name, path in sentinels.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f"historical-{name}\n".encode())
+    alias = tmp_path / "preflight-alias.json"
+    alias.symlink_to(sentinels["r2_preflight"])
+    output_alias = tmp_path / "output-alias.json"
+    output_alias.symlink_to(sentinels["custom_output"])
+    original = {name: path.read_bytes() for name, path in sentinels.items()}
+    safe_output = tmp_path / "safe" / "report-r2-a003.json"
+
+    def unexpected_postprocess(**_kwargs):
+        raise AssertionError("historical guard did not run before analysis")
+
+    monkeypatch.setattr(
+        independent, "independently_postprocess", unexpected_postprocess
+    )
+
+    def argv(**overrides):
+        values = {
+            "chain_prefix": tmp_path / "safe" / "w0wa_exact_isolated_r2_a003",
+            "updated_config": tmp_path / "safe" / "isolated-r2-a003.updated.yaml",
+            "environment_preflight": tmp_path / "safe" / "preflight-r2-a003.json",
+            "output": safe_output,
+        }
+        values.update(overrides)
+        return [
+            "--chain-prefix", str(values["chain_prefix"]),
+            "--updated-config", str(values["updated_config"]),
+            "--run-id", "historical-state-guard-test",
+            "--primary-execution-fingerprint", "sha256:" + "1" * 64,
+            "--environment-fingerprint", "sha256:" + "2" * 64,
+            "--environment-preflight", str(values["environment_preflight"]),
+            "--output", str(values["output"]),
+        ]
+
+    cases = (
+        argv(chain_prefix=chain_root / "w0wa_exact_isolated_r2"),
+        argv(updated_config=sentinels["r2_config"]),
+        argv(environment_preflight=alias),
+        argv(output=sentinels["r2_output"]),
+        argv(output=sentinels["revision_1_output"]),
+        argv(output=sentinels["custom_output"]),
+        argv(output=output_alias),
+    )
+    for case in cases:
+        assert independent.main(case) == 2
+
+    monkeypatch.setattr(
+        independent.sys,
+        "executable",
+        str(local_root / "isolated-venv-r2" / "bin" / "python"),
+    )
+    assert independent.main(argv()) == 2
+    assert {name: path.read_bytes() for name, path in sentinels.items()} == original
+    assert alias.is_symlink()
+    assert output_alias.is_symlink()
+    assert not safe_output.exists()
+
+
 def test_chain_parse_and_hash_share_one_immutable_single_fd_snapshot(
     tmp_path, monkeypatch
 ):

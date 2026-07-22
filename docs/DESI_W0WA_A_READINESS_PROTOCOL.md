@@ -50,9 +50,26 @@ The cumulative revision-2 execution contract is frozen in
 [`DESI_W0WA_A_READINESS_AMENDMENT_002.md`](./DESI_W0WA_A_READINESS_AMENDMENT_002.md),
 whose exact file SHA-256 is
 `fc8fb56ae5009bc80723ee347ade47cb1c0e1cc7fffc75f3ce80015833d9b7af`.
-Every new workflow receipt must bind the target commitment and amendment 002.
-Historical revision-1 receipts retain their original amendment-001 binding and
-are verified with their originating release; they are never rewritten.
+The security-only `setuptools` roll-forward is frozen separately in
+[`DESI_W0WA_A_READINESS_AMENDMENT_003.md`](./DESI_W0WA_A_READINESS_AMENDMENT_003.md),
+whose exact file SHA-256 is
+`dff889dcca171e2ca52e75d106bf1262b2be396b87f8f1dc6e669091776a233d`.
+Every new workflow receipt must bind the target commitment and amendment 003.
+Historical revision-1 and initial revision-2 receipts retain their originating
+amendment bindings and are verified with their originating release; they are
+never rewritten.
+
+Registered Amendment-003 defaults use `*-r2-a003` environment/artifact paths
+and `w0wa_exact_*_r2_a003` chain prefixes. A custom name is allowed only when
+it resolves outside historical state and every output/prefix is fresh. The
+initial Amendment-002 `*-r2` paths, their symlink aliases, and their
+Python/runner binaries are historical and must be rejected before a current
+command performs analysis or writes output.
+
+The Amendment-003 source-ancestry root is the clean pre-change `main` commit
+`ebb2f8d8eef202dbe8a8a85b0cb753829f3899a2`. Exact preflight accepts only a
+clean branch or detached HEAD descended from that commit and re-hashes the
+complete required source inventory.
 
 The committed hash binds the paper version, dataset combination, model,
 allowed and forbidden claims, four central values and asymmetric 68% interval
@@ -110,7 +127,7 @@ preflight -> generate -> run -> analyze -> grade
 `preflight` verifies dependency versions, data hashes, likelihood reference
 points, configuration fingerprints, target commitment, local resource policy,
 the globally clean Git HEAD and tree, ancestry from frozen base commit
-`f9efb4ac6f7850d4c7739ac038d08beb37ea785e`, and a never-reused output prefix.
+`ebb2f8d8eef202dbe8a8a85b0cb753829f3899a2`, and a never-reused output prefix.
 Branch names are not evidence; clean branch descendants and detached HEADs are
 both accepted. `generate` derives run configurations from the exact profile.
 `run` creates fresh four-chain attestations. `analyze`
