@@ -16,6 +16,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from sqlalchemy import select
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.models.foundry_records import (
     FoundryCandidate,
@@ -393,6 +394,85 @@ async def _case(db_session, *, status: str | None = None):
     )
     receipt = _receipt(request, signed, public_key)
     return request, receipt, public_key
+
+
+async def _mark_candidate_bundle_legacy_invalid(
+    db_session,
+    request: WorkflowRegistryRelease,
+) -> FoundryCandidateVersion:
+    version = await db_session.get(
+        FoundryCandidateVersion,
+        uuid.UUID(request.manifest["context"]["candidate_version_db_id"]),
+    )
+    assert version is not None
+    # Simulate a row written under the historical, weaker policy without
+    # mutating the append-only ORM record through application code.
+    set_committed_value(
+        version,
+        "candidate_bundle",
+        {"workflow_spec": {"note": "scientific_verdict=SUPP٠RTED"}},
+    )
+    return version
+
+
+@pytest.mark.asyncio
+async def test_legacy_pending_release_fails_current_policy_on_export_and_import(
+    db_session,
+):
+    request, receipt, public_key = await _case(db_session)
+    _legacy_version = await _mark_candidate_bundle_legacy_invalid(
+        db_session, request
+    )
+
+    with pytest.raises(
+        RegistryReleaseImportError,
+        match="registry_release_candidate_policy_invalid",
+    ):
+        await export_pending_registry_release_request(
+            db_session,
+            release_request_id=request.id,
+            release_request_hash=request.manifest_hash,
+        )
+
+    with pytest.raises(
+        RegistryReleaseImportError,
+        match="registry_release_candidate_policy_invalid",
+    ):
+        await record_signed_registry_release_import(
+            db_session,
+            receipt=receipt,
+            trusted_public_keys={"registry-test-key": public_key},
+        )
+    assert await db_session.scalar(
+        select(WorkflowRegistryReleaseImport).where(
+            WorkflowRegistryReleaseImport.release_request_id == request.id
+        )
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_current_policy_allows_release_that_revokes_legacy_candidate(
+    db_session,
+):
+    request, receipt, public_key = await _case(db_session, status="REVOKED")
+    _legacy_version = await _mark_candidate_bundle_legacy_invalid(
+        db_session, request
+    )
+
+    exported = await export_pending_registry_release_request(
+        db_session,
+        release_request_id=request.id,
+        release_request_hash=request.manifest_hash,
+    )
+    assert exported["release_request_id"] == str(request.id)
+
+    imported, created = await record_signed_registry_release_import(
+        db_session,
+        receipt=receipt,
+        trusted_public_keys={"registry-test-key": public_key},
+    )
+    assert created is True
+    assert imported.status == "SIGNED_READY_FOR_DEPLOYMENT"
 
 
 @pytest.mark.asyncio

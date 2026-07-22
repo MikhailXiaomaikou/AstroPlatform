@@ -12,8 +12,32 @@ from app.services.foundry_evidence_policy import (
     "value",
     [
         "evidence_pack_id=pack-123",
+        "evidence_pack_id=n0ne",
+        "evidence_pack_id=fals3",
+        "evidence_pack_id=正式包",
+        "evidencePack=正式包",
+        "evidence_pack_id=Δ",
+        "evidence_pack_id=📦",
+        "evidence_pack_id=。",
+        "evidence_pack_id=null,pack-123",
         '{"evidence_pack_id": "pack-123"}',
         "Evidence Pack ID: 123e4567-e89b-12d3-a456-426614174000",
+        "Evidence Pack ID is pack-123",
+        "Evidence Pack ID is n〇ne",
+        "Evidence Pack ID is 正式包",
+        "Evidence Pack ID is📦",
+        "Evidence Pack ID is 。",
+        "Evidence Pack ID is unavailable, pack-123",
+        "Evidence Pack ID is intentionally unavailable; actual ID pack-123",
+        "Evidence Pack ID is empty. pack-123",
+        "Evidence Pack ID is: pack-123",
+        "Evidence Pack ID is(pack-123)",
+        "Evidence Pack ID is\u200bpack-123",
+        "Evidence Pack's ID is pack-123",
+        "Evidence Pack identifier is pack-123",
+        "Evidence Pack is pack-123",
+        "formal_evidence_pack=pack-123",
+        "formalEvidencePack=pack-123",
         b"candidate emitted evidence-pack-id='pack/alpha'",
         'evidencePack={"id":"pack-123"}',
         "scientific verdict: SUP\u200bPORTED",
@@ -28,7 +52,20 @@ from app.services.foundry_evidence_policy import (
         "scientific verdict: SᴜΡΡΟRΤΕD",
         "scientific verdict: SUPP0RTED",
         "scientific verdict: 5UPP0R73D",
+        "scientific verdict: SUPP٠RTED",
+        "scientific verdict: SUPP〇RTED",
         "publicationReady=t\u200brue",
+        "publication_ready=١",
+        "claim_eligible=۱",
+        "evidence_pack_allowed=१",
+        "publication_ready=❶",
+        "publication ready is true",
+        "claim eligible is true",
+        "evidence pack allowed is true",
+        "evidence class is formal",
+        "publicati0n_ready=true",
+        "publicati〇n_ready=true",
+        "pᴜblication_ready=true",
         "publication.ready=true",
         "publication/ready=true",
         "evidence.pack.id=pack-1",
@@ -54,8 +91,19 @@ def test_text_policy_rejects_nonempty_evidence_pack_identifiers(
     [
         "The evidence_pack_id field is reserved for formal runs.",
         "Evidence Pack ID is intentionally unavailable.",
+        "Evidence Pack ID is empty.",
+        "Evidence Pack ID is unavailable。",
+        "Evidence Pack ID is “unavailable”",
+        "Evidence Pack ID is unavailable…",
+        "Evidence Pack ID issue is tracked.",
+        "Evidence Pack is intentionally unavailable.",
         "evidence_pack_id=null",
         "evidence_pack_id=",
+        'evidence_pack_id=""',
+        "evidence_pack_id=''",
+        '{"evidence_pack_id":""}',
+        "evidencePack=false",
+        "formalEvidencePack=null",
     ],
 )
 def test_text_policy_does_not_reject_plain_field_discussion(value: str) -> None:
@@ -76,6 +124,12 @@ def test_text_policy_does_not_reject_plain_field_discussion(value: str) -> None:
         {"scientificVerdict": "SUP\u200bPORTED"},
         {"scientificVerdict": "SᴜPPORTED"},
         {"scientificVerdict": "SUPP0RTED"},
+        {"scientificVerdict": "SUPP٠RTED"},
+        {"scientificVerdict": "SUPP〇RTED"},
+        {"publicati0n_ready": True},
+        {"publicati〇n_ready": True},
+        {"pᴜblication_ready": True},
+        {"cla1m_eligible": True},
     ],
 )
 def test_nested_policy_rejects_evidence_pack_identifier_keys_and_values(
@@ -91,6 +145,7 @@ def test_nested_policy_rejects_evidence_pack_identifier_keys_and_values(
         {"Evidence Pack ID": ""},
         {"message": "The evidence_pack_id field is reserved."},
         {"message": "The Ωm profile fit completed without a formal verdict."},
+        {"天地玄黄宇宙洪荒日月盈昃": True},
     ],
 )
 def test_nested_policy_allows_absent_ids_and_plain_discussion(
@@ -100,7 +155,17 @@ def test_nested_policy_allows_absent_ids_and_plain_discussion(
 
 
 def test_structured_verdict_rejects_confusable_without_text_leaf_scan() -> None:
-    for verdict in ("SᴜPPORTED", "SUPP0RTED", "5UPP0R73D"):
+    for verdict in (
+        "SᴜPPORTED",
+        "SUPP0RTED",
+        "5UPP0R73D",
+        "SUPP٠RTED",
+        "SUPP〇RTED",
+    ):
         assert contains_formal_claim_escape(
             {"scientificVerdict": verdict}
         ) is True
+
+
+def test_unrelated_cjk_text_is_not_treated_as_supported() -> None:
+    assert contains_formal_claim_escape_text("天地玄黄宇宙洪荒日") is False

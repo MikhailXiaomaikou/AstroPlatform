@@ -153,11 +153,13 @@ def _publish(
     output_root: Path,
     report: dict[str, Any],
     captured_streams: dict[str, bytes],
+    *,
+    report_path: Path | None = None,
 ) -> None:
     for filename in ("stdout.log", "stderr.log"):
         _write_exclusive(output_root / filename, captured_streams[filename])
     _write_exclusive(
-        output_root / "demo-report.json",
+        report_path or output_root / "demo-report.json",
         (
             json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2)
             + "\n"
@@ -168,10 +170,12 @@ def _publish(
 def _run_legacy_local(args: argparse.Namespace) -> int:
     if os.geteuid() == 0 or args.output is None:
         raise RuntimeError("legacy_output_mode_forbidden")
-    report, captured_streams = _run_candidate(args)
     output = Path(args.output)
+    if not output.name or output.name.casefold() in {"stdout.log", "stderr.log"}:
+        raise RuntimeError("legacy_output_path_reserved")
+    report, captured_streams = _run_candidate(args)
     output.parent.mkdir(parents=True, exist_ok=True)
-    _publish(output.parent, report, captured_streams)
+    _publish(output.parent, report, captured_streams, report_path=output)
     return 0
 
 

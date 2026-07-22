@@ -972,6 +972,9 @@ def test_recorded_verifier_rejects_rehashed_ledger_boundary_tampering(
         {"evidence_class": "A_READY"},
         "Result is SUPPORTED",
         "evidence_pack_id=forged-pack",
+        "Evidence Pack ID is pack-123",
+        "Evidence Pack ID is 正式包",
+        "publication ready is true",
         {"Result is SUPPORTED": None},
     ],
 )
@@ -1203,14 +1206,21 @@ def test_recorded_verifier_rejects_rehashed_candidate_bundle_tampering(
     assert "recorded_candidate_bundle_hash_mismatch" in completed.stderr
 
 
+@pytest.mark.parametrize(
+    "formal_signal",
+    [
+        {"scientific_verdict": "SUPPORTED"},
+        {"scientific_verdict": "SUPP〇RTED"},
+        {"publicati〇n_ready": True},
+    ],
+)
 def test_recorded_verifier_rejects_fully_rehashed_formal_candidate_claim(
     tmp_path: Path,
+    formal_signal: dict[str, object],
 ) -> None:
     repo, kit = _standalone_verifier_fixture(tmp_path)
     bundle = json.loads((kit / "candidate-bundle.json").read_text(encoding="utf-8"))
-    bundle["workflow_spec"]["forged_verdict"] = {
-        "scientific_verdict": "SUPPORTED"
-    }
+    bundle["workflow_spec"]["forged_verdict"] = formal_signal
     _rewrite_candidate_bundle_receipt_chain(kit, bundle)
 
     completed = _run(

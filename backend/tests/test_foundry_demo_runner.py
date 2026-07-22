@@ -79,9 +79,11 @@ def test_demo_artifacts_are_host_readable_and_never_overwritten(
         write_exclusive(output, b"replacement")
 
 
+@pytest.mark.parametrize("output_name", ["demo-report.json", "result.json"])
 def test_legacy_cli_publishes_failed_report_and_captured_streams(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    output_name: str,
 ) -> None:
     from app.services import foundry_demo_runner
 
@@ -98,6 +100,7 @@ def test_legacy_cli_publishes_failed_report_and_captured_streams(
         "artifact_manifest": [],
     }
     monkeypatch.setattr(foundry_demo_runner, "load_candidate_bundle", lambda _path: {})
+
     def fake_run_candidate_demo(
         *_args: object,
         captured_streams: dict[str, bytes],
@@ -111,7 +114,7 @@ def test_legacy_cli_publishes_failed_report_and_captured_streams(
         "run_candidate_demo",
         fake_run_candidate_demo,
     )
-    output = tmp_path / "demo-report.json"
+    output = tmp_path / output_name
     monkeypatch.setattr(
         sys,
         "argv",
@@ -128,8 +131,48 @@ def test_legacy_cli_publishes_failed_report_and_captured_streams(
 
     assert exit_code == 0
     assert json.loads(output.read_text(encoding="utf-8"))["status"] == "FAILED"
+    if output_name != "demo-report.json":
+        assert not (tmp_path / "demo-report.json").exists()
     assert (tmp_path / "stdout.log").read_bytes() == b""
     assert (tmp_path / "stderr.log").read_bytes() == b""
+
+
+@pytest.mark.parametrize(
+    "output_name",
+    ["stdout.log", "stderr.log", "STDOUT.LOG", "StDeRr.LoG"],
+)
+def test_legacy_cli_rejects_reserved_report_names_before_running(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    output_name: str,
+) -> None:
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "run_foundry_candidate_demo.py"
+    )
+    module = runpy.run_path(str(script))
+
+    def candidate_must_not_run(_args: object) -> None:
+        raise AssertionError("reserved output paths must fail before candidate execution")
+
+    module["main"].__globals__["_run_candidate"] = candidate_must_not_run
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(script),
+            "--candidate",
+            "failed_candidate",
+            "--output",
+            str(tmp_path / output_name),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="legacy_output_path_reserved"):
+        module["main"]()
+
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_checked_in_candidate_binds_current_demo_runner_definition() -> None:
@@ -373,6 +416,15 @@ def test_candidate_bundle_cannot_embed_formal_claim_signal() -> None:
         ("limitations", ["scientific verdict: SUPPORTED"]),
         ("generation", {"note": "evidence_pack_id=pack-1"}),
         ("workflow_spec", {"note": "scientific verdict: SUPP0RTED"}),
+        ("workflow_spec", {"note": "scientific verdict: SUPP٠RTED"}),
+        ("workflow_spec", {"note": "scientific verdict: SUPP〇RTED"}),
+        ("workflow_spec", {"publicati0n_ready": True}),
+        ("workflow_spec", {"publicati〇n_ready": True}),
+        ("workflow_spec", {"pᴜblication_ready": True}),
+        ("workflow_spec", {"note": "Evidence Pack ID is pack-123"}),
+        ("workflow_spec", {"note": "Evidence Pack ID is 正式包"}),
+        ("workflow_spec", {"note": "publication ready is true"}),
+        ("workflow_spec", {"formalEvidencePack": "pack-123"}),
         ("source_pins", [{"note": "evidence_pack_id=pack-1"}]),
     ],
 )

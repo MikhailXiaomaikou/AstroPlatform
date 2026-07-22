@@ -20,6 +20,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.attributes import set_committed_value
 
+import app.services.foundry_catalog as foundry_catalog_service
 from app.auth import create_access_token
 from app.config import settings
 from app.models.claim_audit_records import ClaimAudit
@@ -40,6 +41,7 @@ from app.services.foundry_catalog import (
     _formal_build_source_binding,
     _has_strict_demo_report_v1_receipt,
     _pending_registry_release_request,
+    _strict_passed_demo_v1,
     append_candidate_version,
     ensure_validation_run,
     record_demo_report,
@@ -764,6 +766,43 @@ async def test_self_consistent_demo_without_validation_lineage_cannot_unlock_rev
             review_scope="ENGINEERING",
             decision="APPROVED",
             comment="A legacy receipt must not unlock review.",
+        )
+
+
+async def test_legacy_candidate_text_escape_fails_current_shared_gate(
+    db_session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate, version, _run, _demo, _report = await _candidate_with_demo(
+        db_session,
+        suffix="legacy_bundle_policy",
+    )
+    legacy_bundle = copy.deepcopy(version.candidate_bundle)
+    legacy_bundle["workflow_spec"]["note"] = "scientific_verdict=SUPP٠RTED"
+    set_committed_value(version, "candidate_bundle", legacy_bundle)
+
+    def receipt_must_not_be_consulted(*_args, **_kwargs):
+        raise AssertionError("invalid persisted bundles must fail before receipt trust")
+
+    monkeypatch.setattr(
+        foundry_catalog_service,
+        "_has_strict_demo_report_v1_receipt",
+        receipt_must_not_be_consulted,
+    )
+    assert await _strict_passed_demo_v1(db_session, version) is None
+
+    with pytest.raises(
+        FoundryCatalogError,
+        match="current non-formal evidence policy",
+    ):
+        await ensure_validation_run(
+            db_session,
+            candidate_id=candidate.id,
+            candidate_version_id=version.id,
+            candidate_version_hash=version.version_hash,
+            actor_kind="HUMAN_ADMIN",
+            actor_user_id=None,
+            reuse_terminal=True,
         )
 
 

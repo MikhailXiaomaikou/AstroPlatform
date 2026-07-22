@@ -33,6 +33,10 @@ from app.models.foundry_records import (
     WorkflowRegistryReleaseImport,
 )
 from app.services.evidence_pack_v2 import jcs_canonicalize
+from app.services.foundry_registry_import import (
+    RegistryReleaseImportError,
+    _require_current_candidate_policy,
+)
 from app.services.workflow_registry_v2 import (
     WorkflowRegistryError,
     active_registry_identity,
@@ -98,6 +102,27 @@ class RegistryActivationError(ValueError):
         super().__init__(code)
         self.code = code
         self.status_code = status_code
+
+
+async def _require_current_activation_policy(
+    db: AsyncSession,
+    entries: Any,
+) -> None:
+    try:
+        await _require_current_candidate_policy(db, entries)
+    except RegistryReleaseImportError as exc:
+        code = (
+            "registry_activation_candidate_policy_invalid"
+            if exc.code == "registry_release_candidate_policy_invalid"
+            else "registry_activation_candidate_policy_unverifiable"
+        )
+        raise RegistryActivationError(code, status_code=409) from exc
+
+
+def _signed_import_entries(imported: WorkflowRegistryReleaseImport) -> Any:
+    snapshot = imported.signed_snapshot
+    payload = snapshot.get("payload") if isinstance(snapshot, Mapping) else None
+    return payload.get("entries") if isinstance(payload, Mapping) else None
 
 
 @dataclass(frozen=True)
@@ -397,6 +422,7 @@ async def export_verified_activation_material(
         raise RegistryActivationError(
             "registry_activation_import_binding_mismatch", status_code=409
         )
+    await _require_current_activation_policy(db, payload.get("entries"))
     result = {
         "schema_version": ACTIVATION_EXPORT_SCHEMA,
         "release_request_id": str(release_request_id),
@@ -422,6 +448,11 @@ async def _release_chain_state(
     candidate_import: WorkflowRegistryReleaseImport,
 ) -> dict[str, Any]:
     """Return the imported head and highest persisted activation in one chain."""
+
+    await _require_current_activation_policy(
+        db,
+        _signed_import_entries(candidate_import),
+    )
 
     imports = list(
         (await db.execute(select(WorkflowRegistryReleaseImport))).scalars().all()
@@ -681,6 +712,7 @@ async def _verify_projected_catalog(
         raise RegistryActivationError(
             "registry_activation_entries_invalid", status_code=503
         )
+    await _require_current_activation_policy(db, entries)
     counts: dict[str, int] = {}
     for signed_entry in entries:
         workflow = signed_entry.get("workflow") if isinstance(signed_entry, dict) else None

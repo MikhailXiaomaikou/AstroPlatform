@@ -54,42 +54,123 @@ DEMO_REPORT_FIELDS_V1 = frozenset(
     }
 )
 
+_DIGIT_CONFUSABLE_OPTIONS = {
+    "0": frozenset({"o"}),
+    "1": frozenset({"i", "l"}),
+    "2": frozenset({"z"}),
+    "3": frozenset({"e"}),
+    "4": frozenset({"a"}),
+    "5": frozenset({"s"}),
+    "6": frozenset({"g"}),
+    "7": frozenset({"t"}),
+    "8": frozenset({"b"}),
+    "9": frozenset({"g"}),
+}
+
+
+def _confusable_text_key_pattern(value: str) -> str:
+    """Build an ASCII regex for one protected key and digit lookalikes."""
+
+    parts: list[str] = []
+    for character in value:
+        alternatives = {
+            digit
+            for digit, letters in _DIGIT_CONFUSABLE_OPTIONS.items()
+            if character in letters
+        }
+        parts.append(f"[{re.escape(character + ''.join(sorted(alternatives)))}]")
+    return r"[^a-z0-9]*".join(parts)
+
+
+_SCIENTIFIC_VERDICT_MARKER = _confusable_text_key_pattern("scientificverdict")
+_STATUS_MARKER = _confusable_text_key_pattern("status")
+_PUBLICATION_READY_MARKER = _confusable_text_key_pattern("publicationready")
+_CLAIM_ELIGIBLE_MARKER = _confusable_text_key_pattern("claimeligible")
+_EVIDENCE_PACK_ALLOWED_MARKER = _confusable_text_key_pattern(
+    "evidencepackallowed"
+)
+_EVIDENCE_CLASS_MARKER = _confusable_text_key_pattern("evidenceclass")
+_EVIDENCE_PACK_MARKER = _confusable_text_key_pattern("evidencepack")
+_EVIDENCE_PACK_ID_MARKER = _confusable_text_key_pattern("evidencepackid")
+_FORMAL_EVIDENCE_PACK_MARKER = _confusable_text_key_pattern(
+    "formalevidencepack"
+)
+_ID_MARKER = _confusable_text_key_pattern("id")
+_IDENTIFIER_MARKER = _confusable_text_key_pattern("identifier")
+_EVIDENCE_PACK_IDENTIFIER_MARKER = (
+    rf"(?:{_EVIDENCE_PACK_ID_MARKER}|"
+    rf"{_EVIDENCE_PACK_MARKER}[^a-z0-9]*s[^a-z0-9]+{_ID_MARKER}|"
+    rf"{_EVIDENCE_PACK_MARKER}[^a-z0-9]+{_IDENTIFIER_MARKER})"
+)
+_TEXT_ASSIGNMENT_RELATION = r"[\"']?\s*[:=]\s*"
+_TEXT_IS_RELATION = r"[^a-z0-9]*is\b[\s:=\(\[\{\"',;/\-]*"
+_TEXT_VALUE_RELATION = rf"(?:{_TEXT_ASSIGNMENT_RELATION}|{_TEXT_IS_RELATION})"
+
 _EVIDENCE_PACK_ID_ASSIGNMENT = re.compile(
-    r"\bevidence[^a-z0-9]*pack[^a-z0-9]*id\b[\"']?\s*[:=]\s*"
-    r"(?P<value>\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^\s,;}\]]+)",
+    rf"\b{_EVIDENCE_PACK_IDENTIFIER_MARKER}\b{_TEXT_ASSIGNMENT_RELATION}"
+    r"(?P<value>[^\r\n]*)",
     re.IGNORECASE,
 )
 _EVIDENCE_PACK_ASSIGNMENT = re.compile(
-    r"\bevidence[^a-z0-9]*pack\b[\"']?\s*[:=]\s*"
-    r"(?P<value>\{|\[|\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^\s,;}\]]+)",
+    rf"\b(?:{_EVIDENCE_PACK_MARKER}|{_FORMAL_EVIDENCE_PACK_MARKER})\b"
+    rf"{_TEXT_ASSIGNMENT_RELATION}"
+    r"(?P<value>[^\r\n]*)",
     re.IGNORECASE,
 )
-_EMPTY_EVIDENCE_PACK_ID_VALUES = {"", "false", "none", "null"}
+_EVIDENCE_PACK_ID_PROSE = re.compile(
+    rf"\b{_EVIDENCE_PACK_IDENTIFIER_MARKER}\b{_TEXT_IS_RELATION}"
+    r"(?P<value>[^\r\n]*)",
+    re.IGNORECASE,
+)
+_EVIDENCE_PACK_PROSE = re.compile(
+    rf"\b(?:{_EVIDENCE_PACK_MARKER}|{_FORMAL_EVIDENCE_PACK_MARKER})\b"
+    rf"{_TEXT_IS_RELATION}(?P<value>[^\r\n]*)",
+    re.IGNORECASE,
+)
+_EMPTY_EVIDENCE_PACK_ASSIGNMENT_LINE = re.compile(
+    r"(?:\s*|(?:(?:\"\"|'')|(?:[\(\[\{]\s*)?[\"']?"
+    r"(?:false|none|null)[\"']?)\s*(?:[\)\]\}])?\s*[.!?]*\s*)",
+    re.IGNORECASE,
+)
+_EMPTY_EVIDENCE_PACK_PROSE_LINE = re.compile(
+    r"(?:[\(\[\{]\s*)?[\"']?(?:intentionally\s+)?(?:unavailable|"
+    r"not\s+available|not\s+assigned|absent|empty|none|null|false)"
+    r"[\"']?\s*(?:[\)\]\}])?\s*[.!?]*\s*",
+    re.IGNORECASE,
+)
 
 _FORMAL_TEXT_PATTERNS = tuple(
     re.compile(pattern, re.IGNORECASE)
     for pattern in (
-        r"\bscientific[^a-z0-9]*verdict\b[\"']?\s*[:=]\s*[\"']?supported\b",
-        r"\bstatus\b[\"']?\s*[:=]\s*[\"']?supported\b",
+        rf"\b{_SCIENTIFIC_VERDICT_MARKER}\b{_TEXT_VALUE_RELATION}"
+        r"[\"']?supported\b",
+        rf"\b{_STATUS_MARKER}\b{_TEXT_VALUE_RELATION}[\"']?supported\b",
         (
-            r"\b(?:publication[^a-z0-9]*ready|claim[^a-z0-9]*eligible|"
-            r"evidence[^a-z0-9]*pack[^a-z0-9]*allowed)\b[\"']?\s*[:=]\s*"
+            rf"\b(?:{_PUBLICATION_READY_MARKER}|{_CLAIM_ELIGIBLE_MARKER}|"
+            rf"{_EVIDENCE_PACK_ALLOWED_MARKER})\b{_TEXT_VALUE_RELATION}"
             r"[\"']?(?:true|yes|1)\b"
         ),
         (
-            r"\bevidence[^a-z0-9]*class\b[\"']?\s*[:=]\s*[\"']?"
-            r"(?:formal|registered|publication[^a-z0-9]*ready)\b"
+            rf"\b{_EVIDENCE_CLASS_MARKER}\b{_TEXT_VALUE_RELATION}[\"']?"
+            rf"(?:formal|registered|{_PUBLICATION_READY_MARKER})\b"
         ),
     )
 )
 _SUPPORTED_TOKEN = re.compile(r"\bsupported\b", re.IGNORECASE)
 _FORMAL_RESERVED_TOKEN = "supported"
-_ASCII_DIGIT_CONFUSABLES = {
-    "0": "o",
-    "3": "e",
-    "5": "s",
-    "7": "t",
-}
+_PROTECTED_POLICY_KEYS = frozenset(
+    {
+        "claimeligible",
+        "evidenceclass",
+        "evidencepack",
+        "evidencepackallowed",
+        "evidencepackid",
+        "formalevidencepack",
+        "publicationready",
+        "scientificverdict",
+        "status",
+    }
+)
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _CANDIDATE_ID = re.compile(r"[a-z][a-z0-9_]{2,96}")
 _INVISIBLE_CODEPOINTS = frozenset(
@@ -148,6 +229,37 @@ _ASCII_CONFUSABLES = str.maketrans(
         "α": "a",
         "Ϲ": "C",
         "ϲ": "c",
+        "ᴀ": "a",
+        "ʙ": "b",
+        "ᴄ": "c",
+        "ᴅ": "d",
+        "ᴇ": "e",
+        "ꜰ": "f",
+        "ɢ": "g",
+        "ʜ": "h",
+        "ɪ": "i",
+        "ᴊ": "j",
+        "ᴋ": "k",
+        "ʟ": "l",
+        "ᴍ": "m",
+        "ɴ": "n",
+        "ᴏ": "o",
+        "ᴘ": "p",
+        "ʀ": "r",
+        "ꜱ": "s",
+        "ᴛ": "t",
+        "ᴜ": "u",
+        "ᴠ": "v",
+        "ᴡ": "w",
+        "ʏ": "y",
+        "ᴢ": "z",
+        "“": '"',
+        "”": '"',
+        "‘": "'",
+        "’": "'",
+        "。": ".",
+        "｡": ".",
+        "…": ".",
     }
 )
 
@@ -161,8 +273,28 @@ def _visually_ignorable(character: str) -> bool:
     )
 
 
-def _normalized_text(value: Any) -> str:
-    """Normalize compatibility forms and remove invisible format controls."""
+def _decimal_digit(character: str) -> str | None:
+    """Return one ASCII digit for Unicode decimal and numeric forms."""
+
+    try:
+        return str(unicodedata.decimal(character))
+    except (TypeError, ValueError):
+        pass
+    try:
+        numeric = float(unicodedata.numeric(character))
+    except (TypeError, ValueError):
+        return None
+    if numeric.is_integer() and 0 <= numeric <= 9:
+        return str(int(numeric))
+    return None
+
+
+def _normalized_text(
+    value: Any,
+    *,
+    preserve_invisible_boundaries: bool = False,
+) -> str:
+    """Normalize compatibility forms while preserving visible value content."""
 
     normalized = unicodedata.normalize("NFKC", str(value)).translate(
         _ASCII_CONFUSABLES
@@ -170,13 +302,21 @@ def _normalized_text(value: Any) -> str:
     shadow: list[str] = []
     for character in normalized:
         if _visually_ignorable(character):
+            if preserve_invisible_boundaries:
+                shadow.append(" ")
+            continue
+        decimal_digit = _decimal_digit(character)
+        if decimal_digit is not None:
+            shadow.append(decimal_digit)
             continue
         if character.isascii():
             shadow.append(character)
-        else:
-            # Formal state markers are ASCII.  Preserve a boundary for visible
-            # non-ASCII text while removing only explicitly invisible fillers.
+        elif unicodedata.category(character).startswith("Z"):
             shadow.append(" ")
+        else:
+            # Formal state markers are ASCII, but a visible Unicode value must
+            # remain observably non-empty (for example an Evidence Pack ID).
+            shadow.append("�")
     return "".join(shadow)
 
 
@@ -187,10 +327,10 @@ def _contains_confusable_supported_token(value: Any) -> bool:
     common Greek/Cyrillic lookalikes.  Some phonetic letters, such as the small
     capital U in ``SᴜPPORTED``, intentionally survive NFKC.  At this trust
     boundary, a same-length word that otherwise spells the reserved formal
-    verdict is rejected when a remaining non-ASCII letter or a common ASCII
-    digit lookalike (for example ``SUPP0RTED``) occupies one of its character
-    positions.  This is deliberately fail-closed without treating ordinary
-    non-ASCII scientific text as a verdict.
+    verdict is rejected when a remaining non-ASCII letter or a common decimal
+    digit lookalike (for example ``SUPP0RTED`` or ``SUPP٠RTED``) occupies one
+    of its character positions.  This is deliberately fail-closed without
+    treating ordinary non-ASCII scientific text as a verdict.
     """
 
     normalized = unicodedata.normalize("NFKC", str(value)).translate(
@@ -207,19 +347,23 @@ def _contains_confusable_supported_token(value: Any) -> bool:
             _FORMAL_RESERVED_TOKEN,
             strict=True,
         ):
-            if character.isascii():
-                folded = _ASCII_DIGIT_CONFUSABLES.get(
-                    character,
-                    character.casefold(),
-                )
-                if folded != expected:
+            decimal_digit = _decimal_digit(character)
+            if decimal_digit is not None:
+                if expected not in _DIGIT_CONFUSABLE_OPTIONS.get(
+                    decimal_digit,
+                    frozenset(),
+                ):
                     return False
-                if character in _ASCII_DIGIT_CONFUSABLES:
-                    saw_confusable = True
+                saw_confusable = True
                 continue
-            if not unicodedata.category(character).startswith("L"):
-                return False
-            saw_confusable = True
+            if character.isascii():
+                if character.casefold() != expected:
+                    return False
+                continue
+            # Known Greek/Cyrillic/phonetic lookalikes were translated above.
+            # Treating every remaining Unicode letter as an arbitrary ASCII
+            # letter would turn ordinary Chinese text into SUPPORTED.
+            return False
         return saw_confusable
 
     for character in normalized:
@@ -237,7 +381,42 @@ def _contains_confusable_supported_token(value: Any) -> bool:
 def _canonical_key(value: Any) -> str:
     """Map JSON-key spelling variants to one policy identity."""
 
-    return re.sub(r"[^a-z0-9]+", "", _normalized_text(value).casefold())
+    canonical = re.sub(r"[^a-z0-9]+", "", _normalized_text(value).casefold())
+    if canonical in _PROTECTED_POLICY_KEYS:
+        return canonical
+    normalized = unicodedata.normalize("NFKC", str(value)).translate(
+        _ASCII_CONFUSABLES
+    )
+    characters = [
+        character
+        for character in normalized
+        if not _visually_ignorable(character) and character.isalnum()
+    ]
+    for expected_key in _PROTECTED_POLICY_KEYS:
+        if len(characters) != len(expected_key):
+            continue
+        matched = True
+        for character, expected in zip(characters, expected_key, strict=True):
+            decimal_digit = _decimal_digit(character)
+            if decimal_digit is not None:
+                if expected not in _DIGIT_CONFUSABLE_OPTIONS.get(
+                    decimal_digit,
+                    frozenset(),
+                ):
+                    matched = False
+                    break
+                continue
+            if character.isascii():
+                if character.casefold() != expected:
+                    matched = False
+                    break
+                continue
+            # Only explicitly mapped lookalikes may identify protected keys.
+            matched = False
+            break
+        if matched:
+            return expected_key
+    return canonical
 
 
 def demo_report_contract_issue(report: Any) -> str | None:
@@ -457,17 +636,33 @@ def contains_formal_claim_escape_text(value: bytes | str) -> bool:
     ):
         return True
     text = _normalized_text(raw_text)
-    if any(pattern.search(text) is not None for pattern in _FORMAL_TEXT_PATTERNS):
+    boundary_text = _normalized_text(
+        raw_text,
+        preserve_invisible_boundaries=True,
+    )
+    if any(
+        pattern.search(candidate) is not None
+        for pattern in _FORMAL_TEXT_PATTERNS
+        for candidate in (text, boundary_text)
+    ):
         return True
     if _SUPPORTED_TOKEN.search(text) is not None:
         return True
     for match in _EVIDENCE_PACK_ID_ASSIGNMENT.finditer(text):
-        identifier = match.group("value").strip().strip("\"'").strip().lower()
-        if identifier not in _EMPTY_EVIDENCE_PACK_ID_VALUES:
+        identifier = match.group("value")
+        if _EMPTY_EVIDENCE_PACK_ASSIGNMENT_LINE.fullmatch(identifier) is None:
             return True
     for match in _EVIDENCE_PACK_ASSIGNMENT.finditer(text):
-        pack = match.group("value").strip().strip("\"'").strip().lower()
-        if pack not in _EMPTY_EVIDENCE_PACK_ID_VALUES:
+        pack = match.group("value")
+        if _EMPTY_EVIDENCE_PACK_ASSIGNMENT_LINE.fullmatch(pack) is None:
+            return True
+    for match in _EVIDENCE_PACK_ID_PROSE.finditer(boundary_text):
+        identifier = match.group("value")
+        if _EMPTY_EVIDENCE_PACK_PROSE_LINE.fullmatch(identifier) is None:
+            return True
+    for match in _EVIDENCE_PACK_PROSE.finditer(boundary_text):
+        pack = match.group("value")
+        if _EMPTY_EVIDENCE_PACK_PROSE_LINE.fullmatch(pack) is None:
             return True
     return False
 

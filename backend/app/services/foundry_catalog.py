@@ -2268,6 +2268,12 @@ async def ensure_validation_run(
             "Validation must bind the exact candidate version hash",
             status_code=409,
         )
+    if candidate_bundle_contains_formal_claim_escape(version.candidate_bundle):
+        raise FoundryCatalogError(
+            "candidate_formal_claim_forbidden",
+            "Persisted candidate bundle fails the current non-formal evidence policy",
+            status_code=409,
+        )
     if reuse_terminal:
         existing = await db.scalar(
             select(FoundryValidationRun)
@@ -3429,6 +3435,8 @@ async def _strict_passed_demo_v1(
     db: AsyncSession,
     version: FoundryCandidateVersion,
 ) -> FoundryDemoRun | None:
+    if candidate_bundle_contains_formal_claim_escape(version.candidate_bundle):
+        return None
     rows = list(
         (
             await db.execute(
