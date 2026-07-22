@@ -471,6 +471,21 @@ def test_unrelated_cjk_text_is_not_treated_as_supported() -> None:
     ) is False
 
 
+@pytest.mark.parametrize(
+    "lookalike",
+    ["\u02e1", "\u23fd", "\u24db", "\U00011de1"],
+)
+def test_pinned_uts_sources_cannot_create_safe_pack_placeholders(
+    lookalike: str,
+) -> None:
+    assert contains_formal_claim_escape_text(
+        f"evidence_pack_id=nu{lookalike}l"
+    ) is True
+    assert contains_formal_claim_escape_text(
+        f"Evidence Pack ID is nu{lookalike}l"
+    ) is True
+
+
 def test_deep_json_and_cyclic_python_values_fail_closed_without_recursion() -> None:
     deeply_nested = "[" * 500 + "0" + "]" * 500
     assert contains_formal_claim_escape_text(deeply_nested) is False
@@ -576,6 +591,278 @@ def test_text_policy_allows_closed_negative_prose_and_separate_lines(
     assert contains_formal_claim_escape_text(value) is False
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        "publication\nready\n=true",
+        "publication\nready\n=\ntrue",
+        "publication\nready\nis equal to\ntrue",
+        "publication\nready\n| true",
+        "publication\nready\n|\ntrue",
+        "claim\neligible\n=yes",
+        "evidence\npack\nallowed\n=1",
+        "evidence\nclass\n=FORMAL_REGISTRY",
+        "evidence\nclass\n| FORMAL_REGISTRY",
+        "evidence\nclass\nFORMAL REGISTRY",
+        "Evidence\nPack\nID\n=pack-1",
+        "Evidence\nPack\nID\n| pack-123",
+        "Evidence\nPack\nID\nartifact abc",
+        "publication\nready\n(true)",
+        "claim\neligible\n[yes]",
+        "true\n=\npublication\nready",
+        "yes\nis\nclaim\neligible",
+        "FORMAL_REGISTRY\n=\nevidence\nclass",
+        "pack-123\n|\nEvidence\nPack\nID",
+        "(true)\npublication\nready",
+        "FORMAL REGISTRY\nevidence\nclass",
+        "artifact abc\nEvidence\nPack\nID",
+        "INFO: true =\npublication\nready",
+        "true is\nequal\nto publication_ready",
+        "FORMAL_REGISTRY\nassigned\nto evidence_class",
+        "pack-123 was\nset\nto Evidence Pack ID",
+        "t\nrue\npublication_ready",
+        "y\nes\nclaim_eligible",
+        "F O R M A L _ R E G I S T R Y\nevidence_class",
+        "p a c k - 1 2 3\nEvidence Pack ID",
+        "not false\npublication\nready",
+        "REGISTERED_RESULT\nevidence\nclass",
+        "REGISTERED_EVIDENCE\nevidence\nclass",
+        "is_formal_evidence\nevidence\nclass\n"
+        "INFO: unrelated diagnostic passed",
+        "publication_ready_candidate\nevidence\nclass",
+        "A_READY\nevidence\nclass",
+        "(true)\npublication\nready\nINFO: unrelated diagnostic passed",
+        "FORMAL REGISTRY\nevidence\nclass\n"
+        "INFO: unrelated diagnostic passed",
+        "artifact abc\nEvidence\nPack\nID\n"
+        "INFO: unrelated diagnostic passed",
+        "This candidate is not publication\nready\n=true",
+        "This candidate is not publication\nready\n| true",
+        "This candidate is not publication ready=true",
+        "This result is not claim eligible=yes",
+        "The evidence class is not formal=FORMAL_REGISTRY",
+        "No formal Evidence Pack was generated=pack-123",
+        "This candidate is not publication ready | true",
+        "This candidate is not publication ready.=true",
+        "This result is not claim eligible. = yes",
+        "The evidence class is not formal. = FORMAL_REGISTRY",
+        "No formal Evidence Pack was generated. = pack-123",
+        "Evidence Pack generation is disabled. = pack-123",
+        "This result is not claim\neligible\n=true",
+        "The evidence\nclass is not formal\n=FORMAL_REGISTRY",
+        "This candidate does not create an Evidence\nPack\n=pack-123",
+    ],
+)
+def test_text_policy_rejects_wrapped_label_with_following_formal_value(
+    value: str,
+) -> None:
+    assert contains_formal_claim_escape_text(value) is True
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "publication\nready\n=false",
+        "publication\nready\n=\nfalse",
+        "publication\nready\nis equal to\nfalse",
+        "publication\nready\n| false",
+        "publication\nready\n|\nfalse",
+        "publication_ready\n=\nfalse",
+        "false\n=\npublication_ready",
+        "claim\neligible\n=false",
+        "claim_eligible\nis equal to\nfalse",
+        "false\nis equal to\nclaim_eligible",
+        "evidence\npack\nallowed\n=false",
+        "evidence\nclass\n=NON_FORMAL_DEMO",
+        "evidence\nclass\n| NON_FORMAL_DEMO",
+        "evidence_class\n=\nNON_FORMAL_DEMO",
+        "NON_FORMAL_DEMO\n=\nevidence_class",
+        "Evidence\nPack\nID\n=unavailable",
+        "Evidence\nPack\nID\n| unavailable",
+        "Evidence Pack ID\n=\nunavailable",
+        "unavailable\n=\nEvidence Pack ID",
+        "publication\nready\nINFO: unrelated diagnostic passed",
+        "Evidence\nPack\nID\nissue is tracked.",
+        "This candidate is not publication\nready.",
+        "This result is not claim\neligible.",
+        "The evidence\nclass is not formal.",
+        "This candidate does not create an Evidence\nPack.",
+        "No Evidence\nPack is generated for this non-formal demo.",
+        "This candidate\nis not publication ready.",
+        "The evidence class\nis not formal.",
+        "The checksum comparison returned true\npublication\nready\n"
+        "INFO: unrelated diagnostic passed",
+        "ordinary diagnostic complete\nevidence\nclass\n"
+        "INFO: unrelated diagnostic passed",
+        "step 41 passed\nEvidence\nPack\nID\nissue is tracked.",
+        "INFO: false =\npublication\nready",
+        "publication_ready=f\nalse",
+        "evidence_class=NON_\nFORMAL_DEMO",
+        "fa\nlse = publication_ready",
+        "false is\nequal\nto publication_ready",
+        "NON_FORMAL_DEMO\nassigned\nto evidence_class",
+        "unavailable was\nset\nto Evidence Pack ID",
+        "fa\nlse\npublication_ready",
+        "INFO: pre\nThis candidate\nis not publication ready.\nINFO: post",
+        "INFO: pre\nNo formal\nEvidence Pack was generated.\nINFO: post",
+        "The model diagnostic passed\nevidence\nclass\n"
+        "INFO: unrelated diagnostic passed",
+        "evidence checksum verified\nevidence\nclass\n"
+        "INFO: unrelated diagnostic passed",
+        "registry cache refreshed\nevidence\nclass\n"
+        "INFO: unrelated diagnostic passed",
+    ],
+)
+def test_text_policy_allows_wrapped_label_with_closed_non_formal_value(
+    value: str,
+) -> None:
+    assert contains_formal_claim_escape_text(value) is False
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "true\npublication_ready=false",
+        "FORMAL_REGISTRY\nevidence_class=NON_FORMAL_DEMO",
+        "pack-123\nEvidence Pack ID unavailable",
+        "publication_ready=false\n=true",
+        "publication_ready=false\nbecomes true",
+        "publication_ready=false\nt\nrue",
+        "publication_ready=false\nbe\ncomes true",
+        "publication_ready\n=\nfalse\n=true",
+        "evidence_class\n=\nNON_FORMAL_DEMO\n=FORMAL_REGISTRY",
+        "Evidence Pack ID\n=\nunavailable\n=pack-123",
+        "true=\nfalse=\npublication_ready",
+        "FORMAL_REGISTRY=\nNON_FORMAL_DEMO=\nevidence_class",
+        "pack-123=\nunavailable=\nEvidence Pack ID",
+        "true =\nINFO: publication_ready=false",
+        "publication\nready\nINFO: =true",
+        "evidence\nclass\nINFO: FORMAL_REGISTRY",
+        "Evidence\nPack\nID\nINFO: pack-123",
+        "INFO: t\nINFO: rue\npublication_ready=false",
+        "publication_ready=false\nINFO: t\nINFO: rue",
+        "publication_ready=false\nINFO: be\nINFO: comes true",
+        "INFO: FORMAL_\nINFO: REGISTRY\n"
+        "evidence_class=NON_FORMAL_DEMO",
+        "REG1STERED_EVIDENCE\nevidence\nclass",
+        "F0RMAL_EVIDENCE\nevidence\nclass",
+        "FORMAL_REGISTRY_V2\nevidence_class",
+        "MODEL_ADEQUACY_V2\nevidence_class",
+        "This candidate is not publication ready (true)",
+        "This result is not claim eligible [yes]",
+        "The evidence class is not formal (FORMAL_REGISTRY)",
+        "No formal Evidence Pack was generated (pack-123)",
+        "This candidate is not publication ready."
+        + (" " * 1_024)
+        + "=true",
+        "No formal Evidence Pack was generated."
+        + (" " * 1_024)
+        + "=pack-123",
+        "publication_ready\nINFO: INFO: true",
+        "publication_ready=false\nINFO: INFO: true",
+        "true =\nINFO: INFO: publication_ready=false",
+        "This candidate is not publication ready.\nINFO: true",
+        "This candidate is not publication ready.\nt\nrue",
+        "true=\nThis candidate is not publication ready.",
+        "FORMAL_REGISTRY=\nThe evidence class is not formal.",
+        "pack-123=\nNo formal Evidence Pack was generated.",
+        "true=\npublication_ready\nfield is reserved",
+        "pack-123=\nEvidence Pack ID\nissue is tracked.",
+        "true=\nResult: publication_ready=false",
+        "true=\n- publication_ready=false",
+        "true=\n[publication_ready=false]",
+        "publication_ready=false\n-\n>\ntrue",
+        "publication_ready=false\n!\n=\nfalse",
+        "publication_ready=false\n<\nfalse",
+        "Evidence Pack ID=unavailable\nabc\ndef\n1",
+        "publication_\nINFO: ready=true",
+        "true=publication_\nINFO: ready",
+        "publication_ready\nINFO:\ntrue",
+        "Evidence Pack ID\nINFO:\npack-123",
+        "true =\nINFO:\npublication_ready=false",
+        "publication_ready\nIN\nFO: true",
+        "publication\nready\nIN\nFO: =true",
+        "evidence_class\nIN\nFO: FORMAL_REGISTRY",
+        "true =\nIN\nFO: publication_ready=false",
+        "INFO: p\nINFO: ub\nINFO: lication_ready=true",
+        "INFO: Evidence\nINFO:  \nINFO: Pack ID=pack-123",
+        "publication_ready=\nINFO: INF\nO: true",
+        "evidence_class=\nINFO: INF\nO: FORMAL_REGISTRY",
+        "Evidence Pack ID=p\nINFO: INF\nO: ack-123",
+        "publication_ready\nINFO\n:true",
+        "INFO:\rINF\nO:publication_ready=true",
+        "publication_ready=\rINFO\n: true",
+        "publication_ready\nIN\n\n\nFO:true",
+    ],
+)
+def test_text_policy_rejects_every_value_in_assignment_chains(value: str) -> None:
+    assert contains_formal_claim_escape_text(value) is True
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "false\npublication_ready=false",
+        "NON_FORMAL_DEMO\nevidence_class=NON_FORMAL_DEMO",
+        "unavailable\nEvidence Pack ID unavailable",
+        "publication\nready\nINFO: false",
+        "false =\nINFO: publication_ready=false",
+        "No formal Evidence Pack was generated.\nordinary diagnostic complete",
+        "Evidence Pack generation is disabled.\nordinary diagnostic complete",
+        "INFO: pre\nThis candi\ndate is not publication ready.\nINFO: post",
+        "INFO: pre\nThis result is n\not claim eligible.\nINFO: post",
+        "publication_ready\nINFO: INFO: false",
+        "This candidate is not publication ready.\nINFO: ordinary diagnostic",
+        "No formal Evidence Pack was generated.\nINFO: unavailable",
+        "false=\nThis candidate is not publication ready.",
+        "INFO: checksum finished\nEvidence Pack ID=unavailable",
+        "publication_ready=f\nINFO: alse",
+        "evidence_class=NON_FORMAL_\nINFO: DEMO",
+        "false=\npublication_ready\nfield is reserved",
+        "publication_ready\nINFO:\nfalse",
+        "Evidence Pack ID\nINFO:\nunavailable",
+        "false =\nINFO:\npublication_ready=false",
+        "publication_ready\nIN\nFO: false",
+        "INF\nO: publication_ready=false",
+        "INF\nO: evidence_class=NON_FORMAL_DEMO",
+        "INF\nO: Evidence Pack ID=unavailable",
+        "evidence_class=NON\n_\nFORMAL_DEMO",
+        "NON\n_\nFORMAL_DEMO=evidence_class",
+        "Evidence Pack ID=u\nIN\nFO: navailable",
+        "Evidence Pack ID=u\nINF\nO: navailable",
+        "Evidence Pack ID=u\nINFO: IN\nFO: navailable",
+        "\nINFO: INF\nO: false=publication_ready",
+        "evidence_class=NON\nINFO: INF\nO: _FORMAL_DEMO",
+        "Evidence Pack ID=u\nINFO: INF\nO: navailable",
+        "INFO\n:publication_ready=false",
+        "INFO:\rINF\nO:publication_ready=false",
+        "publication_ready=\rINFO\n: false",
+        "IN\n\n\nFO:publication_ready=false",
+    ],
+)
+def test_text_policy_keeps_closed_non_formal_chain_mirrors(value: str) -> None:
+    assert contains_formal_claim_escape_text(value) is False
+
+
+def test_text_policy_has_no_fixed_line_cap_for_formal_reverse_value() -> None:
+    value = "FORMAL\n" + ("_\n" * 2_000) + "REGISTRY\nevidence_class"
+    assert contains_formal_claim_escape_text(value) is True
+
+
+def test_text_policy_streams_large_multiline_records_without_changing_result() -> None:
+    ordinary = "publication_ready\n" + ("ordinary diagnostic\n" * 5_000)
+    repeated = "publication_ready\nfalse\nINFO: next step\n" * 2_000
+    assert contains_formal_claim_escape_text(ordinary) is False
+    assert contains_formal_claim_escape_text(repeated) is False
+
+
+@pytest.mark.parametrize("separator", ["\u2028", "\u2029"])
+def test_text_policy_rejects_unicode_line_separator_ambiguity(separator: str) -> None:
+    assert contains_formal_claim_escape_text(
+        f"publication_ready=false\nbe{separator}comes true"
+    ) is True
+
+
 def test_shared_acyclic_container_is_not_mistaken_for_cycle() -> None:
     shared = {"note": "ordinary withheld result"}
     assert contains_formal_claim_escape(
@@ -599,6 +886,11 @@ def test_text_policy_allows_standard_log_prefixes(value: str) -> None:
     assert contains_formal_claim_escape_text(value) is False
 
 
+def test_dense_safe_single_line_policy_records_remain_supported() -> None:
+    value = ("publication_ready=false " * 5_000).rstrip()
+    assert contains_formal_claim_escape_text(value) is False
+
+
 def test_formal_records_cannot_escape_by_inserting_one_newline() -> None:
     records = (
         "publication_ready=true",
@@ -610,8 +902,70 @@ def test_formal_records_cannot_escape_by_inserting_one_newline() -> None:
         "FORMAL_REGISTRY = evidence_class",
         "pack-123 = Evidence Pack ID",
         "scientific_verdict=SUPPORTED",
+        "publication_ready|true",
+        "evidence_class|FORMAL_REGISTRY",
+        "Evidence Pack ID|pack-123",
+        "true | publication_ready",
+        "FORMAL_REGISTRY | evidence_class",
+        "pack-123 | Evidence Pack ID",
     )
     for record in records:
         for index in range(1, len(record)):
             wrapped = f"{record[:index]}\n{record[index:]}"
             assert contains_formal_claim_escape_text(wrapped) is True, wrapped
+
+
+def test_formal_records_cannot_escape_by_inserting_two_newlines() -> None:
+    records = (
+        "publication_ready=true",
+        "claim_eligible=yes",
+        "evidence_pack_allowed=1",
+        "evidence_class=FORMAL_REGISTRY",
+        "Evidence Pack ID=pack-123",
+        "true = publication_ready",
+        "FORMAL_REGISTRY = evidence_class",
+        "pack-123 = Evidence Pack ID",
+        "scientific_verdict=SUPPORTED",
+        "publication_ready|true",
+        "evidence_class|FORMAL_REGISTRY",
+        "Evidence Pack ID|pack-123",
+        "true | publication_ready",
+        "FORMAL_REGISTRY | evidence_class",
+        "pack-123 | Evidence Pack ID",
+    )
+    for record in records:
+        for first in range(1, len(record) - 1):
+            for second in range(first + 1, len(record)):
+                wrapped = (
+                    f"{record[:first]}\n{record[first:second]}\n"
+                    f"{record[second:]}"
+                )
+                assert contains_formal_claim_escape_text(wrapped) is True, wrapped
+
+
+def test_formal_records_cannot_escape_by_inserting_three_newlines() -> None:
+    records = (
+        "publication_ready=true",
+        "claim_eligible=yes",
+        "evidence_pack_allowed=1",
+        "evidence_class=FORMAL_REGISTRY",
+        "Evidence Pack ID=pack-123",
+        "true = publication_ready",
+        "FORMAL_REGISTRY = evidence_class",
+        "pack-123 = Evidence Pack ID",
+        "publication_ready|true",
+        "evidence_class|FORMAL_REGISTRY",
+        "Evidence Pack ID|pack-123",
+        "true | publication_ready",
+        "FORMAL_REGISTRY | evidence_class",
+        "pack-123 | Evidence Pack ID",
+    )
+    for record in records:
+        for first in range(1, len(record) - 2):
+            for second in range(first + 1, len(record) - 1):
+                for third in range(second + 1, len(record)):
+                    wrapped = (
+                        f"{record[:first]}\n{record[first:second]}\n"
+                        f"{record[second:third]}\n{record[third:]}"
+                    )
+                    assert contains_formal_claim_escape_text(wrapped) is True, wrapped
