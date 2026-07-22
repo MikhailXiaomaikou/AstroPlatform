@@ -402,6 +402,31 @@ def test_formal_claim_in_stream_is_quarantined(
     assert b"SUPPORTED" not in streams["stderr.log"]
 
 
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "evidence_pack_value",
+        "evidence_pack_key",
+        "evidence_pack_stdout",
+        "evidence_pack_stderr",
+    ],
+)
+def test_evidence_pack_identifier_is_erased_from_candidate_output(
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: str,
+) -> None:
+    bundle = load_candidate_bundle(_CANDIDATE)
+    _use_child_scenario(monkeypatch, scenario)
+    streams: dict[str, bytes] = {}
+    report = run_candidate_demo(bundle, captured_streams=streams)
+
+    assert report["status"] == "FAILED"
+    assert report["failure_class"] == "candidate_formal_claim_escape_blocked"
+    assert report["result"] == {}
+    assert b"pack-123" not in streams["stdout.log"]
+    assert b"pack-123" not in streams["stderr.log"]
+
+
 @pytest.mark.parametrize("writer", ["os_write", "subprocess"])
 def test_formal_claim_cannot_bypass_capture_through_native_fds(
     monkeypatch: pytest.MonkeyPatch,

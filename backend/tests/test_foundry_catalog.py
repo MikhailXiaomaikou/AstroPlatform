@@ -617,6 +617,8 @@ async def test_demo_callback_is_hash_bound_idempotent_and_non_formal(db_session)
         ({"scientific_verdict": "SUPPORTED"}, None),
         ({"message": "Result is SUPPORTED"}, None),
         ({"Result is SUPPORTED": None}, None),
+        ({"message": "evidence_pack_id=pack-123"}, None),
+        ({"Evidence Pack ID": "pack-123"}, None),
         ({}, "Result is SUPPORTED"),
     ):
         forged = dict(report)

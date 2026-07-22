@@ -8,6 +8,17 @@ from typing import Any
 
 NON_FORMAL_EVIDENCE_CLASS = "NON_FORMAL_DEMO"
 
+_EVIDENCE_PACK_ID_KEY = re.compile(
+    r"evidence[_ -]?pack[_ -]?id",
+    re.IGNORECASE,
+)
+_EVIDENCE_PACK_ID_ASSIGNMENT = re.compile(
+    r"\bevidence[_ -]?pack[_ -]?id\b[\"']?\s*[:=]\s*"
+    r"(?P<value>\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^\s,;}\]]+)",
+    re.IGNORECASE,
+)
+_EMPTY_EVIDENCE_PACK_ID_VALUES = {"", "false", "none", "null"}
+
 _FORMAL_TEXT_PATTERNS = tuple(
     re.compile(pattern, re.IGNORECASE)
     for pattern in (
@@ -64,9 +75,10 @@ def contains_formal_claim_escape(
             return True
         if key in {
             "evidence_pack",
-            "evidence_pack_id",
             "formal_evidence_pack",
         } and item:
+            return True
+        if _EVIDENCE_PACK_ID_KEY.fullmatch(key) and item:
             return True
         if contains_formal_claim_escape(
             item,
@@ -84,7 +96,13 @@ def contains_formal_claim_escape_text(value: bytes | str) -> bool:
         if isinstance(value, bytes)
         else str(value)
     )
-    return any(pattern.search(text) is not None for pattern in _FORMAL_TEXT_PATTERNS)
+    if any(pattern.search(text) is not None for pattern in _FORMAL_TEXT_PATTERNS):
+        return True
+    for match in _EVIDENCE_PACK_ID_ASSIGNMENT.finditer(text):
+        identifier = match.group("value").strip().strip("\"'").strip().lower()
+        if identifier not in _EMPTY_EVIDENCE_PACK_ID_VALUES:
+            return True
+    return False
 
 
 __all__ = [

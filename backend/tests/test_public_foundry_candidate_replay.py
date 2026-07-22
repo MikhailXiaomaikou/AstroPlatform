@@ -426,6 +426,7 @@ def test_recorded_verifier_binds_the_actual_demo_logs(tmp_path: Path) -> None:
     ("payload", "expected_error"),
     [
         (b"scientific_verdict=SUPPORTED\n", "recorded_demo_log_scope_invalid"),
+        (b"evidence_pack_id=pack-123\n", "recorded_demo_log_scope_invalid"),
         (b"ordinary candidate debug line\n", "recorded_historical_demo_log_not_empty"),
     ],
 )
@@ -937,10 +938,12 @@ def test_recorded_verifier_rejects_rehashed_ledger_boundary_tampering(
         {"scientific_verdict": "SUPPORTED"},
         {"evidence_pack_allowed": True},
         {"evidence_pack_id": "forged-pack"},
+        {"Evidence Pack ID": "forged-pack"},
         {"evidence_class": "FORMAL_EVIDENCE"},
         {"evidence_class": "model_adequacy"},
         {"evidence_class": "A_READY"},
         "Result is SUPPORTED",
+        "evidence_pack_id=forged-pack",
         {"Result is SUPPORTED": None},
     ],
 )

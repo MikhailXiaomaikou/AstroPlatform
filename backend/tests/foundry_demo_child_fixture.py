@@ -114,6 +114,20 @@ def _outcome_for(scenario: str) -> dict[str, object]:
             "result": {},
             "validation_summary": {},
         }
+    if scenario == "evidence_pack_value":
+        return {
+            "status": "PARTIAL",
+            "failure_class": "fixture_only",
+            "result": {"message": "evidence_pack_id=pack-123"},
+            "validation_summary": {},
+        }
+    if scenario == "evidence_pack_key":
+        return {
+            "status": "PARTIAL",
+            "failure_class": "fixture_only",
+            "result": {"Evidence Pack ID": "pack-123"},
+            "validation_summary": {},
+        }
     if scenario == "supported_matrix":
         return {
             "status": "PASSED",
@@ -167,6 +181,10 @@ def main() -> None:
             ],
             check=True,
         )
+    elif scenario == "evidence_pack_stdout":
+        print("evidence_pack_id=pack-123", flush=True)
+    elif scenario == "evidence_pack_stderr":
+        print("Evidence Pack ID: pack-123", file=sys.stderr, flush=True)
     elif scenario == "background_child":
         subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"])
     elif scenario == "delayed_thread":
