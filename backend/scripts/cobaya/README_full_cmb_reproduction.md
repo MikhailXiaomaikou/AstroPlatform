@@ -30,20 +30,98 @@ preflight and cannot produce A-readiness evidence.
 The offline dependency lock is `w0wa_exact_requirements.txt`. It is deliberately
 separate from the web application's requirements and Render deployment. Build
 a dedicated Python 3.14.5 exact environment from the committed 52-wheel
-closure, retaining the original archives because preflight re-hashes them. Do
-not reuse the backend web/test environment; its extra packages and startup
-hooks are outside the frozen scientific closure:
+closure, retaining the original archives because preflight re-hashes them.
+Revision 2 must use new paths: never create, update, remove, or install into the
+revision-1 `exact-venv`, `wheels`, `isolated-venv`, `backend/packages`, receipt,
+or chain paths. Do not reuse the backend web/test environment either; its extra
+packages and startup hooks are outside the frozen scientific closure.
+
+The following setup deliberately fails if any revision-2 destination already
+exists (including a symlink). An interrupted attempt must be inspected and
+archived before an operator chooses another fresh revision-2 destination; do
+not work around the guard by touching revision-1 state:
 
 ```bash
-export EXACT_VENV=../.local/w0wa-strict-a-readiness/exact-venv
+set -eu
+
+export EXACT_R2_ROOT=../.local/w0wa-strict-a-readiness
+export EXACT_VENV="$EXACT_R2_ROOT/exact-venv-r2"
+export EXACT_WHEELHOUSE="$EXACT_R2_ROOT/wheelhouse-r2"
+export EXACT_PACKAGES="$EXACT_R2_ROOT/packages-r2"
+export EXACT_PRIMARY="$EXACT_R2_ROOT/primary-r2"
+export EXACT_PRIMARY_PREFLIGHT="$EXACT_PRIMARY/preflight-r2.json"
+export EXACT_PRIMARY_GENERATION="$EXACT_PRIMARY/generation-r2.json"
+export EXACT_PRIMARY_ANALYSIS="$EXACT_PRIMARY/analysis-r2.json"
+export EXACT_PRIMARY_ADEQUACY="$EXACT_PRIMARY/model-adequacy-r2.json"
+export EXACT_HIDDEN_ANSWER="$EXACT_PRIMARY/hidden-answer-r2.json"
+export EXACT_PRIMARY_GRADE="$EXACT_PRIMARY/grade-r2.json"
+
+for path in "$EXACT_VENV" "$EXACT_WHEELHOUSE" "$EXACT_PACKAGES" "$EXACT_PRIMARY"; do
+  if [ -e "$path" ] || [ -L "$path" ]; then
+    echo "refusing to reuse revision-2 destination: $path" >&2
+    exit 1
+  fi
+done
+
 /opt/homebrew/bin/python3.14 -m venv "$EXACT_VENV"
-mkdir -p ../.local/w0wa-strict-a-readiness/wheels
+mkdir -p "$EXACT_WHEELHOUSE" "$EXACT_PACKAGES" "$EXACT_PRIMARY"
 "$EXACT_VENV/bin/pip" download --only-binary=:all: --no-deps \
   -r scripts/cobaya/w0wa_exact_requirements.txt \
-  -d ../.local/w0wa-strict-a-readiness/wheels
+  -d "$EXACT_WHEELHOUSE"
+
+/opt/homebrew/bin/python3.14 -I - \
+  scripts/cobaya/w0wa_exact_wheel_manifest.json \
+  scripts/cobaya/w0wa_exact_requirements.txt \
+  "$EXACT_WHEELHOUSE" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+manifest_path = Path(sys.argv[1])
+lock_path = Path(sys.argv[2])
+wheelhouse = Path(sys.argv[3])
+expected_manifest_hash = (
+    "sha256:e45ea8e098a3470622cd26cd7ed5061262859a09a6f84f93d97eaf49e56541bc"
+)
+expected_lock_hash = (
+    "sha256:6d40a07a26b021b3cab6de36dbec3df446115718998a25b68abf08bde0a7f833"
+)
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
+if sha256(manifest_path) != expected_manifest_hash:
+    raise SystemExit("wheel manifest hash does not match revision 2")
+if sha256(lock_path) != expected_lock_hash:
+    raise SystemExit("dependency lock hash does not match revision 2")
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+records = manifest.get("wheels")
+if manifest.get("requirements_sha256") != expected_lock_hash:
+    raise SystemExit("wheel manifest dependency-lock binding is invalid")
+if not isinstance(records, list) or len(records) != 52:
+    raise SystemExit("wheel manifest must contain exactly 52 records")
+expected = {record["filename"]: record for record in records}
+if len(expected) != 52 or any(Path(name).name != name for name in expected):
+    raise SystemExit("wheel manifest filenames are duplicate or unsafe")
+observed = {path.name: path for path in wheelhouse.glob("*.whl")}
+if set(observed) != set(expected):
+    raise SystemExit("wheelhouse filenames do not exactly match the manifest")
+for name, record in expected.items():
+    wheel = observed[name]
+    if wheel.stat().st_size != record["size_bytes"] or sha256(wheel) != record["sha256"]:
+        raise SystemExit(f"wheel bytes do not match the manifest: {name}")
+print("verified revision-2 wheel manifest and all 52 wheel archives")
+PY
+
 "$EXACT_VENV/bin/pip" install --no-index \
-  --find-links ../.local/w0wa-strict-a-readiness/wheels \
+  --find-links "$EXACT_WHEELHOUSE" \
   -r scripts/cobaya/w0wa_exact_requirements.txt
+"$EXACT_VENV/bin/pip" check
 ```
 
 Preserve the three official source archives named in
@@ -61,8 +139,17 @@ git -C ../.local/w0wa-strict-a-readiness/pantheonplus-data-release \
 git -C ../.local/w0wa-strict-a-readiness/pantheonplus-data-release \
   checkout --detach c447f0fea703fcd0fff57de5000947b5ca81286b
 
-"$EXACT_VENV/bin/cobaya-install" scripts/cobaya/w0wa_exact_install.yaml -p packages
+"$EXACT_VENV/bin/cobaya-install" scripts/cobaya/w0wa_exact_install.yaml \
+  -p "$EXACT_PACKAGES"
 ```
+
+After that one controlled installation, treat `$EXACT_PACKAGES` as the
+read-only revision-2 likelihood/data closure: do not rerun `cobaya-install`,
+edit it, or use it as an output directory. The primary and isolated revision-2
+environments deliberately read the same hash-verified tree; this avoids a
+second multi-gigabyte copy without trusting or modifying revision-1
+`backend/packages`. Each environment independently re-hashes the tree during
+its own preflight, so any drift fails closed.
 
 Preflight enforces exact versions and hashes every installed file in the full
 runtime dependency closure. It also verifies each original wheel archive,
@@ -104,9 +191,14 @@ independent postprocessor must be launched with `python -I`. The CLI refuses a
 non-isolated interpreter, a non-empty `PYTHONPATH`, or an untrusted startup-hook
 closure; isolating only the Cobaya child is not sufficient.
 
-Every receipt binds
-`docs/DESI_W0WA_A_READINESS_AMENDMENT_001.md`. It records the known-target
-disclosure and the stricter paper-fidelity `bulk ESS >= 1000` overlay.
+Every new receipt binds
+`docs/DESI_W0WA_A_READINESS_AMENDMENT_002.md`. It carries forward the
+known-target disclosure and stricter paper-fidelity `bulk ESS >= 1000` overlay
+from amendment 001, and freezes the security-only environment revision 2.
+Revision 2 remains
+`WITHHELD_PENDING_FRESH_PREFLIGHT_AND_SCIENCE_REGRESSION` until a later
+immutable amendment records the required validation. Historical revision-1
+receipts keep their original amendment-001 binding and must not be rewritten.
 
 ### 1. Preflight
 
@@ -119,7 +211,10 @@ separate committed `w0wa_exact_data_manifest.json` prevents an altered first
 installation from becoming trusted merely because it was the first one hashed.
 
 ```bash
-"$EXACT_VENV/bin/python" -I scripts/cobaya/canonical_full_likelihood_evidence.py preflight
+"$EXACT_VENV/bin/python" -I scripts/cobaya/canonical_full_likelihood_evidence.py preflight \
+  --packages-path "$EXACT_PACKAGES" \
+  --wheels-path "$EXACT_WHEELHOUSE" \
+  --output "$EXACT_PRIMARY_PREFLIGHT"
 ```
 
 Missing PR3/ACT/PR4-CamSpec data, a mismatched version/hash or any
@@ -134,7 +229,13 @@ frozen covariance in memory, so a stale or poisoned cache cannot be consumed.
 ### 2. Generate
 
 ```bash
-"$EXACT_VENV/bin/python" -I scripts/cobaya/canonical_full_likelihood_evidence.py generate
+"$EXACT_VENV/bin/python" -I scripts/cobaya/canonical_full_likelihood_evidence.py generate \
+  --preflight-report "$EXACT_PRIMARY_PREFLIGHT" \
+  --packages-path "$EXACT_PACKAGES" \
+  --free-output "$EXACT_PRIMARY/free-map-r2.yaml" \
+  --fixed-output "$EXACT_PRIMARY/fixed-map-r2.yaml" \
+  --adequacy-output-dir "$EXACT_PRIMARY/adequacy-r2" \
+  --output "$EXACT_PRIMARY_GENERATION"
 ```
 
 This step is receipt-gated and derives paired audit configurations from the
@@ -151,8 +252,11 @@ non-citable:
   scripts/cobaya/canonical_full_likelihood_evidence.py run \
   --kind chain --evidence-class non_citable_smoke \
   --run-id w0wa-exact-smoke-YYYYMMDD \
-  --config ../.local/w0wa-strict-a-readiness/adequacy-configs/non_citable_smoke.yaml \
-  --prefix cobaya_runs/w0wa_exact_smoke --packages-path packages \
+  --config "$EXACT_PRIMARY/adequacy-r2/non_citable_smoke.yaml" \
+  --prefix cobaya_runs/w0wa_exact_smoke_r2 \
+  --packages-path "$EXACT_PACKAGES" \
+  --preflight-report "$EXACT_PRIMARY_PREFLIGHT" \
+  --generation-report "$EXACT_PRIMARY_GENERATION" \
   --mpi 4
 ```
 
@@ -167,7 +271,10 @@ formal or model-adequacy completion requires the durable
   --kind chain --evidence-class formal_candidate \
   --run-id w0wa-exact-formal-YYYYMMDD \
   --config scripts/cobaya/w0wa_desi_cmb_pantheonplus_exact.yaml \
-  --prefix cobaya_runs/w0wa_exact_formal --packages-path packages \
+  --prefix cobaya_runs/w0wa_exact_formal_r2 \
+  --packages-path "$EXACT_PACKAGES" \
+  --preflight-report "$EXACT_PRIMARY_PREFLIGHT" \
+  --generation-report "$EXACT_PRIMARY_GENERATION" \
   --mpi 4
 ```
 
@@ -196,8 +303,13 @@ Supply every physical claim-support artifact explicitly:
 
 ```bash
 "$EXACT_VENV/bin/python" -I scripts/cobaya/canonical_full_likelihood_evidence.py analyze \
-  --support-path ../.local/w0wa-strict-a-readiness/protocol.json \
-  --support-path ../.local/w0wa-strict-a-readiness/diagnostic-report.json
+  --chain-prefix cobaya_runs/w0wa_exact_formal_r2 \
+  --packages-path "$EXACT_PACKAGES" \
+  --preflight-report "$EXACT_PRIMARY_PREFLIGHT" \
+  --generation-report "$EXACT_PRIMARY_GENERATION" \
+  --support-path "$EXACT_PRIMARY/protocol-r2.json" \
+  --support-path "$EXACT_PRIMARY/diagnostic-report-r2.json" \
+  --output "$EXACT_PRIMARY_ANALYSIS"
 ```
 
 The analyzer removes 30% of physical rows per chain, matching GetDist's
@@ -224,31 +336,48 @@ environment fingerprints include venv paths. The native trust fingerprint,
 however, compares binary/build identity without absolute paths:
 
 ```bash
-/opt/homebrew/bin/python3.14 -m venv \
-  ../.local/w0wa-strict-a-readiness/isolated-venv
-../.local/w0wa-strict-a-readiness/isolated-venv/bin/pip install --no-index \
-  --find-links ../.local/w0wa-strict-a-readiness/wheels \
-  -r scripts/cobaya/w0wa_exact_requirements.txt
+set -eu
 
-../.local/w0wa-strict-a-readiness/isolated-venv/bin/python -I \
+export EXACT_ISOLATED_VENV="$EXACT_R2_ROOT/isolated-venv-r2"
+export EXACT_ISOLATED="$EXACT_R2_ROOT/isolated-r2"
+
+for path in "$EXACT_ISOLATED_VENV" "$EXACT_ISOLATED"; do
+  if [ -e "$path" ] || [ -L "$path" ]; then
+    echo "refusing to reuse revision-2 isolated destination: $path" >&2
+    exit 1
+  fi
+done
+
+/opt/homebrew/bin/python3.14 -m venv \
+  "$EXACT_ISOLATED_VENV"
+mkdir -p "$EXACT_ISOLATED"
+"$EXACT_ISOLATED_VENV/bin/pip" install --no-index \
+  --find-links "$EXACT_WHEELHOUSE" \
+  -r scripts/cobaya/w0wa_exact_requirements.txt
+"$EXACT_ISOLATED_VENV/bin/pip" check
+
+"$EXACT_ISOLATED_VENV/bin/python" -I \
   scripts/cobaya/canonical_full_likelihood_evidence.py preflight \
-  --wheels-path ../.local/w0wa-strict-a-readiness/wheels \
-  --output ../.local/w0wa-strict-a-readiness/isolated-preflight.json
-../.local/w0wa-strict-a-readiness/isolated-venv/bin/python -I \
+  --packages-path "$EXACT_PACKAGES" \
+  --wheels-path "$EXACT_WHEELHOUSE" \
+  --output "$EXACT_ISOLATED/preflight-r2.json"
+"$EXACT_ISOLATED_VENV/bin/python" -I \
   scripts/cobaya/canonical_full_likelihood_evidence.py generate \
-  --preflight-report ../.local/w0wa-strict-a-readiness/isolated-preflight.json \
-  --free-output ../.local/w0wa-strict-a-readiness/isolated/free-map.yaml \
-  --fixed-output ../.local/w0wa-strict-a-readiness/isolated/fixed-map.yaml \
-  --adequacy-output-dir ../.local/w0wa-strict-a-readiness/isolated/adequacy \
-  --output ../.local/w0wa-strict-a-readiness/isolated-generation.json
-../.local/w0wa-strict-a-readiness/isolated-venv/bin/python -I \
+  --preflight-report "$EXACT_ISOLATED/preflight-r2.json" \
+  --packages-path "$EXACT_PACKAGES" \
+  --free-output "$EXACT_ISOLATED/free-map-r2.yaml" \
+  --fixed-output "$EXACT_ISOLATED/fixed-map-r2.yaml" \
+  --adequacy-output-dir "$EXACT_ISOLATED/adequacy-r2" \
+  --output "$EXACT_ISOLATED/generation-r2.json"
+"$EXACT_ISOLATED_VENV/bin/python" -I \
   scripts/cobaya/canonical_full_likelihood_evidence.py run \
   --kind chain --evidence-class model_adequacy \
   --run-id w0wa-exact-isolated-YYYYMMDD \
-  --config ../.local/w0wa-strict-a-readiness/isolated/adequacy/independent_reproduction.yaml \
-  --prefix cobaya_runs/w0wa_exact_isolated --packages-path packages \
-  --preflight-report ../.local/w0wa-strict-a-readiness/isolated-preflight.json \
-  --generation-report ../.local/w0wa-strict-a-readiness/isolated-generation.json \
+  --config "$EXACT_ISOLATED/adequacy-r2/independent_reproduction.yaml" \
+  --prefix cobaya_runs/w0wa_exact_isolated_r2 \
+  --packages-path "$EXACT_PACKAGES" \
+  --preflight-report "$EXACT_ISOLATED/preflight-r2.json" \
+  --generation-report "$EXACT_ISOLATED/generation-r2.json" \
   --mpi 4
 ```
 
@@ -256,16 +385,15 @@ Then use the separate postprocessor implementation (it does not import the
 canonical analyzer):
 
 ```bash
-../.local/w0wa-strict-a-readiness/isolated-venv/bin/python -I \
+"$EXACT_ISOLATED_VENV/bin/python" -I \
   scripts/cobaya/independent_w0wa_postprocess.py \
-  --chain-prefix cobaya_runs/w0wa_exact_isolated \
-  --updated-config cobaya_runs/w0wa_exact_isolated.updated.yaml \
+  --chain-prefix cobaya_runs/w0wa_exact_isolated_r2 \
+  --updated-config cobaya_runs/w0wa_exact_isolated_r2.updated.yaml \
   --run-id w0wa-exact-isolated-YYYYMMDD \
   --primary-execution-fingerprint sha256:<primary-execution-fingerprint> \
   --environment-fingerprint sha256:<isolated-environment-fingerprint> \
-  --environment-preflight \
-    ../.local/w0wa-strict-a-readiness/isolated-preflight.json \
-  --output ../.local/w0wa-strict-a-readiness/independent-postprocess.json
+  --environment-preflight "$EXACT_ISOLATED/preflight-r2.json" \
+  --output "$EXACT_ISOLATED/independent-postprocess-r2.json"
 ```
 
 The independent postprocessor does not trust the environment fingerprint as a
@@ -285,9 +413,20 @@ Its report hash is required by the `independent_reproduction` adequacy evidence.
 Grade is the only stage that reads the answer-key file and verifies its
 canonical compact-JSON SHA-256 commitment:
 
+`preflight`, `generate`, `run`, and `analyze` produce the primary preflight,
+generation, chain, and analysis artifacts shown above. They do **not** produce
+the hidden-answer or combined model-adequacy manifests. Before grading, the
+operator must place those separately constructed, hash-bound revision-2 inputs
+at `$EXACT_HIDDEN_ANSWER` and `$EXACT_PRIMARY_ADEQUACY`; grade validates them
+and fails closed. Do not substitute either revision-1 default artifact.
+
 ```bash
 "$EXACT_VENV/bin/python" -I scripts/cobaya/canonical_full_likelihood_evidence.py grade \
-  --target-hash sha256:<pre-registered-commitment>
+  --manifest "$EXACT_PRIMARY_ANALYSIS" \
+  --hidden-answer "$EXACT_HIDDEN_ANSWER" \
+  --adequacy-manifest "$EXACT_PRIMARY_ADEQUACY" \
+  --target-hash sha256:<pre-registered-commitment> \
+  --output "$EXACT_PRIMARY_GRADE"
 ```
 
 It enforces all numerical, directional and six model-adequacy thresholds. Fake

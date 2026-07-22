@@ -252,6 +252,9 @@ def test_exact_profile_matches_paper_stack_and_contains_no_answer_key():
         assert nuisance in expanded["params"]
     assert pipeline.protocol_amendment_record()["valid"] is True
     assert pipeline.PAPER_FIDELITY_AMENDMENT["effective_bulk_ess_floor"] == 1000.0
+    assert pipeline.EXACT_ENVIRONMENT_REVISION["status"] == (
+        "WITHHELD_PENDING_FRESH_PREFLIGHT_AND_SCIENCE_REGRESSION"
+    )
 
     reference = json.loads(REFERENCE_CASES.read_text(encoding="utf-8"))
     registered = {
@@ -282,6 +285,114 @@ def test_exact_profile_matches_paper_stack_and_contains_no_answer_key():
     assert bao["point"]["H0"] == 67.25
     assert "theta_MC_100" not in bao["point"]
     assert "w" not in bao["point"] and "wa" not in bao["point"]
+
+
+def test_revision_2_parser_defaults_are_isolated_from_revision_1() -> None:
+    defaults = pipeline._default_paths()
+    local_root = _REPO_ROOT / ".local" / "w0wa-strict-a-readiness"
+    primary_root = local_root / "primary-r2"
+    assert defaults["packages"] == local_root / "packages-r2"
+    assert defaults["wheels"] == local_root / "wheelhouse-r2"
+    assert defaults["preflight"] == primary_root / "preflight-r2.json"
+    assert defaults["generation"] == primary_root / "generation-r2.json"
+    assert defaults["analysis"] == primary_root / "analysis-r2.json"
+    assert defaults["adequacy_output_dir"] == primary_root / "adequacy-r2"
+    assert defaults["adequacy"] == primary_root / "model-adequacy-r2.json"
+    assert defaults["hidden_answer"] == primary_root / "hidden-answer-r2.json"
+    assert defaults["grade"] == primary_root / "grade-r2.json"
+    assert defaults["formal_chain_prefix"] == (
+        _REPO_ROOT / "backend" / "cobaya_runs" / "w0wa_exact_formal_r2"
+    )
+
+    parser = pipeline._build_parser()
+    parsed = (
+        parser.parse_args(["preflight"]),
+        parser.parse_args(["generate"]),
+        parser.parse_args(
+            [
+                "run", "--kind", "chain", "--config", str(EXACT_CONFIG),
+                "--prefix", str(defaults["formal_chain_prefix"]),
+                "--run-id", "parser-default-test",
+            ]
+        ),
+        parser.parse_args(["analyze"]),
+        parser.parse_args(["grade", "--target-hash", "sha256:" + "0" * 64]),
+    )
+    assert all(
+        pipeline._revision_1_state_argument_violations(namespace) == []
+        for namespace in parsed
+    )
+
+
+def test_revision_2_cli_rejects_revision_1_state_without_writes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    backend_root = tmp_path / "repo" / "backend"
+    local_root = tmp_path / "repo" / ".local" / "w0wa-strict-a-readiness"
+    legacy_packages = backend_root / "packages"
+    legacy_chain = backend_root / "cobaya_runs" / "w0wa_exact_formal"
+    monkeypatch.setattr(pipeline, "BACKEND_ROOT", backend_root)
+    sentinels = {
+        "preflight": local_root / "preflight.json",
+        "analysis": local_root / "analysis.json",
+        "chain": legacy_chain,
+        "package": legacy_packages / "legacy-package.dat",
+    }
+    for name, path in sentinels.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f"revision-1-{name}\n".encode())
+    original = {name: path.read_bytes() for name, path in sentinels.items()}
+
+    def unexpected_runtime_check() -> dict:
+        raise AssertionError("revision-1 guard did not run before exact CLI setup")
+
+    monkeypatch.setattr(
+        pipeline, "_require_isolated_exact_cli_runtime", unexpected_runtime_check
+    )
+    cases = (
+        ["preflight", "--output", str(sentinels["preflight"])],
+        ["generate", "--preflight-report", str(sentinels["preflight"])],
+        [
+            "run", "--kind", "chain", "--config", str(EXACT_CONFIG),
+            "--prefix", str(sentinels["chain"]),
+            "--run-id", "legacy-path-rejection-test",
+        ],
+        [
+            "run", "--kind", "chain", "--config", str(EXACT_CONFIG),
+            "--prefix", str(backend_root / "cobaya_runs" / "r2-test"),
+            "--run-id", "legacy-runner-rejection-test",
+            "--cobaya-run", str(local_root / "exact-venv" / "bin" / "cobaya-run"),
+        ],
+        ["analyze", "--packages-path", str(legacy_packages)],
+        [
+            "grade", "--manifest", str(sentinels["analysis"]),
+            "--target-hash", "sha256:" + "0" * 64,
+        ],
+    )
+    for argv in cases:
+        assert pipeline.main(argv) == 2
+    monkeypatch.setattr(
+        pipeline.sys,
+        "executable",
+        str(local_root / "isolated-venv" / "bin" / "python"),
+    )
+    assert pipeline.main(["preflight"]) == 2
+    assert {name: path.read_bytes() for name, path in sentinels.items()} == original
+    assert not (local_root / "primary-r2").exists()
+
+
+def test_revision_2_path_guard_allows_shared_tracked_inputs() -> None:
+    parsed = pipeline._build_parser().parse_args(
+        [
+            "preflight",
+            "--canonical", str(EXACT_CONFIG),
+            "--dependency-lock", str(DEPENDENCY_LOCK),
+            "--reference-values", str(REFERENCE_CASES),
+            "--data-manifest", str(_SCRIPT_DIR / "w0wa_exact_data_manifest.json"),
+        ]
+    )
+    assert pipeline._revision_1_state_argument_violations(parsed) == []
 
 
 def test_environment_fingerprint_ignores_alternate_launcher_path_only():
@@ -2334,6 +2445,11 @@ def test_grade_uses_hidden_commitment_and_never_grants_final_a(tmp_path):
         "protocol_adjudication:external_protocol_adjudication_not_provided"
         in grade["failures"]
     )
+    assert (
+        "environment_revision_pending_fresh_preflight_and_science_regression"
+        in grade["failures"]
+    )
+    assert grade["environment_revision"] == pipeline.EXACT_ENVIRONMENT_REVISION
     assert "research_alpha_manifest" not in grade
 
     tampered = pipeline.grade_exact_analysis(

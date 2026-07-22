@@ -14,6 +14,10 @@ def test_complete_hidden_record_scores_a_ready_pending_external_review(
     monkeypatch,
 ) -> None:
     from app.services import research_alpha_evaluator as evaluator
+    from app.services.w0wa_exact_contract import (
+        EXACT_ENVIRONMENT_FORMAL_STATUS,
+        EXACT_ENVIRONMENT_REVISION,
+    )
 
     # This is an evaluator-routing unit test, not a production evidence
     # fixture. Production exact-profile acceptance is covered by the manifest
@@ -28,6 +32,11 @@ def test_complete_hidden_record_scores_a_ready_pending_external_review(
         evaluator,
         "_trusted_alpha_manifest",
         lambda manifest, expected_run_id=None: True,
+    )
+    monkeypatch.setitem(
+        EXACT_ENVIRONMENT_REVISION,
+        "status",
+        EXACT_ENVIRONMENT_FORMAL_STATUS,
     )
 
     result = evaluator.evaluate_alpha_class(
@@ -59,6 +68,28 @@ def test_complete_hidden_record_scores_a_ready_pending_external_review(
     assert result["a_level_ready"] is True
     assert result["strict_a"] is False
     assert result["why_not_A"] == ["external_review=pending"]
+
+
+def test_pending_environment_revision_blocks_execution_ready_even_if_trusted(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from app.services import research_alpha_evaluator as evaluator
+    from app.services.w0wa_exact_contract import EXACT_PROFILE_ID
+
+    manifest = _manifest(tmp_path)
+    manifest["profile_id"] = EXACT_PROFILE_ID
+    manifest["readiness_status"] = "A_READY_PENDING_EXTERNAL_REVIEW"
+    manifest["publication_gate"].update(
+        {"eligible": True, "numerical_eligible": True, "reasons": []}
+    )
+    monkeypatch.setattr(
+        evaluator,
+        "_trusted_alpha_manifest",
+        lambda manifest, expected_run_id=None: True,
+    )
+
+    assert evaluator._execution_ready(manifest) is False
 
 
 def test_numeric_boundary_combines_center_and_interval_width_tolerances() -> None:
