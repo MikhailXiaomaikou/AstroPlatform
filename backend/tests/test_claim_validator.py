@@ -682,6 +682,40 @@ def test_sigma_semantics_are_bound_to_nearest_discourse_clause():
     ).ok is True
 
 
+def test_sigma_interval_exemption_never_swallows_comparative_significance():
+    # Regression (2026-07-23 review of 9a4f112): the interval-marker exemption
+    # keyed off nearby "posterior"/"constraint" wording, so fabricated
+    # comparative significances ("posteriors conflict at 4.6σ") extracted no
+    # claim at all and bypassed the numeric gate entirely. The exemption is
+    # now fail-closed: only 1σ/2σ/3σ coverage labels qualify, and the
+    # detection cue list covers comparative wording.
+    from app.services.claim_validator import extract_claims, validate_claims
+
+    fabricated = (
+        "The two posteriors conflict at 4.6 sigma given the S8 constraint.",
+        "The data favor w0waCDM at 4.2 sigma over the LCDM posterior.",
+        "KiDS and Planck clash at 3.0 sigma in the S8 constraint.",
+        "The posteriors disagree at 2 sigma in the joint constraint.",
+        "The posteriors are at odds at 2.5 sigma given the bound.",
+    )
+    for reply in fabricated:
+        assert any(
+            claim.label == "significance_sigma"
+            for claim in extract_claims(reply)
+        ), reply
+        assert validate_claims(reply, []).ok is False, reply
+
+    # Specificity: conventional coverage labels stay exempt.
+    for reply in (
+        "The 2σ upper bound on the neutrino mass sum.",
+        "Omega_m = 0.315 +/- 0.007 (1 sigma) from the posterior constraint.",
+    ):
+        assert not any(
+            claim.label == "significance_sigma"
+            for claim in extract_claims(reply)
+        ), reply
+
+
 def test_one_sigma_value_with_error_keeps_central_value_semantics():
     from app.services.claim_validator import validate_claims
 

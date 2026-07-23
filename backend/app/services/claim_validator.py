@@ -106,12 +106,18 @@ _ADJACENT_UNCERTAINTY_RE = re.compile(
 _UNCERTAINTY_SEPARATOR_RE = re.compile(_UNCERTAINTY_SEPARATOR, re.I)
 _SIGMA_DETECTION_CUE_RE = re.compile(
     r"\b(?:detect(?:ed|ion)?|significan(?:ce|t)|reject(?:ed|ion)?|"
-    r"exclud(?:e|ed|es|ing|sion)|preference|evidence|tension|"
+    r"exclud(?:e|ed|es|ing|sion)|preference|prefer(?:s|red)?|evidence|"
+    r"tension|conflict(?:s|ed|ing)?|clash(?:es|ed|ing)?|"
+    r"disagree(?:s|d|ment|ments)?|at\s+odds|favou?r(?:s|ed|ing)?|"
     r"anomal(?:y|ies)|discrepanc(?:y|ies)|deviat(?:e|ed|es|ion)|"
+    r"diverge(?:s|d|nce)?|incompatib(?:le|ility)|"
     r"excess(?:es)?|signal|offset|departure|difference|"
     r"inconsisten(?:cy|t))\b",
     re.I,
 )
+# Conventional interval-coverage labels are 1σ/2σ/3σ only. Any other sigma
+# value can never be exempted as an interval marker, whatever the wording.
+_INTERVAL_COVERAGE_SIGMA_LEVELS = frozenset({1.0, 2.0, 3.0})
 _SIGMA_INTERVAL_CUE_RE = re.compile(
     r"\b(?:confidence|credible|interval|uncertaint(?:y|ies)|"
     r"error(?:\s*bars?)?|posterior|constraint|hdi|quantile|percentile|"
@@ -913,7 +919,15 @@ def _sigma_is_interval_marker(text: str, claim: Claim) -> bool:
     notation.  Treating it as an independent detection significance creates a
     false unsupported claim.  Explicit detection/significance/tension cues
     remain authoritative and keep the ordinary significance claim.
+
+    Fail closed on the value itself: cue word lists are never complete
+    ("posteriors conflict at 4.6σ" once slipped through on the strength of a
+    nearby "posterior"), so only the conventional 1σ/2σ/3σ coverage labels
+    are ever eligible for this exemption.
     """
+
+    if claim.value not in _INTERVAL_COVERAGE_SIGMA_LEVELS:
+        return False
 
     clause, claim_start, claim_end = _claim_clause(text, claim)
 

@@ -3151,3 +3151,55 @@ def test_research_summary_formats_config_only_dataset_dicts_for_users() -> None:
     assert "Planck PR4/NPIPE EB/TB polarization-rotation products (planck_pr4_ebtb_rotation)" in summary
     assert "ACT DR6 EB/TB polarization-rotation products (act_dr6_ebtb_rotation)" in summary
     assert "{'key':" not in summary
+
+
+def test_exclusion_survives_later_neutral_mention() -> None:
+    # Regression (2026-07-23 review): last-mention-wins intent folding let a
+    # verb-less follow-up mention ("Weak lensing would be double counting")
+    # override an explicit exclusion, silently adding excluded datasets back
+    # into the fit. A default-executable mention must never cancel an
+    # explicit exclusion; only an explicit execution request can.
+    from app.services.agent_runtime.prompt_routing import (
+        _cosmology_forbidden_probe_families,
+        _cosmology_likelihood_run_calls_from_prompt,
+    )
+
+    def dataset_keys(prompt: str) -> list[list[str]]:
+        return [
+            call["input"]["dataset_keys"]
+            for call in _cosmology_likelihood_run_calls_from_prompt(prompt)
+        ]
+
+    assert dataset_keys(
+        "Do not use weak lensing. Run Planck and Pantheon in LCDM. "
+        "Weak lensing would be double counting."
+    ) == [["pantheon_plus", "planck2018_compressed"]]
+    assert "wl" in _cosmology_forbidden_probe_families(
+        "Do not use weak lensing. Run Planck and Pantheon in LCDM. "
+        "Weak lensing would be double counting."
+    )
+    assert dataset_keys(
+        "Exclude KiDS. Run Planck and Pantheon in LCDM. "
+        "KiDS is a lensing survey."
+    ) == [["pantheon_plus", "planck2018_compressed"]]
+    assert dataset_keys(
+        "Do not use BAO. Run Planck and Pantheon in LCDM. "
+        "Note that BAO traces the sound horizon."
+    ) == [["pantheon_plus", "planck2018_compressed"]]
+
+    # ``both`` directly followed by concrete dataset names is a determiner
+    # scoped to those names, not an anaphor cancelling Planck's exclusion.
+    assert dataset_keys(
+        "Do not use Planck. Then run both DESI DR1 and DESI DR2 in LCDM."
+    ) == [["desi_dr2_bao"]]
+
+    # Specificity: an explicit later execution request still re-enables the
+    # family, and true anaphors still override an exclusion.
+    assert dataset_keys(
+        "Do not use weak lensing yet. "
+        "Now run KiDS-1000 weak lensing with Planck in LCDM."
+    ) == [["planck2018_compressed", "kids1000_wl"]]
+    assert dataset_keys(
+        "Do not run DESI DR1 and Pantheon separately; "
+        "then combine them in LCDM."
+    ) == [["desi_dr1_bao", "pantheon_plus"]]

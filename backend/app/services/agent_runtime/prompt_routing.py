@@ -342,6 +342,7 @@ def _explicit_dataset_key_intents(text: str) -> dict[str, tuple[int, bool]]:
                             match.start(),
                             match.end(),
                             comparison_is_execution=True,
+                            report_default=True,
                         ),
                     )
 
@@ -350,6 +351,13 @@ def _explicit_dataset_key_intents(text: str) -> dict[str, tuple[int, bool]]:
     for (position, key), (_end, execute) in sorted(events.items()):
         if execute is None:
             continue
+        if execute is _DEFAULT_EXECUTE:
+            # A verb-less mention ("KiDS is a lensing survey") explains an
+            # earlier explicit exclusion; it must not cancel it.
+            prior = intents.get(key)
+            if prior is not None and prior[1] is False:
+                continue
+            execute = True
         intents[key] = (position, execute)
         last_positions[key] = position
 
@@ -358,7 +366,7 @@ def _explicit_dataset_key_intents(text: str) -> dict[str, tuple[int, bool]]:
         (match.start(), True)
         for match in re.finditer(
             r"\b(?:run|use|execute|fit|analy[sz]e|include|add|combine)\s+"
-            r"(?:both|all|them|these|those|the\s+two)\b",
+            + _ANAPHORIC_EXECUTION_OBJECT,
             prompt,
         )
         if not re.search(
@@ -385,14 +393,43 @@ def _explicit_dataset_key_intents(text: str) -> dict[str, tuple[int, bool]]:
     return intents
 
 
+# Sentinel for a mention judged executable only by the concrete-mention
+# default, with no explicit execution signal of its own. Intent folds must
+# not let such a mention override an explicit exclusion.
+_DEFAULT_EXECUTE = object()
+
+# Anaphoric objects of an execution verb ("run them", "fit both cosmic-shear
+# releases"). ``both``/``all`` followed by concrete dataset names ("run both
+# DESI DR1 and DR2") are determiners scoped to those names — they must not
+# cancel a different dataset's exclusion — so those arms require either a
+# bare pronoun reading or a generic collective noun.
+_ANAPHORIC_EXECUTION_OBJECT = (
+    r"(?:them|these|those|the\s+two"
+    r"|(?:both|all)"
+    r"(?:(?:\s+[a-z0-9][a-z0-9-]*){0,3}\s+"
+    r"(?:datasets?|releases?|surveys?|probes?|samples?|chains?|runs?|"
+    r"likelihoods?|analyses)"
+    r"|(?:\s+of\s+them)?"
+    r"(?:\s+(?:separately|independently|together|jointly|again))?"
+    r"(?!\s+[a-z0-9])"
+    r"))\b"
+)
+
+
 def _dataset_mention_execution_intent(
     prompt: str,
     start: int,
     end: int,
     *,
     comparison_is_execution: bool = False,
-) -> bool | None:
-    """Classify one mention as execute, exclude, or neutral/explanatory."""
+    report_default: bool = False,
+) -> bool | None | object:
+    """Classify one mention as execute, exclude, or neutral/explanatory.
+
+    With ``report_default=True`` the concrete-mention fallback returns
+    ``_DEFAULT_EXECUTE`` instead of ``True`` so callers can tell an explicit
+    execution request apart from a verb-less mention.
+    """
     before = str(prompt or "")[max(0, start - 96) : start].lower()
     after = str(prompt or "")[end : end + 96].lower()
     scope_before = re.split(r"[.;\n]", before)[-1]
@@ -411,7 +448,7 @@ def _dataset_mention_execution_intent(
     if re.search(
         r"\b(?:then\s+|by\s+)?(?:run(?:ning)?|us(?:e|ing)|execut(?:e|ing)|"
         r"select(?:ing)?|fit(?:ting)?|analy[sz](?:e|ing)|combin(?:e|ing))\s+"
-        r"(?:both|all|them|these|those|it|the\s+two)\b",
+        r"(?:it\b|" + _ANAPHORIC_EXECUTION_OBJECT + r")",
         after,
     ):
         return True
@@ -625,6 +662,8 @@ def _dataset_mention_execution_intent(
     # identity/advice guards above this parser suppress metadata-only requests,
     # while keeping ordinary scientific comparisons and provenance checks from
     # silently dropping a requested dataset.
+    if report_default:
+        return _DEFAULT_EXECUTE
     return True
 
 
@@ -1104,7 +1143,7 @@ def _cosmology_prompt_forbids_family(text: str, aliases: tuple[str, ...]) -> boo
 
 def _generic_probe_family_intents(text: str) -> dict[str, tuple[int, bool]]:
     prompt = str(text or "").lower()
-    intents: dict[str, tuple[int, bool]] = {}
+    mentions: dict[str, list[tuple[int, bool | object]]] = {}
     for family, aliases in _GENERIC_PROBE_FAMILY_ALIASES.items():
         for alias in aliases:
             alias_pattern = re.escape(alias).replace(r"\ ", r"\s+")
@@ -1117,12 +1156,25 @@ def _generic_probe_family_intents(text: str) -> dict[str, tuple[int, bool]]:
                     match.start(),
                     match.end(),
                     comparison_is_execution=True,
+                    report_default=True,
                 )
                 if intent is None:
                     continue
-                prior = intents.get(family)
-                if prior is None or match.start() >= prior[0]:
-                    intents[family] = (match.start(), intent)
+                mentions.setdefault(family, []).append((match.start(), intent))
+    intents: dict[str, tuple[int, bool]] = {}
+    for family, events in mentions.items():
+        current: tuple[int, bool] | None = None
+        for position, intent in sorted(events, key=lambda event: event[0]):
+            if intent is _DEFAULT_EXECUTE:
+                # A verb-less mention ("weak lensing would be double
+                # counting") explains an earlier explicit exclusion; it must
+                # not cancel it.
+                if current is not None and current[1] is False:
+                    continue
+                intent = True
+            current = (position, bool(intent))
+        if current is not None:
+            intents[family] = current
     return intents
 
 
