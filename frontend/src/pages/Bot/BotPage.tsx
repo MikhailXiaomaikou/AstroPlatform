@@ -23,6 +23,10 @@ interface DisplayBotMessage extends AutomationBotMessage {
 const MAX_CHAT_MESSAGES = 16;
 const MAX_CHAT_CHARACTERS = 39_000;
 const MAX_INPUT_CHARACTERS = 8_000;
+// Mirrors _MAX_CHAT_MESSAGE_CHARS in backend/app/api/bot_console.py. A linked
+// model reply can exceed it; resending such a turn would 422 every later
+// request until it leaves the history window.
+const MAX_MESSAGE_CHARACTERS = 8_000;
 
 function safeDisplayText(value: string): string {
   // The automation API already returns safe basenames. This final UI guard
@@ -39,6 +43,13 @@ function errorMessage(error: unknown, fallback: string): string {
   };
   const detail = candidate?.response?.data?.detail;
   if (typeof detail === "string" && detail.trim()) return safeDisplayText(detail.trim());
+  if (Array.isArray(detail)) {
+    // FastAPI validation errors carry a list of {msg, ...} objects.
+    const parts = detail
+      .map((item) => (item as { msg?: unknown })?.msg)
+      .filter((msg): msg is string => typeof msg === "string" && msg.trim().length > 0);
+    if (parts.length) return safeDisplayText(parts.join("; "));
+  }
   if (typeof candidate?.message === "string" && candidate.message.trim()) {
     return safeDisplayText(candidate.message.trim());
   }
@@ -57,6 +68,11 @@ function requestMessages(messages: DisplayBotMessage[]): AutomationBotMessage[] 
     if (selected.length >= MAX_CHAT_MESSAGES) break;
     const message = messages[index];
     if (!message.content.trim()) continue;
+    if (message.content.length > MAX_MESSAGE_CHARACTERS) {
+      // Skipped as a whole turn (never truncated into a fake quote); the
+      // server rejects any single message above this limit.
+      continue;
+    }
     const remaining = MAX_CHAT_CHARACTERS - characters;
     if (remaining <= 0) break;
     if (message.content.length > remaining) {

@@ -180,6 +180,58 @@ describe("BotPage", () => {
     expect(screen.getAllByText("Retry this question")).toHaveLength(1);
   });
 
+  it("never resends a reply above the server's per-message limit", async () => {
+    // Regression (2026-07-23): a linked-model reply can exceed the backend's
+    // 8000-character per-message cap; resending it made every later request
+    // 422 until the turn left the 16-message window.
+    const oversized = "x".repeat(8_001);
+    api.chatWithAutomationBot
+      .mockResolvedValueOnce({ reply: oversized, model: "gpt-5.6-sol" })
+      .mockResolvedValueOnce({ reply: "Short answer", model: "gpt-5.6-sol" });
+    render(<BotPage />);
+
+    fireEvent.change(screen.getByLabelText("Message for SOL"), {
+      target: { value: "First question" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(api.chatWithAutomationBot).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(screen.getByLabelText("Message for SOL"), {
+      target: { value: "Second question" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(api.chatWithAutomationBot).toHaveBeenCalledTimes(2));
+
+    const secondPayload = api.chatWithAutomationBot.mock.calls[1][0];
+    expect(secondPayload).toEqual([
+      { role: "user", content: "First question" },
+      { role: "user", content: "Second question" },
+    ]);
+  });
+
+  it("shows FastAPI validation errors as readable text", async () => {
+    api.chatWithAutomationBot.mockRejectedValueOnce({
+      response: {
+        status: 422,
+        data: {
+          detail: [
+            { loc: ["body", 0, "content"], msg: "String should have at most 8000 characters" },
+          ],
+        },
+      },
+    });
+    render(<BotPage />);
+
+    fireEvent.change(screen.getByLabelText("Message for SOL"), {
+      target: { value: "Trigger validation" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "String should have at most 8000 characters",
+    );
+  });
+
   it("submits the weekly research trigger only once while it is pending", async () => {
     let resolveTrigger: ((value: {
       week_id: string;
