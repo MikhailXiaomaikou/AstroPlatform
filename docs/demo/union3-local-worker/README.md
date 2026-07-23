@@ -32,7 +32,7 @@ Worker image.
 
 ## Requirements / 依赖
 
-- the supported backend environment at `/Users/chenkexuan/Projects/astro-platform/backend/venv/bin/python`, or `--backend-python`;
+- the supported backend environment at `backend/venv/bin/python` (repo-relative), or `--backend-python`;
 - installed `frontend/node_modules` including Playwright;
 - Google Chrome or Playwright Chromium;
 - `pdftotext`, `ffmpeg`, Node.js, and npm;
@@ -47,7 +47,7 @@ Docker and an installed Redis server are not required for this laptop recorder. 
 From the repository root:
 
 ```bash
-/Users/chenkexuan/Projects/astro-platform/backend/venv/bin/python \
+backend/venv/bin/python \
   docs/demo/union3-local-worker/run_local_demo.py \
   --output-dir /private/tmp/standard-astro-union3-demo
 ```

@@ -491,6 +491,40 @@ async def test_report_returns_markdown_without_absolute_path(
 
 
 @pytest.mark.asyncio
+async def test_report_week_id_reflects_the_report_not_the_current_week(
+    app_client,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # Regression (2026-07-23 review): when the current week has not run yet,
+    # the mtime-latest report is an older week's file but was labelled with
+    # the current week id, misattributing last week's result as this week's.
+    _, token = test_user
+    import datetime as dt
+
+    old_date = dt.date.today() - dt.timedelta(weeks=3)
+    report_name = f"{old_date.isoformat()}.md"
+    _prepare_research_root(
+        tmp_path,
+        state=None,
+        report_name=report_name,
+        report_text="# Older week\nStill the latest file.",
+    )
+    monkeypatch.setenv("COSMO_SECOND_ORDER_ROOT", str(tmp_path))
+
+    response = await app_client.get(
+        "/api/automation/research/report",
+        headers=_auth_headers(token),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["week_id"] == console.current_week_id(old_date)
+    assert payload["week_id"] != console.current_week_id()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("research_status", ["running", "completed"])
 async def test_trigger_is_idempotent_for_running_and_completed(
     research_status: str,

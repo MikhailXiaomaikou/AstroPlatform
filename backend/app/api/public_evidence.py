@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 
 from app.config import settings
+from app.rate_limit import limiter
 from app.services.evidence_pack_v2 import (
     EVIDENCE_PACK_V2_MAX_ARCHIVE_BYTES,
     EvidencePackV2Error,
@@ -50,6 +51,9 @@ async def evidence_keys():
 
 
 @router.post("/api/public/evidence-packs/verify")
+# Unauthenticated and reads up to the archive cap into memory per request;
+# throttle it like the other anonymous endpoints.
+@limiter.limit("10/minute")
 async def verify_public_evidence_pack(request: Request):
     _require_enabled()
     content_length = request.headers.get("content-length")

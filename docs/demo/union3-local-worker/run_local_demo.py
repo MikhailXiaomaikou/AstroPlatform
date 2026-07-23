@@ -35,9 +35,7 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
 BACKEND = REPO / "backend"
 FRONTEND = REPO / "frontend"
-DEFAULT_BACKEND_PYTHON = Path(
-    "/Users/chenkexuan/Projects/astro-platform/backend/venv/bin/python"
-)
+DEFAULT_BACKEND_PYTHON = BACKEND / "venv" / "bin" / "python"
 _CLIENT_ENV_ALLOWLIST = frozenset(
     {
         "ALL_PROXY",

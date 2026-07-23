@@ -407,6 +407,23 @@ async def research_status() -> dict[str, Any]:
     }
 
 
+def _week_id_for_report(report: Path, file_stat: os.stat_result) -> str:
+    """Label the report with the week it belongs to, not the current week.
+
+    The latest safe report can be last week's file when the current week has
+    not run yet; labelling it with the current week misattributes it. Report
+    names are dated (``2026-07-11.md``), with the file mtime as fallback.
+    """
+
+    try:
+        report_date = dt.date.fromisoformat(report.stem)
+    except ValueError:
+        report_date = dt.datetime.fromtimestamp(
+            file_stat.st_mtime, tz=dt.timezone.utc
+        ).date()
+    return current_week_id(report_date)
+
+
 def research_report() -> dict[str, Any] | None:
     """Return the latest safe report, capped for a browser response."""
 
@@ -420,6 +437,7 @@ def research_report() -> dict[str, Any] | None:
     if opened is None:
         return None
     raw, file_stat = opened
+    week_id = _week_id_for_report(report, file_stat)
     text = raw.decode("utf-8", errors="replace")
     truncated = len(text) > _MAX_REPORT_CHARS
     if truncated:

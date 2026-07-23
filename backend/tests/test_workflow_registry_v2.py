@@ -267,7 +267,11 @@ def test_signed_candidate_snapshot_round_trip_and_tamper_rejection():
     tampered["payload"]["entries"][0]["worker_image_digest"] = (
         "sha256:" + "e" * 64
     )
-    with pytest.raises(WorkflowRegistryError):
+    # Pin the exact gate: a payload edit without re-signing must die on the
+    # payload-hash check, not merely on "some" registry error.
+    with pytest.raises(
+        WorkflowRegistryError, match="registry_snapshot_payload_hash_mismatch"
+    ):
         verify_signed_registry_snapshot(tampered, {"registry-2026-01": public_key})
 
 
@@ -562,6 +566,11 @@ def test_activation_applies_signed_revocation_and_blocks_execution(monkeypatch):
     )
     monkeypatch.setattr(registry_module, "_REGISTRY_LOOKUP_STARTED", False)
     monkeypatch.setattr(registry_module, "_REGISTRY_ACTIVATED", False)
+    monkeypatch.setattr(
+        registry_module,
+        "_ACTIVE_RELEASE_TRUST",
+        registry_module._ACTIVE_RELEASE_TRUST,
+    )
     activated = activate_verified_registry_release(
         signed,
         {"registry-key": public_key},
@@ -576,3 +585,16 @@ def test_activation_applies_signed_revocation_and_blocks_execution(monkeypatch):
     assert UNION3_REPRODUCTION_WORKFLOW_ID not in {
         item["workflow_id"] for item in list_formal_workflows()
     }
+
+
+def test_unversioned_lookup_prefers_the_numerically_highest_version():
+    # Regression (2026-07-23 review): plain string sort ranked "1.10.0"
+    # below "1.2.0", so the unversioned catalog lookup returned the older
+    # inactive version. Only display/lookup order was affected — the
+    # executability gates key on exact (id, version) — but the catalog
+    # should still surface the newest version.
+    from app.services.workflow_registry_v2 import _version_sort_key
+
+    versions = ["1.2.0", "1.10.0", "1.9.9"]
+    assert max(versions, key=_version_sort_key) == "1.10.0"
+    assert sorted(versions, key=_version_sort_key) == ["1.2.0", "1.9.9", "1.10.0"]

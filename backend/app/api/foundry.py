@@ -422,6 +422,22 @@ def _human_reviewer_usernames() -> frozenset[str]:
     )
 
 
+def _reviewer_usernames_for_scope(review_scope: str) -> frozenset[str]:
+    """Per-scope allowlist: the R2/R3 review requirements assume the
+    SCIENTIFIC approval really comes from a scientific reviewer, so scope
+    membership is checked against the matching env var, not the union."""
+
+    env_var = (
+        "SCIENTIFIC_REVIEWER_USERNAMES"
+        if review_scope == "SCIENTIFIC"
+        else "FOUNDRY_HUMAN_REVIEWER_USERNAMES"
+    )
+    value = os.getenv(env_var, "")
+    return frozenset(
+        username.strip() for username in value.split(",") if username.strip()
+    )
+
+
 async def require_foundry_human_reviewer(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -1696,6 +1712,14 @@ async def admin_review_foundry_candidate(
     reviewer: User = Depends(require_foundry_human_reviewer),
 ) -> dict[str, Any]:
     _require_flag(settings.foundry_candidate_catalog_enabled, "Foundry Candidate Catalog")
+    if reviewer.username not in _reviewer_usernames_for_scope(payload.review_scope):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "This account is not allowlisted for "
+                f"{payload.review_scope} reviews"
+            ),
+        )
     try:
         review = await review_candidate_version(
             db,
