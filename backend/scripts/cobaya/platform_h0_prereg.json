@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "profile_id": "platform_planck2018_native_lcdm_h0_v1",
+  "purpose": "Platform-exact offline formal chain: the Planck-2018-native LCDM H0 posterior that the platform's own external-cobaya tool path would produce with no interactive timeout. Preregistered before the production run; the commit that introduces this file is the preregistration timestamp.",
+  "model": "lcdm",
+  "dataset_keys": [
+    "planck_2018_highl_TTTEEE_lite",
+    "planck_2018_lowl_TT",
+    "planck_2018_lowl_EE",
+    "planck_2018_lensing"
+  ],
+  "dataset_integrity": "Each dataset's on-disk files are sha256-pinned in cosmology_likelihoods/registry.py and re-verified at load by cobaya_runner._verify_pinned_cmb_data; the vendored packages root is backend/data/cobaya_packages.",
+  "sampler_commitments": {
+    "sampler": "mcmc",
+    "Rminus1_stop": 0.01,
+    "max_samples": 200000,
+    "mpi_chains": 4,
+    "seed": 20260724,
+    "thread_env": {
+      "OMP_NUM_THREADS": "3",
+      "MKL_NUM_THREADS": "3",
+      "OPENBLAS_NUM_THREADS": "3"
+    }
+  },
+  "yaml_generator_commitment": "The input YAML is generated exclusively by app.services.cobaya_runner._build_cobaya_yaml via scripts/cobaya/produce_platform_chain.py generate (which reuses the production parameter-order and prior-sanitization code paths). The generated YAML's sha256 and the generator commit hash are recorded in the production manifest at run time; hand-editing the YAML invalidates the run.",
+  "environment_commitments": "The production manifest must record: python version, cobaya/camb/getdist/numpy/scipy/arviz versions, the sha256 of pip freeze output, macOS version, and the thread environment above. Bitwise reproducibility is NOT promised on macOS/Accelerate; statistical reproducibility (same YAML, seed, and data) is.",
+  "acceptance_criteria": {
+    "convergence": "rank-normalized R-hat < 1.01 and bulk ESS >= 400 for every sampled parameter (matches the platform publication gate in cosmology_likelihoods/verification.py)",
+    "h0_consistency_check": "The H0 posterior mean must lie within 1.0 km/s/Mpc of the registry-pinned Planck 2018 CMB-only reference 67.36 (PRESETS['planck18']). This is a consistency CHECK against the known plik_lite-vs-full-plik offset scale, committed before the run; it is not a tuning target, and a failure means the artifacts are NOT registered (no threshold adjustment).",
+    "on_failure": "If any criterion fails, the artifacts are not registered and this profile is either rerun (resume) or retired with the failure recorded; acceptance thresholds are never relaxed post hoc."
+  },
+  "disclaimers": [
+    "Known-configuration run, not blind: the Planck 2018 results are public and the operator knows them.",
+    "Trusted-host boundary: the run executes on the operator's machine; integrity rests on the preregistered configuration, byte-pinned inputs, and the post-run artifact manifest, not on adversarial isolation.",
+    "The resulting chain is a platform_exact product: quotable with provenance, but never described as publication-ready while the platform's model-adequacy and external-review requirements remain incomplete."
+  ]
+}
