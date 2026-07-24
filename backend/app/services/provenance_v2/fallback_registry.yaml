@@ -1,5 +1,5 @@
 {
-  "version": "2026-04-23",
+  "version": "2026-07-24",
   "maintainer": "standard-astro",
   "schema_version": 1,
   "services": {
@@ -14,12 +14,12 @@
         "service_name": "VizieR",
         "ivoid": "ivo://CDS.VizieR",
         "publisher": "CDS",
-        "credits_page_url": "https://vizier.cds.unistra.fr/vizier/cite.htx",
-        "acknowledgement_template": "The VizieR catalogue access tool, CDS, Strasbourg, France (DOI: 10.26093/cds/vizier)."
+        "credits_page_url": "https://cds.unistra.fr/vizier-org/licences_vizier.html",
+        "acknowledgement_template": "This research has made use of the VizieR catalogue access tool, CDS, Strasbourg, France (DOI: 10.26093/cds/vizier)."
       },
       "metadata": {
-        "last_verified": "2026-04-23",
-        "notes": "Path A preferred; registry is minimal fallback."
+        "last_verified": "2026-07-24",
+        "notes": "Path A preferred; registry is minimal fallback. 2026-07-24: old cite.htx page is gone; licences_vizier.html carries the current recommended acknowledgment."
       }
     },
     "gaia": {
@@ -37,12 +37,13 @@
         "publisher": "European Space Agency / Gaia Archive",
         "publication_date": "2023-06-13",
         "reference_url": "https://gea.esac.esa.int/archive/",
-        "credits_page_url": "https://www.cosmos.esa.int/web/gaia-users/archive/credits",
-        "acknowledgement_template": "This work has made use of data from the European Space Agency (ESA) mission Gaia, processed by the Gaia Data Processing and Analysis Consortium (DPAC)."
+        "credits_page_url": "https://www.cosmos.esa.int/web/gaia-users/credits",
+        "acknowledgement_template": "This work has made use of data from the European Space Agency (ESA) mission Gaia (https://www.cosmos.esa.int/gaia), processed by the Gaia Data Processing and Analysis Consortium (DPAC, https://www.cosmos.esa.int/web/gaia/dpac/consortium). Funding for the DPAC has been provided by national institutions, in particular the institutions participating in the Gaia Multilateral Agreement."
       },
       "metadata": {
-        "last_verified": "2026-04-23",
-        "alert_on": "Gaia DR4 release"
+        "last_verified": "2026-07-24",
+        "alert_on": "Gaia DR4 release",
+        "notes": "2026-07-24: DR3 still the latest release (DR4 not out; credits page lists DR3 + FPR only). Old /archive/credits URL is gone."
       }
     },
     "simbad": {
@@ -60,12 +61,12 @@
         "publisher": "CDS",
         "publication_date": "2000-11-01",
         "reference_url": "https://simbad.cds.unistra.fr/",
-        "credits_page_url": "https://simbad.cds.unistra.fr/guide/ch14.htx",
+        "credits_page_url": "https://simbad.cds.unistra.fr/guide/index.htx",
         "acknowledgement_template": "This research has made use of the SIMBAD database, operated at CDS, Strasbourg, France (Wenger et al. 2000)."
       },
       "metadata": {
-        "last_verified": "2026-04-23",
-        "notes": "SIMBAD emits no DataOrigin metadata. Registry provides table-level metadata; field-level bibcodes are extracted separately."
+        "last_verified": "2026-07-24",
+        "notes": "SIMBAD emits no DataOrigin metadata. Registry provides table-level metadata; field-level bibcodes are extracted separately. 2026-07-24: guide/ch14.htx is gone; guide index carries the acknowledgment, and Wenger et al. 2000 is still the primary citation."
       }
     },
     "ned": {
@@ -82,11 +83,12 @@
         "publisher": "NASA/IPAC Extragalactic Database (NED)",
         "publication_date": "1991-01-01",
         "reference_url": "https://ned.ipac.caltech.edu/",
-        "credits_page_url": "https://ned.ipac.caltech.edu/acknowledge",
-        "acknowledgement_template": "This research has made use of the NASA/IPAC Extragalactic Database (NED), funded by NASA and operated by Caltech."
+        "credits_page_url": "https://ned.ipac.caltech.edu/Documents/Overview/Acknowledgments",
+        "acknowledgement_template": "This research has made use of the NASA/IPAC Extragalactic Database, which is funded by the National Aeronautics and Space Administration and operated by the California Institute of Technology."
       },
       "metadata": {
-        "last_verified": "2026-04-23"
+        "last_verified": "2026-07-24",
+        "notes": "2026-07-24: old /acknowledge URL is gone; wording updated to the current official sentence on the Acknowledgments page."
       }
     },
     "2mass": {
@@ -105,12 +107,12 @@
         "publisher": "CDS / IPAC",
         "publication_date": "2006-02-01",
         "reference_url": "https://irsa.ipac.caltech.edu/Missions/2mass.html",
-        "credits_page_url": "https://irsa.ipac.caltech.edu/Missions/2mass.html#ack",
-        "acknowledgement_template": "This publication makes use of data products from the Two Micron All Sky Survey, a joint project of the University of Massachusetts and IPAC/Caltech, funded by NASA and NSF."
+        "credits_page_url": "https://irsa.ipac.caltech.edu/Missions/2mass.html",
+        "acknowledgement_template": "This publication makes use of data products from the Two Micron All Sky Survey, which is a joint project of the University of Massachusetts and the Infrared Processing and Analysis Center/California Institute of Technology, funded by the National Aeronautics and Space Administration and the National Science Foundation."
       },
       "metadata": {
-        "last_verified": "2026-04-23",
-        "notes": "Primary path is VizieR II/246; this entry is fallback only."
+        "last_verified": "2026-07-24",
+        "notes": "Primary path is VizieR II/246; this entry is fallback only. 2026-07-24: #ack anchor no longer exists; acknowledgment lives under Mission Characteristics on the same page; wording updated to the official full sentence."
       }
     },
     "alma": {
@@ -132,11 +134,11 @@
         "publication_date": "2011-09-30",
         "reference_url": "https://almascience.eso.org/alma-data/archive",
         "credits_page_url": "https://almascience.nrao.edu/alma-data/publication-acknowledgement",
-        "acknowledgement_template": "This paper makes use of the following ALMA data: ADS/JAO.ALMA. ALMA is a partnership of ESO (representing its member states), NSF (USA), and NINS (Japan), together with NRC (Canada), NSTC and ASIAA (Taiwan), and KASI (Republic of Korea), in cooperation with the Republic of Chile. The Joint ALMA Observatory is operated by ESO, AUI/NRAO, and NAOJ."
+        "acknowledgement_template": "This paper makes use of the following ALMA data: ADS/JAO.ALMA#[project code]. ALMA is a partnership of ESO (representing its member states), NSF (USA) and NINS (Japan), together with NRC (Canada), NSTC and ASIAA (Taiwan), and KASI (Republic of Korea), in cooperation with the Republic of Chile. The Joint ALMA Observatory is operated by ESO, AUI/NRAO and NAOJ."
       },
       "metadata": {
-        "last_verified": "2026-04-24",
-        "notes": "ALMA v2 entry covers Science Archive observation metadata via ObsCore/TAP. It does not provide derived line luminosities or FWHM measurements."
+        "last_verified": "2026-07-24",
+        "notes": "ALMA v2 entry covers Science Archive observation metadata via ObsCore/TAP. It does not provide derived line luminosities or FWHM measurements. 2026-07-24: wording aligned verbatim with the publication-acknowledgement page (project-code placeholder included)."
       }
     },
     "arxiv": {
@@ -152,12 +154,12 @@
         "creator": "Cornell University / arXiv",
         "publisher": "arXiv",
         "reference_url": "https://arxiv.org/",
-        "credits_page_url": "https://info.arxiv.org/help/general/index.html",
+        "credits_page_url": "https://info.arxiv.org/help/index.html",
         "acknowledgement_template": "This research used metadata and open e-print access from arXiv. arXiv paper records provide literature context only unless a table-extraction tool returns verified measurement rows."
       },
       "metadata": {
-        "last_verified": "2026-05-27",
-        "notes": "Literature metadata source. Does not support measurement, posterior, or numerical science claims by itself."
+        "last_verified": "2026-07-24",
+        "notes": "Literature metadata source. Does not support measurement, posterior, or numerical science claims by itself. 2026-07-24: old help/general/index.html is gone; help index is the current landing page. arXiv mandates no acknowledgment wording; template text is this platform's usage statement."
       }
     },
     "ads_or_arxiv_object": {
@@ -175,11 +177,11 @@
         "publisher": "NASA ADS / arXiv",
         "reference_url": "https://ui.adsabs.harvard.edu/",
         "credits_page_url": "https://ui.adsabs.harvard.edu/about/",
-        "acknowledgement_template": "This research used NASA ADS and/or arXiv literature metadata for paper discovery. Literature search results provide citation/context evidence only unless a downstream extraction or likelihood tool returns verified measurement data."
+        "acknowledgement_template": "This research has made use of the Astrophysics Data System, funded by NASA under Cooperative Agreement 80NSSC21M0056, and/or arXiv literature metadata for paper discovery. Literature search results provide citation/context evidence only unless a downstream extraction or likelihood tool returns verified measurement data."
       },
       "metadata": {
-        "last_verified": "2026-05-27",
-        "notes": "Combined literature-discovery provenance for search_literature results. It is intentionally paper-level context, not a measurement source."
+        "last_verified": "2026-07-24",
+        "notes": "Combined literature-discovery provenance for search_literature results. It is intentionally paper-level context, not a measurement source. 2026-07-24: ADS official acknowledgment sentence incorporated; ADS is transitioning to SciX (Science Explorer) but ui.adsabs.harvard.edu remains live."
       }
     }
   }
