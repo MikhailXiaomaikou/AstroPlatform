@@ -8,7 +8,15 @@ here requires installing anything: every claim links to a source document,
 test case, or CI run in this public repository.
 
 Numbers below are copied from the linked sources as of 2026-07-10; the linked
-documents are authoritative if they diverge.
+documents are authoritative if they diverge. Since 2026-07-24, each daily
+blind run also appends its mechanical summary and per-file sha256 hashes to
+the append-only
+[`evidence-log` branch](https://github.com/MikhailXiaomaikou/Standard-Astro/tree/evidence-log)
+(`log/<date>-<run_id>/`), so outcomes stay checkable after the 90-day CI
+artifact retention expires. Full transcripts are not published — only their
+hashes, which can be reconciled against the run's artifact while it exists.
+This is a git audit log protected against force-push, not a cryptographic
+transparency log (an external anchor such as Rekor is a possible upgrade).
 
 ## 1. Archived DESI cross-check: useful, but not a validated reproduction
 

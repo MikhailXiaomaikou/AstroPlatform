@@ -66,6 +66,10 @@ jobs:
     # cleanly on missing-key — daily_blind.sh + runner.py both check.
     if: ${{ vars.DAILY_BLIND_ENABLED == 'true' }}
     timeout-minutes: 45
+    # contents:write is required only by the evidence-log publish step at the
+    # end of this job; the token cannot touch secrets or other repos.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -123,6 +127,71 @@ jobs:
           path: |
             backend/scripts/blind_test_cosmology_m0/results_*
           if-no-files-found: ignore
+      - name: Publish evidence log
+        # Append this run's mechanical summary + per-file hashes to the
+        # append-only `evidence-log` branch, so blind-test outcomes remain
+        # externally checkable after the 90-day artifact retention expires.
+        # Full transcripts (case_*.json) are NOT published — only their
+        # sha256, so a later dispute can still be settled against the
+        # artifact while hidden-answer material stays out of git history.
+        # This is a git audit log, not a cryptographic transparency log;
+        # append-only is enforced by branch protection (see
+        # docs/HONESTY_EVIDENCE.md). A publish failure fails the job on
+        # purpose: a silent gap in the log would look like a covered day.
+        if: always()
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          results=(backend/scripts/blind_test_cosmology_m0/results_*)
+          if [[ ${#results[@]} -eq 0 ]]; then
+            echo "no results directory produced; nothing to publish"
+            exit 0
+          fi
+          src="${results[${#results[@]}-1]}"
+          day="$(date -u +%Y-%m-%d)"
+          dest="log/${day}-${RUN_ID}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git fetch origin evidence-log 2>/dev/null; then
+            git worktree add /tmp/evidence-log FETCH_HEAD
+            (cd /tmp/evidence-log && git checkout -B evidence-log FETCH_HEAD)
+          else
+            git worktree add --detach /tmp/evidence-log
+            (cd /tmp/evidence-log && git checkout --orphan evidence-log && git rm -rf --quiet . || true)
+          fi
+
+          if [[ -e "/tmp/evidence-log/$dest" ]]; then
+            echo "log entry $dest already exists; idempotent skip"
+            exit 0
+          fi
+          mkdir -p "/tmp/evidence-log/$dest"
+          if [[ -f "$src/summary.md" ]]; then
+            cp "$src/summary.md" "/tmp/evidence-log/$dest/summary.md"
+          fi
+          (cd "$src" && find . -type f -exec sha256sum {} \; | sort -k2) \
+            > "/tmp/evidence-log/$dest/hashes.txt"
+          {
+            echo "run_id: $RUN_ID"
+            echo "commit: $RUN_SHA"
+            echo "published_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "artifact: blind-tests-$RUN_ID (90-day retention)"
+          } > "/tmp/evidence-log/$dest/meta.txt"
+
+          cd /tmp/evidence-log
+          git add "$dest"
+          git commit -m "evidence-log: $day run $RUN_ID"
+          for attempt in 1 2 3; do
+            if git push origin evidence-log; then
+              exit 0
+            fi
+            git pull --rebase origin evidence-log || true
+          done
+          echo "failed to push evidence log after 3 attempts" >&2
+          exit 1
 
   integration:
     # Integration tests are the pytest cases marked `integration and not slow`
