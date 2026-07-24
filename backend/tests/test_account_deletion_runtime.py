@@ -1063,3 +1063,19 @@ def test_scheduler_dispatches_only_active_owners(tmp_path, monkeypatch):
         assert len(runs) == 1
         assert runs[0].user_id == active_id
     verify_engine.dispose()
+
+
+def test_runtime_active_check_fails_closed_for_malformed_or_unknown_ids():
+    # Pinned behavior (2026-07-24, after the daily-CI triage): a user_id that
+    # is not a UUID, or has no ACTIVE users row, is treated as
+    # deletion-requested and tool execution is refused. This is intentional
+    # fail-closed behavior — callers (and tests) must own a real ACTIVE
+    # account; do not loosen this to make a harness pass.
+    import uuid
+
+    from app.services.account_deletion import account_runtime_is_active
+
+    assert account_runtime_is_active(None) is True  # anonymous work is exempt
+    assert account_runtime_is_active("") is True
+    assert account_runtime_is_active("test-user") is False
+    assert account_runtime_is_active(str(uuid.uuid4())) is False  # no users row
