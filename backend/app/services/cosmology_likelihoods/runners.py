@@ -446,6 +446,7 @@ def run_likelihood_chain(
     random_seed: int | None = None,
     n_samples: int = 4000,
     allow_emcee_fallback: bool = False,
+    include_chain_payload: bool = False,
 ) -> dict[str, Any]:
     """Run the phase-1 compressed Gaussian cosmology likelihood.
 
@@ -479,6 +480,7 @@ def run_likelihood_chain(
             seed=seed,
             sample_count=sample_count,
             allow_emcee_fallback=allow_emcee_fallback,
+            include_chain_payload=include_chain_payload,
         )
 
     # PART AI Phase 5 #2 Track 2 step 2: external_cobaya dispatch.

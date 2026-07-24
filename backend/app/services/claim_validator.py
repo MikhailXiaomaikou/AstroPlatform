@@ -1328,6 +1328,11 @@ _NON_EVIDENCE_KEYS: frozenset[str] = frozenset({
     # Their hand-entered posterior/proposal means must not ground a fresh
     # constraint merely because a full registry entry appears in datasets_used.
     "compressed_likelihood",
+    # Chain artifact references (2026-07-24): storage keys, uuids, sha256
+    # digests, and byte sizes of the persisted getdist chain files are
+    # reproducibility metadata, not measurements — their digits must never
+    # enter the claimable numeric universe.
+    "chain_artifacts",
 })
 
 

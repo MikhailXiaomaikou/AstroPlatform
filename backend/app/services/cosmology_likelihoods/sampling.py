@@ -134,6 +134,7 @@ def _run_sampling_likelihood_chain(
     seed: int,
     sample_count: int,
     allow_emcee_fallback: bool = False,
+    include_chain_payload: bool = False,
 ) -> dict[str, Any]:
     """Importance-sample executable low-dimensional likelihood products.
 
@@ -753,6 +754,21 @@ def _run_sampling_likelihood_chain(
             + ". Do not cite H0, Om0, w0, wa, sigma8, S8, HDI, or posterior "
             "constraints from this result."
         )
+    if include_chain_payload:
+        # Internal-only carrier for chain persistence: the sole opt-in caller
+        # (the chat exec wrapper) uploads these samples as getdist artifacts
+        # and MUST pop this key before the result reaches normalization,
+        # claim validation, or the SSE stream — raw arrays never travel.
+        result["_chain_payload"] = {
+            "samples": posterior_samples,
+            "parameter_order": list(parameter_order),
+            "prior_bounds": {
+                name: prior_bounds[name] for name in parameter_order
+            },
+            "derived_samples": derived_samples,
+            "sampler": sampler_used,
+            "seed": seed,
+        }
     return result
 
 

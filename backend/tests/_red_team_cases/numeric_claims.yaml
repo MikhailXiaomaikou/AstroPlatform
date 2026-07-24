@@ -633,3 +633,29 @@ cases:
               version: "SDSS DR16 ELG BAO-only: released 399-point probability table for D_V/r_d at z=0.845"
               z_coverage: [0.845, 0.845]
     expect_ok: true
+
+  - name: numeric_in_chain_artifacts_not_in_universe
+    description: |
+      2026-07-24 chain persistence: chain_artifacts carries storage keys,
+      uuids, sha256 digests, and byte sizes for the persisted getdist files.
+      Those digits are reproducibility metadata, never measurements — a
+      fabricated numeric claim laundered off an artifact byte size must be
+      blocked (chain_artifacts is a _NON_EVIDENCE_KEYS whole-subtree skip).
+    reply: "The joint fit used 52941 supernovae."
+    tool_results:
+      - tool: run_cosmology_likelihood_chain
+        input: {}
+        result:
+          analysis_status: "COMPLETED"
+          parameters:
+            H0: {median: 67.36}
+            omegam: {median: 0.3153}
+          chain_artifacts:
+            run_id: "3f1b52941a7c4e02b7a1d0f52941aa77"
+            status: "persisted"
+            files:
+              - name: "chain_1.txt"
+                output_path: "chains/owner/3f1b52941a7c4e02/chain_1.txt"
+                sha256: "52941f00aa11bb22cc33dd44ee55ff6652941f00aa11bb22cc33dd44ee55ff66"
+                size_bytes: 52941
+    expect_ok: false

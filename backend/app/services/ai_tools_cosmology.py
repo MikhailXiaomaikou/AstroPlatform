@@ -999,14 +999,14 @@ def _exec_build_cosmology_likelihood(inp: dict) -> dict:
         }
 
 
-def _exec_run_cosmology_likelihood_chain(inp: dict) -> dict:
+def _exec_run_cosmology_likelihood_chain(inp: dict, user_id: str | None = None) -> dict:
     from app.services.cosmology_likelihoods import run_likelihood_chain
 
     try:
         dataset_keys = inp.get("dataset_keys") or []
         if not isinstance(dataset_keys, list):
             raise ValueError("dataset_keys must be a list")
-        return run_likelihood_chain(
+        result = run_likelihood_chain(
             model=str(inp.get("model") or ""),
             dataset_keys=[str(key) for key in dataset_keys],
             priors=inp.get("priors"),
@@ -1015,7 +1015,29 @@ def _exec_run_cosmology_likelihood_chain(inp: dict) -> dict:
             # Single-cell deep run: upgrade to compressed-emcee when importance
             # ESS collapses on multi-probe products (matrices keep the fast path).
             allow_emcee_fallback=True,
+            # This chat entry point is the ONLY payload consumer: the matrix /
+            # oracle / audit / research-program callers stay payload-free so a
+            # 24-cell robustness matrix never uploads 24 chains.
+            include_chain_payload=bool(user_id),
         )
+        payload = result.pop("_chain_payload", None)
+        if payload is not None and user_id:
+            from app.services.chain_export import persist_chain_artifacts
+
+            chain_artifacts = persist_chain_artifacts(payload, owner_id=str(user_id))
+            result["chain_artifacts"] = chain_artifacts
+            # Deliberately NOT threaded into result["reproducibility"]: the
+            # normalizer treats tool-returned envelopes as untrusted payload
+            # (anti-forged-receipt wall) and would demote it to
+            # upstream_receipt. chain_artifacts.run_id IS the chain identity;
+            # the storage key carries the same id by construction.
+            if chain_artifacts["status"] != "persisted":
+                result.setdefault("warnings", []).append(
+                    "Chain artifact persistence failed; posterior summaries are "
+                    "unaffected but no downloadable getdist chain exists for "
+                    "this run."
+                )
+        return result
     except Exception as exc:
         return {
             "success": False,
@@ -1301,7 +1323,9 @@ async def dispatch_cosmology(
         # whole async worker (all chats / SSE heartbeats) and starve the per-tool
         # deadline, which can only fire at an await point. Mirror the siblings
         # (fit_cosmology_emcee / compute_theory_cmb_spectrum) that use to_thread.
-        return await asyncio.to_thread(_exec_run_cosmology_likelihood_chain, tool_input)
+        return await asyncio.to_thread(
+            _exec_run_cosmology_likelihood_chain, tool_input, user_id
+        )
     elif tool_name == "run_cmb_rotation_likelihood":
         # Off the event loop (mirror run_cosmology_likelihood_chain): this runs a
         # blocking sampler that can take seconds-to-minutes; a sync call would
