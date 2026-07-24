@@ -149,8 +149,11 @@ def cmd_manifest(args: argparse.Namespace) -> int:
         print(f"no artifacts found under {run_dir}", file=sys.stderr)
         return 1
 
+    # sys.executable -m pip works in both the local venv and CI's system
+    # interpreter (CI has no backend/venv), and records the interpreter that
+    # actually runs the chain.
     freeze = subprocess.run(
-        [str(BACKEND_ROOT / "venv" / "bin" / "pip"), "freeze"],
+        [sys.executable, "-m", "pip", "freeze"],
         capture_output=True,
         text=True,
         check=True,
