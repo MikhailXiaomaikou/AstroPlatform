@@ -247,7 +247,7 @@ describe("CosmologyMCMCPanel", () => {
       <CosmologyMCMCPanel
         result={{
           ...base,
-          chain_artifacts: {
+          chain_downloads: {
             status: "persisted",
             run_id: "3f1b52aa-0000-4000-8000-000000000000",
             files: [
@@ -275,7 +275,7 @@ describe("CosmologyMCMCPanel", () => {
       <CosmologyMCMCPanel
         result={{
           ...base,
-          chain_artifacts: { status: "persist_failed", files: [] },
+          chain_downloads: { status: "persist_failed", files: [] },
         }}
       />,
     );

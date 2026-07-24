@@ -1328,11 +1328,14 @@ _NON_EVIDENCE_KEYS: frozenset[str] = frozenset({
     # Their hand-entered posterior/proposal means must not ground a fresh
     # constraint merely because a full registry entry appears in datasets_used.
     "compressed_likelihood",
-    # Chain artifact references (2026-07-24): storage keys, uuids, sha256
+    # Chain download references (2026-07-24): storage keys, uuids, sha256
     # digests, and byte sizes of the persisted getdist chain files are
     # reproducibility metadata, not measurements — their digits must never
-    # enter the claimable numeric universe.
-    "chain_artifacts",
+    # enter the claimable numeric universe. Named `chain_downloads` (not
+    # `chain_artifacts`) to avoid colliding with the research-alpha
+    # manifest's attested chain_artifacts records, whose diagnostics must
+    # stay in the universe if they ever surface in a chat result.
+    "chain_downloads",
 })
 
 

@@ -754,11 +754,15 @@ def _run_sampling_likelihood_chain(
             + ". Do not cite H0, Om0, w0, wa, sigma8, S8, HDI, or posterior "
             "constraints from this result."
         )
-    if include_chain_payload:
+    if include_chain_payload and chain_tier != "blocked":
         # Internal-only carrier for chain persistence: the sole opt-in caller
         # (the chat exec wrapper) uploads these samples as getdist artifacts
         # and MUST pop this key before the result reaches normalization,
         # claim validation, or the SSE stream — raw arrays never travel.
+        # Blocked-tier runs redact their parameter summaries above; handing
+        # out the raw sample cloud as a download would bypass that redaction
+        # (adversarial review 2026-07-25), so blocked chains are never
+        # exported.
         result["_chain_payload"] = {
             "samples": posterior_samples,
             "parameter_order": list(parameter_order),

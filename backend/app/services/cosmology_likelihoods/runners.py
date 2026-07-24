@@ -506,6 +506,7 @@ def run_likelihood_chain(
             # the minutes-long heavy fit the EXTERNAL_COBAYA_ENABLED gate exists
             # for (it never runs on the interactive deadline path by default).
             sampler="mcmc",
+            include_chain_payload=include_chain_payload,
         )
 
     compressed_entries = [entry for entry in entries if _compressed_entry_is_executable(entry)]

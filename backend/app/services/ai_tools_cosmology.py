@@ -1021,22 +1021,43 @@ def _exec_run_cosmology_likelihood_chain(inp: dict, user_id: str | None = None) 
             include_chain_payload=bool(user_id),
         )
         payload = result.pop("_chain_payload", None)
-        if payload is not None and user_id:
-            from app.services.chain_export import persist_chain_artifacts
+        blocked = (
+            result.get("chain_tier") == "blocked"
+            or result.get("__do_not_claim__") is True
+        )
+        if payload is not None and blocked:
+            # Defense in depth: the sampling layer already withholds the
+            # payload for blocked tiers; if one ever leaks through, exporting
+            # it would bypass the blocked-tier redaction.
+            payload = None
+        if user_id and result.get("success") and not blocked:
+            if payload is not None:
+                from app.services.chain_export import persist_chain_artifacts
 
-            chain_artifacts = persist_chain_artifacts(payload, owner_id=str(user_id))
-            result["chain_artifacts"] = chain_artifacts
-            # Deliberately NOT threaded into result["reproducibility"]: the
-            # normalizer treats tool-returned envelopes as untrusted payload
-            # (anti-forged-receipt wall) and would demote it to
-            # upstream_receipt. chain_artifacts.run_id IS the chain identity;
-            # the storage key carries the same id by construction.
-            if chain_artifacts["status"] != "persisted":
-                result.setdefault("warnings", []).append(
-                    "Chain artifact persistence failed; posterior summaries are "
-                    "unaffected but no downloadable getdist chain exists for "
-                    "this run."
+                chain_downloads = persist_chain_artifacts(
+                    payload, owner_id=str(user_id)
                 )
+                result["chain_downloads"] = chain_downloads
+                # Deliberately NOT threaded into result["reproducibility"]:
+                # the normalizer treats tool-returned envelopes as untrusted
+                # payload (anti-forged-receipt wall). chain_downloads.run_id
+                # IS the chain identity; the storage key carries the same id
+                # by construction.
+                if chain_downloads["status"] != "persisted":
+                    result.setdefault("warnings", []).append(
+                        "Chain artifact persistence failed; posterior "
+                        "summaries are unaffected but no downloadable "
+                        "getdist chain exists for this run."
+                    )
+            else:
+                # Loud, not silent: some paths (legacy compressed-analytic,
+                # external cobaya until capture ships end-to-end) do not
+                # expose chain draws — say so instead of quietly omitting.
+                result["chain_downloads"] = {
+                    "status": "unavailable",
+                    "reason": "this sampling path does not expose chain draws",
+                    "files": [],
+                }
         return result
     except Exception as exc:
         return {
