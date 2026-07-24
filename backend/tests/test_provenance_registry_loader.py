@@ -35,15 +35,33 @@ def test_resolve_service_by_key_url_catalog_and_ivoid():
 
 
 def test_check_freshness_warns_for_stale_entries():
-    from app.services.provenance_v2.registry_loader import check_freshness, load_registry
+    # Uses a synthetic registry: pinning "the shipped registry is stale at
+    # date X" breaks every time the registry is legitimately re-verified
+    # (it did on 2026-07-24). The warning logic is what this test owns.
+    from app.services.provenance_v2.registry_loader import check_freshness
 
+    registry = {
+        "services": {
+            "vizier": {"metadata": {"last_verified": "2026-01-01"}},
+            "gaia": {"metadata": {"last_verified": "2026-08-01"}},
+        }
+    }
     warnings = check_freshness(
-        load_registry(),
+        registry,
         warn_days=180,
         today=date(2026, 12, 31),
     )
 
     assert any("vizier" in item for item in warnings)
+    assert not any("gaia" in item for item in warnings)
+
+
+def test_shipped_registry_is_fresh_today():
+    # The real registry must never ship already-stale: this is the guard
+    # that fails in CI ahead of the runtime startup refusal.
+    from app.services.provenance_v2.registry_loader import check_freshness, load_registry
+
+    assert check_freshness(load_registry(), warn_days=180) == []
 
 
 def test_missing_registry_file_is_graceful(tmp_path):
