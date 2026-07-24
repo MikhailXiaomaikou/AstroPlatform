@@ -425,9 +425,18 @@ async def test_signed_import_is_append_only_idempotent_and_does_not_activate(db_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["unsigned", "wrong_key", "wrong_request"])
+@pytest.mark.parametrize(
+    ("failure", "expected_code"),
+    [
+        # Pin the exact gate each forgery dies on, so a refactor cannot
+        # silently swap e.g. the signature check for a mere hash check.
+        ("unsigned", "registry_snapshot_signature"),
+        ("wrong_key", "registry_snapshot_signature_invalid"),
+        ("wrong_request", "registry_release_request_not_found"),
+    ],
+)
 async def test_import_rejects_unsigned_wrong_key_and_wrong_request(
-    db_session, failure
+    db_session, failure, expected_code
 ):
     _request, receipt, public_key = await _case(db_session)
     trusted = {"registry-test-key": public_key}
@@ -443,7 +452,7 @@ async def test_import_rejects_unsigned_wrong_key_and_wrong_request(
     forged["receipt_sha256"] = "sha256:" + hashlib.sha256(
         jcs_canonicalize(unsigned_body)
     ).hexdigest()
-    with pytest.raises(RegistryReleaseImportError):
+    with pytest.raises(RegistryReleaseImportError, match=expected_code):
         await record_signed_registry_release_import(
             db_session,
             receipt=forged,

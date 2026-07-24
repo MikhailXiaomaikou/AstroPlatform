@@ -1,6 +1,7 @@
 """Enhanced health-check endpoints for the Astro Research Platform."""
 
 import asyncio
+import functools
 import logging
 import os
 from pathlib import Path
@@ -26,14 +27,18 @@ _UNKNOWN_RELEASES = {"", "unknown", "none", "null"}
 _FULL_GIT_SHA = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
 
 
-def _expected_alembic_heads() -> set[str]:
-    """Read the migration heads shipped in the running image."""
+@functools.cache
+def _expected_alembic_heads() -> frozenset[str]:
+    """Read the migration heads shipped in the running image.
+
+    Cached for the process lifetime: the migration files are baked into the
+    image, and the readiness probe runs every few seconds."""
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
     config = Config(str(_BACKEND_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(_BACKEND_ROOT / "alembic"))
-    return set(ScriptDirectory.from_config(config).get_heads())
+    return frozenset(ScriptDirectory.from_config(config).get_heads())
 
 
 async def _probe_database() -> bool:

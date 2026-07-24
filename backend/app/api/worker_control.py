@@ -474,7 +474,14 @@ async def heartbeat(
 
 def _clean_artifact_name(value: str) -> str:
     name = PurePosixPath(value.strip()).name
-    if name in {"", ".", ".."} or name != value.strip() or "\\" in value:
+    if (
+        name in {"", ".", ".."}
+        or name != value.strip()
+        or "\\" in value
+        # Same bar as content_type: control characters (\n, \x00, ...) must
+        # not reach an S3 object key.
+        or any(ord(ch) < 32 or ord(ch) == 127 for ch in name)
+    ):
         raise HTTPException(status_code=422, detail="invalid_artifact_name")
     return name
 

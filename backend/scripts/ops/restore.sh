@@ -6,7 +6,15 @@ umask 077
 
 bundle="${1:-}"
 if [[ -z "$bundle" || ! -f "$bundle" ]]; then
-  echo "usage: DATABASE_URL=... RESTORE_CONFIRM=restore:<backup-id> $0 <bundle.tar.gz>" >&2
+  {
+    echo "usage: DATABASE_URL=... RESTORE_CONFIRM=restore:<backup-id> \\"
+    echo "       RESTORE_EXPECTED_COMMIT=<40-hex git commit> \\"
+    echo "       RESTORE_FERNET_KEY_ID=<key id> \\"
+    echo "       RESTORE_EVIDENCE_SIGNING_KEY_ID=<key id> \\"
+    echo "       $0 <bundle.tar.gz>"
+    echo "All five environment variables are required; the restore fails"
+    echo "closed if any is missing or does not match the bundle manifest."
+  } >&2
   exit 2
 fi
 : "${DATABASE_URL:?DATABASE_URL is required}"

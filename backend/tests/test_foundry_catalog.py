@@ -571,6 +571,49 @@ async def test_foundry_self_access_reports_current_user_roles_without_403_probe(
     assert unauthenticated.status_code == 401
 
 
+async def test_review_scope_is_checked_against_the_matching_allowlist(
+    app_client, db_session, monkeypatch
+):
+    # Regression (2026-07-23 Foundry review): the two reviewer env vars were
+    # merged into one set while review_scope came from the request body, so
+    # an engineering-only reviewer could cast the SCIENTIFIC approval that
+    # R2/R3 require. Scope membership must be checked per allowlist.
+    engineering = await _user(db_session, "foundry_engineering_only")
+    scientific = await _user(db_session, "foundry_scientific_only")
+    await db_session.commit()
+
+    monkeypatch.setattr(settings, "foundry_candidate_catalog_enabled", True)
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("LOCAL_DEV_NO_AUTH", "false")
+    monkeypatch.setenv("FOUNDRY_HUMAN_REVIEWER_USERNAMES", engineering.username)
+    monkeypatch.setenv("SCIENTIFIC_REVIEWER_USERNAMES", scientific.username)
+
+    async def post_review(user: User, scope: str):
+        return await app_client.post(
+            f"/api/admin/foundry/candidates/{uuid.uuid4()}/reviews",
+            headers={"Authorization": f"Bearer {create_access_token(user.id)}"},
+            json={
+                "candidate_version_id": str(uuid.uuid4()),
+                "candidate_version_hash": "0" * 64,
+                "review_scope": scope,
+                "decision": "APPROVED",
+                "comment": "scope check",
+            },
+        )
+
+    cross_scientific = await post_review(engineering, "SCIENTIFIC")
+    assert cross_scientific.status_code == 403, cross_scientific.text
+    assert "SCIENTIFIC" in cross_scientific.json()["detail"]
+
+    cross_engineering = await post_review(scientific, "ENGINEERING")
+    assert cross_engineering.status_code == 403, cross_engineering.text
+
+    # Matching scope passes the allowlist gate and reaches the catalog
+    # (which then rejects the unknown candidate — anything but 403 here).
+    matching = await post_review(scientific, "SCIENTIFIC")
+    assert matching.status_code != 403, matching.text
+
+
 async def test_demo_callback_is_hash_bound_idempotent_and_non_formal(db_session):
     _candidate, version, run, demo, report = await _candidate_with_demo(db_session)
     replay = await record_demo_report(

@@ -716,6 +716,31 @@ def test_sigma_interval_exemption_never_swallows_comparative_significance():
         ), reply
 
 
+def test_bare_modal_elsewhere_in_sentence_does_not_wash_strong_conclusion():
+    # Regression (2026-07-23 review): the non-assertive hedge list matched
+    # bare modals anywhere in the sentence, so appending "... and this result
+    # should appear in the abstract" washed an assertive conclusion out of
+    # the gate. Modals hedge only when they modify a conclusion-like verb.
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    washing = (
+        "Our joint fit shows dark energy evolves, and this result should "
+        "appear in the abstract.",
+        "The data reject LCDM; we should publish this immediately.",
+    )
+    for sentence in washing:
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+    hedged = (
+        "Dark energy may evolve according to this fit.",
+        "The tension might be resolved by new calibration.",
+        "w0waCDM could be preferred once full likelihoods are used.",
+        "Future data should help resolve the tension.",
+    )
+    for sentence in hedged:
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+
 def test_one_sigma_value_with_error_keeps_central_value_semantics():
     from app.services.claim_validator import validate_claims
 

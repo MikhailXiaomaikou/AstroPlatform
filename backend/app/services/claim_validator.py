@@ -3519,7 +3519,20 @@ _NONASSERTIVE_COSMOLOGY_CONTEXT_RE = re.compile(
     r"do(?:es)?\s+not\s+(?:resolve|alleviate|eliminate|remove)|"
     r"failed?\s+to\s+(?:show|establish|detect|resolve|alleviate)|"
     r"test(?:ed|ing)?\s+whether|investigat(?:e|ed|ing)\s+whether|"
-    r"ask(?:ed|ing)?\s+whether|may|might|could|would|should|hypothesis|forecast|"
+    r"ask(?:ed|ing)?\s+whether|"
+    # A modal hedges the conclusion only when it modifies a conclusion-like
+    # verb ("may evolve", "could be preferred"). A bare modal elsewhere in
+    # the sentence ("... evolves, and this result should appear in the
+    # abstract") must not wash an assertive conclusion.
+    r"(?:may|might|could|would|should)(?:\s+not)?"
+    r"(?:\s+(?:be|been|have|still|also|yet|then|instead|plausibly|possibly|"
+    r"eventually|partially|fully))*"
+    r"\s+(?:evolv\w*|resolv\w*|alleviat\w*|eliminat\w*|indicat\w*|"
+    r"suggest\w*|impl(?:y|ies)|support\w*|favou?r\w*|prefer\w*|detect\w*|"
+    r"show\w*|reject\w*|exclud\w*|rule\s+out|reconcil\w*|explain\w*|"
+    r"remain\w*|persist\w*|disappear\w*|weaken\w*|strengthen\w*|point\w*|"
+    r"hint\w*|deviat\w*|differ\w*|change\w*|shift\w*|vary\w*|help\w*)|"
+    r"hypothesis|forecast|"
     r"not\s+ruled\s+out|consistent\s+with\s+zero|does\s+not\s+evolve|"
     r"(?:is|are|remains?)\s+unresolved|(?:is|are)\s+not\s+(?:resolved|detected))\b",
     re.I,
