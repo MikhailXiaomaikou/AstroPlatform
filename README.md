@@ -119,6 +119,22 @@ npm run test
 npm run build
 ```
 
+## Verify an Evidence Pack offline
+
+Signed Evidence Packs can be verified on any machine without installing the
+platform:
+
+```bash
+pip install cryptography
+python scripts/verify_evidence_pack.py pack.zip --keyring keys/evidence-keyring.json
+```
+
+The committed [`keys/evidence-keyring.json`](./keys/evidence-keyring.json) is
+the out-of-band trust root (public keys only; currently empty until the first
+signing key is published — see
+[key rotation runbook](./docs/runbooks/EVIDENCE_V2_KEY_ROTATION.md)). A valid
+signature proves origin and integrity, not scientific truth.
+
 ## Documentation
 
 - [Honesty evidence and known limits](./docs/HONESTY_EVIDENCE.md)

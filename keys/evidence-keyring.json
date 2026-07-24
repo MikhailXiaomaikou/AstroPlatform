@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "warning": "Public verification keys only. A record containing private or secret material is rejected by the parser. This committed file is the out-of-band trust root for offline Evidence Pack verification: compare it against the served /.well-known/standard-astro-evidence-keys.json before trusting a hosted deployment.",
+  "keys": []
+}

@@ -164,6 +164,7 @@ paper-level scientific answers. Zero A grades means zero A grades.
 ## 6. Check it yourself
 
 - Bare-LLM baseline (same model, no guardrails): [BARE_LLM_BASELINE_2026_07_09.md](./BARE_LLM_BASELINE_2026_07_09.md)
+- Offline Evidence Pack verifier (no backend install needed): [scripts/verify_evidence_pack.py](../scripts/verify_evidence_pack.py) with the committed out-of-band trust root [keys/evidence-keyring.json](../keys/evidence-keyring.json); a valid signature proves origin and integrity, not scientific truth.
 - Blind-suite case definitions: [cases.yaml](../backend/scripts/blind_test_cosmology_m0/cases.yaml)
 - Blind-suite README with the verified-defense table: [README](../backend/scripts/blind_test_cosmology_m0/README.md)
 - Gate-event triage report + self-correcting addendum: [GATE_EVENT_WEEKLY_REPORT_2026_06_30.md](./GATE_EVENT_WEEKLY_REPORT_2026_06_30.md)
