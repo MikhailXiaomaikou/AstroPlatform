@@ -30,6 +30,37 @@ def assert_no_error(result: dict, tool_name: str = ""):
         pytest.fail(f"{tool_name} returned error: {err}")
 
 
+async def create_active_user() -> str:
+    """Create a real ACTIVE user row and return its id as a string.
+
+    execute_tool() checks account_runtime_is_active() before every run:
+    a user_id without an ACTIVE users row (or one that is not a UUID at
+    all) is treated as deletion-requested and the tool call is refused.
+    Synthetic ids like "test-user" therefore cannot exercise user-scoped
+    tools; tests must own a real account like production callers do.
+    """
+    import uuid
+    from app.models.database import engine
+    from app.models.schemas import Base, User
+    from sqlalchemy.ext.asyncio import AsyncSession as AS
+    from sqlalchemy.orm import sessionmaker
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    async_session_factory = sessionmaker(engine, class_=AS, expire_on_commit=False)
+    uid = uuid.uuid4()
+    async with async_session_factory() as db:
+        db.add(User(
+            id=uid,
+            username=f"e2e-user-{uid.hex[:12]}",
+            email=f"e2e-{uid.hex[:12]}@example.com",
+            password_hash="e2e-not-a-real-hash",
+            account_status="ACTIVE",
+        ))
+        await db.commit()
+    return str(uid)
+
+
 # ═══════════════════════════════════════
 # 1. Data Query Tools
 # ═══════════════════════════════════════
@@ -324,7 +355,7 @@ class TestSessionPaper:
             await conn.run_sync(Base.metadata.create_all)
         async_session_factory = sessionmaker(engine, class_=AS, expire_on_commit=False)
         sid = uuid.uuid4()
-        uid = uuid.uuid4()
+        uid = uuid.UUID(await create_active_user())
         async with async_session_factory() as db:
             session = ChatSession(
                 id=sid,
@@ -400,18 +431,20 @@ class TestSpectrumImageVO:
 class TestCollaboration:
 
     async def test_share_with_team(self):
+        uid = await create_active_user()
         r = await call_tool("share_with_team", {
             "resource_type": "pipeline",
             "resource_id": "test-id",
             "email": "test@example.com",
-        }, user_id="test-user")
+        }, user_id=uid)
         assert_no_error(r, "share_with_team")
         assert r.get("action") == "share"
 
     async def test_invite_member(self):
+        uid = await create_active_user()
         r = await call_tool("invite_team_member", {
             "email": "new@example.com",
             "role": "editor",
-        }, user_id="test-user")
+        }, user_id=uid)
         assert_no_error(r, "invite_team_member")
         assert r.get("action") == "invite"
