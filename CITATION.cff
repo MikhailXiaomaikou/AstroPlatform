@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use Standard Astro in your research, please cite it as below."
+title: "Standard Astro"
+type: software
+authors:
+  - alias: MikhailXiaomaikou
+abstract: >-
+  An auditable AI research workbench for observational cosmology. Numerical
+  claims must trace to current-run server evidence, versioned data with
+  pinned checksums, provenance records, and real citations; insufficient
+  evidence returns WITHHELD or CAPABILITY_GAP instead of a guess.
+repository-code: "https://github.com/MikhailXiaomaikou/Standard-Astro"
+license: Apache-2.0
+keywords:
+  - cosmology
+  - provenance
+  - reproducibility
+  - anti-fabrication
+  - llm-agent
