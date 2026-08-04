@@ -48,6 +48,13 @@ describe("overallValidationState", () => {
     expect(overallValidationState({ ...base, numeric_gate: "skipped" })).toBe("not_validated");
     expect(overallValidationState({ ...base, numeric_gate: "not_run", citation_gate: "not_run" })).toBe("not_validated");
   });
+
+  it("uses schema v2 disposition without conflating limited, abstention, refusal, and hard block", () => {
+    expect(overallValidationState({ ...base, schema_version: 2, response_disposition: "limited" })).toBe("limited");
+    expect(overallValidationState({ ...base, schema_version: 2, response_disposition: "abstention" })).toBe("abstention");
+    expect(overallValidationState({ ...base, schema_version: 2, response_disposition: "refusal" })).toBe("refusal");
+    expect(overallValidationState({ ...base, schema_version: 2, response_disposition: "hard_block" })).toBe("blocked");
+  });
 });
 
 describe("ValidationBadge rendering", () => {
@@ -138,5 +145,26 @@ describe("ValidationBadge rendering", () => {
     render(<ValidationBadge truncated />);
     expect(screen.getByText(/chat\.validation\.truncated/)).toBeTruthy();
     expect(screen.queryByText(/chat\.validation\.badge_/)).toBeNull();
+  });
+
+  it("renders schema v2 diagnostics while old schema v1 remains unchanged", () => {
+    render(
+      <ValidationBadge
+        summary={{
+          ...base,
+          schema_version: 2,
+          response_disposition: "abstention",
+          task_kind: "deterministic_source_check",
+          earliest_limiting_stage: "routing_input",
+          missing_dependencies: ["uncertainty_model"],
+          safe_fallback: "Supply a correlation matrix.",
+        }}
+      />,
+    );
+    const chip = screen.getByText(/chat\.validation\.badge_abstention/);
+    expect(chip.getAttribute("data-validation-state")).toBe("abstention");
+    expect(screen.getByText(/deterministic_source_check/)).toBeTruthy();
+    expect(screen.getByText(/uncertainty_model/)).toBeTruthy();
+    expect(screen.getByText(/Supply a correlation matrix/)).toBeTruthy();
   });
 });

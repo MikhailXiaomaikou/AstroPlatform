@@ -18,7 +18,8 @@ from app.services.agent_runtime.prompt_routing import (
 def _tool_grounded_timeout_summary(tool_results: list[dict], timeout_s: int) -> str:
     """Build a safe user-facing summary when the workflow budget is exhausted."""
     grounded = (
-        _research_tool_grounded_summary(tool_results)
+        _scalar_verification_tool_grounded_summary(tool_results)
+        or _research_tool_grounded_summary(tool_results)
         or _line_lfr_tool_grounded_summary(tool_results)
         or _statistics_tool_grounded_summary(tool_results)
         or _cosmology_tool_grounded_summary(tool_results)
@@ -268,6 +269,88 @@ def _statistics_tool_grounded_summary(tool_results: list[dict]) -> str | None:
         f"- Residual RMS: {_fmt_tool_number(stats.get('residual_rms'))}.\n"
         f"- publication_ready={bool(stats.get('publication_ready'))}."
     )
+
+
+def _scalar_verification_tool_grounded_summary(
+    tool_results: list[dict],
+) -> str | None:
+    """Render only fields stamped into the compact deterministic receipt."""
+    receipt: dict[str, Any] | None = None
+    for entry in reversed(tool_results or []):
+        if entry.get("tool") != "verify_scalar_derivation":
+            continue
+        result = entry.get("result")
+        if isinstance(result, dict):
+            receipt = result
+            break
+    if not receipt:
+        return None
+    disposition = str(receipt.get("response_disposition") or "abstention")
+    if disposition == "abstention" or not isinstance(receipt.get("result"), dict):
+        missing = ", ".join(str(item) for item in receipt.get("missing_dependencies") or [])
+        return (
+            "Deterministic verification abstained before calculation.\n\n"
+            f"- Reason: {receipt.get('error') or 'required inputs were invalid or missing'}.\n"
+            f"- Missing or invalid dependency: {missing or 'not reported'}.\n"
+            f"- Safe next step: {receipt.get('safe_fallback') or 'supply the missing inputs and rerun'}."
+        )
+
+    result = receipt["result"]
+    source_status = str(receipt.get("source_status") or "unavailable")
+    source_line = (
+        "The original source values were independently matched exactly."
+        if source_status == "verified_exact"
+        else (
+            "The arithmetic is verified for the supplied inputs, but the original "
+            f"source values are not cleared for attribution (source_status={source_status})."
+        )
+    )
+    source_items = []
+    for source in receipt.get("source_evidence") or []:
+        if not isinstance(source, dict):
+            continue
+        locator = str(source.get("locator") or "unspecified locator")
+        method = str(source.get("extraction_method") or "not fetched")
+        digest = str(source.get("sha256") or "unavailable")
+        if len(digest) > 16:
+            digest = digest[:16] + "…"
+        source_items.append(
+            f"{source.get('kind') or 'source'}:{source.get('identifier') or source.get('id')} "
+            f"({locator}; {method}; SHA-256 {digest}; status={source.get('status')})"
+        )
+    assumptions = [str(item) for item in receipt.get("assumptions") or [] if item]
+    lines = [
+        "Deterministic source-check receipt:",
+        "",
+        f"- Result: {result.get('rounded_display') or (_fmt_tool_number(result.get('value')) + ' +/- ' + _fmt_tool_number(result.get('standard_uncertainty')))}.",
+        f"- Formula: {receipt.get('formula') or 'not reported'}; operation={receipt.get('operation')}.",
+        f"- Calculation status: {receipt.get('calculation_status')}; disposition={disposition}.",
+        f"- Source status: {source_status}. {source_line}",
+    ]
+    if result.get("standardized_difference_abs") is not None:
+        lines.append(
+            "- Standardized absolute difference: "
+            f"{_fmt_tool_number(result.get('standardized_difference_abs'))} sigma."
+        )
+    if result.get("independent_standard_uncertainty") is not None:
+        lines.append(
+            "- If correlations were instead set to zero, the propagated "
+            "uncertainty would be "
+            f"{_fmt_tool_number(result.get('independent_standard_uncertainty'))}; "
+            "relative change from that independence result = "
+            f"{_fmt_tool_number(result.get('relative_uncertainty_change_vs_independent'))}."
+        )
+    if source_items:
+        lines.append("- Source evidence: " + "; ".join(source_items) + ".")
+    if assumptions:
+        lines.append("- Assumptions: " + "; ".join(assumptions) + ".")
+    lines.extend(
+        [
+            f"- Boundary: {receipt.get('boundary_statement') or 'This is a scalar consistency check, not a fit.'}",
+            f"- Receipt SHA-256: {receipt.get('receipt_sha256') or 'unavailable'}.",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _cosmology_requested_redshift(prompt: str) -> float | None:
@@ -1325,7 +1408,8 @@ def _tool_grounded_summary(
     """Return the safest deterministic summary available from same-turn tools."""
 
     return (
-        _research_tool_grounded_summary(tool_results)
+        _scalar_verification_tool_grounded_summary(tool_results)
+        or _research_tool_grounded_summary(tool_results)
         or _line_lfr_tool_grounded_summary(tool_results)
         or _statistics_tool_grounded_summary(tool_results)
         or _cosmology_tool_grounded_summary(tool_results, user_prompt)

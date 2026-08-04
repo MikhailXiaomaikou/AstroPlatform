@@ -82,6 +82,7 @@ def test_derive_summary_blocked_and_regenerated_families():
     assert blocked["numeric_gate"] == "blocked"
     assert blocked["citation_gate"] == "blocked"
     assert blocked["blocked"] is True
+    assert blocked["response_disposition"] == "hard_block"
     assert blocked["regen_count"] == 2
 
     regenerated = _derive_validation_summary(
@@ -124,6 +125,53 @@ def test_derive_summary_limited_is_not_a_hard_block():
     assert limited["citation_gate"] == "limited"
     assert limited["blocked"] is False
     assert limited["limited"] is True
+    assert limited["response_disposition"] == "limited"
+
+
+def test_hard_gate_overrides_full_scalar_receipt_disposition():
+    summary = _derive_validation_summary(
+        claim_gate_ran=True,
+        gate_skip_reason=None,
+        fabrication_stats={
+            "pass": 0,
+            "blocked": True,
+            "limited": False,
+            "regenerations": 2,
+        },
+        interventions=[
+            {"gate": "numeric_claims", "action": "blocked", "reason": "regen_exhausted"}
+        ],
+        tool_results=[
+            {
+                "tool": "verify_scalar_derivation",
+                "result": {
+                    "response_disposition": "full",
+                    "source_status": "verified_exact",
+                },
+            }
+        ],
+        routing_decision={"task_kind": "deterministic_source_check"},
+    )
+
+    assert summary["blocked"] is True
+    assert summary["response_disposition"] == "hard_block"
+
+
+def test_safe_refusal_is_visible_even_when_no_gate_had_to_block_it():
+    summary = _derive_validation_summary(
+        claim_gate_ran=True,
+        gate_skip_reason=None,
+        fabrication_stats={"pass": 0, "blocked": False, "regenerations": 0},
+        interventions=[],
+        tool_results=[],
+        routing_decision={
+            "task_kind": "general",
+            "matched_signals": ["untrusted_evidence_request"],
+        },
+    )
+
+    assert summary["blocked"] is False
+    assert summary["response_disposition"] == "refusal"
 
 
 def test_derive_summary_meta_skip_and_not_run_are_distinct_from_passed():

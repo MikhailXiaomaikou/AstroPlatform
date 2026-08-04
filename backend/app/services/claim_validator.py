@@ -2609,6 +2609,18 @@ def _build_valid_arxiv_pool(tool_results: Any) -> set[str]:
             if not value:
                 continue
             pool.update(_arxiv_ids_from_text(str(value)))
+        # Lightweight receipts expose normalized source records rather than
+        # the older literature-tool keys above.  Only an independently
+        # matched record may seed citation support: model/user identifiers,
+        # resolved-but-unmatched pages, and conflicts remain diagnostic only.
+        if (
+            str(node.get("kind") or "").lower() == "arxiv"
+            and str(node.get("status") or "").lower() == "verified_exact"
+        ):
+            for key in ("identifier", "final_url"):
+                value = node.get(key)
+                if value:
+                    pool.update(_arxiv_ids_from_text(str(value)))
     return pool
 
 
@@ -2641,6 +2653,14 @@ def _build_valid_doi_pool(tool_results: Any) -> set[str]:
             if not value:
                 continue
             pool.update(_dois_from_text(str(value)))
+        if (
+            str(node.get("kind") or "").lower() == "doi"
+            and str(node.get("status") or "").lower() == "verified_exact"
+        ):
+            for key in ("identifier", "final_url"):
+                value = node.get(key)
+                if value:
+                    pool.update(_dois_from_text(str(value)))
     return pool
 
 
@@ -4307,6 +4327,16 @@ def _citation_pool_nodes(tool_results: Any) -> Iterable[dict[str, Any]]:
             result = {k: v for k, v in entry.items() if k != "input"}
         if not _result_may_support_citation(result):
             continue
+        if result.get("__do_not_claim_source_measurement__") is True:
+            # A scalar receipt may retain a valid derived result when the
+            # source fetch timed out or conflicted.  In that state its source
+            # identifiers are diagnostic only and must not seed the valid
+            # citation pool or turn user-supplied provenance into evidence.
+            result = {
+                key: value
+                for key, value in result.items()
+                if key != "source_evidence"
+            }
         yield from _iter_dict_nodes(result)
 
 
@@ -4421,6 +4451,7 @@ _CITABLE_ANALYSIS_TOOLS: frozenset[str] = frozenset({
     "run_cobaya_cosmology",
     "run_python",
     "search_line_measurements",
+    "verify_scalar_derivation",
 })
 
 

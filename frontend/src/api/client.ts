@@ -1091,6 +1091,11 @@ export interface ValidationSummary {
   regen_count?: number;
   blocked?: boolean;
   limited?: boolean;
+  response_disposition?: "full" | "limited" | "abstention" | "refusal" | "hard_block" | string;
+  task_kind?: "deterministic_source_check" | "research_exploration" | "full_research" | "general" | string;
+  earliest_limiting_stage?: string | null;
+  missing_dependencies?: string[];
+  safe_fallback?: string | null;
   reason?: string;
   interventions?: Array<{ gate?: string; action?: string; reason?: string }>;
 }

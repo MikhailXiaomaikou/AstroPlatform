@@ -62,6 +62,7 @@ tools:
   - research_workflow
   - search_lightcurve
   - verify_research_facts  # focus-agnostic fact verification, reused by N+1 modules
+  - verify_scalar_derivation  # v0.2 controlled scalar derivations; dark-launched by feature flag
 datasets:
   # TBD M1 Phase 3 — pull from app.services.cosmology_likelihoods DATASET_REGISTRY.
   # Will include: desi_dr1_bao, planck2018_compressed, act_dr6, pantheon_plus,

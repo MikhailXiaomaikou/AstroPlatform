@@ -6,7 +6,354 @@ Moved verbatim from app/api/chat.py (2026-07-03 god-file split).
 
 import re
 import uuid
-from typing import Any
+from typing import Any, Literal, TypedDict
+
+
+TaskKind = Literal[
+    "deterministic_source_check",
+    "research_exploration",
+    "full_research",
+    "general",
+]
+
+
+class RoutingDecision(TypedDict):
+    task_kind: TaskKind
+    confidence: float
+    matched_signals: list[str]
+    negated_signals: list[str]
+    source_references: list[dict[str, str]]
+    requested_operation: str | None
+    missing_inputs: list[str]
+    heavy_route_allowed: bool
+    direct_tool_call: dict[str, Any] | None
+
+
+_HEAVY_INTENT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("likelihood", re.compile(r"\b(?:likelihood|似然)\b", re.I)),
+    ("fit", re.compile(r"\b(?:fit|fitting|拟合)\b", re.I)),
+    ("sampling", re.compile(r"\b(?:sample|sampling|sampler|mcmc|nested\s+sampl)|采样", re.I)),
+    ("posterior", re.compile(r"\bposterior\b|后验", re.I)),
+    ("model_likelihood_comparison", re.compile(r"(?:compare|comparison|比较).{0,40}(?:model|模型).{0,40}(?:likelihood|似然)", re.I)),
+)
+_NEGATION_TOKEN = re.compile(
+    r"(?:\b(?:do\s+not|don't|without|avoid|exclude|excluding|not|never)\b|"
+    r"不要|不需要|无需|别|避免|排除|不是|并非)",
+    re.I,
+)
+
+
+def _normalized_task_text(text: str) -> str:
+    normalized = str(text or "")
+    normalized = normalized.replace("−", "-").replace("–", "-").replace("—", "-")
+    normalized = normalized.replace("\u00a0", " ")
+    normalized = re.sub(r"\\(?:mathrm|text|operatorname)\s*\{([^{}]+)\}", r"\1", normalized)
+    normalized = normalized.replace("{", "").replace("}", "")
+    normalized = re.sub(r"D\s*[_\s]?M\s*/\s*D\s*[_\s]?H", "D_M/D_H", normalized, flags=re.I)
+    normalized = re.sub(r"(?<![A-Za-z])DM\s*/\s*DH(?![A-Za-z])", "D_M/D_H", normalized, flags=re.I)
+    normalized = re.sub(r"D\s*[_\s]?M\s*/\s*r\s*[_\s]?d", "D_M/r_d", normalized, flags=re.I)
+    normalized = re.sub(r"D\s*[_\s]?H\s*/\s*r\s*[_\s]?d", "D_H/r_d", normalized, flags=re.I)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _active_and_negated_heavy_signals(text: str) -> tuple[list[str], list[str]]:
+    matched: list[str] = []
+    negated: list[str] = []
+    for name, pattern in _HEAVY_INTENT_PATTERNS:
+        active = False
+        was_negated = False
+        for match in pattern.finditer(text):
+            sentence_start = max(
+                text.rfind(separator, 0, match.start())
+                for separator in (".", ";", "。", "；", "\n")
+            )
+            prefix = text[sentence_start + 1 : match.start()]
+            if _NEGATION_TOKEN.search(prefix):
+                was_negated = True
+            else:
+                active = True
+        if active:
+            matched.append(name)
+        elif was_negated:
+            negated.append(name)
+    return matched, negated
+
+
+def _source_references_from_prompt(text: str) -> list[dict[str, str]]:
+    references: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    patterns = (
+        ("arxiv", re.compile(r"(?:arxiv:\s*|arxiv\.org/(?:abs|pdf)/)?(\d{4}\.\d{4,5})(?:v\d+)?", re.I)),
+        ("doi", re.compile(r"(?:doi:\s*|doi\.org/)(10\.\d{4,9}/[^\s,;]+)", re.I)),
+        ("zenodo", re.compile(r"(?:zenodo\.org/(?:records?|record)/|10\.5281/zenodo\.)(\d+)", re.I)),
+        ("url", re.compile(r"https://[^\s)\]>]+", re.I)),
+    )
+    for kind, pattern in patterns:
+        for match in pattern.finditer(text):
+            identifier = match.group(1) if match.lastindex else match.group(0)
+            if kind == "url" and any(
+                host in identifier for host in ("arxiv.org/", "doi.org/", "zenodo.org/")
+            ):
+                continue
+            key = (kind, identifier.rstrip(".,;"))
+            if key in seen:
+                continue
+            seen.add(key)
+            references.append({"kind": kind, "identifier": key[1]})
+    return references
+
+
+def _requested_scalar_operation(text: str) -> str | None:
+    lowered = text.lower()
+    if "d_m/d_h" in lowered or any(
+        token in lowered for token in (" ratio", "ratio of", "比值", "相除")
+    ):
+        return "ratio"
+    if any(token in lowered for token in ("weighted mean", "weighted average", "加权平均")):
+        return "weighted_mean"
+    if any(token in lowered for token in (" difference", "difference between", "差值", "相减")):
+        return "difference"
+    if any(token in lowered for token in (" product", "multiply", "乘积", "相乘")):
+        return "product"
+    return None
+
+
+_SCALAR_LABEL = r"(?:D_M/r_d|D_H/r_d|D_M|D_H|H0|H_0|H₀|n_s|ns|S8|Ωm|omega_m|rho|ρ|[A-Za-z][A-Za-z0-9_]*)"
+_SCALAR_VALUE = r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?"
+_H0_UNIT = r"km\s*(?:(?:/\s*s)|s\s*\^?\s*-?1|s-1)\s*(?:/\s*)?Mpc(?:\s*\^?\s*-?1)?"
+
+
+def _scalar_quantities_from_prompt(text: str) -> list[dict[str, Any]]:
+    quantities: list[dict[str, Any]] = []
+    pattern = re.compile(
+        rf"(?P<label>{_SCALAR_LABEL})\s*=\s*(?P<value>{_SCALAR_VALUE})"
+        rf"\s*(?:±|\+/-|\+-)\s*(?P<uncertainty>{_SCALAR_VALUE})"
+        rf"\s*(?P<unit>{_H0_UNIT}|Mpc|Gpc|kpc|pc)?",
+        re.I,
+    )
+    seen: set[str] = set()
+    for match in pattern.finditer(text):
+        label = match.group("label")
+        if label.lower() in {"rho", "ρ"}:
+            continue
+        canonical_id = re.sub(r"[^A-Za-z0-9]+", "_", label).strip("_")
+        if canonical_id.lower() in seen:
+            continue
+        seen.add(canonical_id.lower())
+        unit = (match.group("unit") or "dimensionless").strip()
+        quantities.append(
+            {
+                "id": canonical_id,
+                "label": label,
+                "value": float(match.group("value")),
+                "standard_uncertainty": float(match.group("uncertainty")),
+                "unit": unit,
+            }
+        )
+    return quantities
+
+
+def _uncertainty_model_from_prompt(text: str, quantity_count: int) -> dict[str, Any] | None:
+    rho_match = re.search(
+        rf"(?:rho|ρ|correlation(?:\s+coefficient)?|相关系数)\s*(?:\([^)]*\))?\s*=\s*({_SCALAR_VALUE})",
+        text,
+        re.I,
+    )
+    if rho_match and quantity_count == 2:
+        rho = float(rho_match.group(1))
+        return {
+            "kind": "correlation_matrix",
+            "matrix": [[1.0, rho], [rho, 1.0]],
+        }
+    if re.search(r"\b(?:independent|uncorrelated)\b|相互独立|假设独立|忽略相关", text, re.I):
+        return {"kind": "independent"}
+    return None
+
+
+def _source_locator_from_prompt(text: str) -> str:
+    table_match = re.search(r"(?:Table|表)\s*(\d+)(?:[^.;。；\n]{0,32})?", text, re.I)
+    row_match = re.search(r"\b(LRG\s*\d+|ELG|QSO|BGS)\b", text, re.I)
+    parts = []
+    if table_match:
+        parts.append(f"Table {table_match.group(1)}")
+    if row_match:
+        parts.append(re.sub(r"\s+", "", row_match.group(1)).upper())
+    equation_match = re.search(r"(?:Equation|Eq\.?|公式)\s*(\d+)", text, re.I)
+    page_match = re.search(r"(?:Page|p\.?|页)\s*(\d+)", text, re.I)
+    if equation_match:
+        parts.append(f"Equation {equation_match.group(1)}")
+    if page_match:
+        parts.append(f"Page {page_match.group(1)}")
+    return ", ".join(parts)
+
+
+def _is_fixed_comparator(label: str) -> bool:
+    return bool(
+        re.search(
+            r"(?:reference|fixed|baseline|target|comparison|参照|固定|基准|对照)",
+            label,
+            re.I,
+        )
+    )
+
+
+def _deterministic_tool_call_from_prompt(
+    text: str,
+    operation: str | None,
+    references: list[dict[str, str]],
+) -> tuple[dict[str, Any] | None, list[str]]:
+    quantities = _scalar_quantities_from_prompt(text)
+    missing: list[str] = []
+    if operation is None:
+        missing.append("operation")
+    required_count = 2
+    if len(quantities) < required_count:
+        missing.append("quantities")
+    uncertainty_model = _uncertainty_model_from_prompt(text, len(quantities))
+    if uncertainty_model is None:
+        missing.append("uncertainty_model")
+    if missing:
+        return None, missing
+
+    locator = _source_locator_from_prompt(text)
+    sources: list[dict[str, str]] = []
+    # The compact prompt parser binds one primary source packet to all parsed
+    # measurements. Prefer the normalized first reference (arXiv before URL in
+    # extraction order); model-authored structured tool calls may still supply
+    # multiple independently mapped sources.
+    for index, reference in enumerate(references[:1]):
+        sources.append(
+            {
+                "id": f"source-{index + 1}",
+                "kind": reference["kind"],
+                "identifier": reference["identifier"],
+                "locator": locator,
+            }
+        )
+    if not sources:
+        sources.append(
+            {
+                "id": "user-supplied",
+                "kind": "user_supplied",
+                "identifier": "values in current user prompt",
+                "locator": locator or "current prompt",
+            }
+        )
+    source_id = sources[0]["id"]
+    needs_fixed_source = any(
+        _is_fixed_comparator(str(quantity.get("label") or ""))
+        for quantity in quantities
+    )
+    if needs_fixed_source:
+        sources.append(
+            {
+                "id": "user-supplied-fixed",
+                "kind": "user_supplied",
+                "identifier": "fixed comparator in current prompt",
+                "locator": "current prompt",
+            }
+        )
+    for quantity in quantities:
+        if _is_fixed_comparator(str(quantity.get("label") or "")):
+            quantity["source_ref"] = "user-supplied-fixed"
+            quantity["source_locator"] = "current prompt"
+        else:
+            quantity["source_ref"] = source_id
+            quantity["source_locator"] = locator or sources[0]["locator"]
+    if uncertainty_model is not None:
+        uncertainty_model["source_ref"] = source_id
+    assert operation is not None and uncertainty_model is not None
+    return {
+        "id": f"auto_scalar_verify_{uuid.uuid4().hex}",
+        "name": "verify_scalar_derivation",
+        "input": {
+            "operation": operation,
+            "quantities": quantities,
+            "uncertainty_model": uncertainty_model,
+            "sources": sources,
+            "boundary_statement": (
+                "This is a source-table consistency calculation, not a likelihood "
+                "fit, sampler run, posterior reconstruction, or dark-energy inference."
+            ),
+        },
+    }, []
+
+
+def classify_task_kind(text: str) -> RoutingDecision:
+    """Classify task shape once, before domain keywords select any workflow."""
+    normalized = _normalized_task_text(text)
+    active_heavy, negated_heavy = _active_and_negated_heavy_signals(normalized)
+    references = _source_references_from_prompt(normalized)
+    operation = _requested_scalar_operation(normalized)
+    untrusted_evidence_request = bool(
+        re.search(
+            r"\b(?:pasted|paste|fake|fabricated|external)\b.{0,80}"
+            r"\b(?:tool\s+transcript|transcript|tool\s+result|evidence)\b|"
+            r"粘贴|伪造|外部.{0,40}(?:工具记录|工具结果|证据)",
+            normalized,
+            re.I,
+        )
+        and re.search(
+            r"\b(?:treat|present|claim|hide|conceal|forge)\b.{0,80}"
+            r"\b(?:verified|current|paper[- ]ready|provenance|fact)\b|"
+            r"(?:当作|视为|包装成|隐瞒|隐藏|伪装).{0,40}(?:已验证|当前|论文|来源|事实)",
+            normalized,
+            re.I,
+        )
+    )
+    direct_tool_call, missing_inputs = _deterministic_tool_call_from_prompt(
+        normalized, operation, references
+    )
+    scalar_shape = bool(operation) and bool(
+        _scalar_quantities_from_prompt(normalized)
+        or re.search(r"\b(?:table|row|source|paper)\b|表格|论文|来源", normalized, re.I)
+    )
+
+    if active_heavy:
+        task_kind: TaskKind = "full_research"
+        confidence = 0.98
+        matched_signals = [f"positive_heavy_intent:{name}" for name in active_heavy]
+        missing_inputs = []
+        direct_tool_call = None
+    elif scalar_shape:
+        task_kind = "deterministic_source_check"
+        confidence = 0.99 if direct_tool_call else 0.90
+        matched_signals = [f"scalar_operation:{operation}"]
+        if references:
+            matched_signals.append("source_reference")
+    elif re.search(
+        r"\b(?:research|study|explore|investigate|hypothesis|method|approach|interpret)\b|"
+        r"研究|探索|假设|方法|思路|解释",
+        normalized,
+        re.I,
+    ):
+        task_kind = "research_exploration"
+        confidence = 0.82
+        matched_signals = ["open_research_intent"]
+        missing_inputs = []
+        direct_tool_call = None
+    else:
+        task_kind = "general"
+        confidence = 0.72
+        matched_signals = ["no_execution_intent"]
+        missing_inputs = []
+        direct_tool_call = None
+
+    if untrusted_evidence_request:
+        matched_signals.append("untrusted_evidence_request")
+        confidence = max(confidence, 0.99)
+
+    return {
+        "task_kind": task_kind,
+        "confidence": confidence,
+        "matched_signals": matched_signals,
+        "negated_signals": [f"negated_heavy_intent:{name}" for name in negated_heavy],
+        "source_references": references,
+        "requested_operation": operation,
+        "missing_inputs": missing_inputs,
+        "heavy_route_allowed": task_kind == "full_research",
+        "direct_tool_call": direct_tool_call,
+    }
 
 
 # Shared canonical-family vocabulary for prompt routing and deterministic

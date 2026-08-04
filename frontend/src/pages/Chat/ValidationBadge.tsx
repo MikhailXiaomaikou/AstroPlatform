@@ -12,10 +12,14 @@
 import type { ValidationSummary } from "../../api/client";
 import { useI18n } from "../../i18n";
 
-type OverallState = "blocked" | "limited" | "regenerated" | "passed" | "not_validated";
+type OverallState = "blocked" | "refusal" | "abstention" | "limited" | "regenerated" | "passed" | "not_validated";
 
 export function overallValidationState(summary: ValidationSummary): OverallState {
   const states = [summary.numeric_gate, summary.citation_gate];
+  if (summary.response_disposition === "hard_block") return "blocked";
+  if (summary.response_disposition === "refusal") return "refusal";
+  if (summary.response_disposition === "abstention") return "abstention";
+  if (summary.response_disposition === "limited") return "limited";
   if (summary.blocked || states.includes("blocked")) return "blocked";
   if (summary.limited || states.includes("limited")) return "limited";
   if (states.includes("regenerated") || (summary.regen_count ?? 0) > 0) {
@@ -32,6 +36,8 @@ const BADGE_STYLE: Record<OverallState, { icon: string; color: string; border: s
   regenerated: { icon: "⚠", color: "#8a6a00", border: "#e0c36a", background: "#fff8e6" },
   limited: { icon: "⚠", color: "#8a6a00", border: "#e0c36a", background: "#fff8e6" },
   blocked: { icon: "⛔", color: "#b00020", border: "#f2b8bf", background: "#fdf2f4" },
+  refusal: { icon: "⊘", color: "#8b1a1a", border: "#efb3b3", background: "#fdf2f2" },
+  abstention: { icon: "?", color: "#765600", border: "#e0c36a", background: "#fff8e6" },
   not_validated: { icon: "◌", color: "#5f6368", border: "#d0d3d8", background: "#f6f7f8" },
 };
 
@@ -108,6 +114,36 @@ export function ValidationBadge({
               label={t("chat.validation.numeric_gate")}
               state={summary.numeric_gate}
             />
+            {summary.schema_version && summary.schema_version >= 2 && (
+              <>
+                <div>
+                  <strong>{t("chat.validation.task_kind")}:</strong>{" "}
+                  {summary.task_kind || "general"}
+                </div>
+                <div>
+                  <strong>{t("chat.validation.disposition")}:</strong>{" "}
+                  {summary.response_disposition || "full"}
+                </div>
+                {summary.earliest_limiting_stage && (
+                  <div>
+                    <strong>{t("chat.validation.limiting_stage")}:</strong>{" "}
+                    {summary.earliest_limiting_stage}
+                  </div>
+                )}
+                {(summary.missing_dependencies?.length ?? 0) > 0 && (
+                  <div>
+                    <strong>{t("chat.validation.missing_dependencies")}:</strong>{" "}
+                    {summary.missing_dependencies?.join(", ")}
+                  </div>
+                )}
+                {summary.safe_fallback && (
+                  <div>
+                    <strong>{t("chat.validation.safe_fallback")}:</strong>{" "}
+                    {summary.safe_fallback}
+                  </div>
+                )}
+              </>
+            )}
             <GateStateLine
               label={t("chat.validation.citation_gate")}
               state={summary.citation_gate}

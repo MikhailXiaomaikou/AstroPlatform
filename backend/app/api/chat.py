@@ -203,10 +203,22 @@ def _filter_tools_by_research_focus(tools: list[dict]) -> list[dict]:
     (incl. retained dormant tools) under a cosmology-only system prompt.
     """
     if _ASTRO_RESEARCH_FOCUS == "all":
-        return tools
-    focus = _ASTRO_RESEARCH_FOCUS if _ASTRO_RESEARCH_FOCUS in _FOCUS_GATED_VALUES else "cosmology"
-    allowed = build_allowed_tools(focus)
-    return [t for t in tools if t.get("name") in allowed]
+        filtered = tools
+    else:
+        focus = _ASTRO_RESEARCH_FOCUS if _ASTRO_RESEARCH_FOCUS in _FOCUS_GATED_VALUES else "cosmology"
+        allowed = build_allowed_tools(focus)
+        filtered = [t for t in tools if t.get("name") in allowed]
+    # A disabled v0.2 flag must restore the historical wire-visible surface,
+    # not merely make the executor fail after the model has already selected it.
+    from app.config import settings
+
+    if not settings.lightweight_verification_enabled:
+        return [
+            tool
+            for tool in filtered
+            if tool.get("name") != "verify_scalar_derivation"
+        ]
+    return filtered
 
 
 # Module-level SYSTEM_PROMPT — assembled from prompts/ at import time,

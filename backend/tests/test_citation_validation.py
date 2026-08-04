@@ -106,6 +106,60 @@ def test_b4_bibcode_in_successful_result_still_supports_citation():
     assert provenance_citation_violations("See 2023A&A...674A...1G.", tool_results) == []
 
 
+def test_verified_lightweight_source_evidence_supports_arxiv_citation():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [
+        {
+            "tool": "verify_scalar_derivation",
+            "result": {
+                "success": True,
+                "source_status": "verified_exact",
+                "source_evidence": [
+                    {
+                        "kind": "arxiv",
+                        "identifier": "2503.14738",
+                        "status": "verified_exact",
+                        "final_url": "https://ar5iv.labs.arxiv.org/html/2503.14738",
+                    }
+                ],
+            },
+        }
+    ]
+
+    assert provenance_citation_violations(
+        "The verified source is arXiv:2503.14738.", tool_results
+    ) == []
+
+
+def test_unverified_lightweight_source_evidence_cannot_launder_arxiv_citation():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [
+        {
+            "tool": "verify_scalar_derivation",
+            "result": {
+                "success": True,
+                "source_status": "resolved_unmatched",
+                "__do_not_claim_source_measurement__": True,
+                "source_evidence": [
+                    {
+                        "kind": "arxiv",
+                        "identifier": "2503.14738",
+                        "status": "resolved_unmatched",
+                    }
+                ],
+            },
+        }
+    ]
+
+    violations = provenance_citation_violations(
+        "The paper arXiv:2503.14738 reported this value.", tool_results
+    )
+
+    assert any(violation.kind == "invalid_arxiv_id" for violation in violations)
+
+
 def test_bibcode_initial_alone_does_not_support_author_year():
     from app.services.claim_validator import provenance_citation_violations
 

@@ -380,6 +380,10 @@ from app.services.ai_tools.spectral_measurements import (  # noqa: E402
     _split_rows_by_redshift,  # noqa: F401  (re-export)
     _subsample_significance_from_betas,  # noqa: F401  (re-export)
 )
+from app.services.ai_tools.scalar_verification import (  # noqa: E402
+    TOOL_SCHEMAS as _SCALAR_VERIFICATION_TOOL_SCHEMAS,
+    execute_scalar_verification as _exec_verify_scalar_derivation,
+)
 from app.services.ai_tools.sample_export import (  # noqa: E402
     TOOL_SCHEMAS as _SAMPLE_EXPORT_TOOL_SCHEMAS,
     _cosmology_manifest_for,  # noqa: F401  (re-export)
@@ -527,6 +531,7 @@ _BASE_TOOL_SCHEMAS_BY_NAME = {
         + _LITERATURE_TOOL_SCHEMAS
         + _LITERATURE_TABLES_TOOL_SCHEMAS
         + _SPECTRAL_MEASUREMENTS_TOOL_SCHEMAS
+        + _SCALAR_VERIFICATION_TOOL_SCHEMAS
         + _SAMPLE_EXPORT_TOOL_SCHEMAS
         + _LINE_FITTING_TOOL_SCHEMAS
         + _RUN_PYTHON_TOOL_SCHEMAS
@@ -537,6 +542,7 @@ _BASE_TOOL_SCHEMAS_BY_NAME = {
 }
 
 TOOLS = [_BASE_TOOL_SCHEMAS_BY_NAME[_name] for _name in _BASE_TOOL_ORDER]
+TOOLS.extend(_SCALAR_VERIFICATION_TOOL_SCHEMAS)
 
 
 # ── H1 split (2026-05-26): cosmology tools (schemas + executors) extracted to
@@ -1046,6 +1052,8 @@ async def _execute_tool_inner(
             return await _exec_fit_line_lfr_async(tool_input, python_session_id, api_key)
         elif tool_name == "astro_statistics_toolbox":
             return _exec_astro_statistics_toolbox(tool_input)
+        elif tool_name == "verify_scalar_derivation":
+            return await _exec_verify_scalar_derivation(tool_input)
         elif tool_name == "demagnify_sample":
             return _exec_demagnify_sample(tool_input, python_session_id)
         elif tool_name == "compare_luminosity_distances":

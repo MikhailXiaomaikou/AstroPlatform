@@ -223,6 +223,10 @@ class Settings(BaseSettings):
     arxiv_reader_enabled: bool = False
     union3_reproduction_enabled: bool = False
     evidence_pack_v2_enabled: bool = False
+    # v0.2 lightweight deterministic source checks are dark-launched. When
+    # disabled the historical routing and tool surface remain byte-for-byte
+    # compatible for callers that do not opt in.
+    lightweight_verification_enabled: bool = False
     local_science_worker_enabled: bool = False
     workflow_registry_v2_enabled: bool = False
     foundry_gap_tracking_enabled: bool = False
