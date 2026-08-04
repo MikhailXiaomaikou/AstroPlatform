@@ -7,6 +7,7 @@ import pytest
 
 from scripts import build_standard_astro_v02_expert_pack as expert_pack
 from scripts import evaluate_standard_astro_v02 as evaluator
+from scripts import merge_standard_astro_v02_samples as merger
 from scripts import score_standard_astro_v02 as scorer
 
 
@@ -96,3 +97,22 @@ def test_evaluator_refuses_disabled_cli_before_recording_failures(monkeypatch) -
 
     with pytest.raises(SystemExit):
         evaluator._validate_model_backends(parser, ["gpt-5.6-sol"])
+
+
+def test_shard_merger_rejects_duplicate_sample_keys(tmp_path) -> None:
+    record = {
+        "sample_key": "gpt-5.6-sol|direct|V02_01_demo|1",
+        "model": "gpt-5.6-sol",
+        "condition": "direct",
+        "task_id": "V02_01_demo",
+        "repeat_index": 1,
+        "status": "completed",
+    }
+    first = tmp_path / "first.jsonl"
+    second = tmp_path / "second.jsonl"
+    encoded = json.dumps(record) + "\n"
+    first.write_text(encoded, encoding="utf-8")
+    second.write_text(encoded, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Duplicate sample key"):
+        merger._read([first, second])
