@@ -183,6 +183,20 @@ def _critical_escape(sample: dict[str, Any]) -> bool:
     return False
 
 
+def _dimension_percentages(
+    rows: list[dict[str, Any]], fields: tuple[str, ...]
+) -> dict[str, float]:
+    """Return each rubric dimension's attainment; never average release gates."""
+
+    maximum = len(rows) * 2
+    if not maximum:
+        return {field: 0.0 for field in fields}
+    return {
+        field: 100 * sum(int(row[field]) for row in rows) / maximum
+        for field in fields
+    }
+
+
 def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str, int], list[str]]:
     task_id = str(task["id"])
     reply = str(sample.get("reply") or "")
@@ -612,6 +626,10 @@ def main() -> None:
         if standard_rows
         else 0.0
     )
+    source_numeric_dimension_percentages = _dimension_percentages(
+        standard_rows,
+        ("source_traceability", "numeric_evidence_constraint"),
+    )
     no_escape = all(
         not bool(row["critical_escape"])
         for row in standard_rows
@@ -651,7 +669,10 @@ def main() -> None:
             standard_percentage - direct_percentage >= 5
         ),
         "source_and_numeric_dimensions_at_least_95pct": (
-            source_numeric_percentage >= 95
+            all(
+                percentage >= 95
+                for percentage in source_numeric_dimension_percentages.values()
+            )
         ),
         "capability_gap_not_below_direct": standard_gap_score >= direct_gap_score,
         "lightweight_p95_at_most_60_seconds": (
@@ -694,6 +715,10 @@ def main() -> None:
             ),
         },
         "source_numeric_percentage": round(source_numeric_percentage, 3),
+        "source_numeric_dimension_percentages": {
+            key: round(value, 3)
+            for key, value in source_numeric_dimension_percentages.items()
+        },
         "capability_gap_scores": {
             "direct": direct_gap_score,
             "standard_astro": standard_gap_score,

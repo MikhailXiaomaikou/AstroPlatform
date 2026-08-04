@@ -296,6 +296,7 @@ def build_artifact(
     lead = float(standard["percentage"]) - float(direct["percentage"])
     auto_pass = bool(summary["automated_release_checks_passed"])
     auto_status = "全部通过" if auto_pass else "仍有未通过项"
+    source_numeric_dimensions = summary["source_numeric_dimension_percentages"]
     charts = [
         {
             "id": "overall-score",
@@ -501,7 +502,11 @@ def build_artifact(
             "sourceId": "v02-score-audit",
             "body": (
                 "## 六维得分与延迟共同约束可用性\n\n"
-                f"来源与数值证据两维联合达成率为 **{summary['source_numeric_percentage']:.1f}%**。"
+                "来源可追踪性达成率为 "
+                f"**{source_numeric_dimensions['source_traceability']:.1f}%**，"
+                "数值证据约束为 "
+                f"**{source_numeric_dimensions['numeric_evidence_constraint']:.1f}%**；"
+                "发布门按两维分别达到 95% 判定，不使用二者平均数。"
                 "六维图分解总体分数；延迟图只看前四道确定性轻量任务，并同时显示 P50 与 P95，"
                 "避免用平均值掩盖慢尾。"
             ),

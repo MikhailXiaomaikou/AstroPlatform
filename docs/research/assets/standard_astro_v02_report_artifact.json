@@ -5,7 +5,7 @@
     "surface": "report",
     "title": "Standard Astro v0.2：灵活但可审计的轻量研究验证",
     "description": "192-sample technical evaluation of Standard Astro v0.2 lightweight verification.",
-    "generatedAt": "2026-08-04T08:07:00.439708+00:00",
+    "generatedAt": "2026-08-04T08:35:49.482837+00:00",
     "sources": [
       {
         "id": "v02-score-audit",
@@ -15,7 +15,7 @@
           "language": "python",
           "sql": "SELECT * FROM read_csv_auto('docs/research/assets/standard_astro_v02_scores.csv', header = true);",
           "description": "Recomputes six frozen 0–2 dimensions from the 192 pre-registered user-visible responses and compact receipts.",
-          "executed_at": "2026-08-04T08:07:00.439708+00:00",
+          "executed_at": "2026-08-04T08:35:49.482837+00:00",
           "tables_used": [
             "standard_astro_v02_evaluation_samples",
             "standard_astro_v02_evaluation_scores"
@@ -41,7 +41,7 @@
           "engine": "version-controlled JSON",
           "language": "json",
           "description": "Frozen task prompts, expected routes, expected dispositions, scientific targets, and release thresholds.",
-          "executed_at": "2026-08-04T08:07:00.439708+00:00",
+          "executed_at": "2026-08-04T08:35:49.482837+00:00",
           "tables_used": [
             "standard_astro_v02_preregistered_tasks"
           ],
@@ -426,7 +426,7 @@
         "id": "technical-summary",
         "type": "markdown",
         "sourceId": "v02-score-audit",
-        "body": "## 技术摘要\n\n四模型、两条件、八任务、三次重复共 **192/192** 个样本。裸模型得分 **672/1152 (58.3%)**；Standard Astro 得分 **1141/1152 (99.0%)**，差值 **+40.7 个百分点**。自动发布门：**全部通过**。这证明的是冻结微任务上的可审计性与路由效果，不证明系统已能独立完成论文级研究；Alpha v0.2 仍需 12 组博士后匿名 A/B 和 72 小时开关观察。",
+        "body": "## 技术摘要\n\n四模型、两条件、八任务、三次重复共 **192/192** 个样本。裸模型得分 **672/1152 (58.3%)**；Standard Astro 得分 **1141/1152 (99.0%)**，差值 **+40.7 个百分点**。自动发布门：**仍有未通过项**。这证明的是冻结微任务上的可审计性与路由效果，不证明系统已能独立完成论文级研究；Alpha v0.2 仍需 12 组博士后匿名 A/B 和 72 小时开关观察。",
         "layout": "full"
       },
       {
@@ -465,7 +465,7 @@
         "id": "dimension-finding",
         "type": "markdown",
         "sourceId": "v02-score-audit",
-        "body": "## 六维得分与延迟共同约束可用性\n\n来源与数值证据两维联合达成率为 **97.1%**。六维图分解总体分数；延迟图只看前四道确定性轻量任务，并同时显示 P50 与 P95，避免用平均值掩盖慢尾。",
+        "body": "## 六维得分与延迟共同约束可用性\n\n来源可追踪性达成率为 **94.3%**，数值证据约束为 **100.0%**；发布门按两维分别达到 95% 判定，不使用二者平均数。六维图分解总体分数；延迟图只看前四道确定性轻量任务，并同时显示 P50 与 P95，避免用平均值掩盖慢尾。",
         "layout": "full"
       },
       {
@@ -498,7 +498,7 @@
         "id": "release-section",
         "type": "markdown",
         "sourceId": "v02-score-audit",
-        "body": "## 自动发布门只决定是否进入专家测试\n\n本轮自动门为 **全部通过**。即使全部通过，也只能启用默认关闭的功能开关做专家测试；它不能替代科学方法适用性审查、真实用户证据或生产恢复验证。",
+        "body": "## 自动发布门只决定是否进入专家测试\n\n本轮自动门为 **仍有未通过项**。即使全部通过，也只能启用默认关闭的功能开关做专家测试；它不能替代科学方法适用性审查、真实用户证据或生产恢复验证。",
         "layout": "full"
       },
       {
@@ -529,7 +529,7 @@
   },
   "snapshot": {
     "version": 1,
-    "generatedAt": "2026-08-04T08:07:00.439708+00:00",
+    "generatedAt": "2026-08-04T08:35:49.482837+00:00",
     "status": "ready",
     "datasets": {
       "overall_scores": [
@@ -1094,8 +1094,8 @@
         {
           "check": "来源与数值两维至少 95%",
           "check_id": "source_and_numeric_dimensions_at_least_95pct",
-          "passed": true,
-          "status": "PASS"
+          "passed": false,
+          "status": "FAIL"
         },
         {
           "check": "能力缺口题不低于裸模型",
@@ -1133,7 +1133,7 @@
         "language": "python",
         "sql": "SELECT * FROM read_csv_auto('docs/research/assets/standard_astro_v02_scores.csv', header = true);",
         "description": "Recomputes six frozen 0–2 dimensions from the 192 pre-registered user-visible responses and compact receipts.",
-        "executed_at": "2026-08-04T08:07:00.439708+00:00",
+        "executed_at": "2026-08-04T08:35:49.482837+00:00",
         "tables_used": [
           "standard_astro_v02_evaluation_samples",
           "standard_astro_v02_evaluation_scores"
@@ -1159,7 +1159,7 @@
         "engine": "version-controlled JSON",
         "language": "json",
         "description": "Frozen task prompts, expected routes, expected dispositions, scientific targets, and release thresholds.",
-        "executed_at": "2026-08-04T08:07:00.439708+00:00",
+        "executed_at": "2026-08-04T08:35:49.482837+00:00",
         "tables_used": [
           "standard_astro_v02_preregistered_tasks"
         ],

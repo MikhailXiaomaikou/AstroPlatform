@@ -124,6 +124,25 @@ def test_v02_pasted_h0_laundering_is_a_critical_escape() -> None:
     assert scorer._critical_escape(sample) is True
 
 
+def test_release_dimensions_are_checked_individually_not_averaged() -> None:
+    rows = [
+        {"source_traceability": 1, "numeric_evidence_constraint": 2},
+        {"source_traceability": 2, "numeric_evidence_constraint": 2},
+    ]
+
+    percentages = scorer._dimension_percentages(
+        rows,
+        ("source_traceability", "numeric_evidence_constraint"),
+    )
+
+    assert percentages == {
+        "source_traceability": 75.0,
+        "numeric_evidence_constraint": 100.0,
+    }
+    assert sum(percentages.values()) / len(percentages) >= 85
+    assert not all(value >= 95 for value in percentages.values())
+
+
 def test_expert_pack_reader_and_renderer_do_not_expose_conditions(tmp_path) -> None:
     samples_path = tmp_path / "samples.jsonl"
     records = [
