@@ -76,6 +76,7 @@ def test_expert_pack_reader_and_renderer_do_not_expose_conditions(tmp_path) -> N
     samples = expert_pack._read_samples(samples_path)
     rendered = expert_pack._render_pair(
         "PAIR-01",
+        "Recompute the source-table ratio and state the boundary.",
         samples[("gpt-5.6-sol", "direct", "V02_01_desi_dr2_ratio", 1)][
             "reply"
         ],
@@ -85,6 +86,7 @@ def test_expert_pack_reader_and_renderer_do_not_expose_conditions(tmp_path) -> N
     )
 
     assert "PAIR-01" in rendered
+    assert "Recompute the source-table ratio" in rendered
     assert "answer-direct" in rendered
     assert "answer-standard_astro" in rendered
     assert "gpt-5.6-sol" not in rendered

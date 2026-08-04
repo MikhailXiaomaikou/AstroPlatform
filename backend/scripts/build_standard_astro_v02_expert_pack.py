@@ -16,6 +16,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SAMPLES = REPO_ROOT / ".local/standard-astro-v02/evaluation_samples.jsonl"
+DEFAULT_TASKS = REPO_ROOT / "docs/research/standard_astro_v02_preregistered_tasks.json"
 DEFAULT_PACK = REPO_ROOT / ".local/standard-astro-v02/expert_blind_pack.zh-CN.md"
 DEFAULT_KEY = REPO_ROOT / ".local/standard-astro-v02/expert_blind_answer_key.json"
 MODELS = (
@@ -66,8 +67,26 @@ def _read_samples(path: Path) -> dict[tuple[str, str, str, int], dict[str, Any]]
     return samples
 
 
-def _render_pair(pair_id: str, answer_a: str, answer_b: str) -> str:
+def _load_prompts(path: Path) -> dict[str, str]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    prompts = {
+        str(task.get("id")): str(task.get("prompt") or "")
+        for task in payload.get("tasks") or []
+        if isinstance(task, dict) and task.get("id")
+    }
+    if len(prompts) != 8 or not all(prompts.values()):
+        raise ValueError("The expert pack requires all eight preregistered prompts.")
+    return prompts
+
+
+def _render_pair(
+    pair_id: str, prompt: str, answer_a: str, answer_b: str
+) -> str:
     return f"""## {pair_id}
+
+### 研究问题
+
+{prompt.strip()}
 
 ### 回答 A
 
@@ -94,11 +113,13 @@ def _render_pair(pair_id: str, answer_a: str, answer_b: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--samples", type=Path, default=DEFAULT_SAMPLES)
+    parser.add_argument("--tasks", type=Path, default=DEFAULT_TASKS)
     parser.add_argument("--pack", type=Path, default=DEFAULT_PACK)
     parser.add_argument("--answer-key", type=Path, default=DEFAULT_KEY)
     parser.add_argument("--seed", type=int, default=20260804)
     args = parser.parse_args()
     samples = _read_samples(args.samples)
+    prompts = _load_prompts(args.tasks)
     rng = random.Random(args.seed)
 
     sections = [
@@ -133,6 +154,7 @@ def main() -> None:
             sections.append(
                 _render_pair(
                     pair_id,
+                    prompts[task_id],
                     str(answer_a.get("reply") or ""),
                     str(answer_b.get("reply") or ""),
                 )
