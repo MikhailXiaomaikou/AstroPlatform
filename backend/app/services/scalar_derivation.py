@@ -371,9 +371,15 @@ def derive_scalar(
         independent_uncertainty = math.sqrt(max(0.0, independent_variance))
         result_payload["independent_standard_uncertainty"] = independent_uncertainty
         if independent_uncertainty > 0:
-            result_payload["relative_uncertainty_change_vs_independent"] = (
+            relative_change = (
                 result_uncertainty / independent_uncertainty - 1.0
             )
+            result_payload["relative_uncertainty_change_vs_independent"] = (
+                relative_change
+            )
+            result_payload[
+                "relative_uncertainty_change_percent_vs_independent"
+            ] = 100.0 * relative_change
     result = {
         "operation": operation,
         "result": result_payload,

@@ -5,6 +5,9 @@ from typing import Any
 
 from app.api import chat as chat_mod
 from app.config import settings
+from app.services.agent_runtime.summaries import (
+    _scalar_verification_tool_grounded_summary,
+)
 
 
 DESI_PROMPT = (
@@ -49,6 +52,9 @@ def _full_receipt() -> dict[str, Any]:
             "standard_uncertainty": 0.020562805,
             "unit": "dimensionless",
             "rounded_display": "0.89185299 +/- 0.020562805",
+            "independent_standard_uncertainty": 0.017652837,
+            "relative_uncertainty_change_vs_independent": 0.164844,
+            "relative_uncertainty_change_percent_vs_independent": 16.4844,
         },
         "inputs": [],
         "formula": "q0 / q1",
@@ -80,6 +86,18 @@ def _full_receipt() -> dict[str, Any]:
         "publication_ready": True,
         "__tool_status__": "COMPLETED",
     }
+
+
+def test_scalar_summary_explains_negative_correlation_direction() -> None:
+    summary = _scalar_verification_tool_grounded_summary(
+        [{"tool": "verify_scalar_derivation", "result": _full_receipt()}]
+    )
+
+    assert summary is not None
+    assert "16.48%" in summary
+    assert "negative correlation" in summary
+    assert "increases the propagated ratio uncertainty" in summary
+    assert "underestimate" in summary
 
 
 def test_high_confidence_scalar_route_overrides_model_planner_choice() -> None:

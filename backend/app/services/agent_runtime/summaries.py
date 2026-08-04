@@ -318,7 +318,11 @@ def _scalar_verification_tool_grounded_summary(
             f"{source.get('kind') or 'source'}:{source.get('identifier') or source.get('id')} "
             f"({locator}; {method}; SHA-256 {digest}; status={source.get('status')})"
         )
-    assumptions = [str(item) for item in receipt.get("assumptions") or [] if item]
+    assumptions = [
+        str(item).strip().rstrip(".")
+        for item in receipt.get("assumptions") or []
+        if item
+    ]
     lines = [
         "Deterministic source-check receipt:",
         "",
@@ -333,13 +337,48 @@ def _scalar_verification_tool_grounded_summary(
             f"{_fmt_tool_number(result.get('standardized_difference_abs'))} sigma."
         )
     if result.get("independent_standard_uncertainty") is not None:
+        model = receipt.get("uncertainty_model")
+        matrix = model.get("matrix") if isinstance(model, dict) else None
+        rho: float | None = None
+        if (
+            isinstance(matrix, list)
+            and len(matrix) >= 2
+            and isinstance(matrix[0], list)
+            and len(matrix[0]) >= 2
+            and isinstance(matrix[0][1], (int, float))
+        ):
+            rho = float(matrix[0][1])
+        relative = result.get("relative_uncertainty_change_vs_independent")
+        relative_percent = result.get(
+            "relative_uncertainty_change_percent_vs_independent"
+        )
         lines.append(
             "- If correlations were instead set to zero, the propagated "
             "uncertainty would be "
             f"{_fmt_tool_number(result.get('independent_standard_uncertainty'))}; "
             "relative change from that independence result = "
-            f"{_fmt_tool_number(result.get('relative_uncertainty_change_vs_independent'))}."
+            f"{_fmt_tool_number(relative)}"
+            + (
+                f" ({_fmt_tool_number(relative_percent)}%)"
+                if relative_percent is not None
+                else ""
+            )
+            + "."
         )
+        if rho is not None and relative is not None:
+            if rho < 0 and float(relative) > 0:
+                lines.append(
+                    f"- Correlation interpretation: rho={_fmt_tool_number(rho)} "
+                    "is a negative correlation; it increases the propagated "
+                    "ratio uncertainty, so setting rho=0 would underestimate "
+                    "the uncertainty under this comparison convention."
+                )
+            elif rho > 0 and float(relative) < 0:
+                lines.append(
+                    f"- Correlation interpretation: rho={_fmt_tool_number(rho)} "
+                    "is a positive correlation; it decreases the propagated "
+                    "ratio uncertainty relative to rho=0."
+                )
     if source_items:
         lines.append("- Source evidence: " + "; ".join(source_items) + ".")
     if assumptions:

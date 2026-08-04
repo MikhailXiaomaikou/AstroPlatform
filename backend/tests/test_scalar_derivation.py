@@ -55,6 +55,9 @@ def test_desi_ratio_with_correlation_matches_preregistered_value() -> None:
     assert result["result"]["relative_uncertainty_change_vs_independent"] == pytest.approx(
         0.165, abs=0.001
     )
+    assert result["result"][
+        "relative_uncertainty_change_percent_vs_independent"
+    ] == pytest.approx(16.5, abs=0.1)
 
 
 def test_negative_correlation_increases_ratio_uncertainty() -> None:

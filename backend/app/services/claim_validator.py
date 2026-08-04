@@ -2404,6 +2404,7 @@ _VERIFIED_SCALAR_DERIVED_NUMERIC_KEYS = frozenset(
         "standardized_difference_abs",
         "independent_standard_uncertainty",
         "relative_uncertainty_change_vs_independent",
+        "relative_uncertainty_change_percent_vs_independent",
     }
 )
 
