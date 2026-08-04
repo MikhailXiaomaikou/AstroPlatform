@@ -195,7 +195,7 @@ def test_derive_summary_meta_skip_and_not_run_are_distinct_from_passed():
 
 def test_full_research_nonpublication_summary_is_limited_and_actionable():
     prompt = (
-        "Run the full DESI DR2 early dark energy posterior with Planck high-l "
+        "Run the full DESI DR2 early-dark-energy posterior with Planck high-l "
         "and low-l likelihoods and a production sampler."
     )
     summary = _derive_validation_summary(

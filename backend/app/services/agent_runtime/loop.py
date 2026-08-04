@@ -169,8 +169,9 @@ def _full_research_missing_dependencies(user_prompt: str) -> list[str]:
     """
 
     lower = str(user_prompt or "").lower()
+    normalized = re.sub(r"[-_‐‑‒–—]+", " ", lower)
     dependencies: list[str] = []
-    if "early dark energy" in lower or re.search(r"\bede\b", lower):
+    if "early dark energy" in normalized or re.search(r"\bede\b", normalized):
         dependencies.append("native early-dark-energy (EDE) model implementation")
     elif any(term in lower for term in ("model", "模型")):
         dependencies.append("requested model implementation")
@@ -188,12 +189,13 @@ def _full_research_capability_gap_reply(user_prompt: str) -> str:
     dependencies = _full_research_missing_dependencies(user_prompt)
     checklist = "\n".join(f"- {item}." for item in dependencies)
     lower = str(user_prompt or "").lower()
+    normalized = re.sub(r"[-_‐‑‒–—]+", " ", lower)
     scope_parts: list[str] = []
     if "desi" in lower:
         scope_parts.append("DESI DR2" if "dr2" in lower else "DESI")
     if "planck" in lower:
         scope_parts.append("Planck")
-    if "early dark energy" in lower or re.search(r"\bede\b", lower):
+    if "early dark energy" in normalized or re.search(r"\bede\b", normalized):
         scope_parts.append("EDE")
     scope = " / ".join(scope_parts) or "requested"
     return (
