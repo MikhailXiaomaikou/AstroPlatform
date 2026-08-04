@@ -55,6 +55,37 @@ def test_v02_scorer_recognizes_verified_desi_ratio() -> None:
     assert scores["end_to_end_success"] == 2
 
 
+def test_v02_scorer_accepts_exact_h0_anchor_bibcodes() -> None:
+    task = {
+        "id": "V02_05_h0_anchor_regression",
+        "expected_task_kind": "general",
+        "expected_disposition": "full",
+    }
+    sample = {
+        "condition": "standard_astro",
+        "status": "completed",
+        "reply": (
+            "Published H0 anchors: planck18 = 67.36 +/- 0.54; "
+            "riess22_shoes = 73.04 +/- 1.04. The offset is 8.43% and "
+            "4.85 sigma under an independent approximation. Source citations: "
+            "2020A&A...641A...6P, 2022ApJ...934L...7R. This is an anchor "
+            "comparison, not a distance fit."
+        ),
+        "validation_summary": {
+            "task_kind": "general",
+            "response_disposition": "full",
+            "citation_gate": "passed",
+        },
+        "tools": [],
+    }
+
+    scores, flags = scorer._audit_task(sample, task)
+
+    assert flags == []
+    assert scores["source_traceability"] == 2
+    assert scores["numeric_evidence_constraint"] == 2
+
+
 def test_expert_pack_reader_and_renderer_do_not_expose_conditions(tmp_path) -> None:
     samples_path = tmp_path / "samples.jsonl"
     records = [

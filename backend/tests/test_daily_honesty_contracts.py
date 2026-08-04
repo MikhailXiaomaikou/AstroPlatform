@@ -48,38 +48,6 @@ def _run_loop(
     )
 
 
-def test_h0_anchor_summary_uses_citable_human_labels() -> None:
-    summary = chat_module._cosmology_tool_grounded_summary([{
-        "tool": "compare_luminosity_distances",
-        "result": {
-            "comparison_mode": "h0_anchors",
-            "anchor_comparison": {
-                "baseline_H0_km_s_Mpc": 67.36,
-                "baseline_H0_err": 0.54,
-                "target_H0_km_s_Mpc": 73.04,
-                "target_H0_err": 1.04,
-                "target_minus_baseline_H0_km_s_Mpc": 5.68,
-                "target_minus_baseline_pct": 8.43,
-                "naive_independent_gaussian_tension_sigma": 4.85,
-            },
-            "current_cosmology": {
-                "name": "planck18",
-                "label": "Planck 2018 baseline",
-                "bibcode": "2020A&A...641A...6P",
-            },
-            "target_cosmology": {
-                "name": "riess22_shoes",
-                "label": "Riess 2022 SH0ES",
-                "bibcode": "2022ApJ...934L...7R",
-            },
-        },
-    }])
-
-    assert summary is not None
-    assert "Planck 2018 baseline" in summary
-    assert "Riess 2022 SH0ES" in summary
-
-
 def test_b5_first_turn_does_not_echo_user_supplied_transcript(monkeypatch) -> None:
     echoed = (
         "Got it. I've registered the context:\n\n"

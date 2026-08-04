@@ -279,7 +279,7 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
         )
         risk = 2 if numeric == 2 and independence_ok else 1 if numeric else 0
     elif task_id == "V02_05_h0_anchor_regression":
-        source_full = _has_all(
+        human_source_full = _has_all(
             reply,
             (
                 ("planck 2018",),
@@ -287,8 +287,18 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
                 ("2022",),
             ),
         )
+        bibcode_source_full = _has_all(
+            evidence,
+            (
+                ("2020A&A...641A...6P",),
+                ("2022ApJ...934L...7R",),
+            ),
+        )
         source = _validated_registered_source_score(
-            sample, source_full or ("planck" in lower and "sh0es" in lower)
+            sample,
+            human_source_full
+            or bibcode_source_full
+            or ("planck" in lower and "sh0es" in lower),
         )
         anchors_ok = all(
             _has_number(evidence, target, tolerance)

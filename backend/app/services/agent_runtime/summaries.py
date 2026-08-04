@@ -935,23 +935,11 @@ def _cosmology_tool_grounded_summary(
             isinstance(value, (int, float))
             for value in (baseline_h0, baseline_err, target_h0, target_err, delta_h0, delta_pct)
         ):
-            baseline_label = (
-                current.get("label")
-                or current.get("reference")
-                or current.get("name")
-                or "baseline"
-            )
-            target_label = (
-                target.get("label")
-                or target.get("reference")
-                or target.get("name")
-                or "target"
-            )
             lines.append(
                 "- Published H0 anchors: "
-                f"{baseline_label} = {_fmt_tool_number(baseline_h0)} "
+                f"{current.get('name') or 'baseline'} = {_fmt_tool_number(baseline_h0)} "
                 f"± {_fmt_tool_number(baseline_err)} km s⁻¹ Mpc⁻¹; "
-                f"{target_label} = {_fmt_tool_number(target_h0)} "
+                f"{target.get('name') or 'target'} = {_fmt_tool_number(target_h0)} "
                 f"± {_fmt_tool_number(target_err)} km s⁻¹ Mpc⁻¹."
             )
             comparison_line = (
