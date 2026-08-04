@@ -391,9 +391,10 @@ async def _run_agent_loop(
     soft_reminder_s = float(budget.get("soft_reminder_seconds", 75.0))
     budget_mode = str(budget.get("mode") or "default")
     _loop_seconds = float(budget.get("agent_loop_seconds", 360.0))
+    _loop_started = _time.monotonic()
     # H1 / long-task bump: default remains 360s; paper-scale workflows can
     # explicitly opt into a 900s loop with larger summary reserve.
-    _loop_deadline = _time.monotonic() + _loop_seconds
+    _loop_deadline = _loop_started + _loop_seconds
     checkpoint_id = _checkpoint_session_id(chat_session_id, python_session_id)
     checkpoint_note = _format_checkpoint_resume_note(checkpoint_id)
 
@@ -3516,6 +3517,39 @@ async def _run_agent_loop(
     # clause, which fires only when the loop exhausts its iteration budget
     # without breaking — a clean final-answer break is not flagged.
 
+    validation_summary = _derive_validation_summary(
+        claim_gate_ran=_claim_gate_ran,
+        gate_skip_reason=_gate_skip_reason,
+        fabrication_stats=fabrication_stats,
+        interventions=gate_interventions,
+        tool_results=all_tool_results,
+        routing_decision=routing_decision,
+    )
+    if routing_decision is not None:
+        try:
+            from app.observability.metrics import record_counter, record_histogram
+
+            record_counter(
+                "lightweight_response_disposition_total",
+                task_kind=str(validation_summary.get("task_kind") or "general"),
+                disposition=str(
+                    validation_summary.get("response_disposition") or "full"
+                ),
+                earliest_limiting_stage=str(
+                    validation_summary.get("earliest_limiting_stage") or "none"
+                ),
+            )
+            record_histogram(
+                "lightweight_task_duration_seconds",
+                _time.monotonic() - _loop_started,
+                task_kind=str(validation_summary.get("task_kind") or "general"),
+                disposition=str(
+                    validation_summary.get("response_disposition") or "full"
+                ),
+            )
+        except Exception:
+            pass
+
     return {
         "reply": clean_reply,
         "actions": actions,
@@ -3525,12 +3559,5 @@ async def _run_agent_loop(
         # 2026-07-03 honesty surfacing: compact summary of what the gate
         # stack actually did this turn, derived from state the gates
         # already computed (fabrication_stats + gate_interventions).
-        "validation_summary": _derive_validation_summary(
-            claim_gate_ran=_claim_gate_ran,
-            gate_skip_reason=_gate_skip_reason,
-            fabrication_stats=fabrication_stats,
-            interventions=gate_interventions,
-            tool_results=all_tool_results,
-            routing_decision=routing_decision,
-        ),
+        "validation_summary": validation_summary,
     }

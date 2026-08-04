@@ -2357,6 +2357,95 @@ def _build_publication_typed_universe(
     return out
 
 
+def _build_verified_scalar_typed_universe(
+    tool_results: Any,
+) -> dict[str, set[float]]:
+    """Collect typed claims emitted by the controlled scalar verifier.
+
+    ``standardized_difference_abs`` is a derived Gaussian-equivalent
+    significance, but its deliberately explicit field name is not part of the
+    legacy publication-result key catalogue.  Admit it only from a successful
+    ``verify_scalar_derivation`` receipt whose calculation is verified and
+    whose derived-numeric scope is enabled.  This keeps arbitrary tool output
+    (including model-authored ``run_python`` dictionaries) from minting typed
+    significance evidence by copying the field name.
+    """
+    typed: dict[str, set[float]] = {}
+    entries = tool_results if isinstance(tool_results, list) else [tool_results]
+    for entry in entries or []:
+        tool_name, result = _entry_tool_and_result(entry)
+        if tool_name != "verify_scalar_derivation" or not isinstance(result, dict):
+            continue
+        if not _payload_is_claimable_success(tool_name, result):
+            continue
+        if str(result.get("calculation_status") or "").lower() not in {
+            "verified",
+            "verified_deterministic",
+        }:
+            continue
+        scopes = result.get("claim_scopes")
+        if not isinstance(scopes, dict) or scopes.get("derived_numeric") is not True:
+            continue
+        derived = result.get("result")
+        if not isinstance(derived, dict):
+            continue
+        value = derived.get("standardized_difference_abs")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            numeric = float(value)
+            if math.isfinite(numeric):
+                typed.setdefault("significance_sigma", set()).add(numeric)
+    return typed
+
+
+_VERIFIED_SCALAR_DERIVED_NUMERIC_KEYS = frozenset(
+    {
+        "value",
+        "standard_uncertainty",
+        "standardized_difference_abs",
+        "independent_standard_uncertainty",
+        "relative_uncertainty_change_vs_independent",
+    }
+)
+
+
+def _verified_scalar_derived_numbers(tool_results: Any) -> set[float]:
+    """Return only controlled derived fields from successful scalar receipts.
+
+    The global anti-echo pass removes every model-authored input number.  A
+    legitimate propagated uncertainty can numerically equal an input
+    uncertainty (for example a difference against a fixed zero-error
+    comparator).  Re-admit only named outputs produced by the deterministic
+    backend, never echoed quantities, matrices, source text, or arbitrary tool
+    dictionaries.
+    """
+    numbers: set[float] = set()
+    entries = tool_results if isinstance(tool_results, list) else [tool_results]
+    for entry in entries or []:
+        tool_name, result = _entry_tool_and_result(entry)
+        if tool_name != "verify_scalar_derivation" or not isinstance(result, dict):
+            continue
+        if not _payload_is_claimable_success(tool_name, result):
+            continue
+        if str(result.get("calculation_status") or "").lower() not in {
+            "verified",
+            "verified_deterministic",
+        }:
+            continue
+        scopes = result.get("claim_scopes")
+        if not isinstance(scopes, dict) or scopes.get("derived_numeric") is not True:
+            continue
+        derived = result.get("result")
+        if not isinstance(derived, dict):
+            continue
+        for key in _VERIFIED_SCALAR_DERIVED_NUMERIC_KEYS:
+            value = derived.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                numeric = float(value)
+                if math.isfinite(numeric):
+                    numbers.add(numeric)
+    return numbers
+
+
 def _publication_typed_claim_label(claim: Claim) -> str | None:
     base = claim.label.split(".g", 1)[0]
     if base in _PUBLICATION_TYPED_RESULT_KEYS:
@@ -2436,6 +2525,7 @@ def validate_claims(
     # the per-key _NON_EVIDENCE_KEYS list can only chase one name at a time.
     input_numbers = _model_input_numbers(tool_results) if tool_results is not None else set()
     universe -= input_numbers
+    universe |= _verified_scalar_derived_numbers(tool_results)
     universe_size = len(universe)
     universe_sample = sorted(universe)[:50]
 
@@ -2495,6 +2585,10 @@ def validate_claims(
                 label: values - input_numbers
                 for label, values in typed_universe.items()
             }
+        for label, values in _build_verified_scalar_typed_universe(
+            tool_results
+        ).items():
+            typed_universe.setdefault(label, set()).update(values)
 
     uncited: list[Claim] = []
     for c in claims:

@@ -268,7 +268,15 @@ def _result_unit(operation: Operation, quantities: list[Quantity]) -> str:
 
 
 def _rounded_display(value: float, uncertainty: float, unit: str) -> str:
-    unit_suffix = "" if unit == "dimensionless" else f" {unit}"
+    # Keep the canonical unit in the receipt, but render the common Hubble
+    # unit without exponent tokens.  ``km s^-1 Mpc^-1`` is scientifically
+    # conventional, yet a prose-level numeric scanner can legitimately read
+    # the embedded ``-1 Mpc`` as a separate numeric claim.  The slash form is
+    # equivalent, clearer in chat, and has no spurious scalar token.
+    display_unit = (
+        "km/s/Mpc" if unit == "km s^-1 Mpc^-1" else unit
+    )
+    unit_suffix = "" if display_unit == "dimensionless" else f" {display_unit}"
     return f"{value:.8g} ± {uncertainty:.8g}{unit_suffix}"
 
 

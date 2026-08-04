@@ -141,6 +141,8 @@ def test_difference_reports_a_standardized_difference_when_defined() -> None:
 
     assert result["result"]["value"] == pytest.approx(-5.4)
     assert result["result"]["standardized_difference_abs"] == pytest.approx(4.5)
+    assert result["result"]["unit"] == "km s^-1 Mpc^-1"
+    assert result["result"]["rounded_display"].endswith("km/s/Mpc")
 
 
 @pytest.mark.parametrize(

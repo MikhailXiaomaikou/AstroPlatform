@@ -1110,6 +1110,93 @@ def test_blocked_reply_text_does_not_leak_internal_group_labels():
     assert "73.0" in text
 
 
+def test_verified_scalar_standardized_difference_is_typed_significance():
+    result = validate_claims(
+        "The absolute standardized difference is 4.5 sigma.",
+        [
+            {
+                "tool": "verify_scalar_derivation",
+                "input": {
+                    "quantities": [
+                        {"value": 67.6, "standard_uncertainty": 1.2},
+                        {"value": 73.0, "standard_uncertainty": 0.0},
+                    ]
+                },
+                "result": {
+                    "success": True,
+                    "calculation_status": "verified_deterministic",
+                    "claim_scopes": {
+                        "derived_numeric": True,
+                        "source_measurement": True,
+                    },
+                    "result": {
+                        "value": -5.4,
+                        "standard_uncertainty": 1.2,
+                        "standardized_difference_abs": 4.5,
+                    },
+                    "source_status": "verified_exact",
+                },
+            }
+        ],
+        require_typed_scientific_match=True,
+    )
+
+    assert result.ok, result.uncited
+
+
+def test_verified_scalar_propagated_error_survives_structural_anti_echo():
+    result = validate_claims(
+        "The controlled difference is -5.4 ± 1.2 km/s/Mpc.",
+        [
+            {
+                "tool": "verify_scalar_derivation",
+                "input": {
+                    "quantities": [
+                        {"value": 67.6, "standard_uncertainty": 1.2},
+                        {"value": 73.0, "standard_uncertainty": 0.0},
+                    ]
+                },
+                "result": {
+                    "success": True,
+                    "calculation_status": "verified_deterministic",
+                    "claim_scopes": {
+                        "derived_numeric": True,
+                        "source_measurement": True,
+                    },
+                    "result": {
+                        "value": -5.4,
+                        "standard_uncertainty": 1.2,
+                        "standardized_difference_abs": 4.5,
+                    },
+                },
+            }
+        ],
+    )
+
+    assert result.ok, result.uncited
+
+
+def test_untrusted_tool_cannot_mint_typed_scalar_significance():
+    result = validate_claims(
+        "The absolute standardized difference is 4.5 sigma.",
+        [
+            {
+                "tool": "run_python",
+                "result": {
+                    "success": True,
+                    "calculation_status": "verified",
+                    "claim_scopes": {"derived_numeric": True},
+                    "result": {"standardized_difference_abs": 4.5},
+                },
+            }
+        ],
+        require_typed_scientific_match=True,
+    )
+
+    assert not result.ok
+    assert [claim.label for claim in result.uncited] == ["significance_sigma"]
+
+
 def test_zero_data_qualitative_rewrite_prompt_allows_method_answer_without_numbers():
     r = validate_claims("A DESI+SN comparison may show a 2 sigma deviation at z = 0.4.", [])
     assert not r.ok
