@@ -101,6 +101,11 @@ def _source_specs(generated_at: str) -> list[dict[str, Any]]:
             "query": {
                 "engine": "Python rule audit",
                 "language": "python",
+                "sql": (
+                    "SELECT * FROM read_csv_auto("
+                    "'docs/research/assets/standard_astro_v02_scores.csv', "
+                    "header = true);"
+                ),
                 "description": (
                     "Recomputes six frozen 0–2 dimensions from the 192 "
                     "pre-registered user-visible responses and compact receipts."
@@ -327,12 +332,12 @@ def build_artifact(
             "question": "系统增益是否只来自某一个基础模型？",
             "rationale": "分组横向条形图适合比较长模型名与两个条件。",
             "comparisonContext": {"grain": "model × condition", "denominator": "24 × 12", "unit": "%"},
-            "type": "horizontalBar",
+            "type": "bar",
             "dataset": "model_scores",
             "sourceId": "v02-score-audit",
             "encodings": {
-                "x": {"field": "percentage", "type": "quantitative", "label": "得分率", "unit": "%"},
-                "y": {"field": "model", "type": "nominal", "label": "模型"},
+                "x": {"field": "model", "type": "nominal", "label": "模型"},
+                "y": {"field": "percentage", "type": "quantitative", "label": "得分率", "unit": "%"},
                 "color": {"field": "condition", "type": "nominal", "label": "条件"},
                 "tooltip": [
                     {"field": "score", "type": "quantitative", "label": "得分"},
@@ -438,7 +443,7 @@ def build_artifact(
         "title": "自动发布门",
         "subtitle": "自动检查不能替代博士后盲评和 72 小时观察",
         "dataset": "release_checks",
-        "defaultSort": {"field": "passed", "direction": "asc"},
+        "defaultSort": {"field": "status", "direction": "asc"},
         "density": "spacious",
         "sourceId": "v02-score-audit",
         "layout": "full",
