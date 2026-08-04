@@ -12,6 +12,7 @@ normally from sibling modules.
 
 import json
 import logging
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
@@ -158,6 +159,55 @@ _LIMITING_GATE_ACTIONS = frozenset({"annotated_limited"})
 _VALIDATION_SUMMARY_MAX_INTERVENTIONS = 10
 
 
+def _full_research_missing_dependencies(user_prompt: str) -> list[str]:
+    """Describe capability gaps from the requested full-research shape.
+
+    This does not claim that any dependency was executed or inspected.  It
+    turns the user's explicit requested components into a compact checklist so
+    a capability gap remains actionable instead of collapsing to a generic
+    posterior-withheld banner.
+    """
+
+    lower = str(user_prompt or "").lower()
+    dependencies: list[str] = []
+    if "early dark energy" in lower or re.search(r"\bede\b", lower):
+        dependencies.append("native early-dark-energy (EDE) model implementation")
+    elif any(term in lower for term in ("model", "模型")):
+        dependencies.append("requested model implementation")
+    if "planck" in lower:
+        dependencies.append("exact Planck high-l and low-l TT/EE likelihoods")
+    if "desi" in lower and "dr2" in lower:
+        dependencies.append("DESI DR2 BAO data and covariance in the same run")
+    if any(term in lower for term in ("supernova", "pantheon", "超新星")):
+        dependencies.append("the requested supernova likelihood")
+    dependencies.append("production sampler with convergence diagnostics")
+    return list(dict.fromkeys(dependencies))
+
+
+def _full_research_capability_gap_reply(user_prompt: str) -> str:
+    dependencies = _full_research_missing_dependencies(user_prompt)
+    checklist = "\n".join(f"- {item}." for item in dependencies)
+    lower = str(user_prompt or "").lower()
+    scope_parts: list[str] = []
+    if "desi" in lower:
+        scope_parts.append("DESI DR2" if "dr2" in lower else "DESI")
+    if "planck" in lower:
+        scope_parts.append("Planck")
+    if "early dark energy" in lower or re.search(r"\bede\b", lower):
+        scope_parts.append("EDE")
+    scope = " / ".join(scope_parts) or "requested"
+    return (
+        "Capability gap: the requested full-research posterior is not "
+        "publication-ready, so no posterior numbers are reported.\n\n"
+        "Missing dependencies for a credible run:\n"
+        f"{checklist}\n\n"
+        f"This is a {scope} full-likelihood capability assessment, not a "
+        "posterior result. It cannot support H0 or other posterior "
+        "parameter claims. The safe next step is to enable those registered "
+        "components and rerun the full-research path."
+    )
+
+
 def _derive_validation_summary(
     *,
     claim_gate_ran: bool,
@@ -166,6 +216,7 @@ def _derive_validation_summary(
     interventions: list[dict],
     tool_results: list[dict],
     routing_decision: dict[str, Any] | None = None,
+    user_prompt: str = "",
 ) -> dict:
     """Compact, honest per-reply summary of what the gate stack did.
 
@@ -228,6 +279,12 @@ def _derive_validation_summary(
         and bool(routing_missing)
         and not isinstance(scalar_receipt, dict)
     )
+    task_kind = str((routing_decision or {}).get("task_kind") or "general")
+    full_research_limited = task_kind == "full_research" and any(
+        item.get("gate") == "nonpublication_posterior"
+        or item.get("action") == "annotated_limited"
+        for item in interventions
+    )
     if bool(fabrication_stats.get("blocked", False)):
         response_disposition = "hard_block"
     elif explicit_refusal:
@@ -242,7 +299,7 @@ def _derive_validation_summary(
         )
     elif incomplete_scalar_route:
         response_disposition = "abstention"
-    elif bool(fabrication_stats.get("limited", False)):
+    elif bool(fabrication_stats.get("limited", False)) or full_research_limited:
         response_disposition = "limited"
     else:
         response_disposition = "full"
@@ -266,7 +323,15 @@ def _derive_validation_summary(
     missing_dependencies = (
         list(scalar_receipt.get("missing_dependencies") or [])
         if isinstance(scalar_receipt, dict)
-        else routing_missing if incomplete_scalar_route else []
+        else (
+            routing_missing
+            if incomplete_scalar_route
+            else (
+                _full_research_missing_dependencies(user_prompt)
+                if full_research_limited
+                else []
+            )
+        )
     )
     safe_fallback = (
         scalar_receipt.get("safe_fallback")
@@ -274,7 +339,12 @@ def _derive_validation_summary(
         else (
             "Supply the missing deterministic inputs; do not start a research matrix."
             if incomplete_scalar_route
-            else None
+            else (
+                "Enable the listed registered research dependencies and rerun "
+                "the full-research path."
+                if full_research_limited
+                else None
+            )
         )
     )
     summary: dict[str, Any] = {
@@ -283,11 +353,10 @@ def _derive_validation_summary(
         "citation_gate": citation_state,
         "regen_count": int(fabrication_stats.get("regenerations", 0) or 0),
         "blocked": bool(fabrication_stats.get("blocked", False)),
-        "limited": bool(fabrication_stats.get("limited", False)),
+        "limited": bool(fabrication_stats.get("limited", False))
+        or full_research_limited,
         "response_disposition": response_disposition,
-        "task_kind": (
-            str((routing_decision or {}).get("task_kind") or "general")
-        ),
+        "task_kind": task_kind,
         "earliest_limiting_stage": earliest_limiting_stage,
         "missing_dependencies": missing_dependencies,
         "safe_fallback": safe_fallback,
@@ -306,25 +375,38 @@ def _derive_validation_summary(
 
 
 def _not_run_validation_summary(
-    reason: str, routing_decision: dict[str, Any] | None = None
+    reason: str,
+    routing_decision: dict[str, Any] | None = None,
+    user_prompt: str = "",
 ) -> dict:
     """Summary for early-return paths where the gate stack never ran.
 
     Distinct from "passed" by construction — the UI must render these as
     "not validated (<reason>)", never as a pass.
     """
+    task_kind = str((routing_decision or {}).get("task_kind") or "general")
+    full_research_gap = task_kind == "full_research"
     return {
         "schema_version": 2,
         "numeric_gate": "not_run",
         "citation_gate": "not_run",
         "regen_count": 0,
         "blocked": False,
-        "limited": False,
-        "response_disposition": "abstention",
-        "task_kind": str((routing_decision or {}).get("task_kind") or "general"),
+        "limited": full_research_gap,
+        "response_disposition": "limited" if full_research_gap else "abstention",
+        "task_kind": task_kind,
         "earliest_limiting_stage": str(reason),
-        "missing_dependencies": [str(reason)],
-        "safe_fallback": "Retry the task so the validation stack can complete.",
+        "missing_dependencies": (
+            _full_research_missing_dependencies(user_prompt)
+            if full_research_gap
+            else [str(reason)]
+        ),
+        "safe_fallback": (
+            "Enable the listed registered research dependencies and rerun the "
+            "full-research path."
+            if full_research_gap
+            else "Retry the task so the validation stack can complete."
+        ),
         "reason": str(reason),
         "interventions": [],
     }
@@ -2030,7 +2112,9 @@ async def _run_agent_loop(
                 "honest_abstention_dataset_identity_disclosure"
                 if abstention_identity_enforced
                 else "honest_abstention"
-            )
+            ),
+            routing_decision,
+            latest_user_text,
         )
         if abstention_identity_enforced:
             abstention_validation_summary["interventions"] = [{
@@ -3437,14 +3521,18 @@ async def _run_agent_loop(
         all_tool_results,
     )
     if escaped_posterior_values:
-        clean_reply = (
-            _cosmology_tool_grounded_summary(all_tool_results, latest_user_text)
-            or nonpublication_posterior_refusal()
-        )
+        if (routing_decision or {}).get("task_kind") == "full_research":
+            clean_reply = _full_research_capability_gap_reply(latest_user_text)
+        else:
+            clean_reply = (
+                _cosmology_tool_grounded_summary(all_tool_results, latest_user_text)
+                or nonpublication_posterior_refusal()
+            )
+        fabrication_stats["limited"] = True
         fabrication_stats["regenerations"] += 1
         await _gate_event(
             "nonpublication_posterior",
-            "downgraded_summary",
+            "annotated_limited",
             reason="posterior_values_withheld",
             details={"value_count": len(escaped_posterior_values)},
             draft=_posterior_draft,
@@ -3461,10 +3549,11 @@ async def _run_agent_loop(
     if coverage_disclosure and coverage_disclosure not in clean_reply:
         _coverage_draft = clean_reply
         clean_reply = clean_reply.rstrip() + "\n\n" + coverage_disclosure
+        fabrication_stats["limited"] = True
         fabrication_stats["regenerations"] += 1
         await _gate_event(
             "dataset_coverage",
-            "disclosed",
+            "annotated_limited",
             reason="outside_registered_coverage",
             draft=_coverage_draft,
             final=clean_reply,
@@ -3524,6 +3613,7 @@ async def _run_agent_loop(
         interventions=gate_interventions,
         tool_results=all_tool_results,
         routing_decision=routing_decision,
+        user_prompt=latest_user_text,
     )
     if routing_decision is not None:
         try:

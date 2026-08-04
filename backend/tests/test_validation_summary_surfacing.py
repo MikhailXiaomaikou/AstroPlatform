@@ -193,6 +193,52 @@ def test_derive_summary_meta_skip_and_not_run_are_distinct_from_passed():
     assert "passed" not in (not_run["numeric_gate"], not_run["citation_gate"])
 
 
+def test_full_research_nonpublication_summary_is_limited_and_actionable():
+    prompt = (
+        "Run the full DESI DR2 early dark energy posterior with Planck high-l "
+        "and low-l likelihoods and a production sampler."
+    )
+    summary = _derive_validation_summary(
+        claim_gate_ran=True,
+        gate_skip_reason=None,
+        fabrication_stats={
+            "pass": 0,
+            "blocked": False,
+            "limited": True,
+            "regenerations": 1,
+        },
+        interventions=[{
+            "gate": "nonpublication_posterior",
+            "action": "annotated_limited",
+            "reason": "posterior_values_withheld",
+        }],
+        tool_results=[],
+        routing_decision={"task_kind": "full_research"},
+        user_prompt=prompt,
+    )
+
+    assert summary["task_kind"] == "full_research"
+    assert summary["response_disposition"] == "limited"
+    assert summary["limited"] is True
+    assert summary["earliest_limiting_stage"] == "nonpublication_posterior"
+    assert any("EDE" in item for item in summary["missing_dependencies"])
+    assert any("Planck high-l" in item for item in summary["missing_dependencies"])
+    assert any("sampler" in item for item in summary["missing_dependencies"])
+
+
+def test_full_research_honest_abstention_preserves_route_as_limited_gap():
+    summary = _not_run_validation_summary(
+        "honest_abstention",
+        {"task_kind": "full_research"},
+        "Run an EDE posterior with DESI DR2, Planck, and a production sampler.",
+    )
+
+    assert summary["task_kind"] == "full_research"
+    assert summary["response_disposition"] == "limited"
+    assert summary["limited"] is True
+    assert any("DESI DR2" in item for item in summary["missing_dependencies"])
+
+
 def test_derive_summary_interventions_override_meta_skip():
     """The empty-model-reply path skips the main gate block but the fallback
     synthesis still validates what it ships — an intervention recorded there
