@@ -7,10 +7,30 @@ import uuid
 
 import numpy as np
 import pytest
+from sqlalchemy import delete
+from sqlalchemy.orm import Session
 
 from app.services import chain_export
 
 OWNER_ID = str(uuid.UUID("00000000-0000-4000-8000-000000000001"))
+
+
+@pytest.fixture(autouse=True)
+def _isolated_cleanup_queue_table():
+    """Make chain-export tests independent of a pre-migrated developer DB."""
+
+    from app.models.claim_audit_records import ArtifactCleanupQueue
+    from app.services.durable_research_records import _engine
+
+    sync_engine = _engine()
+    ArtifactCleanupQueue.__table__.create(bind=sync_engine, checkfirst=True)
+    with Session(sync_engine) as db:
+        db.execute(delete(ArtifactCleanupQueue))
+        db.commit()
+    yield
+    with Session(sync_engine) as db:
+        db.execute(delete(ArtifactCleanupQueue))
+        db.commit()
 
 
 def _payload() -> dict:
