@@ -1715,6 +1715,7 @@ async def _run_orchestrated_chat(
     _merged_numeric_state = "not_run"
     _merged_citation_state = "not_run"
     _merged_blocked = False
+    _merged_limited = False
     _merged_dataset_identity_enforced = False
     _merged_fact_check_failed = False
     _merged_fact_check_no_safe_summary = False
@@ -1751,7 +1752,7 @@ async def _run_orchestrated_chat(
             from app.services.claim_validator import (
                 blocked_reply_with_narrative,
                 attach_draft_to_banner,
-                blocked_citation_reply_text,
+                limited_citation_reply_text,
                 blocked_unsupported_narrative_reply_text,
                 citation_violations_should_block,
                 is_empty_turn,
@@ -1806,18 +1807,23 @@ async def _run_orchestrated_chat(
                 if merged_reply.strip():
                     merged_reply = merged_reply.rstrip() + (
                         "\n\n---\n\n"
-                        "## ⚠ Citation provenance check failed\n\n"
-                        "The reply above was generated, but the platform's "
-                        "provenance gate flagged citations that the merged "
-                        "tool_results did not support. Treat the flagged "
-                        "items as **NOT verified** and re-run the relevant "
+                        "## ⚠ Limited answer: citation provenance gaps\n\n"
+                        "The supported parts of the answer remain visible, but "
+                        "the platform's provenance gate flagged citations that "
+                        "the merged tool results did not support. Treat only the "
+                        "flagged items as **NOT verified** and re-run the relevant "
                         "tools before quoting them in a paper.\n\n"
-                        + blocked_citation_reply_text(citation_violations)
+                        + limited_citation_reply_text(citation_violations)
                     )
                 else:
-                    merged_reply = blocked_citation_reply_text(citation_violations)
-                _merged_citation_state = "blocked"
-                _merged_blocked = True
+                    merged_reply = limited_citation_reply_text(citation_violations)
+                _merged_citation_state = "limited"
+                _merged_limited = True
+                _merged_gate_interventions.append({
+                    "gate": "citation_methodology",
+                    "action": "annotated_limited",
+                    "reason": "merged_reply_citation_gap",
+                })
             elif zero_data_claims or not validation.ok:
                 try:
                     from app.observability.metrics import record_counter
@@ -2247,6 +2253,7 @@ async def _run_orchestrated_chat(
     from app.services.agent_runtime.loop import (
         _BLOCKING_GATE_ACTIONS,
         _CITATION_GATE_FAMILY,
+        _LIMITING_GATE_ACTIONS,
         _NUMERIC_GATE_FAMILY,
         _VALIDATION_SUMMARY_MAX_INTERVENTIONS,
     )
@@ -2285,10 +2292,16 @@ async def _run_orchestrated_chat(
         i.get("gate") in _NUMERIC_GATE_FAMILY for i in _member_interventions
     ):
         _merged_numeric_state = "regenerated"
-    if _merged_citation_state == "passed" and any(
-        i.get("gate") in _CITATION_GATE_FAMILY for i in _member_interventions
-    ):
-        _merged_citation_state = "regenerated"
+    if _merged_citation_state == "passed":
+        citation_interventions = [
+            i for i in _member_interventions
+            if i.get("gate") in _CITATION_GATE_FAMILY
+        ]
+        if any(i.get("action") in _LIMITING_GATE_ACTIONS for i in citation_interventions):
+            _merged_citation_state = "limited"
+            _merged_limited = True
+        elif citation_interventions:
+            _merged_citation_state = "regenerated"
     merged_validation_summary: dict = {
         "schema_version": 1,
         "numeric_gate": _merged_numeric_state,
@@ -2297,6 +2310,7 @@ async def _run_orchestrated_chat(
             int(s.get("regen_count", 0) or 0) for s in _member_summaries
         ),
         "blocked": _merged_blocked,
+        "limited": _merged_limited,
         "interventions": _member_interventions[:_VALIDATION_SUMMARY_MAX_INTERVENTIONS],
     }
     if _merged_summary_reason:

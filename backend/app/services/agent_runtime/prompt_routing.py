@@ -807,8 +807,8 @@ def _unsupported_cosmology_anchor_numeric_comparison(
     cosmology_manifest carries the Planck18 preset (H0=67.36, Om=0.3153,
     sigma8=0.8111) the fit assumed, and the system prompt REQUIRES declaring
     the assumed cosmology. So a match only blocks when the number attached to
-    the anchor parameter is NOT in a tool-declared cosmology subtree
-    (cosmology_manifest / source_cosmology; ±1%, signed). "Planck18
+    the anchor parameter is NOT in a curated, citation-bearing cosmology
+    subtree returned by a tool (±1%, signed). "Planck18
     (H0 = 67.36)" over a fit result passes; "Planck measured H0 = 70" still
     blocks (matching the full tool universe instead would launder any anchor
     near a coincidental FWHM/flux value).
@@ -2147,7 +2147,10 @@ def _cosmology_direct_route_from_prompt(text: str) -> list[dict[str, Any]] | Non
         return [{
             "id": f"direct_route_{uuid.uuid4().hex}",
             "name": "compare_luminosity_distances",
-            "input": {"target_cosmology": "riess22_shoes"},
+            "input": {
+                "target_cosmology": "riess22_shoes",
+                "comparison_mode": "h0_anchors",
+            },
         }]
 
     # "ap test" removed 2026-05-28: as a bare substring it matched "snap test"

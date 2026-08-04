@@ -1078,6 +1078,7 @@ export interface ChatAction {
 export type ValidationGateState =
   | "passed"
   | "regenerated"
+  | "limited"
   | "blocked"
   | "skipped_no_data"
   | "skipped"
@@ -1089,6 +1090,7 @@ export interface ValidationSummary {
   citation_gate?: ValidationGateState | string;
   regen_count?: number;
   blocked?: boolean;
+  limited?: boolean;
   reason?: string;
   interventions?: Array<{ gate?: string; action?: string; reason?: string }>;
 }

@@ -16,6 +16,8 @@ from app.services.claim_validator import (
     CitationViolation,
     blocked_citation_reply_text,
     blocked_methodology_reply_text,
+    limited_citation_reply_text,
+    limited_methodology_reply_text,
 )
 
 
@@ -49,6 +51,20 @@ def test_blocked_citation_reply_text_hints_for_builtin_cosmology_manifest() -> N
     assert "tool_results" in text
 
 
+def test_limited_citation_note_does_not_claim_the_visible_reply_was_withheld() -> None:
+    text = limited_citation_reply_text([
+        CitationViolation(
+            kind="suspicious_author_year",
+            match_text="Bothwell 2013",
+            line_number=19,
+        ),
+    ])
+
+    assert "Unsupported citation note" in text
+    assert "Reply withheld" not in text
+    assert "Bothwell 2013" in text
+
+
 def test_chat_appends_violation_footer_without_replacing_prose() -> None:
     """Simulate the chat.py inline composition path: original prose +
     footer. The full reply must contain BOTH."""
@@ -65,15 +81,16 @@ def test_chat_appends_violation_footer_without_replacing_prose() -> None:
         match_text="Bothwell 2013",
         line_number=7,
     )
-    annotation = blocked_citation_reply_text([violation])
+    annotation = limited_citation_reply_text([violation])
 
     # This mirrors what chat.py:_run_agent_loop now does.
     composed = original_prose.rstrip() + (
         "\n\n---\n\n"
-        "## ⚠ Citation / methodology provenance check failed\n\n"
-        "The reply above was generated, but the platform's "
-        "provenance gate flagged claims that the tool results "
-        "this turn did not support. Treat the flagged items as "
+        "## ⚠ Limited answer: provenance gaps\n\n"
+        "The supported parts of the answer remain visible, but "
+        "the platform's provenance gate flagged specific claims "
+        "that this turn's tool results did not support. Treat "
+        "only the flagged items as "
         "**NOT verified** and re-run the relevant tools before "
         "quoting any of them in a paper.\n\n"
         + annotation
@@ -83,12 +100,13 @@ def test_chat_appends_violation_footer_without_replacing_prose() -> None:
     assert "Loaded 74 [CII] line measurements" in composed
     assert "OLS slope = 0.798, scatter = 0.320 dex" in composed
     # 2. Violation footer present
-    assert "## ⚠ Citation / methodology provenance check failed" in composed
+    assert "## ⚠ Limited answer: provenance gaps" in composed
+    assert "Reply withheld" not in composed
     assert "Bothwell 2013" in composed
     # 3. Composition order: prose THEN footer (the M6 reproducer's key
     # property — user sees their analysis first, then the warning)
     prose_idx = composed.index("OLS slope")
-    footer_idx = composed.index("provenance check failed")
+    footer_idx = composed.index("Limited answer")
     assert prose_idx < footer_idx, "prose must come before footer"
 
 
@@ -106,3 +124,16 @@ def test_blocked_methodology_reply_text_separately_addressable() -> None:
     # Must NOT mention "re-run the archive query" — that's the citation
     # advice and would mislead the AI when the violation is methodology.
     assert "re-run the archive" not in text
+
+
+def test_limited_methodology_note_does_not_claim_the_reply_was_withheld() -> None:
+    text = limited_methodology_reply_text([
+        CitationViolation(
+            kind="method_mismatch",
+            match_text="Bayesian xyerr fit",
+            line_number=5,
+        ),
+    ])
+
+    assert "Unsupported methodology note" in text
+    assert "Reply withheld" not in text

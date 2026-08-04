@@ -1636,6 +1636,8 @@ _COSMO_STAT_SUFFIXES: frozenset[str] = frozenset({
     "", "median", "mean", "best", "low", "high", "value", "val",
     "bestfit", "map", "mle", "mode", "estimate", "centralvalue",
     "1sigmalow", "1sigmahigh", "q16", "q84", "hdilow94", "hdihigh94", "std",
+    "sigma", "error", "err", "uncertainty", "stderr", "standarderror",
+    "standarddeviation",
 })
 
 # A statement such as ``H0 = 68.8`` is a central-estimate claim.  It cannot be
@@ -4127,6 +4129,20 @@ def blocked_citation_reply_text(violations: list[CitationViolation]) -> str:
     )
 
 
+def limited_citation_reply_text(violations: list[CitationViolation]) -> str:
+    """Citation detail for an answer that remains visible with a caveat.
+
+    The underlying violations and recovery instructions are identical to the
+    hard-block banner. Only the user-facing disposition changes: the original
+    answer is still shown, so saying the whole reply was withheld is false.
+    """
+    return blocked_citation_reply_text(violations).replace(
+        "⚠ Reply withheld:",
+        "⚠ Unsupported citation note:",
+        1,
+    )
+
+
 def _cosmology_manifest_block_note(violations: list[CitationViolation]) -> str:
     """Helpful strict-mode hint for built-in cosmology preset bibcodes.
 
@@ -4215,6 +4231,15 @@ def blocked_methodology_reply_text(violations: list[CitationViolation]) -> str:
             + "\n".join(other_lines)
         )
     return "\n\n".join(parts)
+
+
+def limited_methodology_reply_text(violations: list[CitationViolation]) -> str:
+    """Methodology detail for an answer that remains visible with a caveat."""
+    return blocked_methodology_reply_text(violations).replace(
+        "⚠ Reply withheld:",
+        "⚠ Unsupported methodology note:",
+        1,
+    )
 
 
 def _iter_dict_nodes(payload: Any) -> Iterable[dict[str, Any]]:
@@ -5062,7 +5087,7 @@ def dump_tool_universe(tool_results: Any, limit: int = 50) -> str:
     return json.dumps(vals[:limit])
 
 
-_DECLARED_COSMOLOGY_KEYS = frozenset({"cosmology_manifest", "source_cosmology"})
+_DECLARED_COSMOLOGY_KEYS = _COSMOLOGY_MANIFEST_KEYS
 
 
 def _iter_declared_cosmology_subtrees(node: Any) -> Iterable[dict]:
@@ -5088,13 +5113,15 @@ def value_supported_by_cosmology_manifest(
     tolerance: float = DEFAULT_TOLERANCE,
 ) -> bool:
     """True when ``value`` matches a number inside a cosmology a tool DECLARED
-    this turn (cosmology_manifest / source_cosmology subtrees only; signed
+    this turn (curated cosmology-manifest subtrees only; signed
     ±tolerance band, same matching as validate_claims).
 
     Used by chat.py's cosmology-anchor comparison gate: fit_line_lfr's
     cosmology_manifest carries the Planck18 preset (H0=67.36, Om0=0.3153,
-    sigma8=0.8111) the fit assumed, and citing those values in prose is
-    provenance-correct. Deliberately NOT matched against the full tool
+    sigma8=0.8111) the fit assumed, while compare_luminosity_distances returns
+    current_cosmology / target_cosmology manifests. Citing values from those
+    curated, bibcode-bearing subtrees is provenance-correct. Deliberately NOT
+    matched against the full tool
     universe — with ~10^3 numeric leaves (FWHM errors, S/N, fluxes) a ±1%
     band around any O(10-100) fabricated anchor would almost always hit a
     coincidental match and launder it.

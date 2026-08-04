@@ -151,7 +151,8 @@ _CITATION_GATE_FAMILY = frozenset({
     "unsupported_narrative", "cosmology_anchor", "fact_verification",
     "report_export",
 })
-_BLOCKING_GATE_ACTIONS = frozenset({"blocked", "annotated_blocked"})
+_BLOCKING_GATE_ACTIONS = frozenset({"blocked"})
+_LIMITING_GATE_ACTIONS = frozenset({"annotated_limited"})
 _VALIDATION_SUMMARY_MAX_INTERVENTIONS = 10
 
 
@@ -169,7 +170,8 @@ def _derive_validation_summary(
       passed           gate ran, no intervention
       regenerated      gate intervened; the shipped reply was rewritten or
                        downgraded to a tool-grounded form that then passed
-      blocked          gate blocked the reply / annotated it as unverified
+      limited          answer remains visible, with specific claims annotated
+      blocked          gate withheld or replaced the unsafe reply
       skipped_no_data  gate ran but the turn produced no claimable tool
                        data — "passed" would overstate what was checked
       skipped          gate stack intentionally skipped (see ``reason``)
@@ -183,6 +185,8 @@ def _derive_validation_summary(
         acts = [i for i in interventions if i.get("gate") in family]
         if any(i.get("action") in _BLOCKING_GATE_ACTIONS for i in acts):
             return "blocked"
+        if any(i.get("action") in _LIMITING_GATE_ACTIONS for i in acts):
+            return "limited"
         if acts:
             return "regenerated"
         if not claim_gate_ran:
@@ -205,6 +209,7 @@ def _derive_validation_summary(
         "citation_gate": citation_state,
         "regen_count": int(fabrication_stats.get("regenerations", 0) or 0),
         "blocked": bool(fabrication_stats.get("blocked", False)),
+        "limited": bool(fabrication_stats.get("limited", False)),
         "interventions": [
             {
                 "gate": str(i.get("gate", "")),
@@ -1817,6 +1822,34 @@ async def _run_agent_loop(
     if "<tools_returned_nothing" in clean_reply or "<toolsreturnednothing" in clean_reply:
         clean_reply = _sanitize_tools_returned_nothing(clean_reply)
 
+    # The direct Hubble-tension route is intentionally a single, deterministic
+    # comparison of two citation-pinned H0 manifests. Preserve that determinism
+    # at the rendering boundary too: a model paraphrase can round 4.85σ to an
+    # unsupported "about 5σ" or add historical context that this turn did not
+    # fetch. When this is the sole tool result, render the existing tool-grounded
+    # summary and then run the normal numeric/citation gates over it. Broader
+    # turns with any additional tool keep their model synthesis unchanged.
+    scientific_tool_results = [
+        item for item in all_tool_results
+        if isinstance(item, dict) and item.get("tool")
+    ]
+    if (
+        len(scientific_tool_results) == 1
+        and scientific_tool_results[0].get("tool") == "compare_luminosity_distances"
+    ):
+        anchor_result = scientific_tool_results[0].get("result")
+        if (
+            isinstance(anchor_result, dict)
+            and anchor_result.get("comparison_mode") == "h0_anchors"
+            and anchor_result.get("success") is True
+        ):
+            deterministic_anchor_summary = _cosmology_tool_grounded_summary(
+                all_tool_results,
+                latest_user_text,
+            )
+            if deterministic_anchor_summary:
+                clean_reply = deterministic_anchor_summary
+
     # R2: zero-fabrication gate.  Validate every numeric claim in the reply
     # against the tool_results collected this turn; if any claim can't be
     # cited, push the LLM to regenerate.  After two failures, block.
@@ -1933,6 +1966,7 @@ async def _run_agent_loop(
             provenance_citation_violations,
             citation_violations_should_block,
             blocked_citation_reply_text,
+            limited_citation_reply_text,
             unsupported_literature_narrative_violations,
             blocked_unsupported_narrative_reply_text,
             # Stage 6 P0c-C: second-pass hard barrier
@@ -2471,12 +2505,12 @@ async def _run_agent_loop(
                 if not recovered_with_summary:
                     annotations: list[str] = []
                     if citation_violations:
-                        annotations.append(blocked_citation_reply_text(citation_violations))
+                        annotations.append(limited_citation_reply_text(citation_violations))
                     if method_violations:
                         from app.services.claim_validator import (
-                            blocked_methodology_reply_text,
+                            limited_methodology_reply_text,
                         )
-                        annotations.append(blocked_methodology_reply_text(method_violations))
+                        annotations.append(limited_methodology_reply_text(method_violations))
 
                     # PART AG C1 — annotate-and-attach mode (replaces the
                     # earlier withhold-all behaviour).
@@ -2496,10 +2530,11 @@ async def _run_agent_loop(
                     if clean_reply.strip():
                         annotation_block = (
                             "\n\n---\n\n"
-                            "## ⚠ Citation / methodology provenance check failed\n\n"
-                            "The reply above was generated, but the platform's "
-                            "provenance gate flagged claims that the tool results "
-                            "this turn did not support. Treat the flagged items as "
+                            "## ⚠ Limited answer: provenance gaps\n\n"
+                            "The supported parts of the answer remain visible, but "
+                            "the platform's provenance gate flagged specific claims "
+                            "that this turn's tool results did not support. Treat "
+                            "only the flagged items as "
                             "**NOT verified** and re-run the relevant tools before "
                             "quoting any of them in a paper.\n\n"
                             + "\n\n---\n\n".join(annotations)
@@ -2511,9 +2546,9 @@ async def _run_agent_loop(
                         # previous withhold-only message so the user has
                         # something to read.
                         clean_reply = "\n\n---\n\n".join(annotations)
-                    fabrication_stats["blocked"] = True
+                    fabrication_stats["limited"] = True
                     await _gate_event(
-                        "citation_methodology", "annotated_blocked",
+                        "citation_methodology", "annotated_limited",
                         violations=all_violations,
                         draft=_cm_draft, final=clean_reply,
                     )

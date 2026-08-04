@@ -155,8 +155,11 @@ def test_system_prompt_has_explicit_cosmology_call_examples() -> None:
 
     # Riess+11 / Suzuki+12 → FlatLambdaCDM spec
     assert 'compare_luminosity_distances(target_cosmology="FlatLambdaCDM_H73p8_Om0p295")' in SYSTEM_PROMPT
-    # Riess+22 → riess22_shoes preset
-    assert 'compare_luminosity_distances(target_cosmology="riess22_shoes")' in SYSTEM_PROMPT
+    # Riess+22 H0 tension → citation-pinned anchor mode (no sample cache).
+    assert (
+        'compare_luminosity_distances(target_cosmology="riess22_shoes", '
+        'comparison_mode="h0_anchors")'
+    ) in SYSTEM_PROMPT
     # Planck18 + BAO preset
     assert 'compare_luminosity_distances(target_cosmology="planck18_bao")' in SYSTEM_PROMPT
     # Freedman21 TRGB preset

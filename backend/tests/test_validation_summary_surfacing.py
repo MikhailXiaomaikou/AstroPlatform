@@ -75,7 +75,7 @@ def test_derive_summary_blocked_and_regenerated_families():
         fabrication_stats={"pass": 0, "blocked": True, "regenerations": 2},
         interventions=[
             {"gate": "numeric_claims", "action": "blocked", "reason": "regen_exhausted"},
-            {"gate": "citation_methodology", "action": "annotated_blocked", "reason": ""},
+            {"gate": "citation_methodology", "action": "blocked", "reason": ""},
         ],
         tool_results=[{"tool": "run_adql", "result": {"success": True, "rows": [{"x": 1}]}}],
     )
@@ -97,6 +97,33 @@ def test_derive_summary_blocked_and_regenerated_families():
     assert regenerated["numeric_gate"] == "regenerated"
     assert regenerated["citation_gate"] == "regenerated"
     assert regenerated["blocked"] is False
+
+
+def test_derive_summary_limited_is_not_a_hard_block():
+    limited = _derive_validation_summary(
+        claim_gate_ran=True,
+        gate_skip_reason=None,
+        fabrication_stats={
+            "pass": 1,
+            "blocked": False,
+            "limited": True,
+            "regenerations": 0,
+        },
+        interventions=[{
+            "gate": "citation_methodology",
+            "action": "annotated_limited",
+            "reason": "unsupported_inline_citation",
+        }],
+        tool_results=[{
+            "tool": "run_adql",
+            "result": {"success": True, "rows": [{"x": 1}]},
+        }],
+    )
+
+    assert limited["numeric_gate"] == "passed"
+    assert limited["citation_gate"] == "limited"
+    assert limited["blocked"] is False
+    assert limited["limited"] is True
 
 
 def test_derive_summary_meta_skip_and_not_run_are_distinct_from_passed():

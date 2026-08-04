@@ -54,6 +54,36 @@ _FIT_TOOL_RESULTS = [
     },
 ]
 
+_COMPARE_TOOL_RESULTS = [
+    {
+        "tool": "compare_luminosity_distances",
+        "input": {
+            "target_cosmology": "riess22_shoes",
+            "comparison_mode": "h0_anchors",
+        },
+        "result": {
+            "success": True,
+            "__tool_status__": "PARTIAL",
+            "data_origin": "cached_real",
+            "current_cosmology": {
+                "name": "planck18",
+                "H0_km_s_Mpc": 67.36,
+                "H0_err": 0.54,
+                "bibcode": "2020A&A...641A...6P",
+            },
+            "target_cosmology": {
+                "name": "riess22_shoes",
+                "H0_km_s_Mpc": 73.04,
+                "H0_err": 1.04,
+                "bibcode": "2022ApJ...934L...7R",
+            },
+            "anchor_comparison": {
+                "target_minus_baseline_pct": 8.432,
+            },
+        },
+    }
+]
+
 
 def test_declared_manifest_cosmology_does_not_fire():
     reply = "Luminosities use Planck18 cosmology (H0 = 67.36, Om = 0.3153)."
@@ -74,6 +104,17 @@ def test_shoes_anchor_comparison_still_fires():
     # 73.04 is within 1% of the unrelated FWHM value 73.5; also guards the
     # word-boundary fix ("SH0ES" contains "H0").
     assert fires("Compare with SH0ES H0 = 73.04.", _FIT_TOOL_RESULTS) is True
+
+
+def test_compare_tool_declares_both_curated_h0_anchors():
+    reply = "Planck H0 = 67.36 and SH0ES H0 = 73.04, an 8.432% offset."
+    assert fires(reply, _COMPARE_TOOL_RESULTS) is False
+    assert value_supported_by_cosmology_manifest(67.36, _COMPARE_TOOL_RESULTS) is True
+    assert value_supported_by_cosmology_manifest(73.04, _COMPARE_TOOL_RESULTS) is True
+
+
+def test_compare_tool_does_not_support_unreturned_anchor():
+    assert fires("H0LiCOW time-delay H0 = 74.9.", _COMPARE_TOOL_RESULTS) is True
 
 
 def test_h0licow_anchor_comparison_still_fires():

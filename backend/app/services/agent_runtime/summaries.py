@@ -634,6 +634,7 @@ def _cosmology_tool_grounded_summary(
     config: dict[str, Any] | None = None
     chain: dict[str, Any] | None = None
     ap_test: dict[str, Any] | None = None
+    h0_anchor_comparison: dict[str, Any] | None = None
     for entry in tool_results or []:
         result = entry.get("result")
         if not isinstance(result, dict):
@@ -652,8 +653,14 @@ def _cosmology_tool_grounded_summary(
             chain = result
         elif tool == "assess_bao_bin_anomaly":
             ap_test = result
+        elif (
+            tool == "compare_luminosity_distances"
+            and result.get("comparison_mode") == "h0_anchors"
+            and isinstance(result.get("anchor_comparison"), dict)
+        ):
+            h0_anchor_comparison = result
 
-    if not any((registry, config, chain, ap_test)):
+    if not any((registry, config, chain, ap_test, h0_anchor_comparison)):
         return None
 
     dataset_names: list[str] = []
@@ -782,6 +789,59 @@ def _cosmology_tool_grounded_summary(
             "- The AP test constrains Ωm through the DM/DH ratio, which is independent "
             "of H0 and the sound horizon r_d (both cancel in the ratio). Method: "
             "Alcock & Paczynski 1979."
+        )
+
+    if isinstance(h0_anchor_comparison, dict):
+        anchor = h0_anchor_comparison.get("anchor_comparison") or {}
+        display = h0_anchor_comparison.get("display_values") or {}
+        current = h0_anchor_comparison.get("current_cosmology") or {}
+        target = h0_anchor_comparison.get("target_cosmology") or {}
+        baseline_h0 = anchor.get("baseline_H0_km_s_Mpc")
+        baseline_err = anchor.get("baseline_H0_err")
+        target_h0 = anchor.get("target_H0_km_s_Mpc")
+        target_err = anchor.get("target_H0_err")
+        delta_h0 = anchor.get("target_minus_baseline_H0_km_s_Mpc")
+        delta_pct = display.get(
+            "target_minus_baseline_pct",
+            anchor.get("target_minus_baseline_pct"),
+        )
+        sigma = display.get(
+            "naive_independent_gaussian_tension_sigma",
+            anchor.get("naive_independent_gaussian_tension_sigma"),
+        )
+        if all(
+            isinstance(value, (int, float))
+            for value in (baseline_h0, baseline_err, target_h0, target_err, delta_h0, delta_pct)
+        ):
+            lines.append(
+                "- Published H0 anchors: "
+                f"{current.get('name') or 'baseline'} = {_fmt_tool_number(baseline_h0)} "
+                f"± {_fmt_tool_number(baseline_err)} km s⁻¹ Mpc⁻¹; "
+                f"{target.get('name') or 'target'} = {_fmt_tool_number(target_h0)} "
+                f"± {_fmt_tool_number(target_err)} km s⁻¹ Mpc⁻¹."
+            )
+            comparison_line = (
+                f"- Anchor offset: target minus baseline = {_fmt_tool_number(delta_h0)} "
+                f"km s⁻¹ Mpc⁻¹, or {_fmt_tool_number(delta_pct)}% relative "
+                "to the baseline"
+            )
+            if isinstance(sigma, (int, float)):
+                comparison_line += (
+                    f"; naive independent-Gaussian separation = {_fmt_tool_number(sigma)}σ"
+                )
+            lines.append(comparison_line + ".")
+            refs = [
+                str(manifest.get("bibcode") or "").strip()
+                for manifest in (current, target)
+                if isinstance(manifest, dict)
+                and str(manifest.get("bibcode") or "").strip()
+            ]
+            if refs:
+                lines.append(f"- Source citations: {', '.join(refs)}.")
+        lines.append(
+            "- Scope note: this is a comparison of published H0 anchors only. "
+            "No cached source sample was read, so no per-source luminosity "
+            "distance or delta log-luminosity was computed."
         )
 
     # Deterministic out-of-coverage guard: if the prompt asks for a quantity AT a

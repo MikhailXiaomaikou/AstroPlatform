@@ -12,11 +12,12 @@
 import type { ValidationSummary } from "../../api/client";
 import { useI18n } from "../../i18n";
 
-type OverallState = "blocked" | "regenerated" | "passed" | "not_validated";
+type OverallState = "blocked" | "limited" | "regenerated" | "passed" | "not_validated";
 
 export function overallValidationState(summary: ValidationSummary): OverallState {
   const states = [summary.numeric_gate, summary.citation_gate];
   if (summary.blocked || states.includes("blocked")) return "blocked";
+  if (summary.limited || states.includes("limited")) return "limited";
   if (states.includes("regenerated") || (summary.regen_count ?? 0) > 0) {
     return "regenerated";
   }
@@ -29,6 +30,7 @@ export function overallValidationState(summary: ValidationSummary): OverallState
 const BADGE_STYLE: Record<OverallState, { icon: string; color: string; border: string; background: string }> = {
   passed: { icon: "✓", color: "#1b5e20", border: "#a5d6a7", background: "#f1f8f1" },
   regenerated: { icon: "⚠", color: "#8a6a00", border: "#e0c36a", background: "#fff8e6" },
+  limited: { icon: "⚠", color: "#8a6a00", border: "#e0c36a", background: "#fff8e6" },
   blocked: { icon: "⛔", color: "#b00020", border: "#f2b8bf", background: "#fdf2f4" },
   not_validated: { icon: "◌", color: "#5f6368", border: "#d0d3d8", background: "#f6f7f8" },
 };
@@ -36,7 +38,7 @@ const BADGE_STYLE: Record<OverallState, { icon: string; color: string; border: s
 function GateStateLine({ label, state }: { label: string; state?: string }) {
   const { t } = useI18n();
   const known = new Set([
-    "passed", "regenerated", "blocked", "skipped_no_data", "skipped", "not_run",
+    "passed", "regenerated", "limited", "blocked", "skipped_no_data", "skipped", "not_run",
   ]);
   const stateLabel = state && known.has(state)
     ? t(`chat.validation.state_${state}`)

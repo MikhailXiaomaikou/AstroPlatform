@@ -103,6 +103,88 @@ def test_compare_handles_empty_cache():
     assert out["__tool_status__"] == "EMPTY"
 
 
+def test_compare_h0_anchors_does_not_require_literature_cache():
+    with patch(
+        "app.services.ai_tools._resolve_literature_measurement_cache",
+        side_effect=AssertionError("anchor-only mode must not read the sample cache"),
+    ):
+        out = _exec_compare_luminosity_distances({
+            "target_cosmology": "riess22_shoes",
+            "comparison_mode": "h0_anchors",
+        }, python_session_id="fresh-session")
+
+    assert out["success"] is True
+    assert out["__tool_status__"] == "PARTIAL"
+    assert out["analysis_status"] == "partial"
+    assert out["data_origin"] == "cached_real"
+    assert out["sample_comparison_performed"] is False
+    assert out["current_cosmology"]["H0_km_s_Mpc"] == 67.36
+    assert out["target_cosmology"]["H0_km_s_Mpc"] == 73.04
+    anchor = out["anchor_comparison"]
+    assert 8.0 < anchor["target_minus_baseline_pct"] < 9.0
+    assert 4.0 < anchor["naive_independent_gaussian_tension_sigma"] < 6.0
+    assert "per-source luminosity distance" in out["limitations"][0]
+
+
+def test_compare_h0_anchors_rejects_uncited_legacy_target():
+    out = _exec_compare_luminosity_distances({
+        "target_cosmology": "WMAP9",
+        "comparison_mode": "h0_anchors",
+    })
+
+    assert out["success"] is False
+    assert out["error_class"] == "uncited_cosmology_anchor"
+    assert out["__tool_status__"] == "FAILED"
+
+
+def test_h0_anchor_result_has_tool_grounded_fallback_summary():
+    from app.services.agent_runtime.summaries import _cosmology_tool_grounded_summary
+
+    out = _exec_compare_luminosity_distances({
+        "target_cosmology": "riess22_shoes",
+        "comparison_mode": "h0_anchors",
+    })
+    summary = _cosmology_tool_grounded_summary([{
+        "tool": "compare_luminosity_distances",
+        "result": out,
+    }])
+
+    assert summary is not None
+    assert "67.36" in summary
+    assert "73.04" in summary
+    assert "2020A&A...641A...6P" in summary
+    assert "2022ApJ...934L...7R" in summary
+    assert "published H0 anchors only" in summary
+    assert "per-source luminosity distance" in summary
+
+
+def test_h0_anchor_uncertainties_and_rounded_sigma_are_claimable():
+    from app.services.claim_validator import validate_claims
+
+    out = _exec_compare_luminosity_distances({
+        "target_cosmology": "riess22_shoes",
+        "comparison_mode": "h0_anchors",
+    })
+    tool_results = [{
+        "tool": "compare_luminosity_distances",
+        "input": {
+            "target_cosmology": "riess22_shoes",
+            "comparison_mode": "h0_anchors",
+        },
+        "result": out,
+    }]
+    reply = (
+        "Planck H0 = 67.36 ± 0.54 km s⁻¹ Mpc⁻¹ and SH0ES H0 = "
+        "73.04 ± 1.04 km s⁻¹ Mpc⁻¹. The offset is 8.43%, with a "
+        "naive independent-Gaussian separation of 4.8σ."
+    )
+
+    validation = validate_claims(reply, tool_results)
+    assert validation.ok, [
+        (claim.label, claim.value, claim.raw) for claim in validation.uncited
+    ]
+
+
 def test_compare_skips_rows_with_no_redshift():
     rows = _sample_rows()
     rows.append({

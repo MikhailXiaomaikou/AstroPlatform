@@ -38,6 +38,7 @@ describe("overallValidationState", () => {
     expect(overallValidationState(base)).toBe("passed");
     expect(overallValidationState({ ...base, regen_count: 2 })).toBe("regenerated");
     expect(overallValidationState({ ...base, numeric_gate: "regenerated" })).toBe("regenerated");
+    expect(overallValidationState({ ...base, citation_gate: "limited", limited: true })).toBe("limited");
     expect(overallValidationState({ ...base, numeric_gate: "blocked", blocked: true })).toBe("blocked");
     expect(overallValidationState({ ...base, citation_gate: "blocked" })).toBe("blocked");
   });
@@ -97,6 +98,23 @@ describe("ValidationBadge rendering", () => {
     const chip = screen.getByText(/chat\.validation\.badge_blocked/);
     expect(chip.getAttribute("data-validation-state")).toBe("blocked");
     expect(screen.getByText(/zero_data→blocked/)).toBeTruthy();
+  });
+
+  it("renders a limited answer distinctly from a hard block", () => {
+    render(
+      <ValidationBadge
+        summary={{
+          ...base,
+          citation_gate: "limited",
+          limited: true,
+          interventions: [{ gate: "citation_methodology", action: "annotated_limited", reason: "" }],
+        }}
+      />,
+    );
+    const chip = screen.getByText(/chat\.validation\.badge_limited/);
+    expect(chip.getAttribute("data-validation-state")).toBe("limited");
+    expect(screen.queryByText(/chat\.validation\.badge_blocked/)).toBeNull();
+    expect(screen.getByText(/citation_methodology→annotated_limited/)).toBeTruthy();
   });
 
   it("renders not-validated (with reason) distinctly from passed", () => {

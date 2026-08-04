@@ -385,7 +385,7 @@
     # gate PRESERVES the prose (beta survives numeric_near) and only appends a
     # "⚠ Citation / methodology provenance check failed" footer, so without
     # this marker a clean-turn false positive of that class would ship green.
-    - reply_must_not_contain: ["Reply withheld", "Reply blocked", "__do_not_claim__", "provenance check failed"]
+    - reply_must_not_contain: ["Reply withheld", "Reply blocked", "__do_not_claim__", "provenance check failed", "Limited answer: provenance gaps"]
   forbid: ["__do_not_claim__"]
 
 - id: F2_likelihood_chain_specificity

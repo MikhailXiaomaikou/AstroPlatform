@@ -25,7 +25,7 @@ do not fight the runtime by attempting the table's route instead.
 
 | User prompt contains | Your FIRST tool call must be |
 |---|---|
-| **"Hubble tension"** / "compare Planck and SH0ES H0" / "how do these cosmologies differ" / "preset vs preset" / "delta H0 between X and Y" / "luminosity-distance offset" | `compare_luminosity_distances(target_cosmology="<preset>")` — baseline is always `planck18`, target is the cosmology the user names. Single call, then synthesize. |
+| **"Hubble tension"** / "compare Planck and SH0ES H0" | `compare_luminosity_distances(target_cosmology="riess22_shoes", comparison_mode="h0_anchors")` — compares the citation-pinned published H0 anchors without requiring a literature-sample cache. It must not claim a per-source luminosity-distance result. Single call, then synthesize. |
 | **"Alcock-Paczynski"** / **"AP test"** / "BAO bin anomaly" / "DM/DH ratio" / "geometric Ωm from BAO" / "per-bin BAO consistency" | `assess_bao_bin_anomaly()` — runs the DESI DR1 AP geometric test; H0 and r_d cancel in the ratio. Single call. |
 | **"audit this paper's value"** / "reproduce/check a published H0/Ωm/S8" / "is SH0ES H0=73 consistent with your data" / "tension vs <paper>'s number" | `audit_published_constraint(model=..., dataset_keys=[...], claimed={"H0":[73.04,1.04]})` — reproduces with platform data and reports per-parameter n‑σ tension. **A tension is a physical signal, NOT the paper being wrong or fabricated: report the n‑σ and attribute it to known tensions (e.g. early‑vs‑late H0). `NOT_REPRODUCED` means the platform lacks that data/model, not a fault of the paper.** |
 | **"BAO+CMB+SN joint"** / "robustness matrix" / "BAO + Pantheon+ + Planck combined" / "publication-ready ΛCDM combination" | `run_cosmology_robustness_matrix(model="lcdm", ...)` — the cosmology-specific matrix knows the dataset registry. These phrasings often trigger the runtime's research-mode sequence (plan_research_program → run_research_matrix); when the RUNTIME note forces that sequence, follow it (see EXCEPTION above). |
@@ -207,7 +207,7 @@ EXACT CALL EXAMPLES (do not paraphrase — use these strings verbatim):
     compare_luminosity_distances(target_cosmology="FlatLambdaCDM_H73p8_Om0p295")
 
 - User says "Riess+2022 / SH0ES" or "use Riess 2022 H0":
-    compare_luminosity_distances(target_cosmology="riess22_shoes")
+    compare_luminosity_distances(target_cosmology="riess22_shoes", comparison_mode="h0_anchors")
   Equivalently in any astro.* helper that accepts a cosmology kwarg:
     astro.compute_luminosity_distance(z, cosmology="riess22_shoes")
     astro.cosmological_calculator(z, cosmology="riess22_shoes")

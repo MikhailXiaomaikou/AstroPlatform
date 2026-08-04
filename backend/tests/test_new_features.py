@@ -1388,6 +1388,7 @@ class TestCosmologyDirectRouting:
         assert calls
         assert calls[0]["name"] == "compare_luminosity_distances"
         assert calls[0]["input"]["target_cosmology"] == "riess22_shoes"
+        assert calls[0]["input"]["comparison_mode"] == "h0_anchors"
 
     def test_extended_fisher_hubble_tension_request_does_not_force_dl_tool(self):
         from app.api.chat import _cosmology_direct_route_from_prompt

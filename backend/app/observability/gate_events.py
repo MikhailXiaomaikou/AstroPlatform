@@ -102,7 +102,7 @@ def build_gate_event(
     action vocabulary: "blocked" (hard block banner), "regenerated" /
     "regenerated_clean" (LLM rewrite accepted), "downgraded_summary"
     (deterministic tool-grounded summary replaced the prose),
-    "annotated_blocked" (original prose kept, violation footer appended),
+    "annotated_limited" (original prose kept, violation footer appended),
     "synthesized" (empty model reply filled by a deterministic summary).
     """
     return {

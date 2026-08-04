@@ -1891,6 +1891,66 @@ def test_dataset_identity_disclosure_preserves_honest_abstention(
     )
 
 
+def test_h0_anchor_direct_route_replaces_unsupported_model_rounding(
+    monkeypatch,
+) -> None:
+    import asyncio
+
+    from app.api import chat as chat_module
+    from app.services.ai_tools import _exec_compare_luminosity_distances
+
+    async def fake_llm(**_kwargs):
+        return {
+            "content": (
+                "Planck and SH0ES differ by about 5 sigma, so the tension "
+                "is decisively established."
+            ),
+            "stop_reason": "end_turn",
+            "tool_calls": [],
+        }
+
+    async def fake_exec(tool_calls, *_args, **_kwargs):
+        return [
+            {
+                **call,
+                "tool": call["name"],
+                "result": _exec_compare_luminosity_distances(call["input"]),
+            }
+            for call in tool_calls
+        ]
+
+    monkeypatch.setattr(chat_module, "_llm_messages_create", fake_llm)
+    monkeypatch.setattr(chat_module, "_execute_tool_calls", fake_exec)
+    result = asyncio.run(
+        chat_module._run_agent_loop(
+            system="test cosmology system",
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Quote the Hubble tension between Planck 2018 and "
+                    "Riess 2022 SH0ES using compare_luminosity_distances."
+                ),
+            }],
+            tools=[{
+                "name": "compare_luminosity_distances",
+                "input_schema": {},
+            }],
+            provider_api_keys={},
+            agent_name="orchestrator",
+            python_session_id="fresh-h0-anchor-render-test",
+        )
+    )
+
+    assert "about 5 sigma" not in result["reply"]
+    assert "4.85" in result["reply"]
+    assert "8.43%" in result["reply"]
+    assert "published H0 anchors only" in result["reply"]
+    assert result["validation_summary"]["numeric_gate"] == "passed"
+    assert result["validation_summary"]["citation_gate"] == "passed"
+    assert result["validation_summary"]["regen_count"] == 0
+    assert result["validation_summary"]["blocked"] is False
+
+
 def test_research_auto_fact_check_and_export_emit_tool_events(monkeypatch) -> None:
     import asyncio
 
