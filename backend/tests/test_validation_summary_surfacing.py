@@ -250,6 +250,41 @@ def test_full_research_nonpublication_summary_is_limited_and_actionable():
     assert any("sampler" in item for item in summary["missing_dependencies"])
 
 
+def test_capability_receipt_sets_limited_without_model_rewrite() -> None:
+    summary = _derive_validation_summary(
+        claim_gate_ran=True,
+        gate_skip_reason=None,
+        fabrication_stats={
+            "pass": 1,
+            "blocked": False,
+            "limited": False,
+            "regenerations": 0,
+        },
+        interventions=[],
+        tool_results=[{
+            "tool": "run_dark_energy_evidence_matrix",
+            "result": {
+                "success": True,
+                "analysis_status": "COMPLETED",
+                "publication_ready": False,
+            },
+        }],
+        routing_decision={"task_kind": "full_research"},
+        user_prompt=(
+            "Run arXiv:2503.24343 with the native EDE model, exact Planck "
+            "high-l and low-l likelihoods, DESI DR2, supernovae, and a "
+            "production sampler."
+        ),
+        evidence_receipts_enabled=True,
+    )
+
+    assert summary["response_disposition"] == "limited"
+    assert summary["limited"] is True
+    assert summary["earliest_limiting_stage"] == "capability_gap"
+    assert summary["evidence_receipts"][0]["receipt_kind"] == "capability_gap"
+    assert summary["missing_dependencies"]
+
+
 def test_full_research_honest_abstention_preserves_route_as_limited_gap():
     summary = _not_run_validation_summary(
         "honest_abstention",

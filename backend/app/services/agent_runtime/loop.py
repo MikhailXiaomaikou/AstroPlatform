@@ -389,6 +389,33 @@ def _derive_validation_summary(
         )
         if receipts:
             summary["evidence_receipts"] = receipts
+            limiting_receipt = next(
+                (
+                    receipt
+                    for receipt in receipts
+                    if receipt.get("response_disposition") == "limited"
+                ),
+                None,
+            )
+            if limiting_receipt is not None and response_disposition != "hard_block":
+                summary["limited"] = True
+                summary["response_disposition"] = "limited"
+                summary["earliest_limiting_stage"] = (
+                    summary.get("earliest_limiting_stage")
+                    or str(
+                        limiting_receipt.get("receipt_kind")
+                        or "evidence_receipt"
+                    )
+                )
+                receipt_missing = list(
+                    limiting_receipt.get("missing_dependencies") or []
+                )
+                if receipt_missing:
+                    summary["missing_dependencies"] = receipt_missing
+                    summary["safe_fallback"] = (
+                        "Enable the listed registered dependencies and rerun "
+                        "the requested path."
+                    )
     return summary
 
 
@@ -572,6 +599,9 @@ async def _run_agent_loop(
         except Exception:
             pass
     lightweight_task_kind = str((routing_decision or {}).get("task_kind") or "")
+    untrusted_evidence_request = "untrusted_evidence_request" in set(
+        (routing_decision or {}).get("matched_signals") or []
+    )
     scalar_verification_call = (
         deepcopy((routing_decision or {}).get("direct_tool_call"))
         if lightweight_task_kind == "deterministic_source_check"
@@ -585,6 +615,25 @@ async def _run_agent_loop(
     # "Alcock-Paczynski" prompts. Fires on iteration 0 only, bypasses the
     # first LLM call. None when no trigger phrase matches.
     cosmology_direct_route_calls = _cosmology_direct_route_from_prompt(latest_user_text)
+    coverage_dataset_keys = _cosmology_dataset_keys_from_prompt(latest_user_text)
+    coverage_requested_redshift = _cosmology_requested_redshift(latest_user_text)
+    coverage_query = (
+        coverage_requested_redshift is not None
+        and bool(coverage_dataset_keys)
+        and any(
+            token in latest_user_text.lower()
+            for token in ("coverage", "observed", "measurement", "extrapolat")
+        )
+    )
+    if cosmology_direct_route_calls is None and coverage_query:
+        cosmology_direct_route_calls = [{
+            "id": f"direct_registry_{uuid.uuid4().hex}",
+            "name": "list_cosmology_datasets",
+            "input": {
+                "dataset_keys": coverage_dataset_keys,
+                "requested_redshift": coverage_requested_redshift,
+            },
+        }]
     if routing_decision is not None:
         if not routing_decision.get("heavy_route_allowed"):
             research_program_workflow = False
@@ -1303,8 +1352,48 @@ async def _run_agent_loop(
                 })
                 soft_deadline_reminded = True
 
+        cosmology_direct_route_pending = bool(
+            _iteration == 0
+            and not all_tool_results
+            and cosmology_direct_route_calls
+            and _active_research_focus() == "cosmology"
+        )
+        h0_anchor_direct_route_done = any(
+            item.get("tool") == "compare_luminosity_distances"
+            and isinstance(item.get("result"), dict)
+            and item["result"].get("comparison_mode") == "h0_anchors"
+            and item["result"].get("success") is True
+            for item in all_tool_results
+            if isinstance(item, dict)
+        )
+        outside_coverage_registry_done = (
+            _cosmology_outside_coverage_disclosure(
+                all_tool_results, latest_user_text
+            )
+            is not None
+        )
+        full_research_capability_gap_done = (
+            lightweight_task_kind == "full_research"
+            and any(
+                item.get("tool") in {
+                    "run_dark_energy_evidence_matrix",
+                    "run_research_matrix",
+                }
+                and isinstance(item.get("result"), dict)
+                and item["result"].get("publication_ready") is not True
+                for item in all_tool_results
+                if isinstance(item, dict)
+            )
+        )
+
         try:
-            if scalar_verification_pending:
+            if untrusted_evidence_request and _iteration == 0:
+                response = {
+                    "content": untrusted_evidence_refusal(),
+                    "stop_reason": "end_turn",
+                    "tool_calls": [],
+                }
+            elif scalar_verification_pending:
                 await _emit({
                     "type": "status",
                     "message": (
@@ -1317,6 +1406,77 @@ async def _run_agent_loop(
                     "stop_reason": "tool_use",
                     "tool_calls": [deepcopy(scalar_verification_call)],
                 }
+            elif cosmology_direct_route_pending:
+                await _emit({
+                    "type": "status",
+                    "message": (
+                        "Running the deterministic cosmology comparison before "
+                        "model synthesis."
+                    ),
+                })
+                response = {
+                    "content": "",
+                    "stop_reason": "tool_use",
+                    "tool_calls": deepcopy(cosmology_direct_route_calls),
+                }
+            elif cosmology_registry_pending:
+                registry_dataset_keys = _cosmology_dataset_keys_from_prompt(
+                    latest_user_text
+                )
+                requested_redshift = _cosmology_requested_redshift(latest_user_text)
+                registry_input: dict[str, Any] = {}
+                if registry_dataset_keys:
+                    registry_input["dataset_keys"] = registry_dataset_keys
+                if requested_redshift is not None:
+                    registry_input["requested_redshift"] = requested_redshift
+                response = {
+                    "content": "",
+                    "stop_reason": "tool_use",
+                    "tool_calls": [{
+                        "id": f"auto_cosmo_registry_{uuid.uuid4().hex}",
+                        "name": "list_cosmology_datasets",
+                        "input": registry_input,
+                    }],
+                }
+            elif research_plan_pending:
+                response = {
+                    "content": "",
+                    "stop_reason": "tool_use",
+                    "tool_calls": [{
+                        "id": f"auto_research_plan_{uuid.uuid4().hex}",
+                        "name": "plan_research_program",
+                        "input": {"question": latest_user_text},
+                    }],
+                }
+            elif research_matrix_pending:
+                response = {
+                    "content": "",
+                    "stop_reason": "tool_use",
+                    "tool_calls": [{
+                        "id": f"auto_research_matrix_{uuid.uuid4().hex}",
+                        "name": "run_research_matrix",
+                        "input": {
+                            "research_plan": _research_plan_from_tool_results(
+                                all_tool_results
+                            ),
+                            "question": latest_user_text,
+                        },
+                    }],
+                }
+            elif research_evidence_pending:
+                response = {
+                    "content": "",
+                    "stop_reason": "tool_use",
+                    "tool_calls": [{
+                        "id": f"auto_evidence_graph_{uuid.uuid4().hex}",
+                        "name": "build_evidence_graph",
+                        "input": {
+                            "tool_results": _compact_tool_results_for_evidence(
+                                all_tool_results
+                            ),
+                        },
+                    }],
+                }
             elif scalar_verification_done:
                 # High-confidence deterministic checks do not need a second
                 # model pass. Rendering the signed receipt directly removes
@@ -1327,6 +1487,32 @@ async def _run_agent_loop(
                         all_tool_results, latest_user_text
                     )
                     or "The deterministic receipt is available in the tool card.",
+                    "stop_reason": "end_turn",
+                    "tool_calls": [],
+                }
+            elif outside_coverage_registry_done:
+                response = {
+                    "content": _tool_grounded_summary(
+                        all_tool_results, latest_user_text
+                    )
+                    or "The requested redshift is outside the registered dataset coverage.",
+                    "stop_reason": "end_turn",
+                    "tool_calls": [],
+                }
+            elif full_research_capability_gap_done:
+                response = {
+                    "content": _full_research_capability_gap_reply(
+                        latest_user_text
+                    ),
+                    "stop_reason": "end_turn",
+                    "tool_calls": [],
+                }
+            elif h0_anchor_direct_route_done:
+                response = {
+                    "content": _tool_grounded_summary(
+                        all_tool_results, latest_user_text
+                    )
+                    or "The registered H0-anchor comparison is available in the tool card.",
                     "stop_reason": "end_turn",
                     "tool_calls": [],
                 }

@@ -129,6 +129,18 @@ def _cli_child_env() -> dict[str, str]:
     }
 
 
+def _initialize_empty_git_sandbox(path: str) -> None:
+    """Create the minimal Git metadata Claude Code needs in an empty sandbox."""
+    git_dir = Path(path) / ".git"
+    (git_dir / "objects").mkdir(parents=True)
+    (git_dir / "refs" / "heads").mkdir(parents=True)
+    (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (git_dir / "config").write_text(
+        "[core]\n\trepositoryformatversion = 0\n\tbare = false\n",
+        encoding="utf-8",
+    )
+
+
 class InferenceError(RuntimeError):
     pass
 
@@ -956,7 +968,7 @@ class LocalBackend(OpenAICompatibleBackend):
         the CLI is a pure completion endpoint — its own tools are disabled
         (`--tools ""`, platform tools go through the JSON bridge), no user or
         project settings are loaded (`--setting-sources ""`), no session is
-        persisted, and it runs from an empty temp directory. Anthropic
+        persisted, and it runs from an empty temporary Git sandbox. Anthropic
         API-key variables are stripped from the child environment so the CLI
         authenticates with its subscription login — that is the point of
         this backend.
@@ -971,6 +983,7 @@ class LocalBackend(OpenAICompatibleBackend):
 
         for attempt in range(attempts):
             with tempfile.TemporaryDirectory(prefix="standard-astro-claude-cli-") as tmp:
+                _initialize_empty_git_sandbox(tmp)
                 prompt = self._openai_cli_prompt(
                     messages,
                     system=system,
@@ -981,7 +994,7 @@ class LocalBackend(OpenAICompatibleBackend):
                     cli_path,
                     "--print",
                     "--output-format",
-                    "text",
+                    "json",
                     "--tools",
                     "",
                     "--setting-sources",
@@ -1014,7 +1027,19 @@ class LocalBackend(OpenAICompatibleBackend):
                 if proc.returncode != 0:
                     err = stderr.decode("utf-8", errors="replace").strip()
                     raise InferenceError(f"Claude CLI exited with {proc.returncode}: {err[:500]}")
-                last_text = stdout.decode("utf-8", errors="replace")
+                raw_text = stdout.decode("utf-8", errors="replace")
+                try:
+                    envelope = json.loads(raw_text)
+                except json.JSONDecodeError:
+                    last_text = raw_text
+                else:
+                    if not isinstance(envelope, dict):
+                        last_text = raw_text
+                    elif envelope.get("is_error"):
+                        message = str(envelope.get("result") or "Claude CLI returned an error")
+                        raise InferenceError(message[:500])
+                    else:
+                        last_text = str(envelope.get("result") or "")
                 if (
                     attempt == 0
                     and tools

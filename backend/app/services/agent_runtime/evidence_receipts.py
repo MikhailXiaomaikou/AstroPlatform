@@ -37,6 +37,13 @@ _ARXIV_RE = re.compile(
     r"(?P<identifier>\d{4}\.\d{4,5})(?:v\d+)?",
     re.IGNORECASE,
 )
+_DEFAULT_CAPABILITY_GAP_DEPENDENCIES = (
+    "native early-dark-energy (EDE) model implementation",
+    "exact Planck high-l and low-l TT/EE likelihoods",
+    "DESI DR2 BAO data and covariance in the same run",
+    "the requested supernova likelihood",
+    "production sampler with convergence diagnostics",
+)
 
 
 def _canonical_json(payload: dict[str, Any]) -> str:
@@ -306,21 +313,36 @@ def build_evidence_receipts(
 
     gates = {str(item.get("gate") or "") for item in interventions}
     receipts: list[dict[str, Any]] = []
-    if "dataset_coverage" in gates:
-        coverage = _dataset_coverage_receipt(
-            task_kind=task_kind,
-            response_disposition=response_disposition,
-            tool_results=tool_results,
-        )
-        if coverage is not None:
-            receipts.append(coverage)
-    if task_kind == "full_research" and "nonpublication_posterior" in gates:
+    coverage = _dataset_coverage_receipt(
+        task_kind=task_kind,
+        response_disposition="limited",
+        tool_results=tool_results,
+    )
+    if coverage is not None:
+        receipts.append(coverage)
+    has_nonpublication_research_tool = any(
+        tool in {
+            "run_dark_energy_evidence_matrix",
+            "run_research_matrix",
+            "run_cosmology_likelihood_chain",
+            "run_cosmology_robustness_matrix",
+        }
+        and result.get("publication_ready") is not True
+        for tool, result in _tool_result_items(tool_results)
+    )
+    if task_kind == "full_research" and (
+        "nonpublication_posterior" in gates
+        or has_nonpublication_research_tool
+    ):
         receipts.append(_capability_gap_receipt(
             task_kind=task_kind,
-            response_disposition=response_disposition,
+            response_disposition="limited",
             user_prompt=user_prompt,
             tool_results=tool_results,
-            missing_dependencies=missing_dependencies,
+            missing_dependencies=(
+                missing_dependencies
+                or list(_DEFAULT_CAPABILITY_GAP_DEPENDENCIES)
+            ),
         ))
     if (
         "untrusted_evidence_echo" in gates

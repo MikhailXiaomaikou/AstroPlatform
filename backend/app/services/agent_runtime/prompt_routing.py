@@ -2476,6 +2476,11 @@ def _cosmology_direct_route_from_prompt(text: str) -> list[dict[str, Any]] | Non
         "hubble tension",
         "compare planck and sh0es",
     )
+    explicit_planck_shoes_anchor = (
+        "planck" in t
+        and "sh0es" in t
+        and any(token in t for token in ("compare", "anchor", "tension"))
+    )
     matrix_or_extended_context = (
         "matrix" in t
         or "fisher" in t
@@ -2490,7 +2495,9 @@ def _cosmology_direct_route_from_prompt(text: str) -> list[dict[str, Any]] | Non
         or "build an auditable" in t
         or "available cmb/bao/sn/h0 information" in t
     )
-    if any(k in t for k in hubble_triggers) and not matrix_or_extended_context:
+    if (
+        any(k in t for k in hubble_triggers) or explicit_planck_shoes_anchor
+    ) and not matrix_or_extended_context:
         return [{
             "id": f"direct_route_{uuid.uuid4().hex}",
             "name": "compare_luminosity_distances",

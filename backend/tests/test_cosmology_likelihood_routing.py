@@ -1900,14 +1900,7 @@ def test_h0_anchor_direct_route_replaces_unsupported_model_rounding(
     from app.services.ai_tools import _exec_compare_luminosity_distances
 
     async def fake_llm(**_kwargs):
-        return {
-            "content": (
-                "Planck and SH0ES differ by about 5 sigma, so the tension "
-                "is decisively established."
-            ),
-            "stop_reason": "end_turn",
-            "tool_calls": [],
-        }
+        raise AssertionError("the deterministic H0-anchor route must bypass the model")
 
     async def fake_exec(tool_calls, *_args, **_kwargs):
         return [
