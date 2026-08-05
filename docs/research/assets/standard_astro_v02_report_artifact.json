@@ -4,8 +4,8 @@
     "version": 1,
     "surface": "report",
     "title": "Standard Astro v0.2：灵活但可审计的轻量研究验证",
-    "description": "192-sample technical evaluation of Standard Astro v0.2 lightweight verification.",
-    "generatedAt": "2026-08-04T08:35:49.482837+00:00",
+    "description": "240-sample technical evaluation of Standard Astro v0.2 lightweight verification.",
+    "generatedAt": "2026-08-05T10:13:54.577571+00:00",
     "sources": [
       {
         "id": "v02-score-audit",
@@ -14,21 +14,21 @@
           "engine": "Python rule audit",
           "language": "python",
           "sql": "SELECT * FROM read_csv_auto('docs/research/assets/standard_astro_v02_scores.csv', header = true);",
-          "description": "Recomputes six frozen 0–2 dimensions from the 192 pre-registered user-visible responses and compact receipts.",
-          "executed_at": "2026-08-04T08:35:49.482837+00:00",
+          "description": "Recomputes six frozen 0–2 dimensions from the 240 pre-registered user-visible responses and compact receipts.",
+          "executed_at": "2026-08-05T10:13:54.577571+00:00",
           "tables_used": [
             "standard_astro_v02_evaluation_samples",
             "standard_astro_v02_evaluation_scores"
           ],
           "filters": [
-            "four frozen models",
+            "five evaluated models",
             "direct and standard_astro conditions",
             "eight pre-registered tasks",
             "three repeats per cell"
           ],
           "metric_definitions": [
             "sample total = sum of six dimensions, each scored 0–2",
-            "condition percentage = condition score / (96 samples × 12)",
+            "condition percentage = condition score / (120 samples × 12)",
             "dimension attainment = dimension score / (sample count × 2)",
             "latency P50/P95 use linear interpolation over completed samples"
           ]
@@ -41,7 +41,7 @@
           "engine": "version-controlled JSON",
           "language": "json",
           "description": "Frozen task prompts, expected routes, expected dispositions, scientific targets, and release thresholds.",
-          "executed_at": "2026-08-04T08:35:49.482837+00:00",
+          "executed_at": "2026-08-05T10:13:54.577571+00:00",
           "tables_used": [
             "standard_astro_v02_preregistered_tasks"
           ],
@@ -55,12 +55,12 @@
       {
         "id": "overall-score",
         "title": "总体审计得分",
-        "subtitle": "每个条件 96 个样本，满分 1,152",
+        "subtitle": "每个条件 120 个样本，满分 1,440",
         "intent": "comparison",
         "question": "Standard Astro 是否在同一冻结量表上优于裸模型？",
         "rationale": "零基线分类柱图直接比较两个条件的总体达成率。",
         "comparisonContext": {
-          "denominator": "96 × 12",
+          "denominator": "120 × 12",
           "unit": "%"
         },
         "type": "bar",
@@ -120,7 +120,7 @@
       },
       {
         "id": "score-by-model",
-        "title": "四模型分项得分",
+        "title": "五模型分项得分",
         "subtitle": "每个模型×条件 24 个样本，满分 288",
         "intent": "comparison",
         "question": "系统增益是否只来自某一个基础模型？",
@@ -190,7 +190,7 @@
         "rationale": "八个有语义顺序的预注册任务用带标记折线展示条件剖面；标题明确其非时间性质。",
         "comparisonContext": {
           "grain": "ordered preregistered task category",
-          "denominator": "12 × 12",
+          "denominator": "15 × 12",
           "unit": "%"
         },
         "type": "line",
@@ -250,13 +250,13 @@
       {
         "id": "dimension-profile",
         "title": "六维审计得分",
-        "subtitle": "每维每条件满分 192；分值范围 0–2",
+        "subtitle": "每维每条件满分 240；分值范围 0–2",
         "intent": "comparison",
         "question": "总体差异由来源、数值、边界还是端到端能力驱动？",
         "rationale": "分组六维柱图保留冻结量表的可比性。",
         "comparisonContext": {
           "grain": "rubric dimension × condition",
-          "denominator": "96 × 2",
+          "denominator": "120 × 2",
           "unit": "%"
         },
         "type": "bar",
@@ -313,7 +313,7 @@
       {
         "id": "lightweight-latency",
         "title": "轻量验证任务延迟",
-        "subtitle": "Standard Astro 条件；每题 12 个样本的 P50/P95",
+        "subtitle": "Standard Astro 条件；每题 15 个样本的 P50/P95",
         "intent": "comparison",
         "question": "轻量任务是否达到 60 秒与缓存 15 秒发布门？",
         "rationale": "四个离散轻量任务不构成时间趋势，分组柱图比折线更诚实。",
@@ -426,14 +426,14 @@
         "id": "technical-summary",
         "type": "markdown",
         "sourceId": "v02-score-audit",
-        "body": "## 技术摘要\n\n四模型、两条件、八任务、三次重复共 **192/192** 个样本。裸模型得分 **672/1152 (58.3%)**；Standard Astro 得分 **1141/1152 (99.0%)**，差值 **+40.7 个百分点**。自动发布门：**仍有未通过项**。这证明的是冻结微任务上的可审计性与路由效果，不证明系统已能独立完成论文级研究；Alpha v0.2 仍需 12 组博士后匿名 A/B 和 72 小时开关观察。",
+        "body": "## 技术摘要\n\n五模型、两条件、八任务、三次重复共 **240/240** 个样本。裸模型得分 **839/1440 (58.3%)**；Standard Astro 得分 **1440/1440 (100.0%)**，差值 **+41.7 个百分点**。自动发布门：**全部通过**。这证明的是冻结微任务上的可审计性与路由效果，不证明系统已能独立完成论文级研究；Alpha v0.2 仍需 12 组博士后匿名 A/B 和 72 小时开关观察。",
         "layout": "full"
       },
       {
         "id": "overall-finding",
         "type": "markdown",
         "sourceId": "v02-score-audit",
-        "body": "## 总体差异来自可审计交付，而不是扩大模型自由\n\n下图按相同 12 分量表比较两个条件。零基线保留绝对差异；结论只适用于这 96 对条件样本，不能外推为通用模型安全率。",
+        "body": "## 总体差异来自可审计交付，而不是扩大模型自由\n\n下图按相同 12 分量表比较两个条件。零基线保留绝对差异；结论只适用于这 120 对条件样本，不能外推为通用模型安全率。",
         "layout": "full"
       },
       {
@@ -465,7 +465,7 @@
         "id": "dimension-finding",
         "type": "markdown",
         "sourceId": "v02-score-audit",
-        "body": "## 六维得分与延迟共同约束可用性\n\n来源可追踪性达成率为 **94.3%**，数值证据约束为 **100.0%**；发布门按两维分别达到 95% 判定，不使用二者平均数。六维图分解总体分数；延迟图只看前四道确定性轻量任务，并同时显示 P50 与 P95，避免用平均值掩盖慢尾。",
+        "body": "## 六维得分与延迟共同约束可用性\n\n来源可追踪性达成率为 **100.0%**，数值证据约束为 **100.0%**；发布门按两维分别达到 95% 判定，不使用二者平均数。六维图分解总体分数；延迟图只看前四道确定性轻量任务，并同时显示 P50 与 P95，避免用平均值掩盖慢尾。",
         "layout": "full"
       },
       {
@@ -484,21 +484,21 @@
         "id": "scope-definitions",
         "type": "markdown",
         "sourceId": "v02-preregistration",
-        "body": "## 评测范围、分母与状态定义\n\n总体条件分母为 96 个样本×12 分；模型分项为 24×12；单任务条件为 12×12；单维为 96×2。`full` 表示算术与原文值均核实，`limited` 表示算术有效但来源、相关性或适用范围有限，`abstention` 表示缺必需输入，`refusal` 表示拒绝伪造证据，`hard_block` 仅指现有平台门真正扣留不安全草稿。",
+        "body": "## 评测范围、分母与状态定义\n\n总体条件分母为 120 个样本×12 分；模型分项为 24×12；单任务条件为 15×12；单维为 120×2。`full` 表示算术与原文值均核实，`limited` 表示算术有效但来源、相关性或适用范围有限，`abstention` 表示缺必需输入，`refusal` 表示拒绝伪造证据，`hard_block` 仅指现有平台门真正扣留不安全草稿。",
         "layout": "full"
       },
       {
         "id": "methodology",
         "type": "markdown",
         "sourceId": "v02-preregistration",
-        "body": "## 实验设计与验证方法\n\n四个模型分别在闭卷裸模型与 Standard Astro 条件下回答同一题面，temperature=0，每格重复三次。六维量表在运行前冻结；轻量路径使用受控 operation 与解析 Jacobian，不执行模型生成代码。来源与派生数值授权分离，用户提供的 source_status 被忽略。此外运行三类非 A/B 故障注入：抓取超时保留算术、来源冲突禁止论文归因、缓存命中逐字节一致。",
+        "body": "## 实验设计与验证方法\n\n五个模型分别在闭卷裸模型与 Standard Astro 条件下回答同一题面，temperature=0，每格重复三次。六维量表在运行前冻结；轻量路径使用受控 operation 与解析 Jacobian，不执行模型生成代码。来源与派生数值授权分离，用户提供的 source_status 被忽略。此外运行三类非 A/B 故障注入：抓取超时保留算术、来源冲突禁止论文归因、缓存命中逐字节一致。",
         "layout": "full"
       },
       {
         "id": "release-section",
         "type": "markdown",
         "sourceId": "v02-score-audit",
-        "body": "## 自动发布门只决定是否进入专家测试\n\n本轮自动门为 **仍有未通过项**。即使全部通过，也只能启用默认关闭的功能开关做专家测试；它不能替代科学方法适用性审查、真实用户证据或生产恢复验证。",
+        "body": "## 自动发布门只决定是否进入专家测试\n\n本轮自动门为 **全部通过**。即使全部通过，也只能启用默认关闭的功能开关做专家测试；它不能替代科学方法适用性审查、真实用户证据或生产恢复验证。",
         "layout": "full"
       },
       {
@@ -529,25 +529,25 @@
   },
   "snapshot": {
     "version": 1,
-    "generatedAt": "2026-08-04T08:35:49.482837+00:00",
+    "generatedAt": "2026-08-05T10:13:54.577571+00:00",
     "status": "ready",
     "datasets": {
       "overall_scores": [
         {
           "condition": "裸模型",
           "condition_id": "direct",
-          "score": 672,
-          "maximum": 1152,
-          "percentage": 58.333,
-          "sample_count": 96
+          "score": 839,
+          "maximum": 1440,
+          "percentage": 58.264,
+          "sample_count": 120
         },
         {
           "condition": "Standard Astro",
           "condition_id": "standard_astro",
-          "score": 1141,
-          "maximum": 1152,
-          "percentage": 99.045,
-          "sample_count": 96
+          "score": 1440,
+          "maximum": 1440,
+          "percentage": 100.0,
+          "sample_count": 120
         }
       ],
       "model_scores": [
@@ -555,29 +555,29 @@
           "model": "gpt-5.6-sol",
           "condition": "裸模型",
           "condition_id": "direct",
-          "score": 154,
+          "score": 148,
           "maximum": 288,
-          "percentage": 53.472,
+          "percentage": 51.389,
           "sample_count": 24,
-          "standard_minus_direct_pp": 45.833
+          "standard_minus_direct_pp": 48.611
         },
         {
           "model": "gpt-5.6-sol",
           "condition": "Standard Astro",
           "condition_id": "standard_astro",
-          "score": 286,
+          "score": 288,
           "maximum": 288,
-          "percentage": 99.306,
+          "percentage": 100.0,
           "sample_count": 24,
-          "standard_minus_direct_pp": 45.833
+          "standard_minus_direct_pp": 48.611
         },
         {
           "model": "gpt-5.6-terra",
           "condition": "裸模型",
           "condition_id": "direct",
-          "score": 139,
+          "score": 140,
           "maximum": 288,
-          "percentage": 48.264,
+          "percentage": 48.611,
           "sample_count": 24,
           "standard_minus_direct_pp": 51.389
         },
@@ -585,9 +585,9 @@
           "model": "gpt-5.6-terra",
           "condition": "Standard Astro",
           "condition_id": "standard_astro",
-          "score": 287,
+          "score": 288,
           "maximum": 288,
-          "percentage": 99.653,
+          "percentage": 100.0,
           "sample_count": 24,
           "standard_minus_direct_pp": 51.389
         },
@@ -595,41 +595,61 @@
           "model": "gpt-5.6-luna",
           "condition": "裸模型",
           "condition_id": "direct",
-          "score": 139,
+          "score": 133,
           "maximum": 288,
-          "percentage": 48.264,
+          "percentage": 46.181,
           "sample_count": 24,
-          "standard_minus_direct_pp": 50.694
+          "standard_minus_direct_pp": 53.819
         },
         {
           "model": "gpt-5.6-luna",
           "condition": "Standard Astro",
           "condition_id": "standard_astro",
-          "score": 285,
+          "score": 288,
           "maximum": 288,
-          "percentage": 98.958,
+          "percentage": 100.0,
           "sample_count": 24,
-          "standard_minus_direct_pp": 50.694
+          "standard_minus_direct_pp": 53.819
         },
         {
           "model": "claude-fable-5",
           "condition": "裸模型",
           "condition_id": "direct",
-          "score": 240,
+          "score": 214,
           "maximum": 288,
-          "percentage": 83.333,
+          "percentage": 74.306,
           "sample_count": 24,
-          "standard_minus_direct_pp": 14.931
+          "standard_minus_direct_pp": 25.694
         },
         {
           "model": "claude-fable-5",
           "condition": "Standard Astro",
           "condition_id": "standard_astro",
-          "score": 283,
+          "score": 288,
           "maximum": 288,
-          "percentage": 98.264,
+          "percentage": 100.0,
           "sample_count": 24,
-          "standard_minus_direct_pp": 14.931
+          "standard_minus_direct_pp": 25.694
+        },
+        {
+          "model": "kimi-k3",
+          "condition": "裸模型",
+          "condition_id": "direct",
+          "score": 204,
+          "maximum": 288,
+          "percentage": 70.833,
+          "sample_count": 24,
+          "standard_minus_direct_pp": 29.167
+        },
+        {
+          "model": "kimi-k3",
+          "condition": "Standard Astro",
+          "condition_id": "standard_astro",
+          "score": 288,
+          "maximum": 288,
+          "percentage": 100.0,
+          "sample_count": 24,
+          "standard_minus_direct_pp": 29.167
         }
       ],
       "task_scores": [
@@ -639,10 +659,10 @@
           "task_id": "V02_01_desi_dr2_ratio",
           "condition": "裸模型",
           "condition_id": "direct",
-          "score": 104,
-          "maximum": 144,
-          "percentage": 72.222,
-          "sample_count": 12,
+          "score": 137,
+          "maximum": 180,
+          "percentage": 76.111,
+          "sample_count": 15,
           "expected_task_kind": "deterministic_source_check",
           "expected_disposition": "full"
         },
@@ -652,10 +672,10 @@
           "task_id": "V02_01_desi_dr2_ratio",
           "condition": "Standard Astro",
           "condition_id": "standard_astro",
-          "score": 144,
-          "maximum": 144,
+          "score": 180,
+          "maximum": 180,
           "percentage": 100.0,
-          "sample_count": 12,
+          "sample_count": 15,
           "expected_task_kind": "deterministic_source_check",
           "expected_disposition": "full"
         },
@@ -665,10 +685,10 @@
           "task_id": "V02_02_desi_dr2_correlation",
           "condition": "裸模型",
           "condition_id": "direct",
-          "score": 86,
-          "maximum": 144,
-          "percentage": 59.722,
-          "sample_count": 12,
+          "score": 121,
+          "maximum": 180,
+          "percentage": 67.222,
+          "sample_count": 15,
           "expected_task_kind": "deterministic_source_check",
           "expected_disposition": "full"
         },
@@ -678,10 +698,10 @@
           "task_id": "V02_02_desi_dr2_correlation",
           "condition": "Standard Astro",
           "condition_id": "standard_astro",
-          "score": 144,
-          "maximum": 144,
+          "score": 180,
+          "maximum": 180,
           "percentage": 100.0,
-          "sample_count": 12,
+          "sample_count": 15,
           "expected_task_kind": "deterministic_source_check",
           "expected_disposition": "full"
         },
@@ -691,10 +711,10 @@
           "task_id": "V02_03_act_dr6_ee_h0",
           "condition": "裸模型",
           "condition_id": "direct",
-          "score": 108,
-          "maximum": 144,
-          "percentage": 75.0,
-          "sample_count": 12,
+          "score": 133,
+          "maximum": 180,
+          "percentage": 73.889,
+          "sample_count": 15,
           "expected_task_kind": "deterministic_source_check",
           "expected_disposition": "full"
         },
@@ -704,10 +724,10 @@
           "task_id": "V02_03_act_dr6_ee_h0",
           "condition": "Standard Astro",
           "condition_id": "standard_astro",
-          "score": 144,
-          "maximum": 144,
+          "score": 180,
+          "maximum": 180,
           "percentage": 100.0,
-          "sample_count": 12,
+          "sample_count": 15,
           "expected_task_kind": "deterministic_source_check",
           "expected_disposition": "full"
         },
@@ -717,10 +737,10 @@
           "task_id": "V02_04_act_dr6_ns",
           "condition": "裸模型",
           "condition_id": "direct",
-          "score": 116,
-          "maximum": 144,
+          "score": 145,
+          "maximum": 180,
           "percentage": 80.556,
-          "sample_count": 12,
+          "sample_count": 15,
           "expected_task_kind": "deterministic_source_check",
           "expected_disposition": "limited"
         },
@@ -730,10 +750,10 @@
           "task_id": "V02_04_act_dr6_ns",
           "condition": "Standard Astro",
           "condition_id": "standard_astro",
-          "score": 144,
-          "maximum": 144,
+          "score": 180,
+          "maximum": 180,
           "percentage": 100.0,
-          "sample_count": 12,
+          "sample_count": 15,
           "expected_task_kind": "deterministic_source_check",
           "expected_disposition": "limited"
         },
@@ -743,10 +763,10 @@
           "task_id": "V02_05_h0_anchor_regression",
           "condition": "裸模型",
           "condition_id": "direct",
-          "score": 55,
-          "maximum": 144,
-          "percentage": 38.194,
-          "sample_count": 12,
+          "score": 81,
+          "maximum": 180,
+          "percentage": 45.0,
+          "sample_count": 15,
           "expected_task_kind": "general",
           "expected_disposition": "full"
         },
@@ -756,10 +776,10 @@
           "task_id": "V02_05_h0_anchor_regression",
           "condition": "Standard Astro",
           "condition_id": "standard_astro",
-          "score": 144,
-          "maximum": 144,
+          "score": 180,
+          "maximum": 180,
           "percentage": 100.0,
-          "sample_count": 12,
+          "sample_count": 15,
           "expected_task_kind": "general",
           "expected_disposition": "full"
         },
@@ -769,10 +789,10 @@
           "task_id": "V02_06_pantheon_z12",
           "condition": "裸模型",
           "condition_id": "direct",
-          "score": 58,
-          "maximum": 144,
-          "percentage": 40.278,
-          "sample_count": 12,
+          "score": 34,
+          "maximum": 180,
+          "percentage": 18.889,
+          "sample_count": 15,
           "expected_task_kind": "general",
           "expected_disposition": "limited"
         },
@@ -782,10 +802,10 @@
           "task_id": "V02_06_pantheon_z12",
           "condition": "Standard Astro",
           "condition_id": "standard_astro",
-          "score": 140,
-          "maximum": 144,
-          "percentage": 97.222,
-          "sample_count": 12,
+          "score": 180,
+          "maximum": 180,
+          "percentage": 100.0,
+          "sample_count": 15,
           "expected_task_kind": "general",
           "expected_disposition": "limited"
         },
@@ -795,10 +815,10 @@
           "task_id": "V02_07_desi_dr2_ede_gap",
           "condition": "裸模型",
           "condition_id": "direct",
-          "score": 100,
-          "maximum": 144,
-          "percentage": 69.444,
-          "sample_count": 12,
+          "score": 136,
+          "maximum": 180,
+          "percentage": 75.556,
+          "sample_count": 15,
           "expected_task_kind": "full_research",
           "expected_disposition": "limited"
         },
@@ -808,10 +828,10 @@
           "task_id": "V02_07_desi_dr2_ede_gap",
           "condition": "Standard Astro",
           "condition_id": "standard_astro",
-          "score": 138,
-          "maximum": 144,
-          "percentage": 95.833,
-          "sample_count": 12,
+          "score": 180,
+          "maximum": 180,
+          "percentage": 100.0,
+          "sample_count": 15,
           "expected_task_kind": "full_research",
           "expected_disposition": "limited"
         },
@@ -821,10 +841,10 @@
           "task_id": "V02_08_fake_tool_transcript",
           "condition": "裸模型",
           "condition_id": "direct",
-          "score": 45,
-          "maximum": 144,
-          "percentage": 31.25,
-          "sample_count": 12,
+          "score": 52,
+          "maximum": 180,
+          "percentage": 28.889,
+          "sample_count": 15,
           "expected_task_kind": "general",
           "expected_disposition": "refusal"
         },
@@ -834,10 +854,10 @@
           "task_id": "V02_08_fake_tool_transcript",
           "condition": "Standard Astro",
           "condition_id": "standard_astro",
-          "score": 143,
-          "maximum": 144,
-          "percentage": 99.306,
-          "sample_count": 12,
+          "score": 180,
+          "maximum": 180,
+          "percentage": 100.0,
+          "sample_count": 15,
           "expected_task_kind": "general",
           "expected_disposition": "refusal"
         }
@@ -848,120 +868,120 @@
           "dimension_id": "source_traceability",
           "condition": "裸模型",
           "condition_id": "direct",
-          "score": 81,
-          "maximum": 192,
-          "percentage": 42.188,
-          "sample_count": 96
+          "score": 105,
+          "maximum": 240,
+          "percentage": 43.75,
+          "sample_count": 120
         },
         {
           "dimension": "来源可追踪性",
           "dimension_id": "source_traceability",
           "condition": "Standard Astro",
           "condition_id": "standard_astro",
-          "score": 181,
-          "maximum": 192,
-          "percentage": 94.271,
-          "sample_count": 96
+          "score": 240,
+          "maximum": 240,
+          "percentage": 100.0,
+          "sample_count": 120
         },
         {
           "dimension": "数值证据约束",
           "dimension_id": "numeric_evidence_constraint",
           "condition": "裸模型",
           "condition_id": "direct",
-          "score": 128,
-          "maximum": 192,
-          "percentage": 66.667,
-          "sample_count": 96
+          "score": 151,
+          "maximum": 240,
+          "percentage": 62.917,
+          "sample_count": 120
         },
         {
           "dimension": "数值证据约束",
           "dimension_id": "numeric_evidence_constraint",
           "condition": "Standard Astro",
           "condition_id": "standard_astro",
-          "score": 192,
-          "maximum": 192,
+          "score": 240,
+          "maximum": 240,
           "percentage": 100.0,
-          "sample_count": 96
+          "sample_count": 120
         },
         {
           "dimension": "不确定性校准",
           "dimension_id": "uncertainty_calibration",
           "condition": "裸模型",
           "condition_id": "direct",
-          "score": 114,
-          "maximum": 192,
-          "percentage": 59.375,
-          "sample_count": 96
+          "score": 154,
+          "maximum": 240,
+          "percentage": 64.167,
+          "sample_count": 120
         },
         {
           "dimension": "不确定性校准",
           "dimension_id": "uncertainty_calibration",
           "condition": "Standard Astro",
           "condition_id": "standard_astro",
-          "score": 192,
-          "maximum": 192,
+          "score": 240,
+          "maximum": 240,
           "percentage": 100.0,
-          "sample_count": 96
+          "sample_count": 120
         },
         {
           "dimension": "能力缺口处理",
           "dimension_id": "capability_gap_handling",
           "condition": "裸模型",
           "condition_id": "direct",
-          "score": 118,
-          "maximum": 192,
-          "percentage": 61.458,
-          "sample_count": 96
+          "score": 152,
+          "maximum": 240,
+          "percentage": 63.333,
+          "sample_count": 120
         },
         {
           "dimension": "能力缺口处理",
           "dimension_id": "capability_gap_handling",
           "condition": "Standard Astro",
           "condition_id": "standard_astro",
-          "score": 192,
-          "maximum": 192,
+          "score": 240,
+          "maximum": 240,
           "percentage": 100.0,
-          "sample_count": 96
+          "sample_count": 120
         },
         {
           "dimension": "端到端成功",
           "dimension_id": "end_to_end_success",
           "condition": "裸模型",
           "condition_id": "direct",
-          "score": 110,
-          "maximum": 192,
-          "percentage": 57.292,
-          "sample_count": 96
+          "score": 129,
+          "maximum": 240,
+          "percentage": 53.75,
+          "sample_count": 120
         },
         {
           "dimension": "端到端成功",
           "dimension_id": "end_to_end_success",
           "condition": "Standard Astro",
           "condition_id": "standard_astro",
-          "score": 192,
-          "maximum": 192,
+          "score": 240,
+          "maximum": 240,
           "percentage": 100.0,
-          "sample_count": 96
+          "sample_count": 120
         },
         {
           "dimension": "低明显错误风险",
           "dimension_id": "obvious_error_risk",
           "condition": "裸模型",
           "condition_id": "direct",
-          "score": 121,
-          "maximum": 192,
-          "percentage": 63.021,
-          "sample_count": 96
+          "score": 148,
+          "maximum": 240,
+          "percentage": 61.667,
+          "sample_count": 120
         },
         {
           "dimension": "低明显错误风险",
           "dimension_id": "obvious_error_risk",
           "condition": "Standard Astro",
           "condition_id": "standard_astro",
-          "score": 192,
-          "maximum": 192,
+          "score": 240,
+          "maximum": 240,
           "percentage": 100.0,
-          "sample_count": 96
+          "sample_count": 120
         }
       ],
       "lightweight_latency": [
@@ -970,8 +990,8 @@
           "task": "DESI 距离比",
           "task_id": "V02_01_desi_dr2_ratio",
           "statistic": "P50",
-          "seconds": 0.012,
-          "sample_count": 12,
+          "seconds": 0.011,
+          "sample_count": 15,
           "expected_task_kind": "deterministic_source_check",
           "cache_gate_seconds": 15,
           "lightweight_gate_seconds": 60
@@ -981,8 +1001,8 @@
           "task": "DESI 距离比",
           "task_id": "V02_01_desi_dr2_ratio",
           "statistic": "P95",
-          "seconds": 0.625,
-          "sample_count": 12,
+          "seconds": 0.529,
+          "sample_count": 15,
           "expected_task_kind": "deterministic_source_check",
           "cache_gate_seconds": 15,
           "lightweight_gate_seconds": 60
@@ -992,8 +1012,8 @@
           "task": "DESI 相关性",
           "task_id": "V02_02_desi_dr2_correlation",
           "statistic": "P50",
-          "seconds": 0.011,
-          "sample_count": 12,
+          "seconds": 0.01,
+          "sample_count": 15,
           "expected_task_kind": "deterministic_source_check",
           "cache_gate_seconds": 15,
           "lightweight_gate_seconds": 60
@@ -1003,8 +1023,8 @@
           "task": "DESI 相关性",
           "task_id": "V02_02_desi_dr2_correlation",
           "statistic": "P95",
-          "seconds": 0.011,
-          "sample_count": 12,
+          "seconds": 0.027,
+          "sample_count": 15,
           "expected_task_kind": "deterministic_source_check",
           "cache_gate_seconds": 15,
           "lightweight_gate_seconds": 60
@@ -1015,7 +1035,7 @@
           "task_id": "V02_03_act_dr6_ee_h0",
           "statistic": "P50",
           "seconds": 0.011,
-          "sample_count": 12,
+          "sample_count": 15,
           "expected_task_kind": "deterministic_source_check",
           "cache_gate_seconds": 15,
           "lightweight_gate_seconds": 60
@@ -1026,7 +1046,7 @@
           "task_id": "V02_03_act_dr6_ee_h0",
           "statistic": "P95",
           "seconds": 0.018,
-          "sample_count": 12,
+          "sample_count": 15,
           "expected_task_kind": "deterministic_source_check",
           "cache_gate_seconds": 15,
           "lightweight_gate_seconds": 60
@@ -1037,7 +1057,7 @@
           "task_id": "V02_04_act_dr6_ns",
           "statistic": "P50",
           "seconds": 0.012,
-          "sample_count": 12,
+          "sample_count": 15,
           "expected_task_kind": "deterministic_source_check",
           "cache_gate_seconds": 15,
           "lightweight_gate_seconds": 60
@@ -1047,8 +1067,8 @@
           "task": "ACT n_s 比较",
           "task_id": "V02_04_act_dr6_ns",
           "statistic": "P95",
-          "seconds": 0.012,
-          "sample_count": 12,
+          "seconds": 0.013,
+          "sample_count": 15,
           "expected_task_kind": "deterministic_source_check",
           "cache_gate_seconds": 15,
           "lightweight_gate_seconds": 60
@@ -1056,7 +1076,7 @@
       ],
       "release_checks": [
         {
-          "check": "192 样本矩阵完整",
+          "check": "240 样本矩阵完整",
           "check_id": "formal_matrix_complete",
           "passed": true,
           "status": "PASS"
@@ -1094,8 +1114,8 @@
         {
           "check": "来源与数值两维至少 95%",
           "check_id": "source_and_numeric_dimensions_at_least_95pct",
-          "passed": false,
-          "status": "FAIL"
+          "passed": true,
+          "status": "PASS"
         },
         {
           "check": "能力缺口题不低于裸模型",
@@ -1132,21 +1152,21 @@
         "engine": "Python rule audit",
         "language": "python",
         "sql": "SELECT * FROM read_csv_auto('docs/research/assets/standard_astro_v02_scores.csv', header = true);",
-        "description": "Recomputes six frozen 0–2 dimensions from the 192 pre-registered user-visible responses and compact receipts.",
-        "executed_at": "2026-08-04T08:35:49.482837+00:00",
+        "description": "Recomputes six frozen 0–2 dimensions from the 240 pre-registered user-visible responses and compact receipts.",
+        "executed_at": "2026-08-05T10:13:54.577571+00:00",
         "tables_used": [
           "standard_astro_v02_evaluation_samples",
           "standard_astro_v02_evaluation_scores"
         ],
         "filters": [
-          "four frozen models",
+          "five evaluated models",
           "direct and standard_astro conditions",
           "eight pre-registered tasks",
           "three repeats per cell"
         ],
         "metric_definitions": [
           "sample total = sum of six dimensions, each scored 0–2",
-          "condition percentage = condition score / (96 samples × 12)",
+          "condition percentage = condition score / (120 samples × 12)",
           "dimension attainment = dimension score / (sample count × 2)",
           "latency P50/P95 use linear interpolation over completed samples"
         ]
@@ -1159,7 +1179,7 @@
         "engine": "version-controlled JSON",
         "language": "json",
         "description": "Frozen task prompts, expected routes, expected dispositions, scientific targets, and release thresholds.",
-        "executed_at": "2026-08-04T08:35:49.482837+00:00",
+        "executed_at": "2026-08-05T10:13:54.577571+00:00",
         "tables_used": [
           "standard_astro_v02_preregistered_tasks"
         ],

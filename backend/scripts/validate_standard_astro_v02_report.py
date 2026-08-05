@@ -138,7 +138,8 @@ def main() -> None:
         "claude-fable-5",
         "kimi-k3",
         "standard_astro",
-        "condition",
+        "answer_a_condition",
+        "answer_b_condition",
     ):
         if forbidden in pack:
             raise ValueError(f"Expert pack leaks blinded metadata: {forbidden}")
