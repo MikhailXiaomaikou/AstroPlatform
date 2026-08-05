@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "audit_method": "pre_registered_deterministic_rule_audit",
+  "samples": 240,
+  "conditions": {
+    "direct": {
+      "samples": 120,
+      "score": 839,
+      "maximum": 1440,
+      "percentage": 58.264,
+      "dimensions": {
+        "source_traceability": 105,
+        "numeric_evidence_constraint": 151,
+        "uncertainty_calibration": 154,
+        "capability_gap_handling": 152,
+        "end_to_end_success": 129,
+        "obvious_error_risk": 148
+      }
+    },
+    "standard_astro": {
+      "samples": 120,
+      "score": 1440,
+      "maximum": 1440,
+      "percentage": 100.0,
+      "dimensions": {
+        "source_traceability": 240,
+        "numeric_evidence_constraint": 240,
+        "uncertainty_calibration": 240,
+        "capability_gap_handling": 240,
+        "end_to_end_success": 240,
+        "obvious_error_risk": 240
+      }
+    }
+  },
+  "flagged_samples": 0,
+  "routing": {
+    "correct": 120,
+    "total": 120,
+    "accuracy_percentage": 100.0
+  },
+  "latency_seconds": {
+    "lightweight_p50": 0.011,
+    "lightweight_p95": 0.08839999999999873,
+    "cache_hit_p50": 0.011,
+    "cache_hit_p95": 0.08839999999999873
+  },
+  "source_numeric_percentage": 100.0,
+  "source_numeric_dimension_percentages": {
+    "source_traceability": 100.0,
+    "numeric_evidence_constraint": 100.0
+  },
+  "capability_gap_scores": {
+    "direct": 136,
+    "standard_astro": 180
+  },
+  "release_checks": {
+    "formal_matrix_complete": true,
+    "lightweight_route_accuracy_100pct": true,
+    "expected_answer_hard_block_rate_zero": true,
+    "unverified_numeric_or_attribution_escape_zero": true,
+    "standard_score_at_least_85pct": true,
+    "lead_at_least_5_percentage_points": true,
+    "source_and_numeric_dimensions_at_least_95pct": true,
+    "capability_gap_not_below_direct": true,
+    "lightweight_p95_at_most_60_seconds": true,
+    "cache_hit_p95_at_most_15_seconds": true,
+    "desi_core_all_repeats_pass_five_science_checks": true
+  },
+  "automated_release_checks_passed": true,
+  "release_thresholds_are_not_expert_validated": true
+}
