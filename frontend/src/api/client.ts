@@ -1084,6 +1084,25 @@ export type ValidationGateState =
   | "skipped"
   | "not_run";
 
+export interface EvidenceReceiptV1 {
+  schema_version: 1;
+  receipt_kind: "dataset_coverage" | "capability_gap" | "untrusted_evidence" | string;
+  task_kind: string;
+  response_disposition: "full" | "limited" | "abstention" | "refusal" | "hard_block" | string;
+  source_status:
+    | "verified_registry"
+    | "verified_current_turn"
+    | "untrusted_user_supplied"
+    | "unavailable"
+    | string;
+  subject: Record<string, unknown>;
+  facts: Record<string, unknown>;
+  source_evidence: Array<Record<string, unknown>>;
+  missing_dependencies: string[];
+  boundary_statement: string;
+  receipt_sha256: string;
+}
+
 export interface ValidationSummary {
   schema_version?: number;
   numeric_gate?: ValidationGateState | string;
@@ -1098,6 +1117,7 @@ export interface ValidationSummary {
   safe_fallback?: string | null;
   reason?: string;
   interventions?: Array<{ gate?: string; action?: string; reason?: string }>;
+  evidence_receipts?: EvidenceReceiptV1[];
 }
 
 export interface ChatResponse {
