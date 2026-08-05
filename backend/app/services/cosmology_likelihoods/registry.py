@@ -15,6 +15,7 @@ from app.services.cosmology_likelihoods.core import (
     BAO_MODELS,
     CMB_MODELS,
     CompressedLikelihoodSpec,
+    CoverageProvenanceSpec,
     CosmologyDatasetEntry,
     CovarianceSpec,
     DataProductSpec,
@@ -40,6 +41,7 @@ _PANTHEON_PLUS_COMPRESSED_COV: tuple[tuple[float, float, float], ...] = (
     (0.0, 0.0, 0.027 ** 2),
 )
 _PANTHEON_PLUS_COMPRESSED_NAMES: tuple[str, ...] = ("H0", "omegam", "M_B")
+COSMOLOGY_DATASET_REGISTRY_VERSION = "2026-04-30"
 
 
 _REGISTRY: dict[str, CosmologyDatasetEntry] = {
@@ -805,6 +807,17 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         version="Pantheon+SH0ES DataRelease 2022",
         probe="sn",
         z_coverage=(0.001, 2.26),
+        coverage_provenance=CoverageProvenanceSpec(
+            source_locator=(
+                "Pantheon+SH0ES DataRelease 2022, vendored 1701-row bundle; "
+                "z_hd measurement column extrema"
+            ),
+            upstream_version="c447f0fea703fcd0fff57de5000947b5ca81286b",
+            data_product_role="sn_full_data_npz",
+            data_product_sha256=(
+                "bf0daa4ba2c06347db286d35f9f43c6de7c4fb85634e9f3821008911c7728bad"
+            ),
+        ),
         status="ready",
         observables=(
             "zHD", "zHEL", "m_b_corr", "IS_CALIBRATOR", "CEPH_DIST",
@@ -2765,7 +2778,7 @@ def list_cosmology_datasets(
     )
     return {
         "success": True,
-        "registry_version": "2026-04-30",
+        "registry_version": COSMOLOGY_DATASET_REGISTRY_VERSION,
         "dataset_count": len(entries),
         "datasets": entries,
         "requested_dataset_keys": requested_keys,

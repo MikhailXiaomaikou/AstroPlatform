@@ -174,6 +174,30 @@ def test_safe_refusal_is_visible_even_when_no_gate_had_to_block_it():
     assert summary["response_disposition"] == "refusal"
 
 
+def test_untrusted_echo_block_surfaces_as_refusal_not_generic_hard_block():
+    summary = _derive_validation_summary(
+        claim_gate_ran=True,
+        gate_skip_reason=None,
+        fabrication_stats={"pass": 0, "blocked": True, "regenerations": 0},
+        interventions=[{
+            "gate": "untrusted_evidence_echo",
+            "action": "blocked",
+            "reason": "user_supplied_number_repeated",
+        }],
+        tool_results=[],
+        routing_decision={
+            "task_kind": "general",
+            "matched_signals": ["untrusted_evidence_request"],
+        },
+        evidence_receipts_enabled=True,
+    )
+
+    assert summary["blocked"] is True
+    assert summary["numeric_gate"] == "blocked"
+    assert summary["response_disposition"] == "refusal"
+    assert summary["evidence_receipts"][0]["response_disposition"] == "refusal"
+
+
 def test_derive_summary_meta_skip_and_not_run_are_distinct_from_passed():
     skipped = _derive_validation_summary(
         claim_gate_ran=False,

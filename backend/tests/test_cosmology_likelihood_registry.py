@@ -64,6 +64,12 @@ def test_priority_datasets_expose_machine_readable_data_products():
     assert any(product["role"] == "data_table" and "Pantheon%2BSH0ES.dat" in product["url"] for product in pantheon_products)
     assert any(product["role"] == "covariance" and "STAT%2BSYS.cov" in product["url"] for product in pantheon_products)
     assert any(product["role"] == "likelihood_code" and "cosmosis_likelihood.py" in product["url"] for product in pantheon_products)
+    pantheon_coverage = entries["pantheon_plus"]["coverage_provenance"]
+    assert pantheon_coverage["upstream_version"] == "c447f0fea703fcd0fff57de5000947b5ca81286b"
+    assert pantheon_coverage["data_product_role"] == "sn_full_data_npz"
+    assert pantheon_coverage["data_product_sha256"] == (
+        "bf0daa4ba2c06347db286d35f9f43c6de7c4fb85634e9f3821008911c7728bad"
+    )
 
     planck_products = entries["planck2018_compressed"]["data_products"]
     assert any(product["role"] == "likelihood_code" and "Likelihood_Code" in product["url"] for product in planck_products)

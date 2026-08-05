@@ -100,6 +100,15 @@ explicitly preliminary. Overlapping samples
 declare reciprocal `do_not_combine_with` pairs (DESI vs SDSS/eBOSS BAO,
 the SN compilations among themselves); violating combinations block.
 
+Pantheon+ redshift coverage is also provenance-bound rather than being a
+free-text prompt fact. The registered `z=0.001--2.26` interval points to the
+immutable Pantheon+SH0ES DataRelease commit
+`c447f0fea703fcd0fff57de5000947b5ca81286b` and the vendored 1701-row bundle
+with SHA-256
+`bf0daa4ba2c06347db286d35f9f43c6de7c4fb85634e9f3821008911c7728bad`.
+An outside-range receipt therefore means **verified against the platform
+registry**, not "the paper table was fetched and matched this turn."
+
 ### DESI DR2 official posterior-combination registry
 
 The DR2 BAO mean/covariance likelihood files remain ordinary dataset entries.

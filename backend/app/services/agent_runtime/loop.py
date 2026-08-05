@@ -54,6 +54,7 @@ from app.services.agent_runtime.honesty import (
     untrusted_evidence_echo_values,
     untrusted_evidence_refusal,
 )
+from app.services.agent_runtime.evidence_receipts import build_evidence_receipts
 from app.services.agent_runtime.prompt_routing import (
     _compact_tool_results_for_evidence,
     classify_task_kind,
@@ -219,6 +220,7 @@ def _derive_validation_summary(
     tool_results: list[dict],
     routing_decision: dict[str, Any] | None = None,
     user_prompt: str = "",
+    evidence_receipts_enabled: bool = False,
 ) -> dict:
     """Compact, honest per-reply summary of what the gate stack did.
 
@@ -287,10 +289,10 @@ def _derive_validation_summary(
         or item.get("action") == "annotated_limited"
         for item in interventions
     )
-    if bool(fabrication_stats.get("blocked", False)):
-        response_disposition = "hard_block"
-    elif explicit_refusal:
+    if explicit_refusal:
         response_disposition = "refusal"
+    elif bool(fabrication_stats.get("blocked", False)):
+        response_disposition = "hard_block"
     elif isinstance(scalar_receipt, dict) and bool(
         fabrication_stats.get("limited", False)
     ):
@@ -373,6 +375,20 @@ def _derive_validation_summary(
     }
     if not claim_gate_ran and gate_skip_reason:
         summary["reason"] = str(gate_skip_reason)
+    if evidence_receipts_enabled:
+        receipts = build_evidence_receipts(
+            task_kind=task_kind,
+            response_disposition=response_disposition,
+            user_prompt=user_prompt,
+            tool_results=tool_results,
+            interventions=interventions,
+            matched_signals=list(
+                (routing_decision or {}).get("matched_signals") or []
+            ),
+            missing_dependencies=missing_dependencies,
+        )
+        if receipts:
+            summary["evidence_receipts"] = receipts
     return summary
 
 
@@ -3616,6 +3632,7 @@ async def _run_agent_loop(
         tool_results=all_tool_results,
         routing_decision=routing_decision,
         user_prompt=latest_user_text,
+        evidence_receipts_enabled=settings.lightweight_verification_enabled,
     )
     if routing_decision is not None:
         try:
@@ -3639,6 +3656,36 @@ async def _run_agent_loop(
                     validation_summary.get("response_disposition") or "full"
                 ),
             )
+            evidence_receipts = validation_summary.get("evidence_receipts") or []
+            for receipt in evidence_receipts:
+                if not isinstance(receipt, dict):
+                    continue
+                record_counter(
+                    "evidence_receipt_total",
+                    kind=str(receipt.get("receipt_kind") or "unknown"),
+                    status=str(receipt.get("source_status") or "unknown"),
+                )
+            expected_receipt = (
+                any(
+                    item.get("gate")
+                    in {
+                        "dataset_coverage",
+                        "nonpublication_posterior",
+                        "untrusted_evidence_echo",
+                    }
+                    for item in gate_interventions
+                )
+                or "untrusted_evidence_request"
+                in set((routing_decision or {}).get("matched_signals") or [])
+            )
+            if settings.lightweight_verification_enabled and expected_receipt and not evidence_receipts:
+                record_counter(
+                    "evidence_receipt_missing_total",
+                    task_kind=str(validation_summary.get("task_kind") or "general"),
+                    limiting_stage=str(
+                        validation_summary.get("earliest_limiting_stage") or "none"
+                    ),
+                )
         except Exception:
             pass
 
