@@ -428,6 +428,17 @@ class TestInferenceRouting:
         assert profile.resolved_model_id == "claude-sonnet-5"
         assert profile.supports_tools is True
 
+    def test_local_kimi_cli_profile_uses_tool_bridge(self, monkeypatch):
+        from app.ai.model_profiles import resolve_model_profile
+
+        monkeypatch.setenv("KIMI_CLI_MODEL", "kimi-code/k3")
+        profile = resolve_model_profile("local", "kimi-k3")
+
+        assert profile.id == "local:kimi-cli"
+        assert profile.provider == "local"
+        assert profile.resolved_model_id == "kimi-code/k3"
+        assert profile.supports_tools is True
+
     def test_subscription_cli_is_disabled_for_prod_alias(self, monkeypatch):
         from app.ai.inference_router import _local_cli_enabled
 
@@ -527,6 +538,77 @@ class TestInferenceRouting:
             await LocalBackend().complete(
                 [{"role": "user", "content": "hello"}],
                 model_profile=resolve_model_profile("local", "local:claude-cli"),
+            )
+
+    @pytest.mark.asyncio
+    async def test_local_backend_can_call_kimi_cli(self, monkeypatch):
+        from app.ai.inference_router import LocalBackend
+        from app.ai.model_profiles import resolve_model_profile
+
+        backend = LocalBackend()
+        profile = resolve_model_profile("local", "local:kimi-cli")
+        captured: dict = {}
+
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self):
+                return (
+                    b'{"role":"assistant","content":"{\\"tool_calls\\":[{\\"name\\":\\"search_objects\\",\\"input\\":{\\"query\\":\\"M31\\"}}]}"}\n'
+                    b'{"role":"meta","type":"session.resume_hint","content":"ignored"}\n',
+                    b"",
+                )
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            captured["kwargs"] = kwargs
+            return FakeProc()
+
+        monkeypatch.setenv("KIMI_CLI_ENABLED", "1")
+        monkeypatch.setenv("KIMI_CLI_COMMAND", "kimi")
+        monkeypatch.setenv("MOONSHOT_API_KEY", "must-not-leak")
+        monkeypatch.setenv("JWT_SECRET", "must-not-leak")
+        monkeypatch.setattr(
+            "app.ai.inference_router.shutil.which", lambda name: "/usr/bin/kimi"
+        )
+        monkeypatch.setattr(
+            "app.ai.inference_router.asyncio.create_subprocess_exec",
+            fake_create_subprocess_exec,
+        )
+
+        result = await backend.complete(
+            [{"role": "user", "content": "hello"}],
+            system="You are local.",
+            tools=[{"name": "search_objects", "input_schema": {"type": "object"}}],
+            model_profile=profile,
+        )
+
+        assert result["content"] == ""
+        assert result["tool_calls"][0]["name"] == "search_objects"
+        assert result["tool_calls"][0]["input"] == {"query": "M31"}
+        assert result["model_profile"] == "local:kimi-cli"
+        cmd = captured["cmd"]
+        assert cmd[cmd.index("--model") + 1] == "kimi-code/k3"
+        assert cmd[cmd.index("--output-format") + 1] == "stream-json"
+        assert "--auto" not in cmd
+        assert "--yolo" not in cmd
+        prompt = cmd[cmd.index("--prompt") + 1]
+        assert "Do not invoke Kimi Code built-in tools" in prompt
+        assert "JSON bridge" in prompt
+        assert "search_objects" in prompt
+        skills_dir = Path(cmd[cmd.index("--skills-dir") + 1])
+        assert skills_dir.parent == Path(captured["kwargs"]["cwd"])
+        child_env = captured["kwargs"]["env"]
+        assert child_env["KIMI_CODE_NO_AUTO_UPDATE"] == "1"
+        assert "MOONSHOT_API_KEY" not in child_env
+        assert "JWT_SECRET" not in child_env
+
+    def test_kimi_cli_stream_surfaces_errors(self):
+        from app.ai.inference_router import InferenceError, LocalBackend
+
+        with pytest.raises(InferenceError, match="model unavailable"):
+            LocalBackend._parse_kimi_cli_stream(
+                '{"role":"error","content":"model unavailable"}'
             )
 
     @pytest.mark.asyncio
@@ -655,6 +737,7 @@ class TestInferenceRouting:
         monkeypatch.delenv("LOCAL_MODEL_ENABLED", raising=False)
         monkeypatch.delenv("OPENAI_CLI_ENABLED", raising=False)
         monkeypatch.delenv("CLAUDE_CLI_ENABLED", raising=False)
+        monkeypatch.delenv("KIMI_CLI_ENABLED", raising=False)
         monkeypatch.setattr(router.backends["openai"], "complete", fail_openai)
         monkeypatch.setattr(router.backends["claude"], "complete", fail_if_platform_called)
         monkeypatch.setattr(router.backends["deepseek"], "complete", fail_if_platform_called)

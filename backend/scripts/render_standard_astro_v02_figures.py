@@ -23,8 +23,13 @@ MODELS = (
     "gpt-5.6-terra",
     "gpt-5.6-luna",
     "claude-fable-5",
+    "kimi-k3",
 )
 CONDITIONS = ("direct", "standard_astro")
+REPEATS = 3
+TASK_COUNT = 8
+SAMPLE_MAXIMUM = 12
+EXPECTED_SAMPLES = len(MODELS) * len(CONDITIONS) * TASK_COUNT * REPEATS
 DIMENSIONS = (
     "source_traceability",
     "numeric_evidence_constraint",
@@ -61,8 +66,10 @@ GRID = "#D9DEE5"
 def _read_scores(path: Path) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
-    if len(rows) != 192:
-        raise ValueError(f"Expected 192 audited samples, found {len(rows)}.")
+    if len(rows) != EXPECTED_SAMPLES:
+        raise ValueError(
+            f"Expected {EXPECTED_SAMPLES} audited samples, found {len(rows)}."
+        )
     keys = {row["sample_key"] for row in rows}
     if len(keys) != len(rows):
         raise ValueError("Score rows contain duplicate sample keys.")
@@ -123,7 +130,7 @@ def _condition_totals(rows: list[dict[str, str]]) -> dict[str, int]:
 
 def render_overall(rows: list[dict[str, str]], output_dir: Path) -> None:
     totals = _condition_totals(rows)
-    maximum = 96 * 12
+    maximum = len(MODELS) * TASK_COUNT * REPEATS * SAMPLE_MAXIMUM
     values = [100 * totals[condition] / maximum for condition in CONDITIONS]
     fig, ax = plt.subplots(figsize=(7.4, 4.8))
     bars = ax.bar(
@@ -153,10 +160,10 @@ def render_by_model(rows: list[dict[str, str]], output_dir: Path) -> None:
     totals: defaultdict[tuple[str, str], int] = defaultdict(int)
     for row in rows:
         totals[(row["model"], row["condition"])] += int(row["total"])
-    maximum = 24 * 12
+    maximum = TASK_COUNT * REPEATS * SAMPLE_MAXIMUM
     y = np.arange(len(MODELS))
     height = 0.34
-    fig, ax = plt.subplots(figsize=(9, 5.4))
+    fig, ax = plt.subplots(figsize=(9, 6.2))
     for offset, condition, color, label in (
         (-height / 2, "direct", DIRECT, "Direct model"),
         (height / 2, "standard_astro", STANDARD, "Standard Astro"),
@@ -182,7 +189,7 @@ def render_task_profile(rows: list[dict[str, str]], output_dir: Path) -> None:
     for row in rows:
         prefix = row["task_id"][:6]
         totals[(prefix, row["condition"])] += int(row["total"])
-    maximum = 12 * 12
+    maximum = len(MODELS) * REPEATS * SAMPLE_MAXIMUM
     x = np.arange(len(TASK_PREFIXES))
     fig, ax = plt.subplots(figsize=(10.2, 5.4))
     for condition, color, marker, label in (

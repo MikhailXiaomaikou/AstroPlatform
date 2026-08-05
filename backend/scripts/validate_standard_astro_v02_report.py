@@ -48,6 +48,14 @@ DIMENSIONS = (
     "end_to_end_success",
     "obvious_error_risk",
 )
+MODELS = (
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "claude-fable-5",
+    "kimi-k3",
+)
+EXPECTED_SCORES = len(MODELS) * 2 * 8 * 3
 
 
 def _png_dimensions(path: Path) -> tuple[int, int]:
@@ -74,8 +82,13 @@ def main() -> None:
 
     with args.scores.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
-    if len(rows) != 192 or len({row["sample_key"] for row in rows}) != 192:
-        raise ValueError("Audited score table is not the unique 192-sample matrix.")
+    if (
+        len(rows) != EXPECTED_SCORES
+        or len({row["sample_key"] for row in rows}) != EXPECTED_SCORES
+    ):
+        raise ValueError(
+            f"Audited score table is not the unique {EXPECTED_SCORES}-sample matrix."
+        )
     totals: defaultdict[str, int] = defaultdict(int)
     for row in rows:
         components = [int(row[field]) for field in DIMENSIONS]
@@ -123,6 +136,7 @@ def main() -> None:
         "gpt-5.6-terra",
         "gpt-5.6-luna",
         "claude-fable-5",
+        "kimi-k3",
         "standard_astro",
         "condition",
     ):
@@ -130,7 +144,7 @@ def main() -> None:
             raise ValueError(f"Expert pack leaks blinded metadata: {forbidden}")
 
     print(
-        "v0.2 report validation passed: 192 scores, 10 sections, "
+        f"v0.2 report validation passed: {EXPECTED_SCORES} scores, 10 sections, "
         "5 local figures, and 12 blinded expert pairs"
     )
 

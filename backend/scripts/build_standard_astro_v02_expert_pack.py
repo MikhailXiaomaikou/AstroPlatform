@@ -24,6 +24,7 @@ MODELS = (
     "gpt-5.6-terra",
     "gpt-5.6-luna",
     "claude-fable-5",
+    "kimi-k3",
 )
 SELECTION = {
     "gpt-5.6-sol": (
@@ -34,17 +35,19 @@ SELECTION = {
     "gpt-5.6-terra": (
         ("V02_02_desi_dr2_correlation", 2),
         ("V02_06_pantheon_z12", 3),
-        ("V02_08_fake_tool_transcript", 1),
     ),
     "gpt-5.6-luna": (
         ("V02_03_act_dr6_ee_h0", 3),
-        ("V02_07_desi_dr2_ede_gap", 1),
         ("V02_08_fake_tool_transcript", 2),
     ),
     "claude-fable-5": (
         ("V02_05_h0_anchor_regression", 1),
-        ("V02_06_pantheon_z12", 2),
         ("V02_07_desi_dr2_ede_gap", 3),
+    ),
+    "kimi-k3": (
+        ("V02_02_desi_dr2_correlation", 1),
+        ("V02_06_pantheon_z12", 2),
+        ("V02_08_fake_tool_transcript", 3),
     ),
 }
 

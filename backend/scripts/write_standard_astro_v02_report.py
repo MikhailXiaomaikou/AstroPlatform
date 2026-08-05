@@ -23,8 +23,16 @@ MODELS = (
     "gpt-5.6-terra",
     "gpt-5.6-luna",
     "claude-fable-5",
+    "kimi-k3",
 )
 CONDITIONS = ("direct", "standard_astro")
+REPEATS = 3
+TASK_COUNT = 8
+SAMPLE_MAXIMUM = 12
+EXPECTED_SAMPLES = len(MODELS) * len(CONDITIONS) * TASK_COUNT * REPEATS
+CONDITION_SAMPLES = len(MODELS) * TASK_COUNT * REPEATS
+MODEL_CONDITION_MAXIMUM = TASK_COUNT * REPEATS * SAMPLE_MAXIMUM
+TASK_CONDITION_MAXIMUM = len(MODELS) * REPEATS * SAMPLE_MAXIMUM
 TASK_LABELS = {
     "V02_01": "DESI DR2 距离比",
     "V02_02": "DESI 相关性敏感度",
@@ -40,8 +48,13 @@ TASK_LABELS = {
 def _read_scores(path: Path) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
-    if len(rows) != 192 or len({row["sample_key"] for row in rows}) != 192:
-        raise ValueError("The report requires the complete unique 192-sample matrix.")
+    if (
+        len(rows) != EXPECTED_SAMPLES
+        or len({row["sample_key"] for row in rows}) != EXPECTED_SAMPLES
+    ):
+        raise ValueError(
+            f"The report requires the complete unique {EXPECTED_SAMPLES}-sample matrix."
+        )
     return rows
 
 
@@ -61,8 +74,10 @@ def main() -> None:
     args = parser.parse_args()
     rows = _read_scores(args.scores)
     summary = json.loads(args.summary.read_text(encoding="utf-8"))
-    if summary.get("samples") != 192:
-        raise ValueError("Evaluation summary does not describe 192 samples.")
+    if summary.get("samples") != EXPECTED_SAMPLES:
+        raise ValueError(
+            f"Evaluation summary does not describe {EXPECTED_SAMPLES} samples."
+        )
 
     by_model: defaultdict[tuple[str, str], int] = defaultdict(int)
     by_task: defaultdict[tuple[str, str], int] = defaultdict(int)
@@ -83,17 +98,17 @@ def main() -> None:
     )
 
     model_rows = "\n".join(
-        f"| {model} | {by_model[(model, 'direct')]}/288 "
-        f"({_pct(by_model[(model, 'direct')], 288)}) | "
-        f"{by_model[(model, 'standard_astro')]}/288 "
-        f"({_pct(by_model[(model, 'standard_astro')], 288)}) |"
+        f"| {model} | {by_model[(model, 'direct')]}/{MODEL_CONDITION_MAXIMUM} "
+        f"({_pct(by_model[(model, 'direct')], MODEL_CONDITION_MAXIMUM)}) | "
+        f"{by_model[(model, 'standard_astro')]}/{MODEL_CONDITION_MAXIMUM} "
+        f"({_pct(by_model[(model, 'standard_astro')], MODEL_CONDITION_MAXIMUM)}) |"
         for model in MODELS
     )
     task_rows = "\n".join(
-        f"| {prefix} {TASK_LABELS[prefix]} | {by_task[(prefix, 'direct')]}/144 "
-        f"({_pct(by_task[(prefix, 'direct')], 144)}) | "
-        f"{by_task[(prefix, 'standard_astro')]}/144 "
-        f"({_pct(by_task[(prefix, 'standard_astro')], 144)}) |"
+        f"| {prefix} {TASK_LABELS[prefix]} | {by_task[(prefix, 'direct')]}/{TASK_CONDITION_MAXIMUM} "
+        f"({_pct(by_task[(prefix, 'direct')], TASK_CONDITION_MAXIMUM)}) | "
+        f"{by_task[(prefix, 'standard_astro')]}/{TASK_CONDITION_MAXIMUM} "
+        f"({_pct(by_task[(prefix, 'standard_astro')], TASK_CONDITION_MAXIMUM)}) |"
         for prefix in TASK_LABELS
     )
     release_rows = "\n".join(
@@ -108,7 +123,7 @@ def main() -> None:
 
 ## 摘要
 
-本研究评估 Standard Astro v0.2 能否在保留模型研究灵活性的同时，把公开论文中的小型、可验证计算从重型 likelihood 工作流中分离。实验在实现前冻结 8 道任务，并对四个模型执行直接回答与 Standard Astro 两种条件、每题三次重复，共 `192/192` 个预注册样本。自动审计结果为：直接模型 `{direct['score']}/{direct['maximum']}`（{direct['percentage']:.1f}%），Standard Astro `{standard['score']}/{standard['maximum']}`（{standard['percentage']:.1f}%），差值 `{lead:+.1f}` 个百分点。自动发布门状态：**{automated_status}**。该结论只适用于本题集和冻结评分规则；博士后 12 组匿名 A/B 复核尚须独立完成，不能以自动评分替代。
+本研究评估 Standard Astro v0.2 能否在保留模型研究灵活性的同时，把公开论文中的小型、可验证计算从重型 likelihood 工作流中分离。实验在实现前冻结 8 道任务，并对五个模型执行直接回答与 Standard Astro 两种条件、每题三次重复，共 `{EXPECTED_SAMPLES}/{EXPECTED_SAMPLES}` 个预注册样本。自动审计结果为：直接模型 `{direct['score']}/{direct['maximum']}`（{direct['percentage']:.1f}%），Standard Astro `{standard['score']}/{standard['maximum']}`（{standard['percentage']:.1f}%），差值 `{lead:+.1f}` 个百分点。自动发布门状态：**{automated_status}**。最初冻结的四模型 `192` 样本结果仍可单独复核；新增 Kimi K3 构成同题同口径的 48 样本扩展。该结论只适用于本题集和冻结评分规则；博士后 12 组匿名 A/B 复核尚须独立完成，不能以自动评分替代。
 
 ## 研究问题
 
@@ -152,7 +167,7 @@ v0.2 统一输出 `deterministic_source_check`、`research_exploration`、`full_
 
 ### 六维审计与状态
 
-Standard Astro 的来源与数值证据两维联合达成率为 `{summary['source_numeric_percentage']:.1f}%`。96 个 Standard Astro 样本的终态构成为：{disposition_text}。
+Standard Astro 的来源与数值证据两维联合达成率为 `{summary['source_numeric_percentage']:.1f}%`。{CONDITION_SAMPLES} 个 Standard Astro 样本的终态构成为：{disposition_text}。
 
 ![六维评分](./assets/standard_astro_v02_dimensions.svg)
 
@@ -173,7 +188,7 @@ Standard Astro 的来源与数值证据两维联合达成率为 `{summary['sourc
 
 ## 专家盲测
 
-评测脚本从正式矩阵固定抽取 12 组匿名 A/B 对，覆盖四模型、完整回答、有限回答、能力缺口和伪证据。公开评审表位于 `STANDARD_ASTRO_V02_EXPERT_REVIEW_FORM.zh-CN.md`；隐藏条件与答案键只保存在 `.local`。专家目标为：严重科学错误 0，至少 10/12 可无需科学性修改作为研究起点，至少 8/12 优先选择 Standard Astro。
+评测脚本从正式矩阵固定抽取 12 组匿名 A/B 对，覆盖五模型、完整回答、有限回答、能力缺口和伪证据。公开评审表位于 `STANDARD_ASTRO_V02_EXPERT_REVIEW_FORM.zh-CN.md`；隐藏条件与答案键只保存在 `.local`。专家目标为：严重科学错误 0，至少 10/12 可无需科学性修改作为研究起点，至少 8/12 优先选择 Standard Astro。
 
 ## 局限性
 

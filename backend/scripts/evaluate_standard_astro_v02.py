@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the pre-registered 192-sample Standard Astro v0.2 evaluation.
+"""Run the pre-registered Standard Astro v0.2 evaluation matrix.
 
 The JSONL output is resumable and intentionally compact: it contains the
 user-visible reply, routing/validation metadata, and bounded tool receipts. It
@@ -31,6 +31,7 @@ MODELS = (
     "gpt-5.6-terra",
     "gpt-5.6-luna",
     "claude-fable-5",
+    "kimi-k3",
 )
 CONDITIONS = ("direct", "standard_astro")
 DEFAULT_REPEATS = 3
@@ -53,7 +54,9 @@ def _env_enabled(name: str) -> bool:
 
 
 def _validate_model_backends(parser: argparse.ArgumentParser, models: list[str]) -> None:
-    if any(not model.startswith("claude-") for model in models) and not _env_enabled(
+    if any(
+        not model.startswith(("claude-", "kimi-")) for model in models
+    ) and not _env_enabled(
         "OPENAI_CLI_ENABLED"
     ):
         parser.error(
@@ -67,17 +70,30 @@ def _validate_model_backends(parser: argparse.ArgumentParser, models: list[str])
             "Claude models require CLAUDE_CLI_ENABLED=1; refusing to record a "
             "matrix of immediate backend failures."
         )
+    if any(model.startswith("kimi-") for model in models) and not _env_enabled(
+        "KIMI_CLI_ENABLED"
+    ):
+        parser.error(
+            "Kimi models require KIMI_CLI_ENABLED=1; refusing to record a "
+            "matrix of immediate backend failures."
+        )
 
 
 def _profile(model: str):
-    profile_id = (
-        "local:claude-cli" if model.startswith("claude-") else "local:openai-cli"
-    )
+    if model.startswith("claude-"):
+        profile_id = "local:claude-cli"
+        resolved_model_id = model
+    elif model.startswith("kimi-"):
+        profile_id = "local:kimi-cli"
+        resolved_model_id = "kimi-code/k3"
+    else:
+        profile_id = "local:openai-cli"
+        resolved_model_id = model
     base = resolve_model_profile("local", profile_id)
     return replace(
         base,
         model_id=model,
-        resolved_model_id=model,
+        resolved_model_id=resolved_model_id,
         display_name=model,
     )
 

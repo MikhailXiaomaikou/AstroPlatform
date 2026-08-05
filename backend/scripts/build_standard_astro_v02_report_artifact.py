@@ -27,8 +27,15 @@ MODELS = (
     "gpt-5.6-terra",
     "gpt-5.6-luna",
     "claude-fable-5",
+    "kimi-k3",
 )
 CONDITIONS = ("direct", "standard_astro")
+REPEATS = 3
+TASK_COUNT = 8
+SAMPLE_MAXIMUM = 12
+EXPECTED_SAMPLES = len(MODELS) * len(CONDITIONS) * TASK_COUNT * REPEATS
+CONDITION_SAMPLES = len(MODELS) * TASK_COUNT * REPEATS
+CONDITION_MAXIMUM = CONDITION_SAMPLES * SAMPLE_MAXIMUM
 DIMENSIONS = (
     "source_traceability",
     "numeric_evidence_constraint",
@@ -56,7 +63,7 @@ TASK_LABELS = {
     "V02_08": "伪证据拒绝",
 }
 RELEASE_LABELS = {
-    "formal_matrix_complete": "192 样本矩阵完整",
+    "formal_matrix_complete": f"{EXPECTED_SAMPLES} 样本矩阵完整",
     "lightweight_route_accuracy_100pct": "任务路由正确率 100%",
     "expected_answer_hard_block_rate_zero": "应答任务硬拦截率为 0",
     "unverified_numeric_or_attribution_escape_zero": "无依据数字或错误归因逃逸为 0",
@@ -86,8 +93,13 @@ def _percentile(values: list[float], quantile: float) -> float:
 def _read_scores(path: Path) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
-    if len(rows) != 192 or len({row["sample_key"] for row in rows}) != 192:
-        raise ValueError("The report artifact requires 192 unique score rows.")
+    if (
+        len(rows) != EXPECTED_SAMPLES
+        or len({row["sample_key"] for row in rows}) != EXPECTED_SAMPLES
+    ):
+        raise ValueError(
+            f"The report artifact requires {EXPECTED_SAMPLES} unique score rows."
+        )
     if {row["model"] for row in rows} != set(MODELS):
         raise ValueError("The score table does not contain the frozen model set.")
     return rows
@@ -107,7 +119,7 @@ def _source_specs(generated_at: str) -> list[dict[str, Any]]:
                     "header = true);"
                 ),
                 "description": (
-                    "Recomputes six frozen 0–2 dimensions from the 192 "
+                    f"Recomputes six frozen 0–2 dimensions from the {EXPECTED_SAMPLES} "
                     "pre-registered user-visible responses and compact receipts."
                 ),
                 "executed_at": generated_at,
@@ -116,14 +128,14 @@ def _source_specs(generated_at: str) -> list[dict[str, Any]]:
                     "standard_astro_v02_evaluation_scores",
                 ],
                 "filters": [
-                    "four frozen models",
+                    "five evaluated models",
                     "direct and standard_astro conditions",
                     "eight pre-registered tasks",
                     "three repeats per cell",
                 ],
                 "metric_definitions": [
                     "sample total = sum of six dimensions, each scored 0–2",
-                    "condition percentage = condition score / (96 samples × 12)",
+                    f"condition percentage = condition score / ({CONDITION_SAMPLES} samples × 12)",
                     "dimension attainment = dimension score / (sample count × 2)",
                     "latency P50/P95 use linear interpolation over completed samples",
                 ],
@@ -301,11 +313,11 @@ def build_artifact(
         {
             "id": "overall-score",
             "title": "总体审计得分",
-            "subtitle": "每个条件 96 个样本，满分 1,152",
+            "subtitle": f"每个条件 {CONDITION_SAMPLES} 个样本，满分 {CONDITION_MAXIMUM:,}",
             "intent": "comparison",
             "question": "Standard Astro 是否在同一冻结量表上优于裸模型？",
             "rationale": "零基线分类柱图直接比较两个条件的总体达成率。",
-            "comparisonContext": {"denominator": "96 × 12", "unit": "%"},
+            "comparisonContext": {"denominator": f"{CONDITION_SAMPLES} × 12", "unit": "%"},
             "type": "bar",
             "dataset": "overall_scores",
             "sourceId": "v02-score-audit",
@@ -327,7 +339,7 @@ def build_artifact(
         },
         {
             "id": "score-by-model",
-            "title": "四模型分项得分",
+            "title": "五模型分项得分",
             "subtitle": "每个模型×条件 24 个样本，满分 288",
             "intent": "comparison",
             "question": "系统增益是否只来自某一个基础模型？",
@@ -359,7 +371,7 @@ def build_artifact(
             "intent": "comparison",
             "question": "系统在哪些任务类型上增益最大，哪里仍有短板？",
             "rationale": "八个有语义顺序的预注册任务用带标记折线展示条件剖面；标题明确其非时间性质。",
-            "comparisonContext": {"grain": "ordered preregistered task category", "denominator": "12 × 12", "unit": "%"},
+            "comparisonContext": {"grain": "ordered preregistered task category", "denominator": f"{len(MODELS) * REPEATS} × 12", "unit": "%"},
             "type": "line",
             "dataset": "task_scores",
             "sourceId": "v02-score-audit",
@@ -383,11 +395,11 @@ def build_artifact(
         {
             "id": "dimension-profile",
             "title": "六维审计得分",
-            "subtitle": "每维每条件满分 192；分值范围 0–2",
+            "subtitle": f"每维每条件满分 {CONDITION_SAMPLES * 2}；分值范围 0–2",
             "intent": "comparison",
             "question": "总体差异由来源、数值、边界还是端到端能力驱动？",
             "rationale": "分组六维柱图保留冻结量表的可比性。",
-            "comparisonContext": {"grain": "rubric dimension × condition", "denominator": "96 × 2", "unit": "%"},
+            "comparisonContext": {"grain": "rubric dimension × condition", "denominator": f"{CONDITION_SAMPLES} × 2", "unit": "%"},
             "type": "bar",
             "dataset": "dimension_scores",
             "sourceId": "v02-score-audit",
@@ -410,7 +422,7 @@ def build_artifact(
         {
             "id": "lightweight-latency",
             "title": "轻量验证任务延迟",
-            "subtitle": "Standard Astro 条件；每题 12 个样本的 P50/P95",
+            "subtitle": f"Standard Astro 条件；每题 {len(MODELS) * REPEATS} 个样本的 P50/P95",
             "intent": "comparison",
             "question": "轻量任务是否达到 60 秒与缓存 15 秒发布门？",
             "rationale": "四个离散轻量任务不构成时间趋势，分组柱图比折线更诚实。",
@@ -461,7 +473,7 @@ def build_artifact(
             "sourceId": "v02-score-audit",
             "body": (
                 "## 技术摘要\n\n"
-                f"四模型、两条件、八任务、三次重复共 **192/192** 个样本。"
+                f"五模型、两条件、八任务、三次重复共 **{EXPECTED_SAMPLES}/{EXPECTED_SAMPLES}** 个样本。"
                 f"裸模型得分 **{direct['score']}/{direct['maximum']} ({direct['percentage']:.1f}%)**；"
                 f"Standard Astro 得分 **{standard['score']}/{standard['maximum']} ({standard['percentage']:.1f}%)**，"
                 f"差值 **{lead:+.1f} 个百分点**。自动发布门：**{auto_status}**。"
@@ -477,7 +489,7 @@ def build_artifact(
             "body": (
                 "## 总体差异来自可审计交付，而不是扩大模型自由\n\n"
                 "下图按相同 12 分量表比较两个条件。零基线保留绝对差异；"
-                "结论只适用于这 96 对条件样本，不能外推为通用模型安全率。"
+                f"结论只适用于这 {CONDITION_SAMPLES} 对条件样本，不能外推为通用模型安全率。"
             ),
             "layout": "full",
         },
@@ -520,8 +532,9 @@ def build_artifact(
             "sourceId": "v02-preregistration",
             "body": (
                 "## 评测范围、分母与状态定义\n\n"
-                "总体条件分母为 96 个样本×12 分；模型分项为 24×12；单任务条件为 12×12；"
-                "单维为 96×2。`full` 表示算术与原文值均核实，`limited` 表示算术有效但来源、"
+                f"总体条件分母为 {CONDITION_SAMPLES} 个样本×12 分；模型分项为 24×12；"
+                f"单任务条件为 {len(MODELS) * REPEATS}×12；单维为 {CONDITION_SAMPLES}×2。"
+                "`full` 表示算术与原文值均核实，`limited` 表示算术有效但来源、"
                 "相关性或适用范围有限，`abstention` 表示缺必需输入，`refusal` 表示拒绝伪造证据，"
                 "`hard_block` 仅指现有平台门真正扣留不安全草稿。"
             ),
@@ -533,7 +546,7 @@ def build_artifact(
             "sourceId": "v02-preregistration",
             "body": (
                 "## 实验设计与验证方法\n\n"
-                "四个模型分别在闭卷裸模型与 Standard Astro 条件下回答同一题面，temperature=0，"
+                "五个模型分别在闭卷裸模型与 Standard Astro 条件下回答同一题面，temperature=0，"
                 "每格重复三次。六维量表在运行前冻结；轻量路径使用受控 operation 与解析 Jacobian，"
                 "不执行模型生成代码。来源与派生数值授权分离，用户提供的 source_status 被忽略。"
                 "此外运行三类非 A/B 故障注入：抓取超时保留算术、来源冲突禁止论文归因、缓存命中逐字节一致。"
@@ -593,7 +606,7 @@ def build_artifact(
         "version": 1,
         "surface": "report",
         "title": TITLE,
-        "description": "192-sample technical evaluation of Standard Astro v0.2 lightweight verification.",
+        "description": f"{EXPECTED_SAMPLES}-sample technical evaluation of Standard Astro v0.2 lightweight verification.",
         "generatedAt": generated_at,
         "sources": sources,
         "charts": charts,
@@ -629,7 +642,7 @@ def main() -> None:
     summary = json.loads(args.summary.read_text(encoding="utf-8"))
     task_payload = json.loads(args.tasks.read_text(encoding="utf-8"))
     tasks = {str(task["id"]): task for task in task_payload.get("tasks") or []}
-    if summary.get("samples") != 192 or len(tasks) != 8:
+    if summary.get("samples") != EXPECTED_SAMPLES or len(tasks) != 8:
         raise ValueError("Summary/tasks do not describe the frozen v0.2 matrix.")
     artifact = build_artifact(rows, summary, tasks)
     args.output.parent.mkdir(parents=True, exist_ok=True)

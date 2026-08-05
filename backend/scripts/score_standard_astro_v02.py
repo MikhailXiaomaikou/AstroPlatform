@@ -29,6 +29,7 @@ MODELS = (
     "gpt-5.6-terra",
     "gpt-5.6-luna",
     "claude-fable-5",
+    "kimi-k3",
 )
 CONDITIONS = ("direct", "standard_astro")
 DIMENSIONS = (

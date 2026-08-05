@@ -14,6 +14,7 @@ MODELS = (
     "gpt-5.6-terra",
     "gpt-5.6-luna",
     "claude-fable-5",
+    "kimi-k3",
 )
 CONDITIONS = ("direct", "standard_astro")
 EXPECTED_TASK_PREFIXES = tuple(f"V02_{index:02d}" for index in range(1, 9))

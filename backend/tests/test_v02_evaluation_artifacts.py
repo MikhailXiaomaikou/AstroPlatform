@@ -305,6 +305,24 @@ def test_evaluator_refuses_disabled_cli_before_recording_failures(monkeypatch) -
         evaluator._validate_model_backends(parser, ["gpt-5.6-sol"])
 
 
+def test_evaluator_uses_authenticated_kimi_k3_profile(monkeypatch) -> None:
+    monkeypatch.setenv("KIMI_CLI_MODEL", "wrong-default-must-not-win")
+
+    profile = evaluator._profile("kimi-k3")
+
+    assert profile.id == "local:kimi-cli"
+    assert profile.model_id == "kimi-k3"
+    assert profile.resolved_model_id == "kimi-code/k3"
+
+
+def test_evaluator_refuses_disabled_kimi_cli(monkeypatch) -> None:
+    monkeypatch.delenv("KIMI_CLI_ENABLED", raising=False)
+    parser = argparse.ArgumentParser()
+
+    with pytest.raises(SystemExit):
+        evaluator._validate_model_backends(parser, ["kimi-k3"])
+
+
 def test_shard_merger_rejects_duplicate_sample_keys(tmp_path) -> None:
     record = {
         "sample_key": "gpt-5.6-sol|direct|V02_01_demo|1",
