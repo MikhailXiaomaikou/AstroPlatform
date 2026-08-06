@@ -105,6 +105,8 @@ def main() -> None:
         "8.2 缺陷修复与验证复跑",
         "修复后",
         "refusal×15",
+        "8.3 实况链路披露",
+        "塌缩",
     ):
         assert expected in summary, f"evaluation summary missing {expected!r}"
 
