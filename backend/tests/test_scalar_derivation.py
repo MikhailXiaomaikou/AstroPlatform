@@ -202,3 +202,21 @@ def test_receipt_hash_is_stable_and_excludes_existing_hash() -> None:
 
     assert first == second
     assert len(first) == 64
+
+
+def test_weighted_mean_rejects_zero_uncertainty_inputs() -> None:
+    # Codex review P1 (PR #46, round 2): pinv treats a zero-variance input as
+    # zero precision, so an exact measurement 10 +/- 0 got ZERO weight and the
+    # weighted mean returned 20 +/- 1 as verified_deterministic. The singular
+    # case must abstain instead of silently inverting the weighting.
+    with pytest.raises(ScalarDerivationError) as exc_info:
+        derive_scalar(
+            operation="weighted_mean",
+            quantities=[
+                _quantity("exact", 10.0, 0.0, unit="km/s/Mpc"),
+                _quantity("measured", 20.0, 1.0, unit="km/s/Mpc"),
+            ],
+            uncertainty_model={"kind": "independent"},
+        )
+
+    assert exc_info.value.code == "zero_uncertainty_weighted_mean"

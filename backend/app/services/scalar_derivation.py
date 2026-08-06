@@ -329,6 +329,19 @@ def derive_scalar(
         jacobian = np.asarray([values[1], values[0]])
         formula = "q0 × q1"
     else:
+        # Codex review P1 (PR #46, round 2): the pseudoinverse maps a
+        # zero-variance direction to zero precision, so an exact input
+        # (sigma=0) would get ZERO weight and the "weighted mean" would
+        # ignore the one measurement that should pin it. Abstain on the
+        # singular case instead of silently inverting the weighting.
+        if any(float(covariance[i, i]) == 0.0 for i in range(len(parsed))):
+            raise ScalarDerivationError(
+                "A weighted mean is undefined when an input has zero "
+                "uncertainty: the exact value would pin the mean, not "
+                "average with it. State how the exact input should be "
+                "treated, or drop it from the combination.",
+                code="zero_uncertainty_weighted_mean",
+            )
         precision = np.linalg.pinv(covariance, hermitian=True)
         ones = np.ones(len(parsed))
         denominator = float(ones @ precision @ ones)

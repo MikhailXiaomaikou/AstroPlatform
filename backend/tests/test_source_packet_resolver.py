@@ -433,3 +433,27 @@ def test_missing_requested_locator_must_not_verify_from_document_head() -> None:
     )
 
     assert status != "verified_exact"
+
+
+def test_partial_compound_locator_must_not_verify_from_other_regions() -> None:
+    # Codex review P1 (PR #46, round 2): with locator "Table 4, LRG2", an
+    # occurrence of "LRG2" elsewhere populated locator_indices and re-enabled
+    # the head fallback, so labels and values outside Table 4 could still
+    # earn verified_exact. Every locator fragment must co-occur in a window.
+    document = {
+        "final_url": "https://ar5iv.labs.arxiv.org/html/2503.14738",
+        "mime": "text/html",
+        "sha256": "a" * 64,
+        "extraction_method": "ar5iv_html",
+        "tables": [],
+        "text": (
+            "The LRG2 sample gives D_M = 17.351 +/- 0.177 and "
+            "D_H = 19.455 +/- 0.330 in the abstract summary, far from any table."
+        ),
+    }
+
+    status, _detail = match_expected_claims(
+        document, _claims(), locator="Table 4, LRG2"
+    )
+
+    assert status != "verified_exact"

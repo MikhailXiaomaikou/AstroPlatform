@@ -615,6 +615,16 @@ def _compact_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).lower()
 
 
+def _locator_fragment_alternatives(fragment: str) -> tuple[str, ...]:
+    """Accepted renderings of one locator fragment inside a compacted window."""
+    alternatives = [fragment]
+    equation_number = re.search(r"(?:equation|eq\.?)\s*(\d+)", fragment, re.I)
+    if equation_number:
+        number = equation_number.group(1)
+        alternatives.extend((f"({number})", f"eq. {number}", f"equation {number}"))
+    return tuple(alternatives)
+
+
 def _candidate_windows(document: dict[str, Any], locator: str) -> list[str]:
     windows: list[str] = []
     locator_text = _compact_text(locator)
@@ -678,6 +688,28 @@ def _candidate_windows(document: dict[str, Any], locator: str) -> list[str]:
                 text[index : index + 3000]
                 for index in range(0, min(len(text), 12000), 3000)
             )
+    # Codex review P1 (PR #46, round 2): a compound locator counted as found
+    # when ANY comma-separated fragment matched, so "Table 4, LRG2" could be
+    # satisfied by an "LRG2" occurrence far from Table 4 and verification
+    # proceeded against unrelated regions. Every fragment (or an accepted
+    # equation rendering of it) must co-occur inside a window for that window
+    # to participate in verification.
+    if locator_text:
+        fragments = [
+            part.strip() for part in locator_text.split(",") if part.strip()
+        ]
+        if fragments:
+            windows = [
+                window
+                for window in windows
+                if all(
+                    any(
+                        alternative in window
+                        for alternative in _locator_fragment_alternatives(fragment)
+                    )
+                    for fragment in fragments
+                )
+            ]
     return windows
 
 

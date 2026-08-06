@@ -122,12 +122,29 @@ class TestDeterministicSourceCheckCollapse:
         "D_M/D_H for that row, with a proper 1-sigma error bar?"
     )
 
-    def test_deterministic_source_check_collapses_to_orchestrator(self, orch):
+    def test_deterministic_source_check_collapses_to_orchestrator(self, orch, monkeypatch):
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "lightweight_verification_enabled", True)
         agents, note = orch._collapse_fast_path(
             ["literature_agent", "observation_agent"], self.NATURAL_RATIO_PROMPT
         )
         assert agents == ["orchestrator"]
         assert note and "deterministic" in note.lower()
+
+    def test_collapse_honors_disabled_feature_flag(self, orch, monkeypatch):
+        # Codex review P2 (PR #46, round 2): with the v0.2 flag off, the
+        # lightweight route does not exist in the loop, so collapsing away the
+        # specialists would leave users with neither the historical fan-out
+        # nor the deterministic path. The collapse must honor the flag.
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "lightweight_verification_enabled", False)
+        agents, note = orch._collapse_fast_path(
+            ["literature_agent", "observation_agent"], self.NATURAL_RATIO_PROMPT
+        )
+        assert agents == ["literature_agent", "observation_agent"]
+        assert note is None
 
     def test_general_literature_question_does_not_collapse(self, orch):
         agents, note = orch._collapse_fast_path(

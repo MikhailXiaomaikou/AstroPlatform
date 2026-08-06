@@ -12,6 +12,7 @@ from app.ai.agents.data_agent import DATA_AGENT
 from app.ai.agents.literature_agent import LITERATURE_AGENT
 from app.ai.agents.observation_agent import OBSERVATION_AGENT
 from app.ai.agents.visualization_agent import VISUALIZATION_AGENT
+from app.config import settings
 from app.services.agent_runtime.prompt_routing import classify_task_kind
 from app.services.event_collector import event_collector
 from app.services.memory_service import memory_service
@@ -68,8 +69,15 @@ class Orchestrator:
         # a registered specialist, so build_runtime_context selects no
         # specialist prompts and the chat route keeps its single-orchestrator
         # default, while the truthy note preserves the classified agents'
-        # tool union.
-        if classify_task_kind(user_message)["task_kind"] == "deterministic_source_check":
+        # tool union. Codex review P2 (PR #46, round 2): gate on the feature
+        # flag — with v0.2 disabled the lightweight route does not exist, and
+        # collapsing would leave neither the historical fan-out nor the
+        # deterministic path.
+        if (
+            settings.lightweight_verification_enabled
+            and classify_task_kind(user_message)["task_kind"]
+            == "deterministic_source_check"
+        ):
             return ["orchestrator"], (
                 "Deterministic source-check fast path: the unified "
                 "RoutingDecision owns this task shape; run the single "
