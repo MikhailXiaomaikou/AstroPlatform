@@ -394,3 +394,42 @@ async def test_no_more_than_two_source_adapters_run_concurrently(monkeypatch) ->
     await resolve_source(_source(), _claims())
 
     assert maximum_active == 2
+
+
+def test_rounded_substring_value_must_not_verify_exact() -> None:
+    # Codex review P1 (PR #46): supplied 17.35/0.17 must not match the
+    # paper's 17.351/0.177 via bare substring containment and gain
+    # verified_exact, which would let truncated inputs be attributed to the
+    # paper as independently matched.
+    claims = _claims()
+    claims[0]["value"] = 17.35
+    claims[0]["standard_uncertainty"] = 0.17
+
+    status, _detail = match_expected_claims(
+        _document(), claims, locator="Table 4, LRG2"
+    )
+
+    assert status != "verified_exact"
+
+
+def test_missing_requested_locator_must_not_verify_from_document_head() -> None:
+    # Codex review P1 (PR #46): when a specific locator is requested but not
+    # found, the document-head fallback windows must not grant verified_exact
+    # for that locator — the requested table/equation was never checked.
+    document = {
+        "final_url": "https://ar5iv.labs.arxiv.org/html/2503.14738",
+        "mime": "text/html",
+        "sha256": "a" * 64,
+        "extraction_method": "ar5iv_html",
+        "tables": [],
+        "text": (
+            "In the abstract we quote D_M = 17.351 +/- 0.177 and "
+            "D_H = 19.455 +/- 0.330 for the combined sample."
+        ),
+    }
+
+    status, _detail = match_expected_claims(
+        document, _claims(), locator="Table 9, QSO"
+    )
+
+    assert status != "verified_exact"

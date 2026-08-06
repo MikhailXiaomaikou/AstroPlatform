@@ -149,3 +149,34 @@ def test_natural_pasted_log_phrasing_is_tagged_untrusted() -> None:
     )
 
     assert "untrusted_evidence_request" in decision["matched_signals"]
+
+
+def test_explicit_chain_execution_routes_heavy() -> None:
+    # Codex review P1 (PR #46): an explicit chain-execution request without
+    # likelihood/fit/sampler vocabulary was classified general, which strips
+    # the cosmology workflow tools from an explicit experiment request.
+    decision = classify_task_kind(
+        "Run the executable cosmology chain with Planck under LCDM"
+    )
+
+    assert decision["task_kind"] == "full_research"
+    assert decision["heavy_route_allowed"] is True
+
+
+def test_negated_chain_execution_stays_lightweight() -> None:
+    decision = classify_task_kind(
+        "Use arXiv:2503.14738 Table 4 LRG2 to recompute D_M/D_H. "
+        "D_M/r_d=17.351 +/- 0.177 and D_H/r_d=19.455 +/- 0.330, rho=-0.404. "
+        "Do not run the cosmology chain."
+    )
+
+    assert decision["task_kind"] == "deterministic_source_check"
+    assert decision["heavy_route_allowed"] is False
+
+
+def test_chain_rule_homework_is_not_heavy_intent() -> None:
+    decision = classify_task_kind(
+        "Explain how to run through the chain rule in my calculus homework"
+    )
+
+    assert decision["task_kind"] != "full_research"

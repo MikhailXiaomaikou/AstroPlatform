@@ -668,8 +668,34 @@ def _candidate_windows(document: dict[str, Any], locator: str) -> list[str]:
                 windows.append(
                     text[max(0, locator_index - 500) : locator_index + 12000]
                 )
-        windows.extend(text[index : index + 3000] for index in range(0, min(len(text), 12000), 3000))
+        # Codex review P1 (PR #46): the document-head fallback may only run
+        # when no locator was requested or the requested locator was actually
+        # found. Otherwise labels and numbers occurring elsewhere in the paper
+        # would earn verified_exact for a table/equation that was never
+        # checked — a false source attribution.
+        if not locator_text or locator_indices:
+            windows.extend(
+                text[index : index + 3000]
+                for index in range(0, min(len(text), 12000), 3000)
+            )
     return windows
+
+
+def _number_token_present(token: str, window: str) -> bool:
+    """Value-preserving numeric containment.
+
+    Codex review P1 (PR #46): bare substring matching let a truncated supplied
+    value (17.35) match inside the paper's 17.351 and earn verified_exact.
+    The token must stand on its own numeric boundary; the only permitted
+    continuations are ones that keep the parsed value identical — trailing
+    zeros after a decimal token (0.33 matches the paper's 0.330) and a pure
+    ``.0…`` tail after an integer token (73 matches 73.0 but never 73.04).
+    """
+    value_preserving_suffix = "0*" if "." in token else r"(?:\.0+)?"
+    pattern = (
+        rf"(?<![0-9.eE+−-]){re.escape(token)}{value_preserving_suffix}(?!\.?[0-9])"
+    )
+    return re.search(pattern, window) is not None
 
 
 def match_expected_claims(
@@ -692,7 +718,10 @@ def match_expected_claims(
                 expected_numbers.append(
                     _number_tokens(float(claim["standard_uncertainty"]))
                 )
-            number_match = all(any(token.lower() in window for token in tokens) for tokens in expected_numbers)
+            number_match = all(
+                any(_number_token_present(token.lower(), window) for token in tokens)
+                for tokens in expected_numbers
+            )
             all_labels = all_labels and label_match
             all_numbers = all_numbers and number_match
         if all_labels and all_numbers:

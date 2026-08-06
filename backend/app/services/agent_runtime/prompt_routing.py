@@ -35,6 +35,18 @@ _HEAVY_INTENT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("sampling", re.compile(r"\b(?:sample|sampling|sampler|mcmc|nested\s+sampl)|采样", re.I)),
     ("posterior", re.compile(r"\bposterior\b|后验", re.I)),
     ("model_likelihood_comparison", re.compile(r"(?:compare|comparison|比较).{0,40}(?:model|模型).{0,40}(?:likelihood|似然)", re.I)),
+    # Codex review P1 (PR #46): an explicit chain-execution request phrased
+    # without likelihood/fit/sampler vocabulary ("Run the executable cosmology
+    # chain...") must count as heavy intent. Bare "chain" stays excluded on
+    # purpose (chain rule, chain of reasoning); the noun must be qualified or
+    # the sampler named explicitly.
+    ("chain_execution", re.compile(
+        r"\bcobaya\b|"
+        r"\b(?:run|rerun|re-run|execute|launch)\b[^.;。；]{0,60}"
+        r"\b(?:cosmology|likelihood|mcmc|posterior|parameter)\s+chains?\b|"
+        r"(?:跑|执行|运行)[^.;。；]{0,30}(?:宇宙学|似然|参数)链",
+        re.I,
+    )),
 )
 _NEGATION_TOKEN = re.compile(
     r"(?:\b(?:do\s+not|don't|without|avoid|exclude|excluding|not|never)\b|"
