@@ -49,6 +49,29 @@ DIRECT_SYSTEM = (
 )
 
 
+_LLM_CALL_COUNT = 0
+
+
+def _install_llm_call_counter() -> None:
+    """Count agent-loop model calls via the loop's late-binding shim.
+
+    The agent loop resolves ``chat._llm_messages_create`` at call time (the
+    monkeypatch channel its own docstring documents), so wrapping it here
+    counts every model completion the loop makes without touching product
+    code. The deadline-summary fallback calls ``inference_router.route``
+    directly and is not counted, so ``llm_calls`` is a lower bound on
+    degraded samples.
+    """
+    original = chat._llm_messages_create
+
+    async def _counting(**kwargs):
+        global _LLM_CALL_COUNT
+        _LLM_CALL_COUNT += 1
+        return await original(**kwargs)
+
+    chat._llm_messages_create = _counting
+
+
 def _env_enabled(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -259,6 +282,7 @@ async def _run_sample(
     condition: str,
     task: dict[str, Any],
     repeat_index: int,
+    evaluation_id: str,
 ) -> dict[str, Any]:
     task_id = str(task["id"])
     key = _sample_key(
@@ -268,9 +292,10 @@ async def _run_sample(
         repeat_index=repeat_index,
     )
     started = time.monotonic()
+    calls_before = _LLM_CALL_COUNT
     record: dict[str, Any] = {
         "schema_version": 1,
-        "evaluation_id": "standard-astro-v02-lightweight-verification",
+        "evaluation_id": evaluation_id,
         "sample_key": key,
         "model": model,
         "condition": condition,
@@ -293,6 +318,13 @@ async def _run_sample(
             }
         )
     record["duration_seconds"] = round(time.monotonic() - started, 3)
+    # Direct runs exactly one completion outside the counted shim; the
+    # standard condition runs through the agent loop where the shim counts
+    # every model call (0 means the deterministic route answered alone).
+    if condition == "direct":
+        record["llm_calls"] = 1 if record["status"] == "completed" else 0
+    else:
+        record["llm_calls"] = _LLM_CALL_COUNT - calls_before
     return record
 
 
@@ -315,6 +347,10 @@ async def main() -> None:
     parser.add_argument("--task-ids", nargs="+")
     parser.add_argument("--repeats", type=int, default=DEFAULT_REPEATS)
     parser.add_argument("--no-resume", action="store_true")
+    parser.add_argument(
+        "--evaluation-id",
+        default="standard-astro-v02-lightweight-verification",
+    )
     args = parser.parse_args()
     if args.repeats < 1:
         parser.error("--repeats must be positive")
@@ -332,6 +368,7 @@ async def main() -> None:
         tasks = [task for task in tasks if task["id"] in requested]
     completed = set() if args.no_resume else _completed_keys(args.output)
     settings.lightweight_verification_enabled = True
+    _install_llm_call_counter()
 
     total = len(args.models) * len(args.conditions) * len(tasks) * args.repeats
     pending = 0
@@ -353,6 +390,7 @@ async def main() -> None:
                         condition=condition,
                         task=task,
                         repeat_index=repeat_index,
+                        evaluation_id=args.evaluation_id,
                     )
                     _append_jsonl(args.output, sample)
                     print(
