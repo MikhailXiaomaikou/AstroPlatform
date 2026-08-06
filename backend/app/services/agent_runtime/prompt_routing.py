@@ -154,8 +154,13 @@ def _scalar_quantities_from_prompt(text: str) -> list[dict[str, Any]]:
 
 
 def _uncertainty_model_from_prompt(text: str, quantity_count: int) -> dict[str, Any] | None:
+    # Connector accepts natural phrasings ("a correlation of -0.404", "the
+    # correlation is -0.404") in addition to spec-style "rho=-0.404"; the
+    # 2026-08-06 natural matrix showed the equals-only form suppressed every
+    # legitimate V02_01 answer downstream.
     rho_match = re.search(
-        rf"(?:rho|ρ|correlation(?:\s+coefficient)?|相关系数)\s*(?:\([^)]*\))?\s*=\s*({_SCALAR_VALUE})",
+        rf"(?:rho|ρ|correlation(?:\s+coefficient)?|相关系数)\s*(?:\([^)]*\))?\s*"
+        rf"(?:=|:|\bof\b|\bis\b|为|是)\s*({_SCALAR_VALUE})",
         text,
         re.I,
     )
@@ -167,6 +172,71 @@ def _uncertainty_model_from_prompt(text: str, quantity_count: int) -> dict[str, 
         }
     if re.search(r"\b(?:independent|uncorrelated)\b|相互独立|假设独立|忽略相关", text, re.I):
         return {"kind": "independent"}
+    return None
+
+
+_INDEPENDENCE_STATED_RE = re.compile(
+    r"\b(?:independent|uncorrelated)\b|相互独立|假设独立|忽略相关", re.I
+)
+
+
+def _prompt_numbers(text: str) -> list[float]:
+    values: list[float] = []
+    for match in re.finditer(_SCALAR_VALUE, text.replace("−", "-")):
+        try:
+            values.append(float(match.group()))
+        except ValueError:
+            continue
+    return values
+
+
+def scalar_call_echo_violation(
+    call_input: dict[str, Any], prompt_text: str
+) -> str | None:
+    """Echo-validate a model-authored verify_scalar_derivation call.
+
+    Fabrication guard for the incomplete-packet fallback: the model may
+    complete the parse the deterministic parser missed, but every numeric
+    input must appear in the user's own prompt, and an independence
+    assumption must have been stated by the user. Returns a violation
+    description, or None when the call is fully echoed.
+    """
+    numbers = _prompt_numbers(prompt_text)
+
+    def echoed(value: float) -> bool:
+        return any(
+            abs(value - candidate) <= 1e-9 * max(1.0, abs(candidate))
+            for candidate in numbers
+        )
+
+    for quantity in call_input.get("quantities") or []:
+        for field in ("value", "standard_uncertainty"):
+            raw = quantity.get(field)
+            if not isinstance(raw, (int, float)) or not echoed(float(raw)):
+                label = quantity.get("label") or quantity.get("id") or "quantity"
+                return (
+                    f"{label} {field} {raw!r} does not appear in the user prompt"
+                )
+    model = call_input.get("uncertainty_model") or {}
+    kind = model.get("kind")
+    if kind == "correlation_matrix":
+        for i, row in enumerate(model.get("matrix") or []):
+            for j, cell in enumerate(row or []):
+                if i == j:
+                    continue
+                if not isinstance(cell, (int, float)) or not echoed(float(cell)):
+                    return (
+                        f"correlation coefficient {cell!r} does not appear in "
+                        "the user prompt"
+                    )
+    elif kind == "independent":
+        if not _INDEPENDENCE_STATED_RE.search(prompt_text):
+            return "independence was not stated by the user"
+    else:
+        return (
+            f"uncertainty_model kind {kind!r} is not allowed for the "
+            "incomplete-packet fallback"
+        )
     return None
 
 
@@ -285,11 +355,14 @@ def classify_task_kind(text: str) -> RoutingDecision:
     active_heavy, negated_heavy = _active_and_negated_heavy_signals(normalized)
     references = _source_references_from_prompt(normalized)
     operation = _requested_scalar_operation(normalized)
+    # Noun set includes log/export: the 2026-08-06 natural matrix phrased the
+    # fake transcript as a "pasted log", the detector never fired, and 15
+    # correct model refusals were mislabeled disposition=full.
     untrusted_evidence_request = bool(
         re.search(
             r"\b(?:pasted|paste|fake|fabricated|external)\b.{0,80}"
-            r"\b(?:tool\s+transcript|transcript|tool\s+result|evidence)\b|"
-            r"粘贴|伪造|外部.{0,40}(?:工具记录|工具结果|证据)",
+            r"\b(?:tool\s+transcript|transcript|tool\s+result|evidence|log|export)\b|"
+            r"粘贴|伪造|外部.{0,40}(?:工具记录|工具结果|证据|日志|导出)",
             normalized,
             re.I,
         )

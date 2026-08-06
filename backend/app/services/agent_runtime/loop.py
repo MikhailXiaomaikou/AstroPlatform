@@ -70,6 +70,7 @@ from app.services.agent_runtime.prompt_routing import (
     _research_evidence_graph_from_tool_results,
     _research_plan_from_tool_results,
     _unsupported_cosmology_anchor_numeric_comparison,
+    scalar_call_echo_violation,
 )
 from app.services.agent_runtime.runtime_config import (
     _is_tool_inventory_request,
@@ -982,11 +983,29 @@ async def _run_agent_loop(
                 for tool in visible_tools
                 if tool.get("name") == "verify_scalar_derivation"
             ]
-        elif scalar_verification_done or scalar_verification_incomplete:
-            # Once the receipt exists, synthesis is prose-only. For an
-            # incomplete packet, ask for the missing fields rather than
-            # allowing a planner/search detour to invent them.
+        elif scalar_verification_done:
+            # Once the receipt exists, synthesis is prose-only.
             visible_tools = []
+        elif scalar_verification_incomplete:
+            # 2026-08-06 natural-matrix fix: when the parser already found the
+            # quantities and only the uncertainty statement failed to parse,
+            # let the model complete the parse through the controlled tool
+            # (inputs are echo-validated against the prompt before dispatch).
+            # In every other incomplete state, keep asking for the missing
+            # fields rather than allowing a planner/search detour to invent
+            # them.
+            _missing_now = set(
+                str(item)
+                for item in (routing_decision or {}).get("missing_inputs") or []
+            )
+            if _missing_now == {"uncertainty_model"}:
+                visible_tools = [
+                    tool
+                    for tool in visible_tools
+                    if tool.get("name") == "verify_scalar_derivation"
+                ]
+            else:
+                visible_tools = []
         elif inline_statistics_pending:
             # The user supplied the numerical arrays directly. Use the
             # deterministic statistics tool as the citable path; do not let
@@ -1133,19 +1152,39 @@ async def _run_agent_loop(
                 + "reported those values.]"
             )
         elif scalar_verification_incomplete:
-            missing = ", ".join(
+            missing_items = [
                 str(item)
                 for item in (routing_decision or {}).get("missing_inputs") or []
-            )
-            system_this_call = (
-                system_this_call
-                + "\n\n[RUNTIME: routing classified this as an incomplete "
-                + "deterministic_source_check. No research or calculation "
-                + "tools are available because required inputs are missing: "
-                + f"{missing or 'unspecified inputs'}. Ask for exactly these "
-                + "items. Do not fall back to a research matrix, likelihood, "
-                + "archive guess, or remembered numbers.]"
-            )
+            ]
+            missing = ", ".join(missing_items)
+            if set(missing_items) == {"uncertainty_model"}:
+                system_this_call = (
+                    system_this_call
+                    + "\n\n[RUNTIME: routing classified this as a "
+                    + "deterministic_source_check. The parser found the "
+                    + "quantities but could not parse the correlation/"
+                    + "independence statement. verify_scalar_derivation is "
+                    + "available: re-read the user's own words and complete "
+                    + "the call yourself. Pass a correlation matrix only with "
+                    + "a coefficient the user actually stated, or "
+                    + "kind=independent only if the user explicitly said the "
+                    + "inputs are independent/uncorrelated. Every numeric "
+                    + "input must appear verbatim in the user prompt; "
+                    + "invented inputs are rejected before execution. If the "
+                    + "user stated neither correlation nor independence, ask "
+                    + "for exactly that instead. Do not hand-calculate and do "
+                    + "not start any research tool.]"
+                )
+            else:
+                system_this_call = (
+                    system_this_call
+                    + "\n\n[RUNTIME: routing classified this as an incomplete "
+                    + "deterministic_source_check. No research or calculation "
+                    + "tools are available because required inputs are missing: "
+                    + f"{missing or 'unspecified inputs'}. Ask for exactly these "
+                    + "items. Do not fall back to a research matrix, likelihood, "
+                    + "archive guess, or remembered numbers.]"
+                )
         elif inline_statistics_pending:
             system_this_call = (
                 system_this_call
@@ -1882,6 +1921,37 @@ async def _run_agent_loop(
                     "name": tool_call["name"],
                     "input": tool_call["input"],
                     "result": _suppressed_line_measurement_python_result(fit_ready_literature_cache_keys),
+                }
+            elif (
+                scalar_verification_incomplete
+                and tool_name == "verify_scalar_derivation"
+                and (
+                    scalar_echo_violation := scalar_call_echo_violation(
+                        tool_call.get("input") or {}, latest_user_text
+                    )
+                )
+            ):
+                # Fabrication guard for the incomplete-packet fallback: the
+                # model may complete the parse, never invent inputs. Reject
+                # with a corrective result instead of executing.
+                suppressed_tool_results[tool_call["id"]] = {
+                    "id": tool_call["id"],
+                    "name": tool_call["name"],
+                    "input": tool_call["input"],
+                    "result": {
+                        "success": False,
+                        "__tool_status__": "REJECTED",
+                        "__internal_suppressed__": True,
+                        "__do_not_claim__": True,
+                        "error": f"echo validation failed: {scalar_echo_violation}",
+                        "__message_to_model__": (
+                            "The incomplete-packet fallback only accepts "
+                            "inputs the user actually wrote. Use only numbers "
+                            "present in the user prompt; if the correlation "
+                            "or independence statement is genuinely absent, "
+                            "ask the user for it instead of assuming."
+                        ),
+                    },
                 }
             else:
                 real_tool_calls.append(tool_call)

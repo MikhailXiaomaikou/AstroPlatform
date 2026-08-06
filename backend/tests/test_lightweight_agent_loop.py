@@ -227,3 +227,152 @@ def test_exploration_route_physically_hides_heavy_tools() -> None:
     assert "run_research_matrix" not in observed_tools
     assert "run_cosmology_likelihood_chain" not in observed_tools
     assert result["validation_summary"]["task_kind"] == "research_exploration"
+
+
+UNPARSED_RHO_PROMPT = (
+    "From arXiv:2503.14738 Table 4 LRG2, D_M/r_d = 17.351 +/- 0.177 and "
+    "D_H/r_d = 19.455 +/- 0.330; the two entries share a cross term of "
+    "-0.404. What is D_M/D_H with its 1-sigma error?"
+)
+
+
+def test_incomplete_packet_with_quantities_lets_model_complete_the_parse() -> None:
+    # Regression (natural matrix 2026-08-06): an unparsed uncertainty
+    # statement used to hide every tool and steer the model into asking for
+    # inputs that were already in the prompt; the zero-data gate then killed
+    # the legitimate answer. With only uncertainty_model missing, the model
+    # must be able to finish the parse through the controlled tool.
+    observed_tools: list[list[str]] = []
+    executed: list[list[dict[str, Any]]] = []
+
+    async def fake_llm(*, tools, **kwargs):
+        observed_tools.append([str(tool.get("name")) for tool in tools])
+        if len(observed_tools) == 1:
+            return {
+                "content": "",
+                "stop_reason": "tool_use",
+                "tool_calls": [
+                    {
+                        "id": "model-completed-parse",
+                        "name": "verify_scalar_derivation",
+                        "input": {
+                            "operation": "ratio",
+                            "quantities": [
+                                {
+                                    "id": "D_M_r_d",
+                                    "label": "D_M/r_d",
+                                    "value": 17.351,
+                                    "standard_uncertainty": 0.177,
+                                    "unit": "dimensionless",
+                                },
+                                {
+                                    "id": "D_H_r_d",
+                                    "label": "D_H/r_d",
+                                    "value": 19.455,
+                                    "standard_uncertainty": 0.330,
+                                    "unit": "dimensionless",
+                                },
+                            ],
+                            "uncertainty_model": {
+                                "kind": "correlation_matrix",
+                                "matrix": [[1.0, -0.404], [-0.404, 1.0]],
+                            },
+                            "sources": [
+                                {
+                                    "id": "source-1",
+                                    "kind": "arxiv",
+                                    "identifier": "2503.14738",
+                                    "locator": "Table 4, LRG2",
+                                }
+                            ],
+                        },
+                    }
+                ],
+            }
+        return {
+            "content": "The controlled check completed; see the receipt.",
+            "stop_reason": "end_turn",
+            "tool_calls": [],
+        }
+
+    async def fake_exec(tool_calls, *_args, **_kwargs):
+        executed.append(tool_calls)
+        return [
+            {
+                "id": tool_calls[0]["id"],
+                "name": "verify_scalar_derivation",
+                "input": tool_calls[0]["input"],
+                "result": _full_receipt(),
+            }
+        ]
+
+    result = _run_loop(
+        fake_llm,
+        fake_exec,
+        UNPARSED_RHO_PROMPT,
+        [
+            {"name": "verify_scalar_derivation", "input_schema": {}},
+            {"name": "plan_research_program", "input_schema": {}},
+        ],
+    )
+
+    assert observed_tools[0] == ["verify_scalar_derivation"]
+    assert len(executed) == 1
+    assert executed[0][0]["name"] == "verify_scalar_derivation"
+    summary = result["validation_summary"]
+    assert summary["task_kind"] == "deterministic_source_check"
+    assert summary["response_disposition"] == "full"
+
+
+def test_incomplete_packet_fallback_rejects_uneechoed_inputs() -> None:
+    # The fallback must not become a fabrication vector: a correlation the
+    # user never wrote is rejected before execution with a corrective result.
+    async def fake_llm(*, tools, **kwargs):
+        return {
+            "content": "",
+            "stop_reason": "tool_use",
+            "tool_calls": [
+                {
+                    "id": "fabricated-rho",
+                    "name": "verify_scalar_derivation",
+                    "input": {
+                        "operation": "ratio",
+                        "quantities": [
+                            {
+                                "id": "D_M_r_d",
+                                "label": "D_M/r_d",
+                                "value": 17.351,
+                                "standard_uncertainty": 0.177,
+                                "unit": "dimensionless",
+                            },
+                            {
+                                "id": "D_H_r_d",
+                                "label": "D_H/r_d",
+                                "value": 19.455,
+                                "standard_uncertainty": 0.330,
+                                "unit": "dimensionless",
+                            },
+                        ],
+                        "uncertainty_model": {
+                            "kind": "correlation_matrix",
+                            "matrix": [[1.0, -0.5], [-0.5, 1.0]],
+                        },
+                        "sources": [],
+                    },
+                }
+            ],
+        }
+
+    async def fake_exec(*args, **kwargs):  # pragma: no cover - must not run
+        raise AssertionError("unechoed scalar call must not execute")
+
+    result = _run_loop(
+        fake_llm,
+        fake_exec,
+        UNPARSED_RHO_PROMPT,
+        [{"name": "verify_scalar_derivation", "input_schema": {}}],
+    )
+
+    summary = result["validation_summary"]
+    assert summary["task_kind"] == "deterministic_source_check"
+    assert summary["response_disposition"] != "full"
