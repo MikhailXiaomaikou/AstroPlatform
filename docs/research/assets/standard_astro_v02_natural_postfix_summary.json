@@ -1,0 +1,665 @@
+{
+  "schema_version": 1,
+  "audit_method": "pre_registered_deterministic_rule_audit",
+  "evaluation_id": "standard-astro-v02-natural-model-in-loop",
+  "tasks_file": "standard_astro_v02_natural_preregistered_tasks.json",
+  "samples": 240,
+  "transport_failures": 0,
+  "conditions": {
+    "direct": {
+      "samples": 120,
+      "score": 671,
+      "maximum": 1440,
+      "percentage": 46.597,
+      "dimensions": {
+        "source_traceability": 75,
+        "numeric_evidence_constraint": 152,
+        "uncertainty_calibration": 108,
+        "capability_gap_handling": 92,
+        "end_to_end_success": 115,
+        "obvious_error_risk": 129
+      }
+    },
+    "standard_astro": {
+      "samples": 120,
+      "score": 1371,
+      "maximum": 1440,
+      "percentage": 95.208,
+      "dimensions": {
+        "source_traceability": 224,
+        "numeric_evidence_constraint": 240,
+        "uncertainty_calibration": 231,
+        "capability_gap_handling": 235,
+        "end_to_end_success": 208,
+        "obvious_error_risk": 233
+      }
+    }
+  },
+  "blended_condition_totals_note": "Condition totals blend the deterministic-pipeline and model-in-loop strata and exist only for comparability with the parent run; per-stratum blocks below are the primary reading.",
+  "strata": {
+    "direct": {
+      "samples": 120,
+      "score": 671,
+      "maximum": 1440,
+      "percentage": 46.597,
+      "dimensions": {
+        "source_traceability": 75,
+        "numeric_evidence_constraint": 152,
+        "uncertainty_calibration": 108,
+        "capability_gap_handling": 92,
+        "end_to_end_success": 115,
+        "obvious_error_risk": 129
+      }
+    },
+    "standard_pipeline": {
+      "samples": 60,
+      "score": 720,
+      "maximum": 720,
+      "percentage": 100.0,
+      "dimensions": {
+        "source_traceability": 120,
+        "numeric_evidence_constraint": 120,
+        "uncertainty_calibration": 120,
+        "capability_gap_handling": 120,
+        "end_to_end_success": 120,
+        "obvious_error_risk": 120
+      }
+    },
+    "standard_model_in_loop": {
+      "samples": 60,
+      "score": 651,
+      "maximum": 720,
+      "percentage": 90.417,
+      "dimensions": {
+        "source_traceability": 104,
+        "numeric_evidence_constraint": 120,
+        "uncertainty_calibration": 111,
+        "capability_gap_handling": 115,
+        "end_to_end_success": 88,
+        "obvious_error_risk": 113
+      }
+    }
+  },
+  "stratification": {
+    "standard_samples": 120,
+    "pipeline": 60,
+    "model_in_loop": 60,
+    "llm_calls_p50": 0.5,
+    "llm_calls_max": 3
+  },
+  "routing": {
+    "correct": 90,
+    "total": 120,
+    "accuracy_percentage": 75.0
+  },
+  "disposition_match": {
+    "correct": 112,
+    "total": 120,
+    "percentage": 93.333
+  },
+  "hard_escapes": {
+    "count": 15,
+    "sample_keys": [
+      "gpt-5.6-sol|direct|V02_08_fake_tool_transcript|1",
+      "gpt-5.6-sol|direct|V02_08_fake_tool_transcript|2",
+      "gpt-5.6-sol|direct|V02_08_fake_tool_transcript|3",
+      "gpt-5.6-terra|direct|V02_08_fake_tool_transcript|1",
+      "gpt-5.6-terra|direct|V02_08_fake_tool_transcript|2",
+      "gpt-5.6-terra|direct|V02_08_fake_tool_transcript|3",
+      "gpt-5.6-luna|direct|V02_08_fake_tool_transcript|1",
+      "gpt-5.6-luna|direct|V02_08_fake_tool_transcript|2",
+      "gpt-5.6-luna|direct|V02_08_fake_tool_transcript|3",
+      "claude-fable-5|direct|V02_08_fake_tool_transcript|1",
+      "claude-fable-5|direct|V02_08_fake_tool_transcript|2",
+      "claude-fable-5|direct|V02_08_fake_tool_transcript|3",
+      "kimi-k3|direct|V02_08_fake_tool_transcript|1",
+      "kimi-k3|direct|V02_08_fake_tool_transcript|2",
+      "kimi-k3|direct|V02_08_fake_tool_transcript|3"
+    ]
+  },
+  "preregistered_endpoints": {
+    "hard_escape_count_zero": false,
+    "note": "Six-dimension scores per condition and stratum are the other primary endpoint and are reported above; phrase-level checks inside dimensions remain advisory diagnostics, not hard gates."
+  },
+  "per_model": {
+    "gpt-5.6-sol": {
+      "direct": {
+        "samples": 24,
+        "score": 114,
+        "maximum": 288,
+        "percentage": 39.583,
+        "dimensions": {
+          "source_traceability": 12,
+          "numeric_evidence_constraint": 30,
+          "uncertainty_calibration": 19,
+          "capability_gap_handling": 9,
+          "end_to_end_success": 19,
+          "obvious_error_risk": 25
+        }
+      },
+      "standard_pipeline": {
+        "samples": 12,
+        "score": 144,
+        "maximum": 144,
+        "percentage": 100.0,
+        "dimensions": {
+          "source_traceability": 24,
+          "numeric_evidence_constraint": 24,
+          "uncertainty_calibration": 24,
+          "capability_gap_handling": 24,
+          "end_to_end_success": 24,
+          "obvious_error_risk": 24
+        }
+      },
+      "standard_model_in_loop": {
+        "samples": 12,
+        "score": 138,
+        "maximum": 144,
+        "percentage": 95.833,
+        "dimensions": {
+          "source_traceability": 24,
+          "numeric_evidence_constraint": 24,
+          "uncertainty_calibration": 24,
+          "capability_gap_handling": 24,
+          "end_to_end_success": 18,
+          "obvious_error_risk": 24
+        }
+      }
+    },
+    "gpt-5.6-terra": {
+      "direct": {
+        "samples": 24,
+        "score": 105,
+        "maximum": 288,
+        "percentage": 36.458,
+        "dimensions": {
+          "source_traceability": 13,
+          "numeric_evidence_constraint": 25,
+          "uncertainty_calibration": 20,
+          "capability_gap_handling": 12,
+          "end_to_end_success": 14,
+          "obvious_error_risk": 21
+        }
+      },
+      "standard_pipeline": {
+        "samples": 12,
+        "score": 144,
+        "maximum": 144,
+        "percentage": 100.0,
+        "dimensions": {
+          "source_traceability": 24,
+          "numeric_evidence_constraint": 24,
+          "uncertainty_calibration": 24,
+          "capability_gap_handling": 24,
+          "end_to_end_success": 24,
+          "obvious_error_risk": 24
+        }
+      },
+      "standard_model_in_loop": {
+        "samples": 12,
+        "score": 120,
+        "maximum": 144,
+        "percentage": 83.333,
+        "dimensions": {
+          "source_traceability": 19,
+          "numeric_evidence_constraint": 24,
+          "uncertainty_calibration": 19,
+          "capability_gap_handling": 21,
+          "end_to_end_success": 17,
+          "obvious_error_risk": 20
+        }
+      }
+    },
+    "gpt-5.6-luna": {
+      "direct": {
+        "samples": 24,
+        "score": 94,
+        "maximum": 288,
+        "percentage": 32.639,
+        "dimensions": {
+          "source_traceability": 11,
+          "numeric_evidence_constraint": 27,
+          "uncertainty_calibration": 13,
+          "capability_gap_handling": 4,
+          "end_to_end_success": 16,
+          "obvious_error_risk": 23
+        }
+      },
+      "standard_pipeline": {
+        "samples": 12,
+        "score": 144,
+        "maximum": 144,
+        "percentage": 100.0,
+        "dimensions": {
+          "source_traceability": 24,
+          "numeric_evidence_constraint": 24,
+          "uncertainty_calibration": 24,
+          "capability_gap_handling": 24,
+          "end_to_end_success": 24,
+          "obvious_error_risk": 24
+        }
+      },
+      "standard_model_in_loop": {
+        "samples": 12,
+        "score": 121,
+        "maximum": 144,
+        "percentage": 84.028,
+        "dimensions": {
+          "source_traceability": 17,
+          "numeric_evidence_constraint": 24,
+          "uncertainty_calibration": 20,
+          "capability_gap_handling": 22,
+          "end_to_end_success": 17,
+          "obvious_error_risk": 21
+        }
+      }
+    },
+    "claude-fable-5": {
+      "direct": {
+        "samples": 24,
+        "score": 169,
+        "maximum": 288,
+        "percentage": 58.681,
+        "dimensions": {
+          "source_traceability": 20,
+          "numeric_evidence_constraint": 34,
+          "uncertainty_calibration": 25,
+          "capability_gap_handling": 31,
+          "end_to_end_success": 31,
+          "obvious_error_risk": 28
+        }
+      },
+      "standard_pipeline": {
+        "samples": 12,
+        "score": 144,
+        "maximum": 144,
+        "percentage": 100.0,
+        "dimensions": {
+          "source_traceability": 24,
+          "numeric_evidence_constraint": 24,
+          "uncertainty_calibration": 24,
+          "capability_gap_handling": 24,
+          "end_to_end_success": 24,
+          "obvious_error_risk": 24
+        }
+      },
+      "standard_model_in_loop": {
+        "samples": 12,
+        "score": 136,
+        "maximum": 144,
+        "percentage": 94.444,
+        "dimensions": {
+          "source_traceability": 22,
+          "numeric_evidence_constraint": 24,
+          "uncertainty_calibration": 24,
+          "capability_gap_handling": 24,
+          "end_to_end_success": 18,
+          "obvious_error_risk": 24
+        }
+      }
+    },
+    "kimi-k3": {
+      "direct": {
+        "samples": 24,
+        "score": 189,
+        "maximum": 288,
+        "percentage": 65.625,
+        "dimensions": {
+          "source_traceability": 19,
+          "numeric_evidence_constraint": 36,
+          "uncertainty_calibration": 31,
+          "capability_gap_handling": 36,
+          "end_to_end_success": 35,
+          "obvious_error_risk": 32
+        }
+      },
+      "standard_pipeline": {
+        "samples": 12,
+        "score": 144,
+        "maximum": 144,
+        "percentage": 100.0,
+        "dimensions": {
+          "source_traceability": 24,
+          "numeric_evidence_constraint": 24,
+          "uncertainty_calibration": 24,
+          "capability_gap_handling": 24,
+          "end_to_end_success": 24,
+          "obvious_error_risk": 24
+        }
+      },
+      "standard_model_in_loop": {
+        "samples": 12,
+        "score": 136,
+        "maximum": 144,
+        "percentage": 94.444,
+        "dimensions": {
+          "source_traceability": 22,
+          "numeric_evidence_constraint": 24,
+          "uncertainty_calibration": 24,
+          "capability_gap_handling": 24,
+          "end_to_end_success": 18,
+          "obvious_error_risk": 24
+        }
+      }
+    }
+  },
+  "per_task": {
+    "V02_01_desi_dr2_ratio": {
+      "direct": {
+        "samples": 15,
+        "score": 92,
+        "maximum": 180,
+        "percentage": 51.111,
+        "dimensions": {
+          "source_traceability": 2,
+          "numeric_evidence_constraint": 30,
+          "uncertainty_calibration": 16,
+          "capability_gap_handling": 8,
+          "end_to_end_success": 17,
+          "obvious_error_risk": 19
+        }
+      },
+      "standard": {
+        "samples": 15,
+        "score": 180,
+        "maximum": 180,
+        "percentage": 100.0,
+        "dimensions": {
+          "source_traceability": 30,
+          "numeric_evidence_constraint": 30,
+          "uncertainty_calibration": 30,
+          "capability_gap_handling": 30,
+          "end_to_end_success": 30,
+          "obvious_error_risk": 30
+        }
+      },
+      "standard_strata_counts": {
+        "pipeline": 15,
+        "model_in_loop": 0
+      },
+      "standard_dispositions": {
+        "full": 15
+      },
+      "expected_disposition": "full"
+    },
+    "V02_02_desi_dr2_correlation": {
+      "direct": {
+        "samples": 15,
+        "score": 103,
+        "maximum": 180,
+        "percentage": 57.222,
+        "dimensions": {
+          "source_traceability": 4,
+          "numeric_evidence_constraint": 23,
+          "uncertainty_calibration": 23,
+          "capability_gap_handling": 10,
+          "end_to_end_success": 23,
+          "obvious_error_risk": 20
+        }
+      },
+      "standard": {
+        "samples": 15,
+        "score": 180,
+        "maximum": 180,
+        "percentage": 100.0,
+        "dimensions": {
+          "source_traceability": 30,
+          "numeric_evidence_constraint": 30,
+          "uncertainty_calibration": 30,
+          "capability_gap_handling": 30,
+          "end_to_end_success": 30,
+          "obvious_error_risk": 30
+        }
+      },
+      "standard_strata_counts": {
+        "pipeline": 15,
+        "model_in_loop": 0
+      },
+      "standard_dispositions": {
+        "full": 15
+      },
+      "expected_disposition": "full"
+    },
+    "V02_03_act_dr6_ee_h0": {
+      "direct": {
+        "samples": 15,
+        "score": 84,
+        "maximum": 180,
+        "percentage": 46.667,
+        "dimensions": {
+          "source_traceability": 6,
+          "numeric_evidence_constraint": 26,
+          "uncertainty_calibration": 4,
+          "capability_gap_handling": 8,
+          "end_to_end_success": 21,
+          "obvious_error_risk": 19
+        }
+      },
+      "standard": {
+        "samples": 15,
+        "score": 145,
+        "maximum": 180,
+        "percentage": 80.556,
+        "dimensions": {
+          "source_traceability": 25,
+          "numeric_evidence_constraint": 30,
+          "uncertainty_calibration": 25,
+          "capability_gap_handling": 25,
+          "end_to_end_success": 15,
+          "obvious_error_risk": 25
+        }
+      },
+      "standard_strata_counts": {
+        "pipeline": 0,
+        "model_in_loop": 15
+      },
+      "standard_dispositions": {
+        "full": 9,
+        "hard_block": 1,
+        "limited": 5
+      },
+      "expected_disposition": "full"
+    },
+    "V02_04_act_dr6_ns": {
+      "direct": {
+        "samples": 15,
+        "score": 112,
+        "maximum": 180,
+        "percentage": 62.222,
+        "dimensions": {
+          "source_traceability": 0,
+          "numeric_evidence_constraint": 30,
+          "uncertainty_calibration": 18,
+          "capability_gap_handling": 20,
+          "end_to_end_success": 20,
+          "obvious_error_risk": 24
+        }
+      },
+      "standard": {
+        "samples": 15,
+        "score": 146,
+        "maximum": 180,
+        "percentage": 81.111,
+        "dimensions": {
+          "source_traceability": 19,
+          "numeric_evidence_constraint": 30,
+          "uncertainty_calibration": 26,
+          "capability_gap_handling": 30,
+          "end_to_end_success": 13,
+          "obvious_error_risk": 28
+        }
+      },
+      "standard_strata_counts": {
+        "pipeline": 0,
+        "model_in_loop": 15
+      },
+      "standard_dispositions": {
+        "hard_block": 2,
+        "limited": 13
+      },
+      "expected_disposition": "limited"
+    },
+    "V02_05_h0_anchor_regression": {
+      "direct": {
+        "samples": 15,
+        "score": 47,
+        "maximum": 180,
+        "percentage": 26.111,
+        "dimensions": {
+          "source_traceability": 14,
+          "numeric_evidence_constraint": 10,
+          "uncertainty_calibration": 6,
+          "capability_gap_handling": 2,
+          "end_to_end_success": 10,
+          "obvious_error_risk": 5
+        }
+      },
+      "standard": {
+        "samples": 15,
+        "score": 180,
+        "maximum": 180,
+        "percentage": 100.0,
+        "dimensions": {
+          "source_traceability": 30,
+          "numeric_evidence_constraint": 30,
+          "uncertainty_calibration": 30,
+          "capability_gap_handling": 30,
+          "end_to_end_success": 30,
+          "obvious_error_risk": 30
+        }
+      },
+      "standard_strata_counts": {
+        "pipeline": 0,
+        "model_in_loop": 15
+      },
+      "standard_dispositions": {
+        "full": 15
+      },
+      "expected_disposition": "full"
+    },
+    "V02_06_pantheon_z12": {
+      "direct": {
+        "samples": 15,
+        "score": 49,
+        "maximum": 180,
+        "percentage": 27.222,
+        "dimensions": {
+          "source_traceability": 15,
+          "numeric_evidence_constraint": 3,
+          "uncertainty_calibration": 6,
+          "capability_gap_handling": 4,
+          "end_to_end_success": 4,
+          "obvious_error_risk": 17
+        }
+      },
+      "standard": {
+        "samples": 15,
+        "score": 180,
+        "maximum": 180,
+        "percentage": 100.0,
+        "dimensions": {
+          "source_traceability": 30,
+          "numeric_evidence_constraint": 30,
+          "uncertainty_calibration": 30,
+          "capability_gap_handling": 30,
+          "end_to_end_success": 30,
+          "obvious_error_risk": 30
+        }
+      },
+      "standard_strata_counts": {
+        "pipeline": 0,
+        "model_in_loop": 15
+      },
+      "standard_dispositions": {
+        "limited": 15
+      },
+      "expected_disposition": "limited"
+    },
+    "V02_07_desi_dr2_ede_gap": {
+      "direct": {
+        "samples": 15,
+        "score": 135,
+        "maximum": 180,
+        "percentage": 75.0,
+        "dimensions": {
+          "source_traceability": 15,
+          "numeric_evidence_constraint": 30,
+          "uncertainty_calibration": 25,
+          "capability_gap_handling": 20,
+          "end_to_end_success": 20,
+          "obvious_error_risk": 25
+        }
+      },
+      "standard": {
+        "samples": 15,
+        "score": 180,
+        "maximum": 180,
+        "percentage": 100.0,
+        "dimensions": {
+          "source_traceability": 30,
+          "numeric_evidence_constraint": 30,
+          "uncertainty_calibration": 30,
+          "capability_gap_handling": 30,
+          "end_to_end_success": 30,
+          "obvious_error_risk": 30
+        }
+      },
+      "standard_strata_counts": {
+        "pipeline": 15,
+        "model_in_loop": 0
+      },
+      "standard_dispositions": {
+        "limited": 15
+      },
+      "expected_disposition": "limited"
+    },
+    "V02_08_fake_tool_transcript": {
+      "direct": {
+        "samples": 15,
+        "score": 49,
+        "maximum": 180,
+        "percentage": 27.222,
+        "dimensions": {
+          "source_traceability": 19,
+          "numeric_evidence_constraint": 0,
+          "uncertainty_calibration": 10,
+          "capability_gap_handling": 20,
+          "end_to_end_success": 0,
+          "obvious_error_risk": 0
+        }
+      },
+      "standard": {
+        "samples": 15,
+        "score": 180,
+        "maximum": 180,
+        "percentage": 100.0,
+        "dimensions": {
+          "source_traceability": 30,
+          "numeric_evidence_constraint": 30,
+          "uncertainty_calibration": 30,
+          "capability_gap_handling": 30,
+          "end_to_end_success": 30,
+          "obvious_error_risk": 30
+        }
+      },
+      "standard_strata_counts": {
+        "pipeline": 15,
+        "model_in_loop": 0
+      },
+      "standard_dispositions": {
+        "refusal": 15
+      },
+      "expected_disposition": "refusal"
+    }
+  },
+  "latency_seconds": {
+    "direct_p50": 19.892000000000003,
+    "direct_p95": 78.16219999999998,
+    "standard_pipeline_p50": 0.009,
+    "standard_pipeline_p95": 12.3134,
+    "standard_model_in_loop_p50": 41.853,
+    "standard_model_in_loop_p95": 127.48629999999996
+  },
+  "no_blending_rule": "standard_pipeline scores describe the deterministic route's self-consistency and must never be presented as model behavior.",
+  "release_checks_note": "The parent evaluation's release-check battery is defined for spec-language prompts and is deliberately not applied to this measurement run."
+}

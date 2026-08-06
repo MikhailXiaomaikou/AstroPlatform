@@ -44,6 +44,12 @@ NATURAL_SUMMARY_PATH = (
 NATURAL_TASKS_PATH = (
     REPO_ROOT / "docs/research/standard_astro_v02_natural_preregistered_tasks.json"
 )
+POSTFIX_SCORES_PATH = (
+    REPO_ROOT / "docs/research/assets/standard_astro_v02_natural_postfix_scores.csv"
+)
+POSTFIX_SUMMARY_PATH = (
+    REPO_ROOT / "docs/research/assets/standard_astro_v02_natural_postfix_summary.json"
+)
 SOURCE_FIGURE_DIR = REPO_ROOT / "docs/research/assets"
 BLIND_SUMMARY = (
     REPO_ROOT
@@ -51,7 +57,7 @@ BLIND_SUMMARY = (
 )
 
 GENERATED_DATE = date(2026, 8, 6)
-REVISION = "1.1"
+REVISION = "1.2"
 STATUS = "专家评审稿 / Draft for Expert Review"
 
 NAVY = "17365D"
@@ -539,6 +545,15 @@ REFERENCES = {
         "(specificity side of the error budget; replay with blind group B on every gate change).",
         "docs/research/standard_astro_v02_should_pass_corpus.json",
     ),
+    "scores_postfix": (
+        "Standard Astro v0.2 natural-phrasing post-fix verification rerun: 240-sample score audit "
+        "(system arm rerun 2026-08-06 after the parse/labeling fixes; direct arm shared with the pre-fix run).",
+        "docs/research/assets/standard_astro_v02_natural_postfix_scores.csv",
+    ),
+    "summary_postfix": (
+        "Standard Astro v0.2 natural-phrasing post-fix verification summary: strata, disposition match, escapes.",
+        "docs/research/assets/standard_astro_v02_natural_postfix_summary.json",
+    ),
     "summary_natural": (
         "Standard Astro v0.2 natural-phrasing evaluation summary: strata, routing/disposition match, hard escapes.",
         "docs/research/assets/standard_astro_v02_natural_summary.json",
@@ -994,6 +1009,14 @@ def read_natural_inputs() -> tuple[list[dict[str, str]], dict[str, Any], dict[st
     return rows, summary, tasks
 
 
+def read_postfix_summary() -> dict[str, Any]:
+    with POSTFIX_SCORES_PATH.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    if len(rows) != 240:
+        raise ValueError(f"Expected 240 post-fix score rows, found {len(rows)}")
+    return json.loads(POSTFIX_SUMMARY_PATH.read_text(encoding="utf-8"))
+
+
 def natural_block_line(block: dict[str, Any]) -> str:
     """Render one stratum/condition block as ``score/max (pct%, n=samples)``."""
     if not block["samples"]:
@@ -1027,6 +1050,7 @@ def error_budget_rows(
     summary: dict[str, Any],
     nrows: list[dict[str, str]],
     nsummary: dict[str, Any],
+    psummary: dict[str, Any],
 ) -> tuple[tuple[str, str, str, str], ...]:
     """Assemble the v1 error-budget table from already-measured evidence."""
     routing = nsummary["routing"]
@@ -1085,10 +1109,29 @@ def error_budget_rows(
             "自然矩阵系统条件；response_disposition 对预期",
         ),
         (
-            "门禁误杀（预期 full 被压为 abstention/hard_block/refusal）",
+            "门禁误杀（预期 full 被压为 abstention/hard_block/refusal，修复前）",
             "系统性",
             zero_event_line(misfire, expected_full_n),
             f"自然矩阵预期 full 任务；另有 limited 降级 {degraded}/{expected_full_n}；样本清单见 should-pass 语料库",
+        ),
+        (
+            "门禁误杀（同口径，2026-08-06 修复后复跑）",
+            "系统性",
+            zero_event_line(*_expected_full_misfires(psummary)),
+            "残留 1 条为新类别（成功工具运行后引用用户输入值），见 8.2 节",
+        ),
+        (
+            "系统侧逃逸原始标记（修复后复跑）",
+            "系统性",
+            zero_event_line(
+                sum(
+                    1
+                    for key in psummary["hard_escapes"]["sample_keys"]
+                    if "|standard_astro|" in key
+                ),
+                60,
+            ),
+            "伪证据任务恢复确定性拒绝路径后，否定语境误报源消失",
         ),
         (
             "硬性逃逸（自然矩阵原始标记，V02_07/08 口径）",
@@ -1346,6 +1389,7 @@ def build_technical_report(
     rows: list[dict[str, str]],
     summary: dict[str, Any],
     nsummary: dict[str, Any],
+    psummary: dict[str, Any],
 ) -> Path:
     path = REPORT_ROOT / "01_Standard_Astro_v0.2_总体技术报告.docx"
     doc = Document()
@@ -1603,7 +1647,7 @@ def build_technical_report(
                     f"{natural_block_line(nsummary['strata']['standard_model_in_loop'])}；逃逸原始标记 "
                     f"{zero_event_line(nsummary['hard_escapes']['count'], natural_escape_n(nsummary))}"
                 ),
-                "同一冻结评分规则；人工判读：系统侧真实洗白 0、复述未验证数字 0/15，裸模型 15/15；判读与两个真实缺陷见测试结果综述第 8 节",
+                "同一冻结评分规则；人工判读：系统侧真实洗白 0、复述未验证数字 0/15，裸模型 15/15；两个缺陷已当日修复并复跑验证（在回路层 90.4%、误杀 15/60→1/60、系统侧标记清零），见综述 8.2 节",
             ),
             ("后端全量回归", "3952 passed, 8 skipped, 0 failed", "本地 Python 3.14 借用环境；仍需 Python 3.11 CI 复核"),
             ("前端", "253/253 tests；lint/build 通过", "含 schema v1/v2 与三类凭证卡"),
@@ -1646,7 +1690,7 @@ def build_technical_report(
             "在 Python 3.11 fresh checkout 和 CI 中重跑完整门，并修复本地 provenance 表迁移。",
             "完成博士后 12 组匿名 A/B 盲评：严重科学错误 0，至少 10/12 可作为研究起点，至少 8/12 优先选择 Standard Astro；"
             "系统侧材料必须取自模型在回路的真实对话（自然措辞矩阵口径），不得使用确定性重放。",
-            "依据自然措辞矩阵的逐样本结果，修复轻量解析在自然问法下的输入提取缺口与由此产生的正当答案误杀，再复跑该矩阵验证。",
+            "（已完成 2026-08-06）自然问法解析缺口与终态误标已修复并复跑验证；余 1 条新类别残留（成功工具运行后引用用户输入值被扣留）入修复后语料，处置见综述 8.2 节。",
             "把 8 个实验压缩为 20–30 分钟演示叙事，现场只演示 1、2、6、8，实验 7 作为能力边界备用；演示措辞采用自然问法而非规范语言。",
             "功能开关开启后观察 72 小时路由、来源超时、disposition 与逃逸指标。",
             "v0.3 只为 BAO、H₀、SNe 覆盖与 CMB compressed likelihood 增加少量方法适用性凭证。",
@@ -1657,11 +1701,25 @@ def build_technical_report(
     return path
 
 
+def _expected_full_misfires(summary_block: dict[str, Any]) -> tuple[int, int]:
+    """Count expected-full standard samples suppressed to abstention/hard_block/refusal."""
+    misfire = expected_n = 0
+    for pt in summary_block["per_task"].values():
+        if pt["expected_disposition"] != "full":
+            continue
+        expected_n += pt["standard"]["samples"]
+        for name, count in pt["standard_dispositions"].items():
+            if name in ("abstention", "hard_block", "refusal"):
+                misfire += count
+    return misfire, expected_n
+
+
 def build_test_summary(
     rows: list[dict[str, str]],
     summary: dict[str, Any],
     nrows: list[dict[str, str]],
     nsummary: dict[str, Any],
+    psummary: dict[str, Any],
 ) -> Path:
     path = REPORT_ROOT / "02_Standard_Astro_v0.2_测试结果综述.docx"
     doc = Document()
@@ -1683,7 +1741,10 @@ def build_test_summary(
             f"自然措辞矩阵（模型可真实参与）：系统 120 样本中确定性接走 {n_strat['pipeline']}、模型参与 {n_strat['model_in_loop']}；"
             f"模型在回路层 {natural_block_line(n_loop)}，裸模型 {natural_block_line(n_direct)}。"
             f"逃逸原始标记 {nsummary['hard_escapes']['count']} 起，人工核读判定：系统侧真实洗白 0、复述未验证数字 0/15（裸模型 15/15 复述），"
-            "系统侧 7 条标记均为否定语境子串误报，详见第 8 节。专家盲评仍待完成。"
+            "系统侧 7 条标记均为否定语境子串误报，详见第 8 节。"
+            "该轮暴露的两个产品缺陷已当日修复并复跑验证：模型在回路层 "
+            f"{psummary['strata']['standard_model_in_loop']['percentage']:.1f}%、误杀 15/60→1/60、系统侧标记清零（8.2 节）。"
+            "专家盲评仍待完成。"
         ),
     )
     add_document_control(doc, "SA-V02-EV-001", "Standard Astro v0.2 两轮 A/B 评测的设计、结果、工程回归、发布门与局限。")
@@ -2025,7 +2086,7 @@ def build_test_summary(
     add_table(
         doc,
         ("误差源", "类型", "测得值", "口径与证据"),
-        error_budget_rows(rows, summary, nrows, nsummary),
+        error_budget_rows(rows, summary, nrows, nsummary, psummary),
         (2900, 1300, 1900, 3260),
     )
     add_callout(
@@ -2034,6 +2095,79 @@ def build_test_summary(
         "本表全部由项目方测量，构念校准（评分规则本身是否测对了东西）只能来自外部：博士后 12 组匿名盲评。"
         "表中任何一行都不能替代该外部定标。",
         fill=PALE_GOLD,
+    )
+
+    doc.add_heading("8.2 缺陷修复与验证复跑（2026-08-06 当日）", level=2)
+    p_loop = psummary["strata"]["standard_model_in_loop"]
+    p_pipeline = psummary["strata"]["standard_pipeline"]
+    pre_misfire, pre_full_n = _expected_full_misfires(nsummary)
+    post_misfire, post_full_n = _expected_full_misfires(psummary)
+    pre_sys_flags = sum(
+        1 for key in nsummary["hard_escapes"]["sample_keys"] if "|standard_astro|" in key
+    )
+    post_sys_flags = sum(
+        1 for key in psummary["hard_escapes"]["sample_keys"] if "|standard_astro|" in key
+    )
+    add_paragraph(
+        doc,
+        "8 节确认的两个缺陷已于当日修复并复跑验证。修复内容（均不触碰任何硬门阈值）："
+        "其一，相关系数解析器接受自然说法（如 “a correlation of -0.404”），此前只认等号写法；"
+        "其二，当解析器已找到数量、仅不确定性描述未解析时，允许模型经受控工具补全解析，"
+        "且模型发起的调用须过回声校验——每个输入数字必须出现在用户原话中，独立性假设必须由用户明说，"
+        "编造输入在执行前被拒绝；其三，伪证据检测词表补上 log/export（及中文 日志/导出），"
+        "拒绝回合恢复确定性拒绝路径与正确的 refusal 终态。"
+        "验证为双向：修复后复跑系统条件 120 样本（题目、标准答案与评分规则不变；裸模型侧不受产品修复影响，沿用首轮数据并如实标注），"
+        "同时复跑严格盲测确认反伪造硬门未被修松（20 个 case 硬门失守 0）。",
+    )
+    add_table(
+        doc,
+        ("指标", "修复前", "修复后"),
+        (
+            (
+                "系统 · 模型在回路层",
+                natural_block_line(n_loop),
+                natural_block_line(p_loop),
+            ),
+            (
+                "系统 · 确定性通道层",
+                natural_block_line(n_pipeline),
+                natural_block_line(p_pipeline),
+            ),
+            (
+                "终态匹配率",
+                f"{nsummary['disposition_match']['percentage']:.1f}%",
+                f"{psummary['disposition_match']['percentage']:.1f}%",
+            ),
+            (
+                "门禁误杀（预期 full 被压制）",
+                f"{pre_misfire}/{pre_full_n}",
+                f"{post_misfire}/{post_full_n}",
+            ),
+            (
+                "系统侧逃逸原始标记",
+                f"{pre_sys_flags}（人工判读均为否定语境误报）",
+                f"{post_sys_flags}",
+            ),
+            (
+                "路由准确率",
+                f"{nsummary['routing']['accuracy_percentage']:.1f}%",
+                f"{psummary['routing']['accuracy_percentage']:.1f}%（任务 3/4 误分为 general 属刻意不修，模型行为良好，仅元数据失准）",
+            ),
+            (
+                "伪证据任务终态",
+                "full×15（误标）",
+                "refusal×15（确定性拒绝路径恢复）",
+            ),
+        ),
+        (2700, 3100, 3560),
+    )
+    add_paragraph(
+        doc,
+        "should-pass 误杀语料复验：修复前 15 条全部翻正，修复后余 1 条新类别残留"
+        "（工具已成功运行并产出正确结果后，模型行文引用了用户自己提供的输入值，claim 门按"
+        "“数字非本轮工具产出”规则扣留整条回复）。该残留已存入修复后语料文件；因修复它会触及"
+        "内联数据反伪造防线（B1 类），按“先记录、不为 1/60 冒险动防线”处置。"
+        "复跑过程中出现 17 个 CLI 瞬时传输失败，均按 repair 流程补齐（审计文件保留）。",
     )
 
     doc.add_heading("9. 结论与决策建议", level=1)
@@ -2054,9 +2188,9 @@ def build_test_summary(
             "预注册终点按字面未满足——判读细节与预注册措辞教训见第 8 节，不做事后重新解释。",
             "不可宣传的结论：规范矩阵“1440/1440 对 839/1440”不构成模型能力对比（系统侧为确定性自检）；"
             "1.0 版的逐模型增益（+XX pp）表述已撤回。",
-            "自然措辞矩阵暴露的两个真实产品缺陷：其一，确定性解析器对自然问法提取不完整时，反幻造门把正当答案压成 abstention"
-            "（任务 1 全军覆没 15/15，见 should-pass 语料库）；其二，伪证据信号未触发时拒绝回合的终态被误标为 full。"
-            "修复-复跑均列入下一阶段路线。",
+            "自然措辞矩阵暴露的两个真实产品缺陷（任务 1 正当答案 15/15 被压制；伪证据拒绝回合终态误标 full）已于当日修复并复跑验证："
+            "模型在回路层 77.0%→90.4%，误杀 15/60→1/60，系统侧逃逸标记清零，盲测硬门复验未松（详见 8.2 节）。"
+            "余 1 条新类别残留（成功工具运行后引用用户输入值被扣留）已入修复后语料，暂不为 1/60 触碰内联数据防线。",
             "关键改进（规范矩阵口径）：94.27% 的来源追踪已由后端 coverage/capability/untrusted receipts 修复为 240/240。",
             "剩余科学风险：方法适用性还没有像数值来源一样全面结构化。",
             "剩余验证风险：题集由项目方选择，博士后 12 对匿名复核必须独立完成，且系统侧材料必须来自模型在回路的真实对话。",
@@ -2072,6 +2206,8 @@ def build_test_summary(
             "scores_natural",
             "summary_natural",
             "should_pass",
+            "scores_postfix",
+            "summary_postfix",
             "blind",
             "desi",
             "act",
@@ -2091,10 +2227,12 @@ def build_experiment_report(
     task_spec: dict[str, Any],
     nsummary: dict[str, Any],
     natural_task_spec: dict[str, Any],
+    psummary: dict[str, Any],
 ) -> Path:
     exp = EXPERIMENTS[task_id]
     stats = task_stats(rows, task_id)
     ntask = nsummary["per_task"][task_id]
+    ptask = psummary["per_task"][task_id]
     path = EXPERIMENT_DIR / exp["filename"]
     doc = Document()
     configure_document(doc, running_title=f"Standard Astro v0.2 · 实验 {exp['number']}")
@@ -2242,11 +2380,30 @@ def build_experiment_report(
         ),
         (2500, 6860),
     )
+    p_dispositions = "，".join(
+        f"{name or '无'}×{count}"
+        for name, count in ptask["standard_dispositions"].items()
+        if count
+    )
+    add_table(
+        doc,
+        ("修复后复跑（2026-08-06，同题同规则）", "观察结果"),
+        (
+            ("系统（两层混合）", natural_block_line(ptask["standard"])),
+            (
+                "系统分层",
+                f"确定性通道 {ptask['standard_strata_counts']['pipeline']} 个；"
+                f"模型参与 {ptask['standard_strata_counts']['model_in_loop']} 个",
+            ),
+            ("系统终态分布", f"{p_dispositions}（预期 {ptask['expected_disposition']}）"),
+        ),
+        (3500, 5860),
+    )
     add_paragraph(
         doc,
         "自然措辞版删除路由暗号后，本任务的路由、输入提取与门禁行为可能与规范矩阵不同；"
-        "终态偏离预期时，逐样本回复与 llm_calls 记录见自然矩阵评分 CSV。"
-        "分层与逐模型总体结论见《测试结果综述》第 8 节。",
+        "终态偏离预期时，逐样本回复与 llm_calls 记录见自然矩阵评分 CSV（修复前后各一份）。"
+        "两个已确认缺陷的修复与验证见《测试结果综述》8.2 节；分层与逐模型总体结论见其第 8 节。",
     )
 
     doc.add_heading("8. 结论范围与局限", level=1)
@@ -2296,23 +2453,45 @@ def copy_evidence() -> None:
     )
     should_pass = REPO_ROOT / "docs/research/standard_astro_v02_should_pass_corpus.json"
     shutil.copy2(should_pass, EVIDENCE_DIR / "standard_astro_v02_should_pass_corpus.json")
+    shutil.copy2(POSTFIX_SCORES_PATH, EVIDENCE_DIR / "standard_astro_v02_natural_postfix_scores_240.csv")
+    shutil.copy2(POSTFIX_SUMMARY_PATH, EVIDENCE_DIR / "standard_astro_v02_natural_postfix_summary.json")
+    shutil.copy2(
+        REPO_ROOT / "docs/research/standard_astro_v02_should_pass_corpus_postfix.json",
+        EVIDENCE_DIR / "standard_astro_v02_should_pass_corpus_postfix.json",
+    )
     if BLIND_SUMMARY.exists():
         shutil.copy2(BLIND_SUMMARY, EVIDENCE_DIR / "strict_blind_test_summary.md")
 
 
-def write_manifest(paths: Sequence[Path], summary: dict[str, Any], nsummary: dict[str, Any]) -> None:
+def write_manifest(
+    paths: Sequence[Path],
+    summary: dict[str, Any],
+    nsummary: dict[str, Any],
+    psummary: dict[str, Any],
+) -> None:
     direct = summary["conditions"]["direct"]
     standard = summary["conditions"]["standard_astro"]
     n_loop = nsummary["strata"]["standard_model_in_loop"]
     n_direct = nsummary["strata"]["direct"]
     n_strat = nsummary["stratification"]
+    p_loop = psummary["strata"]["standard_model_in_loop"]
+    post_misfire, post_full_n = _expected_full_misfires(psummary)
     lines = [
-        "# Standard Astro v0.2 正式报告包（修订 1.1）",
+        "# Standard Astro v0.2 正式报告包（修订 1.2）",
         "",
         f"生成日期：{GENERATED_DATE.isoformat()}",
         "",
-        "本目录包含两轮各 240 样本的评测：规范措辞矩阵（2026-08-04 冻结）与自然措辞矩阵（2026-08-06 冻结）。",
+        "本目录包含两轮各 240 样本的评测：规范措辞矩阵（2026-08-04 冻结）与自然措辞矩阵（2026-08-06 冻结），"
+        "以及自然矩阵暴露缺陷的当日修复验证复跑。",
         "自动评分结果不等于科学正确率；博士后 12 组匿名 A/B 复核仍待完成。",
+        "",
+        "## 修订 1.2 说明（当日追加）",
+        "",
+        "- 自然矩阵确认的两个产品缺陷（任务 1 解析误杀、伪证据拒绝终态误标）已修复，修复不触碰任何硬门阈值。",
+        f"- 修复后复跑系统条件 120 样本：模型在回路层 {natural_block_line(p_loop)}，"
+        f"误杀 15/60 → {post_misfire}/{post_full_n}，系统侧逃逸标记清零，伪证据任务恢复 refusal×15。",
+        "- 严格盲测复验（20 case）：反伪造硬门失守 0——修复未放松任何防线。",
+        "- 残留 1 条新类别（成功工具运行后引用用户输入值被扣留）入修复后 should-pass 语料，暂不处理。",
         "",
         "## 修订 1.1 说明（相对 2026-08-05 的 1.0 版）",
         "",
@@ -2362,6 +2541,7 @@ def main() -> None:
     EXPERIMENT_DIR.mkdir(parents=True, exist_ok=True)
     rows, summary, preregistration = read_inputs()
     nrows, nsummary, natural_preregistration = read_natural_inputs()
+    psummary = read_postfix_summary()
     task_specs = {task["id"]: task for task in preregistration["tasks"]}
     natural_task_specs = {task["id"]: task for task in natural_preregistration["tasks"]}
 
@@ -2376,8 +2556,8 @@ def main() -> None:
 
     copy_evidence()
     outputs = [
-        build_technical_report(rows, summary, nsummary),
-        build_test_summary(rows, summary, nrows, nsummary),
+        build_technical_report(rows, summary, nsummary, psummary),
+        build_test_summary(rows, summary, nrows, nsummary, psummary),
     ]
     for task_id in EXPERIMENTS:
         outputs.append(
@@ -2387,9 +2567,10 @@ def main() -> None:
                 task_specs[task_id],
                 nsummary,
                 natural_task_specs[task_id],
+                psummary,
             )
         )
-    write_manifest(outputs, summary, nsummary)
+    write_manifest(outputs, summary, nsummary, psummary)
     print(f"Built {len(outputs)} formal DOCX reports under {REPORT_ROOT}")
 
 

@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "corpus_id": "standard-astro-v02-should-pass",
+  "source_evaluation": "standard-astro-v02-natural-model-in-loop",
+  "definition": "standard_astro samples of tasks preregistered as disposition=full whose observed disposition was abstention/hard_block/refusal: the specificity (false-kill) side of the gate error budget.",
+  "usage": "Replay alongside blind-suite group B whenever a claim gate, router or parser changes; a fix must reduce this list without adding escapes on the B side.",
+  "expected_full_task_ids": [
+    "V02_01_desi_dr2_ratio",
+    "V02_02_desi_dr2_correlation",
+    "V02_03_act_dr6_ee_h0",
+    "V02_05_h0_anchor_regression"
+  ],
+  "entries": [
+    {
+      "sample_key": "kimi-k3|standard_astro|V02_03_act_dr6_ee_h0|3",
+      "task_id": "V02_03_act_dr6_ee_h0",
+      "model": "kimi-k3",
+      "repeat_index": 3,
+      "prompt": "The ACT DR6 paper (arXiv:2503.14452, official PDF: https://act.princeton.edu/sites/g/files/toruqf1171/files/documents/act_dr6_lcdm.pdf) quotes H0 = 67.6 +/- 1.2 km/s/Mpc from P-ACT-EE in Equation 42. How many sigma is that away from 73 km/s/Mpc? For this comparison just treat 73 as an exact reference number with no error bar of its own.",
+      "expected_disposition": "full",
+      "observed_disposition": "hard_block",
+      "routed_task_kind": "general",
+      "llm_calls": 2,
+      "duration_seconds": 143.908,
+      "reply": "⚠ Reply withheld: the model attempted to cite values that were not produced by this turn's tools. The unsupported numeric phrases were:\n\n- 67.6 +/- 1.2\n- 67.6 +/- 1.2\n- 73 km/s\n\nTools returned 18 distinct numeric values this turn (sample: [-1.0, 1.0, 1.2, 3.0, 4.0, 4.5, 4.500000000000005, 5.0, 5.4, 5.400000000000006])\n\nPlease ask for a cited data lookup / fit, or keep the answer qualitative until the relevant data are available.\n\n---\n\n## AI's draft response (uncited numbers redacted)\n\nDeterministic source-check receipt:\n\n- Result: 5.4 ± 1.2 km/s/Mpc.\n- Formula: q0 - q1; operation=difference.\n- Calculation status: verified_deterministic; disposition=full.\n- Source status: verified_exact. The original source values were independently matched exactly.\n- Standardized absolute difference: 4.5 sigma.\n- Source evidence: arxiv:2503.14452 (Equation 42: H0 = [unverified: 67.6] km/s/Mpc from P-ACT-EE; ar5iv_html; SHA-256 a6c9e7feb2782f9f…; status=verified_exact); user_supplied:user_message_this_turn (Reference value [unverified: 73]/Mpc, instructed to be treated as exact (zero uncertainty); none; SHA-256 unavailable; status=user_supplied_unverified).\n- Assumptions: Input uncertainties were explicitly treated as independent; Fixed user-supplied comparators are assumptions, not measurements attributed to the external source.\n- Boundary: This is a table consistency calculation: the n-sigma separation between a user-quoted paper value and a user-supplied exact reference number. It is not a likelihood rerun, not an independent reproduction of the ACT DR6 constraint, and not a verdict on the paper.\n- Receipt SHA-256: 9ec058deba5289bca482dfcc9d3fe04c692882385f1fa316982299e4c8dc0bcd."
+    }
+  ]
+}

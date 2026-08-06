@@ -20,6 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 REPORT_ROOT = REPO_ROOT / "docs/research/formal_report_package_2026-08-06"
 SCORES = REPORT_ROOT / "evidence/standard_astro_v02_scores_240.csv"
 NATURAL_SCORES = REPORT_ROOT / "evidence/standard_astro_v02_natural_scores_240.csv"
+POSTFIX_SCORES = REPORT_ROOT / "evidence/standard_astro_v02_natural_postfix_scores_240.csv"
 
 # Withdrawn framings that must never come back in any report body.
 FORBIDDEN_EVERYWHERE = (
@@ -52,6 +53,12 @@ def main() -> None:
         f"expected 240 natural score rows, found {len(natural_rows)}"
     )
     assert "llm_calls" in natural_rows[0], "natural scores must record llm_calls"
+
+    with POSTFIX_SCORES.open(encoding="utf-8", newline="") as handle:
+        postfix_rows = list(csv.DictReader(handle))
+    assert len(postfix_rows) == 240, (
+        f"expected 240 post-fix score rows, found {len(postfix_rows)}"
+    )
     assert "stratum" in natural_rows[0], "natural scores must record stratum"
     strata = {row["stratum"] for row in natural_rows if row["condition"] == "standard_astro"}
     assert strata <= {"standard_pipeline", "standard_model_in_loop"}, strata
@@ -95,6 +102,9 @@ def main() -> None:
         "should-pass",
         "人工判读",
         "子串误报",
+        "8.2 缺陷修复与验证复跑",
+        "修复后",
+        "refusal×15",
     ):
         assert expected in summary, f"evaluation summary missing {expected!r}"
 
@@ -123,19 +133,22 @@ def main() -> None:
         "standard_astro_v02_natural_scores_240.csv",
         "standard_astro_v02_natural_summary.json",
         "standard_astro_v02_should_pass_corpus.json",
+        "standard_astro_v02_should_pass_corpus_postfix.json",
+        "standard_astro_v02_natural_postfix_scores_240.csv",
+        "standard_astro_v02_natural_postfix_summary.json",
         "strict_blind_test_summary.md",
     }
     actual_evidence = {path.name for path in (REPORT_ROOT / "evidence").iterdir()}
     assert required_evidence <= actual_evidence, required_evidence - actual_evidence
 
     readme = (REPORT_ROOT / "README.md").read_text(encoding="utf-8")
-    for expected in ("修订 1.1", "已撤回", "模型不在回路", "模型在回路层", "95% 置信上界"):
+    for expected in ("修订 1.2", "修订 1.1", "已撤回", "模型不在回路", "模型在回路层", "95% 置信上界", "硬门失守 0"):
         assert expected in readme, f"README missing {expected!r}"
 
     print(
-        "PASS: 10 DOCX reports, 2x240 score rows with llm_calls/stratum, honesty "
-        "relabels present, withdrawn framings absent, error budget and CI phrasing "
-        "present, 8 evidence artifacts validated."
+        "PASS: 10 DOCX reports, 3x240 score rows, honesty relabels present, "
+        "withdrawn framings absent, error budget, CI phrasing and post-fix "
+        "verification present, 11 evidence artifacts validated."
     )
 
 
