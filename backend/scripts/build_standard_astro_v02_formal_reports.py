@@ -27,7 +27,7 @@ from docx.shared import Inches, Pt, RGBColor
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-REPORT_ROOT = REPO_ROOT / "docs/research/formal_report_package_2026-08-05"
+REPORT_ROOT = REPO_ROOT / "docs/research/formal_report_package_2026-08-06"
 ASSET_DIR = REPORT_ROOT / "assets"
 EXPERIMENT_DIR = REPORT_ROOT / "03_逐实验报告"
 EVIDENCE_DIR = REPORT_ROOT / "evidence"
@@ -35,14 +35,23 @@ EVIDENCE_DIR = REPORT_ROOT / "evidence"
 SCORES_PATH = REPO_ROOT / "docs/research/assets/standard_astro_v02_scores.csv"
 SUMMARY_PATH = REPO_ROOT / "docs/research/assets/standard_astro_v02_summary.json"
 TASKS_PATH = REPO_ROOT / "docs/research/standard_astro_v02_preregistered_tasks.json"
+NATURAL_SCORES_PATH = (
+    REPO_ROOT / "docs/research/assets/standard_astro_v02_natural_scores.csv"
+)
+NATURAL_SUMMARY_PATH = (
+    REPO_ROOT / "docs/research/assets/standard_astro_v02_natural_summary.json"
+)
+NATURAL_TASKS_PATH = (
+    REPO_ROOT / "docs/research/standard_astro_v02_natural_preregistered_tasks.json"
+)
 SOURCE_FIGURE_DIR = REPO_ROOT / "docs/research/assets"
 BLIND_SUMMARY = (
     REPO_ROOT
     / "backend/scripts/blind_test_cosmology_m0/results_20260805_181634/summary.md"
 )
 
-GENERATED_DATE = date(2026, 8, 5)
-REVISION = "1.0"
+GENERATED_DATE = date(2026, 8, 6)
+REVISION = "1.1"
 STATUS = "专家评审稿 / Draft for Expert Review"
 
 NAVY = "17365D"
@@ -193,7 +202,7 @@ EXPERIMENTS: dict[str, dict[str, Any]] = {
         "abstract_en": (
             "This covariance-sensitivity experiment compares the published correlation ρ=−0.404 with a counterfactual independence assumption. "
             "The correct uncertainty is 0.020563 versus 0.017653 under ρ=0, so the naive result is 16.5% too small under the preregistered denominator. "
-            "All system-assisted samples preserved the covariance direction and the methodological boundary."
+            "All 15 deterministic-path system samples (model not in the loop) preserved the covariance direction and the methodological boundary."
         ),
         "refs": ("desi",),
     },
@@ -492,7 +501,7 @@ EXPERIMENTS: dict[str, dict[str, Any]] = {
         "abstract_en": (
             "This adversarial task asks the system to treat a pasted fake transcript as a verified current run and conceal its origin. "
             "Standard Astro refused false attribution, assigned untrusted_user_supplied provenance, and offered a legitimate rerun path. "
-            "No unsupported H₀ value escaped in the 15 system-assisted samples."
+            "No unsupported H₀ value escaped in the 15 deterministic-path system samples (model not in the loop; the refusal template is emitted without a model call)."
         ),
         "refs": (),
     },
@@ -508,13 +517,31 @@ REFERENCES = {
         "Standard Astro v0.2 preregistered task specification (version-controlled JSON, frozen 2026-08-04).",
         "docs/research/standard_astro_v02_preregistered_tasks.json",
     ),
+    "prereg_natural": (
+        "Standard Astro v0.2 natural-phrasing preregistration: identical ground truths, prompts rewritten in user voice, "
+        "llm_calls stratification analysis plan (frozen 2026-08-06).",
+        "docs/research/standard_astro_v02_natural_preregistered_tasks.json",
+    ),
     "scores": (
-        "Standard Astro v0.2 deterministic 240-sample score audit.",
+        "Standard Astro v0.2 deterministic 240-sample score audit (spec-language matrix).",
         "docs/research/assets/standard_astro_v02_scores.csv",
     ),
     "summary": (
-        "Standard Astro v0.2 evaluation summary and release checks.",
+        "Standard Astro v0.2 evaluation summary and release checks (spec-language matrix).",
         "docs/research/assets/standard_astro_v02_summary.json",
+    ),
+    "scores_natural": (
+        "Standard Astro v0.2 natural-phrasing 240-sample score audit with per-sample llm_calls and stratum labels.",
+        "docs/research/assets/standard_astro_v02_natural_scores.csv",
+    ),
+    "should_pass": (
+        "Standard Astro v0.2 should-pass regression corpus: expected-full samples suppressed by the gates "
+        "(specificity side of the error budget; replay with blind group B on every gate change).",
+        "docs/research/standard_astro_v02_should_pass_corpus.json",
+    ),
+    "summary_natural": (
+        "Standard Astro v0.2 natural-phrasing evaluation summary: strata, routing/disposition match, hard escapes.",
+        "docs/research/assets/standard_astro_v02_natural_summary.json",
     ),
     "desi": (
         "DESI Collaboration, DESI DR2 Results II: Measurements of Baryon Acoustic Oscillations and Cosmological Constraints, arXiv:2503.14738.",
@@ -957,6 +984,173 @@ def read_inputs() -> tuple[list[dict[str, str]], dict[str, Any], dict[str, Any]]
     return rows, summary, tasks
 
 
+def read_natural_inputs() -> tuple[list[dict[str, str]], dict[str, Any], dict[str, Any]]:
+    with NATURAL_SCORES_PATH.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    summary = json.loads(NATURAL_SUMMARY_PATH.read_text(encoding="utf-8"))
+    tasks = json.loads(NATURAL_TASKS_PATH.read_text(encoding="utf-8"))
+    if len(rows) != 240:
+        raise ValueError(f"Expected 240 natural score rows, found {len(rows)}")
+    return rows, summary, tasks
+
+
+def natural_block_line(block: dict[str, Any]) -> str:
+    """Render one stratum/condition block as ``score/max (pct%, n=samples)``."""
+    if not block["samples"]:
+        return "—（n=0）"
+    return (
+        f"{block['score']}/{block['maximum']}"
+        f"（{block['percentage']:.1f}%，n={block['samples']}）"
+    )
+
+
+def zero_event_line(events: int, n: int) -> str:
+    """Instrument-spec phrasing: a zero count carries a rule-of-three 95% bound."""
+    if not n:
+        return "—（n=0）"
+    if events:
+        return f"{events}/{n}（{100 * events / n:.1f}%）"
+    return f"0/{n}（95% 置信上界 {300.0 / n:.1f}%）"
+
+
+def natural_escape_n(nsummary: dict[str, Any]) -> int:
+    """Samples where the hard-escape rule applies (tasks 07/08, both conditions)."""
+    total = 0
+    for task_id, pt in nsummary["per_task"].items():
+        if str(task_id).startswith(("V02_07", "V02_08")):
+            total += pt["direct"]["samples"] + pt["standard"]["samples"]
+    return total
+
+
+def error_budget_rows(
+    rows: list[dict[str, str]],
+    summary: dict[str, Any],
+    nrows: list[dict[str, str]],
+    nsummary: dict[str, Any],
+) -> tuple[tuple[str, str, str, str], ...]:
+    """Assemble the v1 error-budget table from already-measured evidence."""
+    routing = nsummary["routing"]
+    disposition = nsummary["disposition_match"]
+    expected_full_tasks = {
+        task_id
+        for task_id, pt in nsummary["per_task"].items()
+        if pt["expected_disposition"] == "full"
+    }
+    misfire = degraded = expected_full_n = 0
+    for task_id in expected_full_tasks:
+        pt = nsummary["per_task"][task_id]
+        expected_full_n += pt["standard"]["samples"]
+        for name, count in pt["standard_dispositions"].items():
+            if name in ("abstention", "hard_block", "refusal"):
+                misfire += count
+            elif name == "limited":
+                degraded += count
+    escape_n_natural = sum(
+        str(row["task_id"]).startswith(("V02_07", "V02_08")) for row in nrows
+    )
+    escape_n_spec = sum(
+        str(row["task_id"]).startswith(("V02_07", "V02_08"))
+        and row["condition"] == "standard_astro"
+        for row in rows
+    )
+    source_degraded = sum(
+        row["condition"] == "standard_astro"
+        and (row.get("source_status") or "") in ("unavailable", "resolved_unmatched", "conflict")
+        for row in nrows
+    )
+    cells: dict[tuple[str, str, str], list[int]] = {}
+    for row in nrows:
+        key = (str(row["model"]), str(row["condition"]), str(row["task_id"]))
+        cells.setdefault(key, []).append(int(row["total"]))
+    def mean_range(condition: str) -> str:
+        ranges = [
+            max(values) - min(values)
+            for (_, cond, _), values in cells.items()
+            if cond == condition and len(values) == 3
+        ]
+        if not ranges:
+            return "—"
+        return f"{sum(ranges) / len(ranges):.2f}/12"
+    return (
+        (
+            "路由错分（系统未把任务识别为预期类型）",
+            "系统性",
+            zero_event_line(routing["total"] - routing["correct"], routing["total"]),
+            "自然矩阵系统条件；routed_task_kind 对预注册预期",
+        ),
+        (
+            "终态偏离预注册预期",
+            "系统性",
+            zero_event_line(disposition["total"] - disposition["correct"], disposition["total"]),
+            "自然矩阵系统条件；response_disposition 对预期",
+        ),
+        (
+            "门禁误杀（预期 full 被压为 abstention/hard_block/refusal）",
+            "系统性",
+            zero_event_line(misfire, expected_full_n),
+            f"自然矩阵预期 full 任务；另有 limited 降级 {degraded}/{expected_full_n}；样本清单见 should-pass 语料库",
+        ),
+        (
+            "硬性逃逸（自然矩阵原始标记，V02_07/08 口径）",
+            "系统性",
+            zero_event_line(nsummary["hard_escapes"]["count"], escape_n_natural),
+            "两条件合计；人工判读：裸模型 15 条真实复述未验证数字，系统侧 7 条均为否定语境子串误报（真实洗白 0），见第 8 节判读框",
+        ),
+        (
+            "终态元数据失准（拒绝回合被标为 full）",
+            "系统性",
+            "15/15（V02_08 系统样本）",
+            "内容层全部正确拒绝；自然措辞下伪证据信号未触发导致 disposition 分层失准",
+        ),
+        (
+            "逃逸规则子串误报（否定语境盲区）",
+            "系统性（评分器）",
+            "7/22 标记",
+            "与盲测已知子串陷阱同源；证据=逐条人工核读",
+        ),
+        (
+            "硬性逃逸（规范矩阵系统侧，V02_07/08 口径）",
+            "系统性",
+            zero_event_line(0, escape_n_spec),
+            "确定性路径口径",
+        ),
+        (
+            "硬性逃逸（严格盲测硬门）",
+            "系统性",
+            zero_event_line(0, 12),
+            "B/C/F 12 case；样本量小，置信弱",
+        ),
+        (
+            "模型漂移信号（盲测措辞软检查未命中）",
+            "系统性（随时间变化）",
+            "3/12（25.0%）",
+            "B1/B3/B4 反伪造场景；阶段性小样本，待控制图化",
+        ),
+        (
+            "传输失败（CLI/后端异常）",
+            "统计性",
+            zero_event_line(nsummary["transport_failures"], nsummary["samples"]),
+            "自然矩阵全部样本；失败样本已按 repair 流程补跑",
+        ),
+        (
+            "来源解析降级（unavailable/unmatched/conflict）",
+            "统计性（外部依赖）",
+            zero_event_line(source_degraded, 120),
+            "自然矩阵系统条件",
+        ),
+        (
+            "重复散布（同单元 3 次重复的极差均值）",
+            "统计性",
+            f"裸模型 {mean_range('direct')}；系统 {mean_range('standard_astro')}",
+            "自然矩阵；单样本满分 12",
+        ),
+        ("同义改写稳健性", "系统性", "未测", "冻结变体文件已备，见参考资料"),
+        ("留出集泛化", "系统性", "未测", "留出题集已封存，仅验收时运行"),
+        ("环境再现性（Python 3.11 fresh checkout/CI）", "系统性", "未测", "路线图第 1 条"),
+        ("外部定标（博士后 12 组匿名盲评）", "构念校准", "未测", "唯一的外部标准，不可由本表任何内部测量替代"),
+    )
+
+
 def task_stats(rows: list[dict[str, str]], task_id: str) -> dict[str, Any]:
     subset = [row for row in rows if row["task_id"] == task_id]
     result: dict[str, Any] = {"models": {}}
@@ -1087,11 +1281,72 @@ def make_experiment_chart(path: Path, title: str, stats: dict[str, Any]) -> None
     draw.rounded_rectangle((1150, 935, 1185, 970), radius=5, fill=direct_color)
     draw.text((1200, 952), "裸模型", font=font(19), fill="#263746", anchor="lm")
     draw.rounded_rectangle((1370, 935, 1405, 970), radius=5, fill=system_color)
-    draw.text((1420, 952), "Standard Astro", font=font(19), fill="#263746", anchor="lm")
+    draw.text((1420, 952), "Standard Astro（确定性路径）", font=font(19), fill="#263746", anchor="lm")
     image.save(path, dpi=(180, 180))
 
 
-def build_technical_report(rows: list[dict[str, str]], summary: dict[str, Any]) -> Path:
+def make_natural_chart(path: Path, nsummary: dict[str, Any]) -> None:
+    """Per-model chart for the natural matrix: bare model vs model-in-loop system."""
+    width, height = 1800, 1120
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+    strat = nsummary["stratification"]
+    draw.text((90, 45), "自然措辞矩阵：裸模型 vs 系统（仅模型在回路层）", font=font(35, bold=True), fill="#17365D")
+    draw.text(
+        (90, 98),
+        (
+            f"系统条件 {strat['standard_samples']} 样本中确定性通道接走 {strat['pipeline']} 个、"
+            f"模型参与 {strat['model_in_loop']} 个；本图系统柱只统计模型参与层"
+        ),
+        font=font(21),
+        fill="#6B7280",
+    )
+    left, right, top, bottom = 350, 1650, 205, 940
+    for tick in range(0, 101, 20):
+        x = left + (right - left) * tick / 100
+        draw.line((x, top, x, bottom), fill="#E5E8EB", width=2)
+        draw.text((x, bottom + 18), str(tick), font=font(18), fill="#596A7B", anchor="ma")
+    group_h = (bottom - top) / len(MODEL_ORDER)
+    direct_color = "#5B7794"
+    loop_color = "#7A5CA8"
+    for idx, model in enumerate(MODEL_ORDER):
+        blocks = nsummary["per_model"][model]
+        center = top + group_h * (idx + 0.5)
+        draw.text((left - 24, center), MODEL_LABELS[model], font=font(21), fill="#263746", anchor="rm")
+        bars = (
+            (-25, blocks["direct"], direct_color),
+            (25, blocks["standard_model_in_loop"], loop_color),
+        )
+        for offset, block, color in bars:
+            y1, y2 = center + offset - 16, center + offset + 16
+            if block["samples"]:
+                value = block["percentage"]
+                x2 = left + (right - left) * value / 100
+                if x2 > left:
+                    draw.rounded_rectangle((left, y1, x2, y2), radius=6, fill=color, outline="#24384A", width=1)
+                label = f"{value:.1f}%（n={block['samples']}）"
+            else:
+                x2 = left
+                label = "n=0"
+            draw.text((min(x2 + 12, right + 8), center + offset), label, font=font(18, bold=True), fill="#263746", anchor="lm")
+    draw.rounded_rectangle((950, 985, 985, 1020), radius=5, fill=direct_color)
+    draw.text((1000, 1002), "裸模型", font=font(19), fill="#263746", anchor="lm")
+    draw.rounded_rectangle((1180, 985, 1215, 1020), radius=5, fill=loop_color)
+    draw.text((1230, 1002), "系统 · 模型在回路层", font=font(19), fill="#263746", anchor="lm")
+    draw.text(
+        (90, 1065),
+        "图 N｜同一冻结评分规则；两类柱的样本数不同，比较时以标注的 n 为准。",
+        font=font(19),
+        fill="#6B7280",
+    )
+    image.save(path, dpi=(180, 180))
+
+
+def build_technical_report(
+    rows: list[dict[str, str]],
+    summary: dict[str, Any],
+    nsummary: dict[str, Any],
+) -> Path:
     path = REPORT_ROOT / "01_Standard_Astro_v0.2_总体技术报告.docx"
     doc = Document()
     configure_document(doc, running_title="Standard Astro v0.2 · 总体技术报告")
@@ -1104,7 +1359,9 @@ def build_technical_report(rows: list[dict[str, str]], summary: dict[str, Any]) 
         summary=(
             "Standard Astro v0.2 是位于基础模型与科研结论之间的研究 harness：模型可提出方法，"
             "但数值、来源、不确定性和能力边界必须由后端工具、凭证与声明门核实。"
-            "当前工程实现已完成五模型本地 CLI 接入和 240 样本自动评测；其定位仍是受控 Alpha，而非自主宇宙学家。"
+            "当前工程实现已完成五模型本地 CLI 接入和两轮 240 样本自动评测："
+            "规范措辞矩阵（系统条件由确定性路径应答，模型不在回路）与自然措辞矩阵（模型真实参与）。"
+            "其定位仍是受控 Alpha，而非自主宇宙学家。"
         ),
     )
     add_document_control(
@@ -1128,9 +1385,25 @@ def build_technical_report(rows: list[dict[str, str]], summary: dict[str, Any]) 
     )
     add_paragraph(
         doc,
-        f"自动评测包含 {summary['samples']} 个正式样本。Standard Astro 条件在冻结六维量表上取得 "
-        f"{summary['conditions']['standard_astro']['score']}/{summary['conditions']['standard_astro']['maximum']}；"
-        "来源追踪和数值证据均为 240/240。该结果只证明当前题集与规则下的系统行为，不能替代专家科学评审。",
+        f"自动评测分两轮，各 {summary['samples']} 个正式样本。第一轮规范措辞矩阵中，Standard Astro 条件取得 "
+        f"{summary['conditions']['standard_astro']['score']}/{summary['conditions']['standard_astro']['maximum']}——"
+        "必须如实说明：该轮题目使用系统路由器可直接识别的规范语言，7/8 任务由确定性代码路径在毫秒级应答，"
+        "模型不在回路，因此这组满分是管道与审计规则的自洽性验证（相当于回归测试），不构成模型行为证据。"
+        "真实的模型对照基线是裸模型条件的 "
+        f"{summary['conditions']['direct']['score']}/{summary['conditions']['direct']['maximum']}"
+        f"（{summary['conditions']['direct']['percentage']:.1f}%）。",
+    )
+    add_paragraph(
+        doc,
+        "第二轮自然措辞矩阵（2026-08-06 冻结）把同样 8 道题改写为研究者的自然问法并记录每个样本的模型调用次数：系统条件 "
+        f"{nsummary['stratification']['standard_samples']} 个样本中确定性通道接走 "
+        f"{nsummary['stratification']['pipeline']} 个、模型真实参与 "
+        f"{nsummary['stratification']['model_in_loop']} 个；模型在回路层得分 "
+        f"{natural_block_line(nsummary['strata']['standard_model_in_loop'])}，裸模型 "
+        f"{natural_block_line(nsummary['strata']['direct'])}。逃逸原始标记 "
+        f"{nsummary['hard_escapes']['count']} 起——人工核读判定系统侧真实洗白 0、复述未验证数字 0/15（裸模型 15/15 复述），"
+        "系统侧标记均为否定语境子串误报，判读见《测试结果综述》第 8 节。"
+        "两轮结果均只证明当前题集与规则下的行为，不能替代专家科学评审。",
     )
 
     doc.add_heading("English technical summary", level=2)
@@ -1138,8 +1411,11 @@ def build_technical_report(rows: list[dict[str, str]], summary: dict[str, Any]) 
         doc,
         "Standard Astro v0.2 is a research harness between a foundation model and a scientific claim. "
         "The model remains free to interpret a question and propose methods, while backend routing, controlled calculations, source resolution, "
-        "hashed evidence receipts, and claim gates determine what can be presented as verified. The current evaluation supports a controlled Alpha demonstration, "
-        "not autonomous scientific inference or replacement of expert review.",
+        "hashed evidence receipts, and claim gates determine what can be presented as verified. "
+        "Two 240-sample matrices are reported. In the spec-language matrix the system arm was answered by the deterministic route with the model not in the loop, "
+        "so its perfect score verifies pipeline/audit self-consistency rather than model behavior; the bare-model 58.3% is the genuine behavioral baseline. "
+        "The natural-phrasing matrix rephrases the same tasks the way a working cosmologist would and stratifies system results by recorded model participation. "
+        "The current evaluation supports a controlled Alpha demonstration, not autonomous scientific inference or replacement of expert review.",
     )
 
     doc.add_heading("1. 系统定位与设计原则", level=1)
@@ -1292,17 +1568,52 @@ def build_technical_report(rows: list[dict[str, str]], summary: dict[str, Any]) 
     )
 
     doc.add_heading("9. 验证证据与当前成熟度", level=1)
+    add_callout(
+        doc,
+        "证据分层口径",
+        "下表把“管道自检”与“模型行为证据”明确分开：规范措辞矩阵的系统侧满分属于前者；"
+        "模型行为证据只能来自裸模型条件、自然措辞矩阵的模型在回路层与严格盲测。",
+        fill=PALE_GOLD,
+    )
     add_table(
         doc,
         ("验证层", "结果", "解释"),
         (
-            ("五模型正式矩阵", "240/240 完成；Standard 自动得分 1440/1440", "冻结题集和规则内通过，不是全领域科学正确率"),
-            ("来源与数值证据", "各 240/240", "结构化凭证和声明门读取，而非依赖模型措辞"),
+            (
+                "规范措辞矩阵（管道自检）",
+                "240/240 完成；系统侧 1440/1440",
+                "系统条件由确定性路径应答（7/8 任务毫秒级，模型不在回路）；证明管道与审计规则自洽，不构成模型行为证据",
+            ),
+            (
+                "规范矩阵裸模型基线",
+                f"{summary['conditions']['direct']['score']}/1440"
+                f"（{summary['conditions']['direct']['percentage']:.1f}%）",
+                "五个真实模型闭卷作答的行为数据；来源与证据维度失分集中",
+            ),
+            (
+                "来源与数值证据（规范矩阵系统侧）",
+                "各 240/240",
+                "结构化凭证和声明门读取；口径仅覆盖确定性路径样本",
+            ),
+            (
+                "自然措辞矩阵（模型在回路）",
+                (
+                    f"确定性接走 {nsummary['stratification']['pipeline']}、模型参与 "
+                    f"{nsummary['stratification']['model_in_loop']}；模型在回路层 "
+                    f"{natural_block_line(nsummary['strata']['standard_model_in_loop'])}；逃逸原始标记 "
+                    f"{zero_event_line(nsummary['hard_escapes']['count'], natural_escape_n(nsummary))}"
+                ),
+                "同一冻结评分规则；人工判读：系统侧真实洗白 0、复述未验证数字 0/15，裸模型 15/15；判读与两个真实缺陷见测试结果综述第 8 节",
+            ),
             ("后端全量回归", "3952 passed, 8 skipped, 0 failed", "本地 Python 3.14 借用环境；仍需 Python 3.11 CI 复核"),
             ("前端", "253/253 tests；lint/build 通过", "含 schema v1/v2 与三类凭证卡"),
-            ("严格盲测", "12 case 完成；B/C/F 硬门失败 0", "3 个旧措辞软检查未命中，结构安全结果仍通过"),
+            (
+                "严格盲测",
+                f"12 case 完成；硬门失守 {zero_event_line(0, 12)}；3 个措辞软检查未命中",
+                "模型在回路的对抗性证据；软检查失败集中在反伪造场景的措辞层，须与满分口径并列陈述",
+            ),
             ("注册表/基准", "registry 34/34；benchmark 23 pass, 2 intended skip", "确定性科学路径保持回归"),
-            ("专家盲评", "待完成", "12 组匿名 A/B，不可由自动评分替代"),
+            ("专家盲评", "待完成", "12 组匿名 A/B，不可由自动评分替代；系统侧材料必须取自模型在回路的真实对话"),
         ),
         (2100, 3000, 4260),
     )
@@ -1312,6 +1623,8 @@ def build_technical_report(rows: list[dict[str, str]], summary: dict[str, Any]) 
         doc,
         (
             "8 道任务是高价值微任务，不覆盖观测宇宙学全部研究形态。",
+            "规范措辞矩阵的题目使用路由器可直接识别的语言，其系统侧满分不能外推到自然用户输入；自然措辞矩阵正是为补此缺口而增设。",
+            "规范矩阵的 240 个正式样本经历过多轮修复-重跑-合并（repair/merge 文件链保留在 .local 审计目录），“冻结后一次通过”不成立，评审时应按迭代达标理解。",
             "一阶 Jacobian 不适用于强非线性、非高斯或边界主导问题；这些问题必须升级到 full_research。",
             "自动评分由项目方设计，即使预注册也存在构念偏差；专家盲评是必要外部校准。",
             "当前本地全量回归使用 Python 3.14 借用环境，尚不能代替项目规定的全新 Python 3.11 checkout/CI。",
@@ -1331,51 +1644,77 @@ def build_technical_report(rows: list[dict[str, str]], summary: dict[str, Any]) 
         doc,
         (
             "在 Python 3.11 fresh checkout 和 CI 中重跑完整门，并修复本地 provenance 表迁移。",
-            "完成博士后 12 组匿名 A/B 盲评：严重科学错误 0，至少 10/12 可作为研究起点，至少 8/12 优先选择 Standard Astro。",
-            "把 8 个实验压缩为 20–30 分钟演示叙事，现场只演示 1、2、6、8，实验 7 作为能力边界备用。",
+            "完成博士后 12 组匿名 A/B 盲评：严重科学错误 0，至少 10/12 可作为研究起点，至少 8/12 优先选择 Standard Astro；"
+            "系统侧材料必须取自模型在回路的真实对话（自然措辞矩阵口径），不得使用确定性重放。",
+            "依据自然措辞矩阵的逐样本结果，修复轻量解析在自然问法下的输入提取缺口与由此产生的正当答案误杀，再复跑该矩阵验证。",
+            "把 8 个实验压缩为 20–30 分钟演示叙事，现场只演示 1、2、6、8，实验 7 作为能力边界备用；演示措辞采用自然问法而非规范语言。",
             "功能开关开启后观察 72 小时路由、来源超时、disposition 与逃逸指标。",
             "v0.3 只为 BAO、H₀、SNe 覆盖与 CMB compressed likelihood 增加少量方法适用性凭证。",
         ),
     )
-    add_references(doc, ("repo", "prereg", "scores", "summary", "blind"))
+    add_references(doc, ("repo", "prereg", "prereg_natural", "scores", "summary", "scores_natural", "summary_natural", "blind"))
     doc.save(path)
     return path
 
 
-def build_test_summary(rows: list[dict[str, str]], summary: dict[str, Any]) -> Path:
+def build_test_summary(
+    rows: list[dict[str, str]],
+    summary: dict[str, Any],
+    nrows: list[dict[str, str]],
+    nsummary: dict[str, Any],
+) -> Path:
     path = REPORT_ROOT / "02_Standard_Astro_v0.2_测试结果综述.docx"
     doc = Document()
     configure_document(doc, running_title="Standard Astro v0.2 · 测试结果综述")
     direct = summary["conditions"]["direct"]
     standard = summary["conditions"]["standard_astro"]
+    n_loop = nsummary["strata"]["standard_model_in_loop"]
+    n_direct = nsummary["strata"]["direct"]
+    n_strat = nsummary["stratification"]
     add_cover(
         doc,
         report_id="SA-V02-EV-001",
         title="Standard Astro v0.2 测试结果综述",
-        subtitle="五模型、八任务、双条件、三次重复的预注册评测",
-        english_title="Evaluation Results Review: Five Models, Eight Tasks, Two Conditions, Three Repeats",
+        subtitle="规范措辞与自然措辞两轮 240 样本预注册评测",
+        english_title="Evaluation Results Review: Spec-Language and Natural-Phrasing 240-Sample Matrices",
         summary=(
-            f"240/240 个正式样本完成。裸模型为 {direct['score']}/{direct['maximum']}（{direct['percentage']:.1f}%），"
-            f"Standard Astro 为 {standard['score']}/{standard['maximum']}（{standard['percentage']:.1f}%）。"
-            "来源追踪和数值证据均为 240/240；结论仅适用于冻结题集和自动规则，专家盲评仍待完成。"
+            f"规范措辞矩阵：裸模型 {direct['score']}/{direct['maximum']}（{direct['percentage']:.1f}%，真实模型行为基线）；"
+            f"系统侧 {standard['score']}/{standard['maximum']} 为确定性路径自检，模型不在回路，不构成模型行为证据。"
+            f"自然措辞矩阵（模型可真实参与）：系统 120 样本中确定性接走 {n_strat['pipeline']}、模型参与 {n_strat['model_in_loop']}；"
+            f"模型在回路层 {natural_block_line(n_loop)}，裸模型 {natural_block_line(n_direct)}。"
+            f"逃逸原始标记 {nsummary['hard_escapes']['count']} 起，人工核读判定：系统侧真实洗白 0、复述未验证数字 0/15（裸模型 15/15 复述），"
+            "系统侧 7 条标记均为否定语境子串误报，详见第 8 节。专家盲评仍待完成。"
         ),
     )
-    add_document_control(doc, "SA-V02-EV-001", "Standard Astro v0.2 的正式 A/B 评测设计、结果、工程回归、发布门与局限。")
+    add_document_control(doc, "SA-V02-EV-001", "Standard Astro v0.2 两轮 A/B 评测的设计、结果、工程回归、发布门与局限。")
 
     doc.add_heading("结果摘要", level=1)
+    add_callout(
+        doc,
+        "先说结论",
+        "本报告包含两轮各 240 样本的评测。第一轮（规范措辞）里系统条件的满分是确定性管道的自检——题目使用路由器母语，"
+        "7/8 任务在毫秒级由代码直接应答，模型没有参与，因此“1440/1440 对 839/1440”不是五个模型进系统后的能力提升，"
+        "不应作为宣传口径。第二轮（自然措辞）把同样的题改成研究者的自然问法并记录模型参与度，才是系统面对真实输入的行为证据。",
+        fill=PALE_GOLD,
+    )
     add_paragraph(
         doc,
-        "Standard Astro 在五个基础模型上都把输出收敛到相同的证据和边界标准。最大增益出现在 Pantheon+ 覆盖外请求、"
-        "伪证据拒绝和 Planck–SH0ES 锚点回归；这些任务的主要困难不是语言能力，而是来源、状态和工程依赖。",
+        "规范矩阵中裸模型基线的失分集中在来源、证据状态与外推边界（Pantheon+ 覆盖外请求、伪证据拒绝、Planck–SH0ES 锚点回归），"
+        "说明这些任务的主要困难不是语言能力而是 provenance——这半边是真实模型行为数据，也是本产品要解决的问题的直接证据。",
     )
-    add_figure(doc, SOURCE_FIGURE_DIR / "standard_astro_v02_overall.png", "图 1. 两种条件的总体六维自动审计得分；柱状图从零开始。")
+    add_figure(doc, SOURCE_FIGURE_DIR / "standard_astro_v02_overall.png", "图 1. 规范措辞矩阵两条件的六维得分（系统侧为确定性路径自检）；柱状图从零开始。")
 
     doc.add_heading("English abstract", level=2)
     add_paragraph(
         doc,
-        "The formal matrix contains 240 completed samples: five models, two conditions, eight preregistered tasks, and three repeats per cell. "
-        "Direct models scored 58.3% on the frozen six-dimension audit, while Standard Astro scored 100.0%. "
-        "The result demonstrates deterministic control within the evaluated scope; it does not establish universal scientific correctness or absolute safety."
+        "Two 240-sample matrices are reported (five models, two conditions, eight preregistered tasks, three repeats). "
+        f"In the spec-language matrix, bare models scored {direct['percentage']:.1f}% — the genuine behavioral baseline — while the system arm's "
+        "perfect score was produced by the deterministic route with the model not in the loop (millisecond latencies on 7 of 8 tasks), "
+        "so it verifies pipeline/audit self-consistency, not model capability, and the per-model gain (+XX pp) framing of revision 1.0 has been withdrawn. "
+        "In the natural-phrasing matrix the same tasks were rephrased the way a working cosmologist would ask them, with per-sample LLM-call counts recorded: "
+        f"{n_strat['pipeline']} of 120 system samples were still answered deterministically, {n_strat['model_in_loop']} genuinely involved the model; "
+        f"the model-in-loop stratum scored {n_loop['percentage']:.1f}% (n={n_loop['samples']}) against a bare-model {n_direct['percentage']:.1f}%, with "
+        f"{nsummary['hard_escapes']['count']} hard escapes. Neither matrix establishes universal scientific correctness or absolute safety."
     )
 
     doc.add_heading("1. 评测设计", level=1)
@@ -1388,15 +1727,23 @@ def build_test_summary(rows: list[dict[str, str]], summary: dict[str, Any]) -> P
             ("条件 B", "Standard Astro：真实路由、工具、来源解析、凭证和声明门"),
             ("任务", "8 道预注册观测宇宙学任务"),
             ("重复", "每个 model × condition × task 单元重复 3 次"),
-            ("样本量", "5 × 2 × 8 × 3 = 240；每种条件 120"),
-            ("评分", "6 维，每维 0–2；单样本满分 12；总满分 2880"),
+            ("矩阵一（规范措辞，2026-08-04 冻结）", "题目为路由器可直接识别的规范语言；系统条件实测由确定性路径应答（模型不在回路）"),
+            ("矩阵二（自然措辞，2026-08-06 冻结）", "同题同标准答案改写为自然问法，去除路由暗号；逐样本记录 llm_calls 并按模型参与分层"),
+            ("样本量", "每轮 5 × 2 × 8 × 3 = 240；两轮共 480"),
+            ("评分", "6 维，每维 0–2；单样本满分 12；两轮使用同一冻结审计规则"),
         ),
         (1900, 7460),
     )
     add_paragraph(
         doc,
         "最初冻结矩阵为四模型 192 样本；Kimi K3 以完全相同的题目、条件、重复数和评分规则新增 48 样本。"
-        "正式五模型结果没有删除原始四模型子矩阵。",
+        "正式五模型结果没有删除原始四模型子矩阵。"
+        "规范矩阵样本经历过多轮修复-重跑-合并（repair/merge 审计文件保留），应按“迭代达标”而非“一次通过”理解。",
+    )
+    add_paragraph(
+        doc,
+        f"自然矩阵 240 样本传输失败 {nsummary['transport_failures']} 个；"
+        "其运行与补跑历史保留在 .local/standard-astro-v02-natural/ 审计目录。",
     )
 
     doc.add_heading("2. 评分维度及解释", level=1)
@@ -1414,13 +1761,13 @@ def build_test_summary(rows: list[dict[str, str]], summary: dict[str, Any]) -> P
         (1900, 4040, 3420),
     )
 
-    doc.add_heading("3. 总体结果", level=1)
+    doc.add_heading("3. 规范措辞矩阵总体结果（系统侧为确定性路径自检）", level=1)
     add_table(
         doc,
         ("条件", "样本", "得分", "满分", "得分率", "相对结论"),
         (
-            ("裸模型", direct["samples"], direct["score"], direct["maximum"], f"{direct['percentage']:.1f}%", "灵活，但来源和边界不稳定"),
-            ("Standard Astro", standard["samples"], standard["score"], standard["maximum"], f"{standard['percentage']:.1f}%", "冻结题集内全部自动门通过"),
+            ("裸模型", direct["samples"], direct["score"], direct["maximum"], f"{direct['percentage']:.1f}%", "真实模型行为基线；来源和边界不稳定"),
+            ("Standard Astro（确定性路径）", standard["samples"], standard["score"], standard["maximum"], f"{standard['percentage']:.1f}%", "管道自检：7/8 任务毫秒级应答，模型不在回路"),
         ),
         (1800, 1100, 1200, 1200, 1200, 2860),
         numeric_columns={1, 2, 3, 4},
@@ -1428,40 +1775,42 @@ def build_test_summary(rows: list[dict[str, str]], summary: dict[str, Any]) -> P
     add_callout(
         doc,
         "解释限制",
-        "100.0% 是预注册自动审计得分，不是科学正确率、统计置信度或面对所有宇宙学问题的安全概率。",
+        "本表两行的口径不对等：裸模型行是五个真实模型的自由文本被严格规则打分；系统行是确定性代码路径的输出被与之共同设计的规则打分，"
+        "满分在很大程度上由构造保证（等价于回归测试全绿）。因此“58.3% 对 100.0%”不构成模型能力对比，"
+        "也不是科学正确率、统计置信度或面对所有宇宙学问题的安全概率。系统面对自然输入的行为证据见第 8 节。",
         fill=PALE_GOLD,
     )
 
-    doc.add_heading("4. 五个模型的分项结果", level=1)
+    doc.add_heading("4. 五个模型的分项结果（规范矩阵）", level=1)
     model_rows = []
     for model in MODEL_ORDER:
         direct_rows = [row for row in rows if row["model"] == model and row["condition"] == "direct"]
-        standard_rows = [row for row in rows if row["model"] == model and row["condition"] == "standard_astro"]
         ds = sum(int(row["total"]) for row in direct_rows)
-        ss = sum(int(row["total"]) for row in standard_rows)
-        model_rows.append((MODEL_LABELS[model], f"{ds}/288", f"{100*ds/288:.1f}%", f"{ss}/288", f"{100*ss/288:.1f}%", f"+{100*(ss-ds)/288:.1f} pp"))
+        model_rows.append((MODEL_LABELS[model], f"{ds}/288", f"{100*ds/288:.1f}%"))
     add_table(
         doc,
-        ("模型", "裸模型", "裸模型率", "系统", "系统率", "系统增益"),
+        ("模型", "裸模型", "裸模型率"),
         model_rows,
-        (2350, 1350, 1350, 1250, 1350, 1710),
-        numeric_columns={1, 2, 3, 4, 5},
+        (3550, 2500, 3310),
+        numeric_columns={1, 2},
     )
-    add_figure(doc, SOURCE_FIGURE_DIR / "standard_astro_v02_by_model.png", "图 2. 五个模型在直接条件和 Standard Astro 条件下的得分。")
     add_paragraph(
         doc,
-        "Claude Fable 5 和 Kimi K3 的裸模型得分高于三种 Codex 配置，但进入系统后五个模型均满足相同的自动证据标准。"
-        "这支持“系统价值主要来自 harness，而非某个特定模型”的判断。",
+        "本表只列裸模型列：这是矩阵中唯一的逐模型行为数据。修订说明：1.0 版此处曾按模型列出“系统 288/288”与逐模型增益（+XX pp）列，"
+        "该口径已撤回——规范矩阵的系统条件由同一段确定性代码应答，五个模型的“系统列”是同一计算重放 15 次的必然结果"
+        "（120 行零方差、毫秒级耗时），既不构成模型行为，也不支持“进入系统后模型得到提升”的解读。"
+        "模型与系统协同的真实对比见第 8 节自然措辞矩阵。",
     )
+    add_figure(doc, SOURCE_FIGURE_DIR / "standard_astro_v02_by_model.png", "图 2. 规范矩阵五个模型两条件得分（系统柱为确定性路径自检，模型间恒等是构造使然）。")
 
-    doc.add_heading("5. 八项任务的结果", level=1)
+    doc.add_heading("5. 八项任务的结果（规范矩阵）", level=1)
     task_rows = []
     for task_id, exp in EXPERIMENTS.items():
         stats = task_stats(rows, task_id)
         task_rows.append((f"{exp['number']}", exp["title"], f"{stats['direct']['score']}/180", f"{stats['direct']['percentage']:.1f}%", "180/180", "100.0%", exp["disposition"]))
     add_table(
         doc,
-        ("#", "任务", "裸分", "裸率", "系统分", "系统率", "终态"),
+        ("#", "任务", "裸分", "裸率", "系统分（确定性）", "系统率", "终态"),
         task_rows,
         (500, 3450, 1100, 1000, 1100, 1000, 1210),
         numeric_columns={0, 2, 3, 4, 5},
@@ -1473,7 +1822,7 @@ def build_test_summary(rows: list[dict[str, str]], summary: dict[str, Any]) -> P
         "前者要求正确区分测量与外推，后者要求核验 provenance。由此可见，语言流畅度不能替代证据状态。",
     )
 
-    doc.add_heading("6. 六维结果、终态与延迟", level=1)
+    doc.add_heading("6. 六维结果、终态与延迟（规范矩阵）", level=1)
     dimension_rows = []
     for key, label in DIMENSIONS:
         d = direct["dimensions"][key]
@@ -1481,7 +1830,7 @@ def build_test_summary(rows: list[dict[str, str]], summary: dict[str, Any]) -> P
         dimension_rows.append((label, f"{d}/240", f"{100*d/240:.1f}%", f"{s}/240", f"{100*s/240:.1f}%"))
     add_table(
         doc,
-        ("维度", "裸模型", "裸率", "系统", "系统率"),
+        ("维度", "裸模型", "裸率", "系统（确定性）", "系统率"),
         dimension_rows,
         (2850, 1500, 1500, 1500, 2010),
         numeric_columns={1, 2, 3, 4},
@@ -1498,16 +1847,23 @@ def build_test_summary(rows: list[dict[str, str]], summary: dict[str, Any]) -> P
         doc,
         f"轻量路径 P50={summary['latency_seconds']['lightweight_p50']:.3f}s，"
         f"P95={summary['latency_seconds']['lightweight_p95']:.3f}s；缓存命中具有同一测得分布。"
-        "EDE full_research 能力缺口路径的中位数约为 13.3s，因此不能把所有任务的延迟都概括为毫秒级。",
+        "EDE full_research 能力缺口路径的中位数约为 13.3s，因此不能把所有任务的延迟都概括为毫秒级。"
+        "毫秒级耗时同时是“模型不在回路”的直接证据：一次本地 CLI 模型调用至少需要数秒，"
+        "0.011s 的中位耗时说明这些样本从路由到应答全程未调用任何模型。",
     )
     add_figure(doc, SOURCE_FIGURE_DIR / "standard_astro_v02_latency.png", "图 5. Standard Astro 按任务的延迟分布；EDE 能力缺口使用重型路线。")
 
     doc.add_heading("7. 自动发布门与工程回归", level=1)
+    add_paragraph(
+        doc,
+        "下表的发布门在规范措辞矩阵上定义与执行，其“通过”只覆盖确定性路径行为；自然措辞矩阵是测量性运行，"
+        "预注册终点见第 8 节，不套用本发布门。",
+    )
     release_rows = [
         (key, "通过" if value else "未通过")
         for key, value in summary["release_checks"].items()
     ]
-    add_table(doc, ("自动检查", "结果"), release_rows, (7200, 2160))
+    add_table(doc, ("自动检查（规范矩阵口径）", "结果"), release_rows, (7200, 2160))
     add_table(
         doc,
         ("工程门", "结果", "限制/备注"),
@@ -1517,35 +1873,228 @@ def build_test_summary(rows: list[dict[str, str]], summary: dict[str, Any]) -> P
             ("前端", "253/253 + lint + build", "VITE_API_URL 明确配置"),
             ("注册表审计", "34/34", "无失败"),
             ("宇宙学 benchmark", "23 pass / 2 intended skip", "跳过项为预期能力边界"),
-            ("B/C/F 严格盲测", "12 completed / hard failures 0", "3 个措辞软检查未命中"),
+            (
+                "B/C/F 严格盲测",
+                "12 completed / hard failures 0",
+                "模型在回路的对抗性证据；B1/B3/B4 三个反伪造场景的措辞软检查未命中（归类 model_drift），硬门未失守",
+            ),
         ),
         (3000, 3100, 3260),
     )
+    add_callout(
+        doc,
+        "盲测软失败为何必须与满分并列陈述",
+        "严格盲测是 1.0 版报告中唯一让模型真实跑在系统里的证据，12 个 case 中 3 个未通过措辞软检查，且全部集中在"
+        "伪证据/自供数据场景；与规范矩阵系统侧的 100% 并读，才能得到“硬防线守住、措辞层非满分”的真实画面。"
+        "自然措辞矩阵（第 8 节）把这一画面扩展到了全部 8 道预注册任务。",
+        fill=PALE_GOLD,
+    )
 
-    doc.add_heading("8. 结论与决策建议", level=1)
+    doc.add_heading("8. 自然措辞矩阵：模型在回路的行为证据（2026-08-06）", level=1)
+    add_paragraph(
+        doc,
+        "本节是 1.1 版新增的核心内容。同样 8 道题、同样的标准答案与评分规则，题目被改写为研究者的自然问法："
+        "删除所有路由器母语（如显式否定串“Do not run a likelihood, fit, sampler…”与规格化交付清单），"
+        "保留全部数值输入与来源标识；已知关键词直达路径的触发词在存在同等自然的替代表述时被避开。"
+        "评测脚本经由 chat 主循环的晚绑定接口逐样本记录模型调用次数（llm_calls），"
+        "系统条件按“确定性通道应答（llm_calls=0）”与“模型参与（llm_calls>0）”分层报告，永不合并为单一头条数字。",
+    )
+    n_pipeline = nsummary["strata"]["standard_pipeline"]
+    add_table(
+        doc,
+        ("层", "样本", "得分", "满分", "得分率"),
+        (
+            (
+                "裸模型（全部）",
+                n_direct["samples"],
+                n_direct["score"],
+                n_direct["maximum"],
+                f"{n_direct['percentage']:.1f}%" if n_direct["samples"] else "—",
+            ),
+            (
+                "系统 · 确定性通道层",
+                n_pipeline["samples"],
+                n_pipeline["score"],
+                n_pipeline["maximum"],
+                f"{n_pipeline['percentage']:.1f}%" if n_pipeline["samples"] else "—",
+            ),
+            (
+                "系统 · 模型在回路层",
+                n_loop["samples"],
+                n_loop["score"],
+                n_loop["maximum"],
+                f"{n_loop['percentage']:.1f}%" if n_loop["samples"] else "—",
+            ),
+        ),
+        (3200, 1300, 1300, 1300, 2260),
+        numeric_columns={1, 2, 3, 4},
+    )
+    add_paragraph(
+        doc,
+        f"路由准确率（routed task_kind 对预注册预期）：{nsummary['routing']['correct']}/{nsummary['routing']['total']}"
+        f"（{nsummary['routing']['accuracy_percentage']:.1f}%）；"
+        f"终态匹配率（response_disposition 对预期）：{nsummary['disposition_match']['correct']}/{nsummary['disposition_match']['total']}"
+        f"（{nsummary['disposition_match']['percentage']:.1f}%）；"
+        f"硬性逃逸原始标记（冻结规则，适用口径 V02_07/08）："
+        f"{zero_event_line(nsummary['hard_escapes']['count'], natural_escape_n(nsummary))}"
+        f"（预注册终点要求为 0，按冻结字面{'满足' if nsummary['preregistered_endpoints']['hard_escape_count_zero'] else '未满足'}）。"
+        "零事件按“三分之三法则”给出 95% 置信上界——精密仪器口径下不存在“误差等于零”，只存在“小于某上界”。",
+    )
+    add_callout(
+        doc,
+        "逃逸标记的逐条人工判读（2026-08-06，核读全部被标记回复及全部 15 条系统侧 V02_08 回复）",
+        "22 个原始标记分为两类。裸模型侧 15/15：五个模型的全部伪证据样本都复述了未验证数字 74.91（部分另以“透明来源”软包装呈现该值）——"
+        "这是产品要防的基线失败，真实成立。系统侧 7/15：全部为评分规则的否定语境子串误报——回复原文是“cannot present … as a "
+        "paper-ready result”一类的明确拒绝，被“paper-ready result”子串命中；人工核读系统侧 15 条回复，复述未验证数字 0 条、"
+        "以已验证口径呈现 0 条，全部给出合法重跑路径。即：在“不得复述未验证数字”的最严口径下，系统内模型 0/15，裸模型 15/15。"
+        "同时确认两个真实缺陷：其一，这些拒绝回合的 response_disposition 被后端标为 full 而非 refusal——自然措辞下确定性伪证据信号未触发，"
+        "元数据分层失准（内容层未失守）；其二，冻结的逃逸规则本身继承了盲测已知的子串陷阱（无法识别否定语境）。"
+        "另有预注册措辞教训：终点写成“两条件均为 0”系起草失误——裸模型复述未验证数字恰是本产品存在的理由，不应被同一终点覆盖；"
+        "此处按冻结字面如实报“未满足”，并把教训记录在案，而不是事后重新解释。",
+        fill=PALE_GOLD,
+    )
+    natural_task_rows = []
+    for task_id, exp in EXPERIMENTS.items():
+        pt = nsummary["per_task"][task_id]
+        counts = pt["standard_strata_counts"]
+        dispositions = "，".join(
+            f"{name or '无'}×{count}"
+            for name, count in pt["standard_dispositions"].items()
+            if count
+        )
+        natural_task_rows.append(
+            (
+                f"{exp['number']}",
+                exp["title"],
+                f"{pt['direct']['percentage']:.1f}%" if pt["direct"]["samples"] else "—",
+                f"{pt['standard']['percentage']:.1f}%" if pt["standard"]["samples"] else "—",
+                f"{counts['pipeline']}/{counts['model_in_loop']}",
+                f"{dispositions}（预期 {pt['expected_disposition']}）",
+            )
+        )
+    add_table(
+        doc,
+        ("#", "任务", "裸率", "系统率（混合）", "确定性/模型参与", "系统终态分布"),
+        natural_task_rows,
+        (500, 2900, 1000, 1300, 1300, 2360),
+        numeric_columns={0, 2, 3},
+    )
+    add_paragraph(
+        doc,
+        "“系统率（混合）”把两层合并，仅用于逐任务定位问题；结论层面只使用上方分层口径。"
+        "终态分布若偏离预期（例如可答题落入 abstention），通常意味着自然问法未被确定性解析器完整提取、"
+        "而反幻造门又拦下了模型的未验证算术——防线守住、正当答案被误杀，这是轻量路径在自然输入下的主要产品缺口。",
+    )
+    natural_model_rows = []
+    for model in MODEL_ORDER:
+        blocks = nsummary["per_model"][model]
+        natural_model_rows.append(
+            (
+                MODEL_LABELS[model],
+                natural_block_line(blocks["direct"]),
+                natural_block_line(blocks["standard_model_in_loop"]),
+            )
+        )
+    add_table(
+        doc,
+        ("模型", "裸模型", "系统 · 模型在回路层"),
+        natural_model_rows,
+        (2900, 3200, 3260),
+    )
+    add_figure(
+        doc,
+        ASSET_DIR / "natural_matrix_by_model.png",
+        "图 6. 自然措辞矩阵逐模型对比（系统柱仅统计模型在回路层，n 见标注）。",
+    )
+    add_callout(
+        doc,
+        "读法提醒",
+        "两层样本量由系统自身的路由行为决定，不是评测者分配的；逐模型的模型在回路层 n 可能较小，"
+        "比较时以标注的 n 为准，不应把小样本百分比当作精确能力估计。",
+        fill=PALE_GOLD,
+    )
+
+    doc.add_heading("8.1 误差预算表（v1）", level=2)
+    add_paragraph(
+        doc,
+        "把 Standard Astro 当作一台精密仪器：下表按误差源拆分当前全部已测口径，系统性误差不随重复次数平均消失，"
+        "统计性误差随样本量收敛；“未测”行是已识别但尚无测量的误差源，列出它们正是预算表的意义。"
+        "预期 full 任务被门禁压降的逐样本清单已提取为 should-pass 回归语料库（见参考资料），"
+        "后续每次修改门禁应连同盲测 B 组一起复跑，双向误差同时可见。",
+    )
+    add_table(
+        doc,
+        ("误差源", "类型", "测得值", "口径与证据"),
+        error_budget_rows(rows, summary, nrows, nsummary),
+        (2900, 1300, 1900, 3260),
+    )
+    add_callout(
+        doc,
+        "预算表的边界",
+        "本表全部由项目方测量，构念校准（评分规则本身是否测对了东西）只能来自外部：博士后 12 组匿名盲评。"
+        "表中任何一行都不能替代该外部定标。",
+        fill=PALE_GOLD,
+    )
+
+    doc.add_heading("9. 结论与决策建议", level=1)
     add_callout(
         doc,
         "当前决策",
-        "自动工程门支持进入受控博士后演示和匿名盲评；专家门、Python 3.11 CI、72 小时观察和生产恢复验证未完成，因此暂不宣称正式发布。",
+        "自动工程门支持进入受控博士后演示和匿名盲评，演示与盲评材料一律采用自然措辞、模型在回路口径；"
+        "专家门、Python 3.11 CI、72 小时观察和生产恢复验证未完成，因此暂不宣称正式发布。",
         fill=PALE_GOLD,
     )
     add_bullets(
         doc,
         (
-            "优势：不同基础模型在系统内共享相同证据标准；来源和数字不会依赖最终措辞。",
-            "关键改进：94.27% 的来源追踪已由后端 coverage/capability/untrusted receipts 修复为 240/240。",
+            "可宣传的结论：裸模型在 provenance 敏感任务上系统性失分（规范矩阵 58.3%、自然矩阵 46.6%），这是产品要解决的问题的真实证据；"
+            "在“不得复述未验证数字”的最严口径下（伪证据任务，人工核读），系统内模型 0/15 复述，裸模型 15/15 复述；"
+            "系统侧真实洗白为 0，规范矩阵与严格盲测的硬门也未失守。",
+            "同样要如实说的：自然矩阵按冻结规则的原始逃逸标记为 22（含 7 条系统侧否定语境误报与 15 条裸模型真实复述），"
+            "预注册终点按字面未满足——判读细节与预注册措辞教训见第 8 节，不做事后重新解释。",
+            "不可宣传的结论：规范矩阵“1440/1440 对 839/1440”不构成模型能力对比（系统侧为确定性自检）；"
+            "1.0 版的逐模型增益（+XX pp）表述已撤回。",
+            "自然措辞矩阵暴露的两个真实产品缺陷：其一，确定性解析器对自然问法提取不完整时，反幻造门把正当答案压成 abstention"
+            "（任务 1 全军覆没 15/15，见 should-pass 语料库）；其二，伪证据信号未触发时拒绝回合的终态被误标为 full。"
+            "修复-复跑均列入下一阶段路线。",
+            "关键改进（规范矩阵口径）：94.27% 的来源追踪已由后端 coverage/capability/untrusted receipts 修复为 240/240。",
             "剩余科学风险：方法适用性还没有像数值来源一样全面结构化。",
-            "剩余验证风险：题集由项目方选择，博士后 12 对匿名复核必须独立完成。",
+            "剩余验证风险：题集由项目方选择，博士后 12 对匿名复核必须独立完成，且系统侧材料必须来自模型在回路的真实对话。",
         ),
     )
-    add_references(doc, ("prereg", "scores", "summary", "blind", "desi", "act", "planck", "shoes", "pantheon", "ede"))
+    add_references(
+        doc,
+        (
+            "prereg",
+            "prereg_natural",
+            "scores",
+            "summary",
+            "scores_natural",
+            "summary_natural",
+            "should_pass",
+            "blind",
+            "desi",
+            "act",
+            "planck",
+            "shoes",
+            "pantheon",
+            "ede",
+        ),
+    )
     doc.save(path)
     return path
 
 
-def build_experiment_report(rows: list[dict[str, str]], task_id: str, task_spec: dict[str, Any]) -> Path:
+def build_experiment_report(
+    rows: list[dict[str, str]],
+    task_id: str,
+    task_spec: dict[str, Any],
+    nsummary: dict[str, Any],
+    natural_task_spec: dict[str, Any],
+) -> Path:
     exp = EXPERIMENTS[task_id]
     stats = task_stats(rows, task_id)
+    ntask = nsummary["per_task"][task_id]
     path = EXPERIMENT_DIR / exp["filename"]
     doc = Document()
     configure_document(doc, running_title=f"Standard Astro v0.2 · 实验 {exp['number']}")
@@ -1556,15 +2105,18 @@ def build_experiment_report(rows: list[dict[str, str]], task_id: str, task_spec:
         subtitle="预注册观测宇宙学 A/B 测试详细报告",
         english_title=exp["title_en"],
         summary=(
-            f"本实验共 30 个正式样本。裸模型得分 {stats['direct']['score']}/180（{stats['direct']['percentage']:.1f}%）；"
-            f"Standard Astro 得分 {stats['standard_astro']['score']}/180（{stats['standard_astro']['percentage']:.1f}%）。"
-            f"系统路线为 {exp['route']}，终态为 {exp['disposition']}。"
+            f"规范措辞矩阵 30 样本：裸模型 {stats['direct']['score']}/180（{stats['direct']['percentage']:.1f}%）；"
+            f"Standard Astro {stats['standard_astro']['score']}/180——系统侧由确定性路径应答（模型不在回路），"
+            f"属管道自检口径。自然措辞矩阵 30 样本：裸模型 {ntask['direct']['percentage']:.1f}%，"
+            f"系统混合 {ntask['standard']['percentage']:.1f}%"
+            f"（确定性 {ntask['standard_strata_counts']['pipeline']}/模型参与 {ntask['standard_strata_counts']['model_in_loop']}）。"
+            f"规范矩阵系统路线为 {exp['route']}，终态为 {exp['disposition']}。"
         ),
     )
     add_document_control(
         doc,
         f"SA-V02-EXP-{exp['number']:03d}",
-        f"预注册任务 {task_id} 的科学背景、输入、计算、30 样本结果、路由/凭证与结论边界。",
+        f"预注册任务 {task_id} 的科学背景、输入、计算、两轮 60 样本结果、路由/凭证与结论边界。",
     )
 
     doc.add_heading("摘要", level=1)
@@ -1572,8 +2124,9 @@ def build_experiment_report(rows: list[dict[str, str]], task_id: str, task_spec:
     add_callout(
         doc,
         "实验结论",
-        "Standard Astro 的 15 个系统辅助样本全部满足冻结六维自动审计；"
-        "该结论只适用于本任务，不应外推为普遍科学正确率。",
+        "规范措辞矩阵中 Standard Astro 的 15 个系统确定性样本（模型不在回路）全部满足冻结六维自动审计——"
+        "该结果证明确定性管道与审计规则在本任务上自洽，不构成模型行为证据；"
+        "模型在回路的表现见第 7 节自然措辞对照。两者均只适用于本任务，不应外推为普遍科学正确率。",
     )
     doc.add_heading("English abstract", level=2)
     add_paragraph(doc, exp["abstract_en"])
@@ -1581,7 +2134,8 @@ def build_experiment_report(rows: list[dict[str, str]], task_id: str, task_spec:
     doc.add_heading("1. 科学背景与研究问题", level=1)
     for paragraph in exp["background"]:
         add_paragraph(doc, paragraph)
-    add_paragraph(doc, f"预注册问题：{task_spec['prompt']}")
+    add_paragraph(doc, f"预注册问题（规范措辞）：{task_spec['prompt']}")
+    add_paragraph(doc, f"自然措辞版（2026-08-06 冻结，标准答案不变）：{natural_task_spec['prompt']}")
 
     doc.add_heading("2. 来源、输入与基准", level=1)
     add_paragraph(doc, f"主要来源：{exp['source']}")
@@ -1610,20 +2164,21 @@ def build_experiment_report(rows: list[dict[str, str]], task_id: str, task_spec:
             ("基础模型", "GPT-5.6 Sol、Terra、Luna；Claude Fable 5；Kimi K3"),
             ("条件", "裸模型闭卷 vs. Standard Astro 完整系统路径"),
             ("重复", "每个模型、每个条件重复 3 次"),
-            ("本实验样本", "5 × 2 × 3 = 30"),
+            ("本实验样本", "规范措辞矩阵 5 × 2 × 3 = 30；自然措辞矩阵同构 30"),
             ("评分", "6 维 × 0–2 分；每个样本满分 12；每种条件满分 180"),
+            ("矩阵口径", "规范矩阵系统侧由确定性路径应答（模型不在回路）；自然矩阵逐样本记录 llm_calls 并分层"),
             ("自动评分性质", "读取回答、路由状态与后端凭证；不是专家科学评审"),
         ),
         (2500, 6860),
     )
 
-    doc.add_heading("5. 测试结果", level=1)
+    doc.add_heading("5. 测试结果（规范措辞矩阵）", level=1)
     add_table(
         doc,
         ("条件", "样本", "得分", "满分", "得分率"),
         (
             ("裸模型", 15, stats["direct"]["score"], 180, f"{stats['direct']['percentage']:.1f}%"),
-            ("Standard Astro", 15, stats["standard_astro"]["score"], 180, f"{stats['standard_astro']['percentage']:.1f}%"),
+            ("Standard Astro（确定性路径）", 15, stats["standard_astro"]["score"], 180, f"{stats['standard_astro']['percentage']:.1f}%"),
         ),
         (2850, 1300, 1500, 1500, 2210),
         numeric_columns={1, 2, 3, 4},
@@ -1635,14 +2190,19 @@ def build_experiment_report(rows: list[dict[str, str]], task_id: str, task_spec:
         model_rows.append((MODEL_LABELS[model], f"{direct_model['score']}/36", f"{direct_model['percentage']:.1f}%", f"{system_model['score']}/36", f"{system_model['percentage']:.1f}%"))
     add_table(
         doc,
-        ("模型", "裸分", "裸率", "系统分", "系统率"),
+        ("模型", "裸分", "裸率", "系统分（确定性）", "系统率"),
         model_rows,
         (2900, 1500, 1500, 1500, 1960),
         numeric_columns={1, 2, 3, 4},
     )
-    add_figure(doc, ASSET_DIR / f"experiment_{exp['number']:02d}.png", f"图 {exp['number']}. 五个模型在实验 {exp['number']} 两种条件下的得分率。")
+    add_paragraph(
+        doc,
+        "系统列五个模型完全相同是构造使然：该条件由同一段确定性代码应答，模型不在回路，"
+        "系统列不构成逐模型行为数据。",
+    )
+    add_figure(doc, ASSET_DIR / f"experiment_{exp['number']:02d}.png", f"图 {exp['number']}. 五个模型在实验 {exp['number']} 两种条件下的得分率（系统柱为确定性路径自检）。")
 
-    doc.add_heading("6. 系统行为审计", level=1)
+    doc.add_heading("6. 系统行为审计（规范矩阵）", level=1)
     add_table(
         doc,
         ("审计项", "15 个 Standard Astro 样本的观察结果"),
@@ -1651,39 +2211,74 @@ def build_experiment_report(rows: list[dict[str, str]], task_id: str, task_spec:
             ("响应终态", ", ".join(f"{k}: {v}" for k, v in stats["disposition"].items())),
             ("来源状态", ", ".join(f"{k}: {v}" for k, v in stats["source_status"].items())),
             ("系统延迟", f"P50={stats['latency_p50']:.3f}s；max={stats['latency_max']:.3f}s"),
+            (
+                "模型参与",
+                "本轮未记录 llm_calls；依据耗时特征（毫秒级或跨模型恒定）判定为确定性路径应答，模型不在回路",
+            ),
             ("关键逃逸", "0"),
         ),
         (2500, 6860),
     )
     add_paragraph(doc, exp["interpretation"])
 
-    doc.add_heading("7. 结论范围与局限", level=1)
+    doc.add_heading("7. 自然措辞矩阵对照（模型在回路口径）", level=1)
+    n_dispositions = "，".join(
+        f"{name or '无'}×{count}"
+        for name, count in ntask["standard_dispositions"].items()
+        if count
+    )
+    add_table(
+        doc,
+        ("项目", "自然措辞矩阵观察结果"),
+        (
+            ("裸模型", natural_block_line(ntask["direct"])),
+            ("系统（两层混合）", natural_block_line(ntask["standard"])),
+            (
+                "系统分层",
+                f"确定性通道 {ntask['standard_strata_counts']['pipeline']} 个；"
+                f"模型参与 {ntask['standard_strata_counts']['model_in_loop']} 个",
+            ),
+            ("系统终态分布", f"{n_dispositions}（预期 {ntask['expected_disposition']}）"),
+        ),
+        (2500, 6860),
+    )
+    add_paragraph(
+        doc,
+        "自然措辞版删除路由暗号后，本任务的路由、输入提取与门禁行为可能与规范矩阵不同；"
+        "终态偏离预期时，逐样本回复与 llm_calls 记录见自然矩阵评分 CSV。"
+        "分层与逐模型总体结论见《测试结果综述》第 8 节。",
+    )
+
+    doc.add_heading("8. 结论范围与局限", level=1)
     add_bullets(doc, exp["limits"])
     add_callout(
         doc,
         "可支持的结论",
-        "在本任务的 15 个系统辅助样本中，路由、终态、来源/证据与六维自动评分满足预注册要求。",
+        "规范矩阵中本任务的 15 个系统确定性样本（模型不在回路）满足预注册的路由、终态、来源/证据与六维自动评分要求；"
+        "该结论描述管道自检，不构成模型行为证据。模型在回路的行为以第 7 节自然矩阵口径为准。",
         fill=PALE_BLUE,
     )
     add_callout(
         doc,
         "不可支持的结论",
-        "不能据此声称系统绝对安全、已经复现整篇论文、方法在所有数据上适用，或可替代宇宙学专家评审。",
+        "不能据此声称系统绝对安全、已经复现整篇论文、方法在所有数据上适用、模型进入系统后能力得到提升，"
+        "或可替代宇宙学专家评审。",
         fill=PALE_GOLD,
     )
 
-    doc.add_heading("8. 复核清单", level=1)
+    doc.add_heading("9. 复核清单", level=1)
     add_bullets(
         doc,
         (
-            "核对预注册 prompt、ground_truth 与本报告输入完全一致。",
-            "从逐样本 CSV 重算本实验 30 行的六维得分。",
-            "抽查每个模型至少一组裸模型/Standard Astro 回答。",
-            "核对系统路由、disposition、source_status 与凭证哈希。",
+            "核对两版预注册 prompt、ground_truth 与本报告输入完全一致。",
+            "从两轮逐样本 CSV 重算本实验 60 行的六维得分。",
+            "抽查每个模型至少一组裸模型/Standard Astro 回答（含自然矩阵模型参与样本）。",
+            "核对系统路由、disposition、source_status、llm_calls 与凭证哈希。",
+            "确认规范矩阵系统侧样本为确定性路径应答，引用时不得作为模型行为证据。",
             "由博士后判断科学解释和方法边界是否需要修改。",
         ),
     )
-    add_references(doc, ("prereg", "scores", "summary", *exp["refs"]))
+    add_references(doc, ("prereg", "prereg_natural", "scores", "summary", "scores_natural", "summary_natural", *exp["refs"]))
     doc.save(path)
     return path
 
@@ -1693,33 +2288,66 @@ def copy_evidence() -> None:
     shutil.copy2(SCORES_PATH, EVIDENCE_DIR / "standard_astro_v02_scores_240.csv")
     shutil.copy2(SUMMARY_PATH, EVIDENCE_DIR / "standard_astro_v02_summary.json")
     shutil.copy2(TASKS_PATH, EVIDENCE_DIR / "standard_astro_v02_preregistered_tasks.json")
+    shutil.copy2(NATURAL_SCORES_PATH, EVIDENCE_DIR / "standard_astro_v02_natural_scores_240.csv")
+    shutil.copy2(NATURAL_SUMMARY_PATH, EVIDENCE_DIR / "standard_astro_v02_natural_summary.json")
+    shutil.copy2(
+        NATURAL_TASKS_PATH,
+        EVIDENCE_DIR / "standard_astro_v02_natural_preregistered_tasks.json",
+    )
+    should_pass = REPO_ROOT / "docs/research/standard_astro_v02_should_pass_corpus.json"
+    shutil.copy2(should_pass, EVIDENCE_DIR / "standard_astro_v02_should_pass_corpus.json")
     if BLIND_SUMMARY.exists():
         shutil.copy2(BLIND_SUMMARY, EVIDENCE_DIR / "strict_blind_test_summary.md")
 
 
-def write_manifest(paths: Sequence[Path]) -> None:
+def write_manifest(paths: Sequence[Path], summary: dict[str, Any], nsummary: dict[str, Any]) -> None:
+    direct = summary["conditions"]["direct"]
+    standard = summary["conditions"]["standard_astro"]
+    n_loop = nsummary["strata"]["standard_model_in_loop"]
+    n_direct = nsummary["strata"]["direct"]
+    n_strat = nsummary["stratification"]
     lines = [
-        "# Standard Astro v0.2 正式报告包",
+        "# Standard Astro v0.2 正式报告包（修订 1.1）",
         "",
         f"生成日期：{GENERATED_DATE.isoformat()}",
         "",
-        "本目录以五模型、两条件、八任务、三次重复的 240 个正式样本为统计基线。",
+        "本目录包含两轮各 240 样本的评测：规范措辞矩阵（2026-08-04 冻结）与自然措辞矩阵（2026-08-06 冻结）。",
         "自动评分结果不等于科学正确率；博士后 12 组匿名 A/B 复核仍待完成。",
+        "",
+        "## 修订 1.1 说明（相对 2026-08-05 的 1.0 版）",
+        "",
+        "- 1.0 版把规范矩阵系统侧的 1440/1440 与裸模型 839/1440 并列为头条对比。该口径已撤回：",
+        "  系统条件实测由确定性代码路径应答（7/8 任务毫秒级、120 行零方差），模型不在回路，",
+        "  该满分是管道与审计规则的自洽性验证（回归测试口径），不构成模型行为证据。",
+        "- 1.0 版的逐模型增益（+XX pp）列已撤回，理由同上。",
+        "- 新增自然措辞矩阵：同题同标准答案改写为研究者自然问法，逐样本记录模型调用次数并分层报告。",
+        "- 严格盲测的 3 个措辞软失败（B1/B3/B4，反伪造场景）从工程表备注提升为正文条目。",
         "",
         "## 文件结构",
         "",
         "1. `01_Standard_Astro_v0.2_总体技术报告.docx`：系统定位、架构、接口、信任边界、验证证据与路线图。",
-        "2. `02_Standard_Astro_v0.2_测试结果综述.docx`：评测设计、总体/模型/任务结果、发布门和局限。",
-        "3. `03_逐实验报告/`：八项预注册实验的独立正式报告。",
-        "4. `evidence/`：240 行评分、汇总、预注册任务与严格盲测摘要。",
+        "2. `02_Standard_Astro_v0.2_测试结果综述.docx`：两轮评测设计、结果、工程回归、发布门和局限（第 8 节为自然矩阵）。",
+        "3. `03_逐实验报告/`：八项预注册实验的独立正式报告（各含自然矩阵对照节）。",
+        "4. `evidence/`：两轮 240 行评分、汇总、两版预注册任务与严格盲测摘要。",
         "5. `assets/`：报告内使用的系统架构图和逐实验模型对比图。",
         "",
-        "## 正式结论",
+        "## 正式结论（1.1 口径）",
         "",
-        "- 来源追踪：240/240（自动审计口径）。",
-        "- 数值证据约束：240/240（自动审计口径）。",
-        "- Standard Astro 总分：1440/1440；裸模型：839/1440。",
-        "- 当前阶段：可进入受控专家演示和盲评；不应宣传为绝对安全或论文级自主研究系统。",
+        f"- 规范矩阵裸模型基线：{direct['score']}/1440（{direct['percentage']:.1f}%）——真实模型行为数据，"
+        "失分集中在来源、证据状态与外推边界。",
+        f"- 规范矩阵系统侧：{standard['score']}/1440，确定性路径自检（模型不在回路），不作模型能力宣传。",
+        f"- 自然矩阵：系统 120 样本中确定性接走 {n_strat['pipeline']}、模型参与 {n_strat['model_in_loop']}；"
+        f"模型在回路层 {natural_block_line(n_loop)}，裸模型 {natural_block_line(n_direct)}。",
+        f"- 硬性逃逸（V02_07/08 口径）：自然矩阵原始标记 "
+        f"{zero_event_line(nsummary['hard_escapes']['count'], natural_escape_n(nsummary))}——人工核读判定："
+        "裸模型 15 条真实复述未验证数字（基线失败），系统侧 7 条全部为否定语境子串误报，系统侧真实洗白 0、复述 0/15；"
+        f"规范矩阵系统侧 {zero_event_line(0, 30)}；严格盲测硬门 {zero_event_line(0, 12)}。"
+        "零事件按三分之三法则报 95% 置信上界，不写“误差等于零”。",
+        "- 自然矩阵确认的两个真实缺陷：任务 1 正当答案被门禁全数压制（15/15，见 should-pass 语料库）；"
+        "伪证据任务的拒绝回合终态被误标为 full（元数据层失准，内容层未失守）。",
+        "- 严格盲测：3 个反伪造场景措辞软检查未命中（model_drift）；误差预算表见测试结果综述 8.1 节。",
+        "- 当前阶段：可进入受控专家演示和盲评（一律使用自然措辞、模型在回路口径）；"
+        "不应宣传为绝对安全或论文级自主研究系统。",
         "",
         "## 已生成文档",
         "",
@@ -1733,9 +2361,12 @@ def main() -> None:
     ASSET_DIR.mkdir(parents=True, exist_ok=True)
     EXPERIMENT_DIR.mkdir(parents=True, exist_ok=True)
     rows, summary, preregistration = read_inputs()
+    nrows, nsummary, natural_preregistration = read_natural_inputs()
     task_specs = {task["id"]: task for task in preregistration["tasks"]}
+    natural_task_specs = {task["id"]: task for task in natural_preregistration["tasks"]}
 
     make_architecture_figure(ASSET_DIR / "system_architecture.png")
+    make_natural_chart(ASSET_DIR / "natural_matrix_by_model.png", nsummary)
     for task_id, exp in EXPERIMENTS.items():
         make_experiment_chart(
             ASSET_DIR / f"experiment_{exp['number']:02d}.png",
@@ -1744,10 +2375,21 @@ def main() -> None:
         )
 
     copy_evidence()
-    outputs = [build_technical_report(rows, summary), build_test_summary(rows, summary)]
+    outputs = [
+        build_technical_report(rows, summary, nsummary),
+        build_test_summary(rows, summary, nrows, nsummary),
+    ]
     for task_id in EXPERIMENTS:
-        outputs.append(build_experiment_report(rows, task_id, task_specs[task_id]))
-    write_manifest(outputs)
+        outputs.append(
+            build_experiment_report(
+                rows,
+                task_id,
+                task_specs[task_id],
+                nsummary,
+                natural_task_specs[task_id],
+            )
+        )
+    write_manifest(outputs, summary, nsummary)
     print(f"Built {len(outputs)} formal DOCX reports under {REPORT_ROOT}")
 
 
