@@ -176,35 +176,72 @@ def _source_references_from_prompt(text: str) -> list[dict[str, str]]:
 def _requested_scalar_operation(text: str) -> str | None:
     # Codex review P1 (PR #46, round 4): leading-space tokens missed
     # operation words at the very start of a prompt ("Product of A and B"),
-    # dropping a complete verification request to general. Use token
-    # boundaries instead.
-    lowered = text.lower()
-    if "d_m/d_h" in lowered or re.search(r"\bratios?\b|比值|相除", lowered):
-        return "ratio"
-    if re.search(r"\bweighted\s+(?:mean|average)\b|加权平均", lowered):
-        return "weighted_mean"
-    if re.search(r"\bdifferences?\b|差值|相减", lowered):
-        return "difference"
-    if re.search(r"\bproducts?\b|\bmultipl(?:y|ied|ication)\b|乘积|相乘", lowered):
-        return "product"
-    return None
+    # dropping a complete verification request to general. Internal review
+    # after round 7 also found that fixed priority ignored negation ("Do not
+    # take a ratio; compute the difference") and guessed when multiple active
+    # operations were present. Keep only unnegated matches and abstain on
+    # ambiguity.
+    patterns = (
+        ("ratio", re.compile(r"d_m/d_h|\bratios?\b|比值|相除", re.I)),
+        (
+            "weighted_mean",
+            re.compile(r"\bweighted\s+(?:mean|average)\b|加权平均", re.I),
+        ),
+        ("difference", re.compile(r"\bdifferences?\b|差值|相减", re.I)),
+        (
+            "product",
+            re.compile(r"\bproducts?\b|\bmultipl(?:y|ied|ication)\b|乘积|相乘", re.I),
+        ),
+    )
+    active: set[str] = set()
+    for operation, pattern in patterns:
+        for match in pattern.finditer(text):
+            clause_start = max(
+                text.rfind(separator, 0, match.start())
+                for separator in (".", ";", "。", "；", "\n")
+            )
+            prefix = text[clause_start + 1 : match.start()]
+            contrasts = list(
+                re.finditer(r"(?:,|，)\s*(?:but\b|instead\b|但|而是)", prefix, re.I)
+            )
+            if contrasts:
+                prefix = prefix[contrasts[-1].end() :]
+            if not _prefix_negates(prefix):
+                active.add(operation)
+    return next(iter(active)) if len(active) == 1 else None
 
 
 _SCALAR_LABEL = r"(?:D_M/r_d|D_H/r_d|D_M|D_H|H0|H_0|H₀|n_s|ns|S8|Ωm|omega_m|rho|ρ|[A-Za-z][A-Za-z0-9_]*)"
 _SCALAR_VALUE = r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?"
 _H0_UNIT = r"km\s*(?:(?:/\s*s)|s\s*\^?\s*-?1|s-1)\s*(?:/\s*)?Mpc(?:\s*\^?\s*-?1)?"
+_SCALAR_QUANTITY_RE = re.compile(
+    rf"(?P<label>{_SCALAR_LABEL})\s*=\s*(?P<value>{_SCALAR_VALUE})"
+    rf"\s*(?:±|\+/-|\+-)\s*(?P<uncertainty>{_SCALAR_VALUE})"
+    rf"\s*(?P<unit>{_H0_UNIT}|Mpc|Gpc|kpc|pc)?",
+    re.I,
+)
+
+
+def _canonical_scalar_label(label: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(label or "").lower())
+
+
+def _repeated_scalar_labels(text: str) -> list[str]:
+    seen: set[str] = set()
+    repeated: list[str] = []
+    for match in _SCALAR_QUANTITY_RE.finditer(text):
+        label = match.group("label")
+        key = _canonical_scalar_label(label)
+        if key in seen and key not in repeated:
+            repeated.append(key)
+        seen.add(key)
+    return repeated
 
 
 def _scalar_quantities_from_prompt(text: str) -> list[dict[str, Any]]:
     quantities: list[dict[str, Any]] = []
-    pattern = re.compile(
-        rf"(?P<label>{_SCALAR_LABEL})\s*=\s*(?P<value>{_SCALAR_VALUE})"
-        rf"\s*(?:±|\+/-|\+-)\s*(?P<uncertainty>{_SCALAR_VALUE})"
-        rf"\s*(?P<unit>{_H0_UNIT}|Mpc|Gpc|kpc|pc)?",
-        re.I,
-    )
     seen: set[str] = set()
-    for match in pattern.finditer(text):
+    for match in _SCALAR_QUANTITY_RE.finditer(text):
         label = match.group("label")
         if label.lower() in {"rho", "ρ"}:
             continue
@@ -225,19 +262,73 @@ def _scalar_quantities_from_prompt(text: str) -> list[dict[str, Any]]:
     return quantities
 
 
+_COUNTERFACTUAL_CORRELATION_CONTEXT = re.compile(
+    r"\b(?:counterfactual|hypothetical|what[- ]if)\b|反事实|假想", re.I
+)
+_CORRELATION_CONTRAST_BOUNDARY = re.compile(
+    r"\b(?:versus|vs\.?|but|rather\s+than|instead(?:\s+of)?|whereas|"
+    r"compared\s+(?:with|to))\b|而是|相比|对比",
+    re.I,
+)
+
+
+def _correlation_match_is_inactive(
+    text: str, match_start: int, match_end: int
+) -> bool:
+    clause_start = max(
+        text.rfind(separator, 0, match_start)
+        for separator in (".", ";", "。", "；", "\n")
+    )
+    clause_end_candidates = [
+        position
+        for separator in (".", ";", "。", "；", "\n")
+        if (position := text.find(separator, match_end)) >= 0
+    ]
+    clause_end = min(clause_end_candidates, default=len(text))
+
+    local_start = clause_start + 1
+    before = text[local_start:match_start]
+    boundaries_before = list(_CORRELATION_CONTRAST_BOUNDARY.finditer(before))
+    previous_correlations = list(_CORRELATION_VALUE_RE.finditer(before))
+    if boundaries_before:
+        local_start += boundaries_before[-1].end()
+    if previous_correlations:
+        local_start = max(local_start, clause_start + 1 + previous_correlations[-1].end())
+
+    local_end = clause_end
+    after = text[match_end:clause_end]
+    boundary_after = _CORRELATION_CONTRAST_BOUNDARY.search(after)
+    next_correlation = _CORRELATION_VALUE_RE.search(after)
+    if boundary_after:
+        local_end = min(local_end, match_end + boundary_after.start())
+    if next_correlation:
+        local_end = min(local_end, match_end + next_correlation.start())
+
+    prefix = text[local_start:match_start]
+    suffix = text[match_end:local_end]
+    return _prefix_negates(prefix) or bool(
+        _COUNTERFACTUAL_CORRELATION_CONTEXT.search(prefix)
+        or _COUNTERFACTUAL_CORRELATION_CONTEXT.search(suffix)
+    )
+
+
 def _uncertainty_model_from_prompt(text: str, quantity_count: int) -> dict[str, Any] | None:
     # Connector accepts natural phrasings ("a correlation of -0.404", "the
     # correlation is -0.404") in addition to spec-style "rho=-0.404"; the
     # 2026-08-06 natural matrix showed the equals-only form suppressed every
     # legitimate V02_01 answer downstream.
-    rho_match = re.search(
+    deterministic_correlation_re = re.compile(
         rf"(?:rho|ρ|correlation(?:\s+coefficient)?|相关系数)\s*(?:\([^)]*\))?\s*"
         rf"(?:=|:|\bof\b|\bis\b|为|是)\s*({_SCALAR_VALUE})",
-        text,
         re.I,
     )
-    if rho_match and quantity_count == 2:
-        rho = float(rho_match.group(1))
+    correlation_values: list[float] = []
+    for match in deterministic_correlation_re.finditer(text):
+        if not _correlation_match_is_inactive(text, match.start(), match.end()):
+            correlation_values.append(float(match.group(1)))
+    unique_correlations = list(dict.fromkeys(correlation_values))
+    if len(unique_correlations) == 1 and quantity_count == 2:
+        rho = unique_correlations[0]
         return {
             "kind": "correlation_matrix",
             "matrix": [[1.0, rho], [rho, 1.0]],
@@ -252,14 +343,167 @@ _INDEPENDENCE_STATED_RE = re.compile(
 )
 
 
-def _prompt_numbers(text: str) -> list[float]:
+_CORRELATION_VALUE_RE = re.compile(
+    rf"(?:rho|ρ|correlation(?:\s+coefficient)?|cross\s+terms?|相关系数)"
+    rf"\s*(?:\([^)]*\))?\s*(?:=|:|\bof\b|\bis\b|为|是)?\s*({_SCALAR_VALUE})",
+    re.I,
+)
+
+
+def _prompt_correlation_values(text: str) -> list[float]:
     values: list[float] = []
-    for match in re.finditer(_SCALAR_VALUE, text.replace("−", "-")):
+    normalized = text.replace("−", "-")
+    for match in _CORRELATION_VALUE_RE.finditer(normalized):
+        if _correlation_match_is_inactive(normalized, match.start(), match.end()):
+            continue
         try:
-            values.append(float(match.group()))
+            values.append(float(match.group(1)))
         except ValueError:
             continue
     return values
+
+
+_CORRELATION_PAIR_RE = re.compile(
+    rf"(?:rho|ρ|correlation(?:\s+coefficient)?)\s*"
+    rf"\(\s*(?P<left>{_SCALAR_LABEL})\s*,\s*(?P<right>{_SCALAR_LABEL})\s*\)\s*"
+    rf"(?:=|:|\bof\b|\bis\b|为|是)?\s*(?P<value>{_SCALAR_VALUE})",
+    re.I,
+)
+
+
+def _prompt_correlation_pairs(text: str) -> dict[tuple[str, str], float] | None:
+    normalized = text.replace("−", "-")
+    pairs: dict[tuple[str, str], float] = {}
+    for match in _CORRELATION_PAIR_RE.finditer(normalized):
+        if _correlation_match_is_inactive(normalized, match.start(), match.end()):
+            continue
+        left = _canonical_scalar_label(match.group("left"))
+        right = _canonical_scalar_label(match.group("right"))
+        if not left or not right or left == right:
+            return None
+        key = tuple(sorted((left, right)))
+        value = float(match.group("value"))
+        if key in pairs and pairs[key] != value:
+            return None
+        pairs[key] = value
+    return pairs
+
+
+def _canonical_source_identity(kind: Any, identifier: Any) -> tuple[str, str]:
+    source_kind = str(kind or "").strip().lower()
+    value = str(identifier or "").strip().rstrip(".,;)")
+    if source_kind == "arxiv":
+        match = re.search(r"(?:arxiv:\s*|arxiv\.org/(?:abs|pdf)/)?(\d{4}\.\d{4,5})", value, re.I)
+        if match:
+            value = match.group(1)
+    elif source_kind == "doi":
+        match = re.search(r"(?:doi:\s*|doi\.org/)?(10\.\d{4,9}/\S+)", value, re.I)
+        if match:
+            value = match.group(1).rstrip(".,;")
+    elif source_kind == "zenodo":
+        match = re.search(r"(?:zenodo\.(?:org/(?:records?|record)/)?|10\.5281/zenodo\.)?(\d+)", value, re.I)
+        if match:
+            value = match.group(1)
+    return source_kind, value
+
+
+def _canonical_source_locator(locator: Any) -> str:
+    normalized = re.sub(r"\s+", " ", str(locator or "")).strip().casefold()
+    return re.sub(r"\s*([,;:])\s*", r"\1", normalized)
+
+
+def _scalar_source_echo_violation(
+    call_input: dict[str, Any], prompt_text: str
+) -> str | None:
+    """Require fallback sources to be the identities and locators in the prompt."""
+    normalized = _normalized_task_text(prompt_text)
+    expected_references = _source_references_from_prompt(normalized)
+    expected_identities = {
+        _canonical_source_identity(reference["kind"], reference["identifier"])
+        for reference in expected_references
+    }
+    expected_primary = {
+        identity
+        for identity in expected_identities
+        if identity[0] in {"arxiv", "doi", "zenodo"}
+    }
+    if len(expected_primary) > 1:
+        return "the prompt contains an ambiguous multi-source quantity mapping"
+
+    sources = call_input.get("sources") or []
+    if not isinstance(sources, list):
+        return "sources must be a list"
+    sources_by_id: dict[str, dict[str, Any]] = {}
+    actual_external: set[tuple[str, str]] = set()
+    expected_locator = _source_locator_from_prompt(normalized)
+    for source in sources:
+        if not isinstance(source, dict):
+            return "each source must be an object"
+        source_id = str(source.get("id") or "").strip()
+        if not source_id or source_id in sources_by_id:
+            return "source ids must be non-empty and unique"
+        sources_by_id[source_id] = source
+        identity = _canonical_source_identity(
+            source.get("kind"), source.get("identifier")
+        )
+        if identity[0] != "user_supplied":
+            actual_external.add(identity)
+            if identity not in expected_identities:
+                return f"source {identity!r} was not stated in the user prompt"
+            if _canonical_source_locator(source.get("locator")) != (
+                _canonical_source_locator(expected_locator)
+            ):
+                return "source locator does not match the user prompt"
+
+    required = expected_primary or expected_identities
+    if required and not required.issubset(actual_external):
+        return "the call omitted a source stated in the user prompt"
+    if not expected_identities and actual_external:
+        return "the call added an external source not stated in the user prompt"
+
+    referenced_ids: set[str] = set()
+    for quantity in call_input.get("quantities") or []:
+        source_ref = str(quantity.get("source_ref") or "").strip()
+        if not source_ref:
+            return "quantity source_ref is missing"
+        source = sources_by_id.get(source_ref)
+        if source is None:
+            return f"quantity source_ref {source_ref!r} is not declared"
+        referenced_ids.add(source_ref)
+        is_fixed = _is_fixed_comparator(str(quantity.get("label") or ""))
+        if expected_identities and not is_fixed:
+            if source.get("kind") == "user_supplied":
+                return "a cited prompt quantity was changed to user_supplied"
+            if _canonical_source_locator(quantity.get("source_locator")) != (
+                _canonical_source_locator(expected_locator)
+            ):
+                return "quantity source locator does not match the user prompt"
+        elif source.get("kind") != "user_supplied":
+            return "an uncited or fixed quantity was changed to an external source"
+
+    model_source_ref = str(
+        (call_input.get("uncertainty_model") or {}).get("source_ref") or ""
+    ).strip()
+    model = call_input.get("uncertainty_model") or {}
+    if expected_identities and model.get("kind") == "correlation_matrix":
+        if not model_source_ref:
+            return "cited correlation source_ref is missing"
+        model_source = sources_by_id.get(model_source_ref)
+        if model_source is None:
+            return f"uncertainty source_ref {model_source_ref!r} is not declared"
+        model_identity = _canonical_source_identity(
+            model_source.get("kind"), model_source.get("identifier")
+        )
+        if model_identity not in expected_identities:
+            return "cited correlation was changed to a different source"
+    if model_source_ref:
+        if model_source_ref not in sources_by_id:
+            return f"uncertainty source_ref {model_source_ref!r} is not declared"
+        referenced_ids.add(model_source_ref)
+    unused_sources = set(sources_by_id) - referenced_ids
+    if unused_sources:
+        return "the call added unreferenced sources"
+    return None
 
 
 def scalar_call_echo_violation(
@@ -277,25 +521,40 @@ def scalar_call_echo_violation(
     parsed quantity must carry that quantity's own numbers. Returns a
     violation description, or None when the call is fully echoed.
     """
-    numbers = _prompt_numbers(prompt_text)
+    requested_operation = _requested_scalar_operation(
+        _normalized_task_text(prompt_text)
+    )
+    call_operation = str(call_input.get("operation") or "").strip().lower()
+    if requested_operation is not None and call_operation != requested_operation:
+        return (
+            f"operation {call_operation!r} does not match the user-requested "
+            f"operation {requested_operation!r}"
+        )
 
-    def echoed(value: float) -> bool:
+    repeated_labels = _repeated_scalar_labels(_normalized_task_text(prompt_text))
+    if repeated_labels:
+        return "prompt contains ambiguous repeated quantity labels: " + ", ".join(
+            repeated_labels
+        )
+
+    correlation_values = _prompt_correlation_values(prompt_text)
+
+    def correlation_echoed(value: float) -> bool:
         return any(
             abs(value - candidate) <= 1e-9 * max(1.0, abs(candidate))
-            for candidate in numbers
+            for candidate in correlation_values
         )
 
     def close(left: float, right: float) -> bool:
         return abs(left - right) <= 1e-9 * max(1.0, abs(right))
 
-    def canonical(label: Any) -> str:
-        return re.sub(r"[^a-z0-9]+", "", str(label or "").lower())
-
     parsed = _scalar_quantities_from_prompt(_normalized_task_text(prompt_text))
     parsed_by_key = {
-        canonical(quantity.get("label") or quantity.get("id")): quantity
+        _canonical_scalar_label(quantity.get("label") or quantity.get("id")): quantity
         for quantity in parsed
     }
+    from app.services.scalar_derivation import normalize_unit
+
     unused = list(parsed)
     for quantity in call_input.get("quantities") or []:
         for field in ("value", "standard_uncertainty"):
@@ -306,50 +565,77 @@ def scalar_call_echo_violation(
         label = quantity.get("label") or quantity.get("id") or "quantity"
         value = float(quantity["value"])
         uncertainty = float(quantity["standard_uncertainty"])
-        key = canonical(label)
+        unit = normalize_unit(quantity.get("unit"))
+        key = _canonical_scalar_label(label)
         target = parsed_by_key.get(key)
-        if target is not None:
-            if not (
-                close(value, float(target["value"]))
-                and close(uncertainty, float(target["standard_uncertainty"]))
-            ):
-                return (
-                    f"{label} does not carry the prompt's own numbers for "
-                    f"that quantity ({target['value']} ± "
-                    f"{target['standard_uncertainty']})"
-                )
-            if target in unused:
-                unused.remove(target)
-        else:
-            match = next(
-                (
-                    candidate
-                    for candidate in unused
-                    if close(value, float(candidate["value"]))
-                    and close(
-                        uncertainty, float(candidate["standard_uncertainty"])
-                    )
-                ),
-                None,
+        if target is None:
+            return f"quantity label {label!r} was not stated in the user prompt"
+        if target not in unused:
+            return f"{label} repeats a quantity already used by the call"
+        if not (
+            close(value, float(target["value"]))
+            and close(uncertainty, float(target["standard_uncertainty"]))
+            and unit == normalize_unit(target.get("unit"))
+        ):
+            return (
+                f"{label} does not carry the prompt's own value, uncertainty, "
+                "and unit for that quantity"
             )
-            if match is None:
-                return (
-                    f"{label} {value!r} ± {uncertainty!r} does not correspond "
-                    "to any quantity stated in the user prompt"
-                )
-            unused.remove(match)
+        unused.remove(target)
+    if unused:
+        omitted = ", ".join(
+            str(quantity.get("label") or quantity.get("id") or "quantity")
+            for quantity in unused
+        )
+        return f"call omitted quantities stated in the user prompt: {omitted}"
+    if source_violation := _scalar_source_echo_violation(call_input, prompt_text):
+        return source_violation
     model = call_input.get("uncertainty_model") or {}
     kind = model.get("kind")
     if kind == "correlation_matrix":
-        for i, row in enumerate(model.get("matrix") or []):
-            for j, cell in enumerate(row or []):
-                if i == j:
-                    continue
-                if not isinstance(cell, (int, float)) or not echoed(float(cell)):
-                    return (
-                        f"correlation coefficient {cell!r} does not appear in "
-                        "the user prompt"
-                    )
+        quantities = call_input.get("quantities") or []
+        matrix = model.get("matrix") or []
+        if len(quantities) > 2:
+            labels = [
+                _canonical_scalar_label(quantity.get("label") or quantity.get("id"))
+                for quantity in quantities
+            ]
+            expected_pairs = _prompt_correlation_pairs(prompt_text)
+            required_pairs = {
+                tuple(sorted((labels[i], labels[j])))
+                for i in range(len(labels))
+                for j in range(i + 1, len(labels))
+            }
+            if expected_pairs is None or set(expected_pairs) != required_pairs:
+                return "prompt does not bind every correlation to a quantity pair"
+            if len(matrix) != len(labels) or any(
+                not isinstance(row, list) or len(row) != len(labels) for row in matrix
+            ):
+                return "correlation matrix shape does not match the prompt quantities"
+            for i in range(len(labels)):
+                for j in range(i + 1, len(labels)):
+                    expected = expected_pairs[tuple(sorted((labels[i], labels[j])))]
+                    left = matrix[i][j]
+                    right = matrix[j][i]
+                    if not (
+                        isinstance(left, (int, float))
+                        and isinstance(right, (int, float))
+                        and close(float(left), expected)
+                        and close(float(right), expected)
+                    ):
+                        return "correlation matrix does not match the prompt's pair binding"
+        else:
+            for i, row in enumerate(matrix):
+                for j, cell in enumerate(row or []):
+                    if i == j:
+                        continue
+                    if not isinstance(cell, (int, float)) or not correlation_echoed(
+                        float(cell)
+                    ):
+                        return (
+                            f"correlation coefficient {cell!r} is not bound to a "
+                            "correlation statement in the user prompt"
+                        )
     elif kind == "independent":
         if not _INDEPENDENCE_STATED_RE.search(prompt_text):
             return "independence was not stated by the user"
@@ -409,6 +695,8 @@ def _deterministic_tool_call_from_prompt(
     }
     if len(primary_identifiers) > 1:
         missing.append("unambiguous_source_mapping")
+    if _repeated_scalar_labels(text):
+        missing.append("unambiguous_quantities")
     required_count = 2
     if len(quantities) < required_count:
         missing.append("quantities")

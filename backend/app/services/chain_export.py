@@ -89,6 +89,64 @@ def _ranges_bytes(
     return ("\n".join(lines) + "\n").encode()
 
 
+def _raw_chain_param_names(
+    raw_files: dict[str, Any], parameter_order: list[str]
+) -> list[str]:
+    """Return one getdist parameter name for every raw column after the first two."""
+    chain_columns: list[list[str] | None] = []
+    chain_widths: list[int] = []
+    for name, data in sorted(raw_files.items()):
+        if not str(name).endswith(".txt"):
+            continue
+        header: list[str] | None = None
+        width: int | None = None
+        for line in bytes(data).decode("utf-8", errors="replace").splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("#"):
+                candidate = stripped[1:].split()
+                if candidate:
+                    header = candidate
+                continue
+            width = len(stripped.split())
+            break
+        if width is None or width < 2:
+            raise ValueError(f"raw chain {name!r} has no valid data rows")
+        if header is not None and len(header) != width:
+            raise ValueError(
+                f"raw chain {name!r} header has {len(header)} columns but data has {width}"
+            )
+        chain_columns.append(header)
+        chain_widths.append(width)
+
+    if not chain_widths:
+        raise ValueError("external chain payload contains no chain .txt files")
+    if len(set(chain_widths)) != 1:
+        raise ValueError("external chain files do not share one column layout")
+
+    parameter_count = chain_widths[0] - 2
+    headers = [columns for columns in chain_columns if columns is not None]
+    if headers:
+        if len(headers) != len(chain_columns) or any(
+            columns != headers[0] for columns in headers[1:]
+        ):
+            raise ValueError("external chain headers are missing or inconsistent")
+        names = headers[0][2:]
+        return [
+            name if name in parameter_order or name.endswith("*") else f"{name}*"
+            for name in names
+        ]
+
+    if len(parameter_order) > parameter_count:
+        raise ValueError("external chain has fewer columns than parameter_order")
+    extra_count = parameter_count - len(parameter_order)
+    return [
+        *parameter_order,
+        *(f"raw_extra_{index + 1}*" for index in range(extra_count)),
+    ]
+
+
 def render_getdist_files(payload: dict[str, Any]) -> dict[str, bytes]:
     """Render a chain payload as getdist-format file bytes."""
     parameter_order: list[str] = list(payload["parameter_order"])
@@ -97,9 +155,13 @@ def render_getdist_files(payload: dict[str, Any]) -> dict[str, bytes]:
     raw_files = payload.get("raw_files")
     if raw_files:
         # External cobaya path: the sampler's own chain files are already
-        # getdist-native; pass them through verbatim and add the sidecars.
+        # getdist-native; pass them through verbatim and add sidecars covering
+        # every post-weight/post-logpost column, including Cobaya prior/chi2
+        # fields. A shorter sidecar makes GetDist shift or reject real columns.
         files = {str(name): bytes(data) for name, data in raw_files.items()}
-        files["chain.paramnames"] = _paramnames_bytes(parameter_order)
+        files["chain.paramnames"] = _paramnames_bytes(
+            _raw_chain_param_names(raw_files, parameter_order)
+        )
         ranges = _ranges_bytes(parameter_order, prior_bounds)
         if ranges:
             files["chain.ranges"] = ranges

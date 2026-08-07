@@ -4,6 +4,7 @@ import asyncio
 import gzip
 import io
 import json
+import ssl
 import tarfile
 from typing import Any
 
@@ -30,6 +31,53 @@ class MemoryBackend:
     def set(self, key: str, value: Any, ttl: int) -> None:
         self.values[key] = value
         self.ttls[key] = ttl
+
+
+class _FakePinnedHTTPStream:
+    def __init__(self, events: dict[str, Any]) -> None:
+        self.events = events
+        self.response = (
+            b"HTTP/1.1 200 OK\r\n"
+            b"Content-Type: text/plain\r\n"
+            b"Content-Length: 2\r\n"
+            b"Connection: close\r\n\r\nok"
+        )
+
+    async def read(self, _max_bytes: int, timeout=None) -> bytes:
+        payload, self.response = self.response, b""
+        return payload
+
+    async def write(self, buffer: bytes, timeout=None) -> None:
+        self.events.setdefault("writes", []).append(bytes(buffer))
+
+    async def aclose(self) -> None:
+        self.events["closed"] = True
+
+    async def start_tls(
+        self, ssl_context, server_hostname=None, timeout=None
+    ) -> _FakePinnedHTTPStream:
+        self.events["sni"] = server_hostname
+        self.events["check_hostname"] = ssl_context.check_hostname
+        self.events["verify_mode"] = ssl_context.verify_mode
+        return self
+
+    def get_extra_info(self, _info: str) -> None:
+        return None
+
+
+class _FakePinnedNetworkBackend:
+    def __init__(self, events: dict[str, Any]) -> None:
+        self.events = events
+
+    async def connect_tcp(self, host, port, **_kwargs):
+        self.events["tcp"] = (host, port)
+        return _FakePinnedHTTPStream(self.events)
+
+    async def connect_unix_socket(self, *_args, **_kwargs):
+        raise AssertionError("Unix socket must not be used")
+
+    async def sleep(self, _seconds: float) -> None:
+        return None
 
 
 def _source(**overrides: Any) -> dict[str, Any]:
@@ -102,6 +150,7 @@ def test_source_identifier_normalization() -> None:
         "https://127.0.0.1/data",
         "https://169.254.169.254/latest/meta-data",
         "https://user:pass@example.com/data",
+        "https://Ｘ.com/data",
     ],
 )
 def test_url_sources_block_non_https_and_ssrf_targets(url: str) -> None:
@@ -126,6 +175,152 @@ async def test_dns_allows_managed_proxy_synthetic_range_but_blocks_private(
     with pytest.raises(SourceResolutionError) as exc_info:
         await resolver._require_public_dns("attacker.example")
     assert exc_info.value.code == "ssrf_blocked"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source_url", "expected_hostname"),
+    [
+        ("https://attacker.example/data", "attacker.example"),
+        ("https://faß.de/data", "xn--fa-hia.de"),
+    ],
+)
+async def test_download_connects_to_the_validated_dns_address(
+    monkeypatch, source_url: str, expected_hostname: str
+) -> None:
+    # Codex review P1 (PR #46, round 7): validation and connection previously
+    # resolved the hostname separately, so DNS rebinding could swap a public
+    # validation answer for a private connection target. The HTTP transport
+    # must connect to the exact address returned by the validation lookup.
+    validated_address = "198.18.0.31"
+
+    dns_hostnames: list[str] = []
+
+    async def public_dns(hostname: str) -> tuple[str, ...]:
+        dns_hostnames.append(hostname)
+        return (validated_address,)
+
+    captured: dict[str, Any] = {}
+
+    class FakeResponse:
+        status_code = 200
+        headers = {"content-type": "text/plain", "content-length": "2"}
+
+        async def aiter_bytes(self):
+            yield b"ok"
+
+    class FakeStream:
+        async def __aenter__(self):
+            return FakeResponse()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class FakeClient:
+        def __init__(self, *, transport=None, **_kwargs):
+            assert transport is not None
+            captured["transport"] = transport
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def stream(self, _method, url, **_kwargs):
+            captured["url"] = url
+            return FakeStream()
+
+    class FakeNetworkBackend:
+        def __init__(self) -> None:
+            self.hosts: list[str] = []
+
+        async def connect_tcp(self, host, _port, **_kwargs):
+            self.hosts.append(host)
+            return object()
+
+    monkeypatch.setattr(resolver, "_require_public_dns", public_dns)
+    monkeypatch.setattr(resolver.httpx, "AsyncClient", FakeClient)
+
+    payload, final_url, _mime = await resolver._download(
+        source_url,
+        accept="text/plain",
+        allowed_mime_prefixes=("text/",),
+    )
+
+    pinned_backend = captured["transport"]._pool._network_backend
+    fake_backend = FakeNetworkBackend()
+    pinned_backend._backend = fake_backend
+    await pinned_backend.connect_tcp(expected_hostname, 443)
+
+    assert payload == b"ok"
+    assert final_url == source_url
+    assert captured["url"] == final_url
+    assert dns_hostnames == [expected_hostname]
+    assert fake_backend.hosts == [validated_address]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "validated_address", ["93.184.216.34", "2606:4700:4700::1111"]
+)
+async def test_pinned_transport_preserves_http_and_tls_origin(
+    monkeypatch, validated_address: str
+) -> None:
+    # Exercise the real HTTPX -> httpcore -> pinned backend path. A hostile
+    # environment proxy must not replace the validated TCP destination, while
+    # Host, SNI, and certificate verification keep the original hostname.
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+    events: dict[str, Any] = {}
+    transport = resolver._pinned_https_transport(
+        "attacker.example", (validated_address,)
+    )
+    transport._pool._network_backend._backend = _FakePinnedNetworkBackend(events)
+
+    async with resolver.httpx.AsyncClient(transport=transport, trust_env=True) as client:
+        response = await client.get("https://attacker.example/data?q=1")
+
+    request_bytes = b"".join(events["writes"])
+    assert response.status_code == 200
+    assert response.content == b"ok"
+    assert events["tcp"] == (validated_address, 443)
+    assert b"GET /data?q=1 HTTP/1.1\r\n" in request_bytes
+    assert b"\r\nhost: attacker.example\r\n" in request_bytes.lower()
+    assert events["sni"] == "attacker.example"
+    assert events["check_hostname"] is True
+    assert events["verify_mode"] == ssl.CERT_REQUIRED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("unicode_hostname", "wire_hostname"),
+    [
+        ("bücher.example", "xn--bcher-kva.example"),
+        ("faß.de", "xn--fa-hia.de"),
+        ("βόλος.com", "xn--nxasmm1c.com"),
+    ],
+)
+async def test_pinned_transport_normalizes_idn_hostname(
+    unicode_hostname: str, wire_hostname: str
+) -> None:
+    # Internal adversarial review: urllib.parse preserves Unicode hostnames,
+    # while HTTPX passes the IDNA ASCII form to the network backend. The pin
+    # identity must compare those canonical forms without escaping the normal
+    # source-resolution error contract.
+    events: dict[str, Any] = {}
+    transport = resolver._pinned_https_transport(
+        unicode_hostname, ("93.184.216.34",)
+    )
+    transport._pool._network_backend._backend = _FakePinnedNetworkBackend(events)
+
+    async with resolver.httpx.AsyncClient(transport=transport) as client:
+        response = await client.get(f"https://{unicode_hostname}/idn")
+
+    request_bytes = b"".join(events["writes"])
+    assert response.status_code == 200
+    assert events["tcp"] == ("93.184.216.34", 443)
+    assert f"\r\nhost: {wire_hostname}\r\n".encode() in request_bytes.lower()
+    assert events["sni"] == wire_hostname
 
 
 def test_exact_match_requires_labels_and_values_in_same_window() -> None:

@@ -264,6 +264,8 @@ def test_incomplete_packet_with_quantities_lets_model_complete_the_parse() -> No
                                     "value": 17.351,
                                     "standard_uncertainty": 0.177,
                                     "unit": "dimensionless",
+                                    "source_ref": "source-1",
+                                    "source_locator": "Table 4, LRG2",
                                 },
                                 {
                                     "id": "D_H_r_d",
@@ -271,11 +273,14 @@ def test_incomplete_packet_with_quantities_lets_model_complete_the_parse() -> No
                                     "value": 19.455,
                                     "standard_uncertainty": 0.330,
                                     "unit": "dimensionless",
+                                    "source_ref": "source-1",
+                                    "source_locator": "Table 4, LRG2",
                                 },
                             ],
                             "uncertainty_model": {
                                 "kind": "correlation_matrix",
                                 "matrix": [[1.0, -0.404], [-0.404, 1.0]],
+                                "source_ref": "source-1",
                             },
                             "sources": [
                                 {

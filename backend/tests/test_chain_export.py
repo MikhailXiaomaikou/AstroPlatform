@@ -209,7 +209,11 @@ def test_raw_cobaya_payload_roundtrip(monkeypatch, tmp_path):
     from app import storage
 
     monkeypatch.setattr(storage.settings, "local_storage_dir", str(tmp_path / "objects"))
-    raw_chain = b"# weight -logpost H0 omegam\n1 12.5 67.4 0.31\n2 11.9 67.6 0.32\n"
+    raw_chain = (
+        b"# weight minuslogpost H0 omegam minuslogprior chi2\n"
+        b"1 12.5 67.4 0.31 2.0 21.0\n"
+        b"2 11.9 67.6 0.32 2.0 19.8\n"
+    )
     block = chain_export.persist_chain_artifacts(
         {
             "raw_files": {"chain.1.txt": raw_chain, "chain.input.yaml": b"sampler: mcmc\n"},
@@ -227,6 +231,14 @@ def test_raw_cobaya_payload_roundtrip(monkeypatch, tmp_path):
     for entry in block["files"]:
         if entry["name"] == "chain.1.txt":
             assert storage.download_fits(entry["output_path"]) == raw_chain
+        if entry["name"] == "chain.paramnames":
+            sidecar = storage.download_fits(entry["output_path"]).decode().splitlines()
+            assert [line.split("\t", 1)[0] for line in sidecar] == [
+                "H0",
+                "omegam",
+                "minuslogprior*",
+                "chi2*",
+            ]
 
 
 async def test_execute_tool_channel_normalizes_and_registers(monkeypatch, tmp_path):

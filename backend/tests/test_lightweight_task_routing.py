@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
 import pytest
 
 from app.services.agent_runtime.prompt_routing import classify_task_kind
@@ -133,6 +135,40 @@ def test_natural_correlation_of_phrasing_builds_direct_tool_call() -> None:
     matrix = call["input"]["uncertainty_model"]["matrix"]
     assert matrix[0][1] == pytest.approx(-0.404)
     assert matrix[1][0] == pytest.approx(-0.404)
+
+
+@pytest.mark.parametrize(
+    "correlation_clause",
+    [
+        (
+            "with rho=-0.404. Compare the propagated uncertainty with the "
+            "counterfactual rho=0 result."
+        ),
+        "with rho=-0.404. Compare against rho=0 counterfactual.",
+        "with rho=-0.404. Compare against rho=0 in a hypothetical case.",
+        "under the counterfactual rho=0 versus the published rho=-0.404.",
+    ],
+)
+def test_counterfactual_correlation_does_not_replace_the_primary_model(
+    correlation_clause: str,
+) -> None:
+    from app.services.agent_runtime.prompt_routing import scalar_call_echo_violation
+
+    prompt = (
+        "Use arXiv:2503.14738 Table 4 LRG2 to recompute D_M/D_H from "
+        "D_M/r_d=17.351 +/- 0.177 and D_H/r_d=19.455 +/- 0.330 "
+        f"{correlation_clause}"
+    )
+    decision = classify_task_kind(prompt)
+
+    assert decision["missing_inputs"] == []
+    call = decision["direct_tool_call"]["input"]
+    assert call["uncertainty_model"]["matrix"][0][1] == pytest.approx(-0.404)
+    assert scalar_call_echo_violation(call, prompt) is None
+
+    counterfactual_only = deepcopy(call)
+    counterfactual_only["uncertainty_model"]["matrix"] = [[1.0, 0.0], [0.0, 1.0]]
+    assert scalar_call_echo_violation(counterfactual_only, prompt) is not None
 
 
 def test_natural_pasted_log_phrasing_is_tagged_untrusted() -> None:
@@ -306,15 +342,576 @@ def test_echo_guard_rejects_values_not_assigned_to_that_quantity() -> None:
     faithful = {
         "operation": "ratio",
         "quantities": [
-            {"id": "A", "label": "A", "value": 10.0, "standard_uncertainty": 1.0},
-            {"id": "B", "label": "B", "value": 20.0, "standard_uncertainty": 2.0},
+            {
+                "id": "A",
+                "label": "A",
+                "value": 10.0,
+                "standard_uncertainty": 1.0,
+                "unit": "dimensionless",
+                "source_ref": "paper",
+                "source_locator": "Table 4, LRG2",
+            },
+            {
+                "id": "B",
+                "label": "B",
+                "value": 20.0,
+                "standard_uncertainty": 2.0,
+                "unit": "dimensionless",
+                "source_ref": "paper",
+                "source_locator": "Table 4, LRG2",
+            },
         ],
         "uncertainty_model": {
             "kind": "correlation_matrix",
             "matrix": [[1.0, -0.404], [-0.404, 1.0]],
+            "source_ref": "paper",
         },
+        "sources": [
+            {
+                "id": "paper",
+                "kind": "arxiv",
+                "identifier": "2503.14738",
+                "locator": "Table 4, LRG2",
+            }
+        ],
     }
 
     assert scalar_call_echo_violation(borrowed_digit, prompt) is not None
     assert scalar_call_echo_violation(swapped, prompt) is not None
     assert scalar_call_echo_violation(faithful, prompt) is None
+
+
+def test_echo_guard_rejects_changed_operation() -> None:
+    # Codex review P1 (PR #46, round 7): a fallback call could faithfully
+    # echo every quantity while changing the requested ratio into a
+    # difference, exposing a receipt for an operation the user did not ask for.
+    from app.services.agent_runtime.prompt_routing import scalar_call_echo_violation
+
+    prompt = (
+        "Ratio of A = 10 +/- 1 to B = 20 +/- 2, using the quoted cross "
+        "term 0.1."
+    )
+    changed_operation = {
+        "operation": "difference",
+        "quantities": [
+            {"id": "A", "label": "A", "value": 10.0, "standard_uncertainty": 1.0},
+            {"id": "B", "label": "B", "value": 20.0, "standard_uncertainty": 2.0},
+        ],
+        "uncertainty_model": {
+            "kind": "correlation_matrix",
+            "matrix": [[1.0, 0.1], [0.1, 1.0]],
+        },
+    }
+
+    assert scalar_call_echo_violation(changed_operation, prompt) is not None
+
+
+def test_echo_guard_rejects_omitted_prompt_quantity() -> None:
+    # Codex review P1 (PR #46, round 7): after matching a subset, the echo
+    # guard never rejected parsed quantities left unused. A three-measurement
+    # weighted mean could therefore become a valid two-measurement receipt.
+    from app.services.agent_runtime.prompt_routing import scalar_call_echo_violation
+
+    prompt = (
+        "Weighted mean of A = 10 +/- 1, B = 20 +/- 2, and C = 30 +/- 3; "
+        "use the quoted cross term 0.1."
+    )
+    omitted_third_measurement = {
+        "operation": "weighted_mean",
+        "quantities": [
+            {"id": "A", "label": "A", "value": 10.0, "standard_uncertainty": 1.0},
+            {"id": "B", "label": "B", "value": 20.0, "standard_uncertainty": 2.0},
+        ],
+        "uncertainty_model": {
+            "kind": "correlation_matrix",
+            "matrix": [[1.0, 0.1], [0.1, 1.0]],
+        },
+    }
+
+    assert scalar_call_echo_violation(omitted_third_measurement, prompt) is not None
+
+
+def test_echo_guard_rejects_explicitly_negated_operation() -> None:
+    # Internal adversarial review after round 7: fixed operation priority
+    # treated the explicitly forbidden ratio as the user's request.
+    from app.services.agent_runtime.prompt_routing import scalar_call_echo_violation
+
+    prompt = (
+        "Do not take a ratio; compute the difference between A = 10 +/- 1 "
+        "and B = 20 +/- 2, using the quoted cross term 0.1."
+    )
+    decision = classify_task_kind(prompt)
+    forbidden_ratio = {
+        "operation": "ratio",
+        "quantities": [
+            {"id": "A", "label": "A", "value": 10.0, "standard_uncertainty": 1.0},
+            {"id": "B", "label": "B", "value": 20.0, "standard_uncertainty": 2.0},
+        ],
+        "uncertainty_model": {
+            "kind": "correlation_matrix",
+            "matrix": [[1.0, 0.1], [0.1, 1.0]],
+        },
+    }
+
+    assert decision["requested_operation"] == "difference"
+    assert scalar_call_echo_violation(forbidden_ratio, prompt) is not None
+
+
+def test_echo_guard_rejects_reusing_consumed_quantity() -> None:
+    # A known label that had already been consumed could be submitted again,
+    # changing a weighted mean while every parsed prompt quantity still appeared.
+    from app.services.agent_runtime.prompt_routing import scalar_call_echo_violation
+
+    prompt = (
+        "Weighted mean of A = 10 +/- 1 and B = 20 +/- 2; use the quoted "
+        "cross term 0.1."
+    )
+    repeated_a = {
+        "operation": "weighted_mean",
+        "quantities": [
+            {"id": "A", "label": "A", "value": 10.0, "standard_uncertainty": 1.0},
+            {"id": "A2", "label": "A", "value": 10.0, "standard_uncertainty": 1.0},
+            {"id": "B", "label": "B", "value": 20.0, "standard_uncertainty": 2.0},
+        ],
+        "uncertainty_model": {
+            "kind": "correlation_matrix",
+            "matrix": [
+                [1.0, 0.1, 0.1],
+                [0.1, 1.0, 0.1],
+                [0.1, 0.1, 1.0],
+            ],
+        },
+    }
+
+    assert scalar_call_echo_violation(repeated_a, prompt) is not None
+
+
+def test_repeated_prompt_label_is_ambiguous_not_deduplicated() -> None:
+    # The compact parser silently discarded the second A measurement, allowing
+    # the fallback to produce a receipt that omitted a user-supplied value.
+    from app.services.agent_runtime.prompt_routing import scalar_call_echo_violation
+
+    prompt = (
+        "Weighted mean of A = 10 +/- 1, A = 20 +/- 2, and B = 30 +/- 3; "
+        "use the quoted cross term 0.1."
+    )
+    decision = classify_task_kind(prompt)
+    deduplicated_call = {
+        "operation": "weighted_mean",
+        "quantities": [
+            {"id": "A", "label": "A", "value": 10.0, "standard_uncertainty": 1.0},
+            {"id": "B", "label": "B", "value": 30.0, "standard_uncertainty": 3.0},
+        ],
+        "uncertainty_model": {
+            "kind": "correlation_matrix",
+            "matrix": [[1.0, 0.1], [0.1, 1.0]],
+        },
+    }
+
+    assert "unambiguous_quantities" in decision["missing_inputs"]
+    assert scalar_call_echo_violation(deduplicated_call, prompt) is not None
+
+
+def test_echo_guard_rejects_locator_number_as_correlation() -> None:
+    # Correlation cells were checked against every number in the prompt, so a
+    # model could borrow the locator's Table 1 as rho=1 when no rho was stated.
+    from app.services.agent_runtime.prompt_routing import scalar_call_echo_violation
+
+    prompt = "From Table 1, ratio of A = 10 +/- 2 to B = 20 +/- 3."
+    borrowed_locator = {
+        "operation": "ratio",
+        "quantities": [
+            {"id": "A", "label": "A", "value": 10.0, "standard_uncertainty": 2.0},
+            {"id": "B", "label": "B", "value": 20.0, "standard_uncertainty": 3.0},
+        ],
+        "uncertainty_model": {
+            "kind": "correlation_matrix",
+            "matrix": [[1.0, 1.0], [1.0, 1.0]],
+        },
+    }
+
+    assert scalar_call_echo_violation(borrowed_locator, prompt) is not None
+
+
+def test_echo_guard_accepts_context_bound_cross_term() -> None:
+    from app.services.agent_runtime.prompt_routing import scalar_call_echo_violation
+
+    prompt = (
+        "Ratio of A = 10 +/- 2 to B = 20 +/- 3, using the quoted cross "
+        "term 0.1."
+    )
+    faithful = {
+        "operation": "ratio",
+        "quantities": [
+            {
+                "id": "A",
+                "label": "A",
+                "value": 10.0,
+                "standard_uncertainty": 2.0,
+                "unit": "dimensionless",
+                "source_ref": "prompt",
+                "source_locator": "current prompt",
+            },
+            {
+                "id": "B",
+                "label": "B",
+                "value": 20.0,
+                "standard_uncertainty": 3.0,
+                "unit": "dimensionless",
+                "source_ref": "prompt",
+                "source_locator": "current prompt",
+            },
+        ],
+        "uncertainty_model": {
+            "kind": "correlation_matrix",
+            "matrix": [[1.0, 0.1], [0.1, 1.0]],
+        },
+        "sources": [
+            {
+                "id": "prompt",
+                "kind": "user_supplied",
+                "identifier": "values in current user prompt",
+                "locator": "current prompt",
+            }
+        ],
+    }
+
+    assert scalar_call_echo_violation(faithful, prompt) is None
+
+
+def test_echo_guard_rejects_changed_quantity_unit() -> None:
+    from app.services.agent_runtime.prompt_routing import scalar_call_echo_violation
+
+    prompt = (
+        "Difference between A = 10 +/- 1 Mpc and B = 20 +/- 2 Mpc, using "
+        "the quoted cross term 0.1."
+    )
+    changed_units = {
+        "operation": "difference",
+        "quantities": [
+            {
+                "id": "A",
+                "label": "A",
+                "value": 10.0,
+                "standard_uncertainty": 1.0,
+                "unit": "Gpc",
+            },
+            {
+                "id": "B",
+                "label": "B",
+                "value": 20.0,
+                "standard_uncertainty": 2.0,
+                "unit": "Gpc",
+            },
+        ],
+        "uncertainty_model": {
+            "kind": "correlation_matrix",
+            "matrix": [[1.0, 0.1], [0.1, 1.0]],
+        },
+    }
+
+    assert scalar_call_echo_violation(changed_units, prompt) is not None
+
+
+def test_echo_guard_rejects_changed_source_identity() -> None:
+    from app.services.agent_runtime.prompt_routing import scalar_call_echo_violation
+
+    prompt = (
+        "From arXiv:2503.14738 Table 4, ratio of A = 10 +/- 1 to "
+        "B = 20 +/- 2, using the quoted cross term 0.1."
+    )
+    changed_source = {
+        "operation": "ratio",
+        "quantities": [
+            {
+                "id": "A",
+                "label": "A",
+                "value": 10.0,
+                "standard_uncertainty": 1.0,
+                "unit": "dimensionless",
+                "source_ref": "wrong-paper",
+                "source_locator": "Table 4",
+            },
+            {
+                "id": "B",
+                "label": "B",
+                "value": 20.0,
+                "standard_uncertainty": 2.0,
+                "unit": "dimensionless",
+                "source_ref": "wrong-paper",
+                "source_locator": "Table 4",
+            },
+        ],
+        "uncertainty_model": {
+            "kind": "correlation_matrix",
+            "matrix": [[1.0, 0.1], [0.1, 1.0]],
+            "source_ref": "wrong-paper",
+        },
+        "sources": [
+            {
+                "id": "wrong-paper",
+                "kind": "arxiv",
+                "identifier": "2503.14452",
+                "locator": "Table 4",
+            }
+        ],
+    }
+
+    assert scalar_call_echo_violation(changed_source, prompt) is not None
+
+
+def test_echo_guard_rejects_changed_quantity_labels() -> None:
+    from app.services.agent_runtime.prompt_routing import scalar_call_echo_violation
+
+    prompt = (
+        "From arXiv:2503.14738 Table 4, ratio of A = 10 +/- 1 to "
+        "B = 20 +/- 2, using the quoted cross term 0.1."
+    )
+    renamed = {
+        "operation": "ratio",
+        "quantities": [
+            {
+                "id": "X",
+                "label": "X",
+                "value": 10.0,
+                "standard_uncertainty": 1.0,
+                "unit": "dimensionless",
+                "source_ref": "paper",
+                "source_locator": "Table 4",
+            },
+            {
+                "id": "Y",
+                "label": "Y",
+                "value": 20.0,
+                "standard_uncertainty": 2.0,
+                "unit": "dimensionless",
+                "source_ref": "paper",
+                "source_locator": "Table 4",
+            },
+        ],
+        "uncertainty_model": {
+            "kind": "correlation_matrix",
+            "matrix": [[1.0, 0.1], [0.1, 1.0]],
+            "source_ref": "paper",
+        },
+        "sources": [
+            {
+                "id": "paper",
+                "kind": "arxiv",
+                "identifier": "2503.14738",
+                "locator": "Table 4",
+            }
+        ],
+    }
+
+    assert scalar_call_echo_violation(renamed, prompt) is not None
+
+
+def test_echo_guard_requires_cited_uncertainty_source() -> None:
+    from app.services.agent_runtime.prompt_routing import scalar_call_echo_violation
+
+    prompt = (
+        "From arXiv:2503.14738 Table 4, ratio of A = 10 +/- 1 to "
+        "B = 20 +/- 2, using the quoted cross term 0.1."
+    )
+    quantities = [
+        {
+            "id": "A",
+            "label": "A",
+            "value": 10.0,
+            "standard_uncertainty": 1.0,
+            "unit": "dimensionless",
+            "source_ref": "paper",
+            "source_locator": "Table 4",
+        },
+        {
+            "id": "B",
+            "label": "B",
+            "value": 20.0,
+            "standard_uncertainty": 2.0,
+            "unit": "dimensionless",
+            "source_ref": "paper",
+            "source_locator": "Table 4",
+        },
+    ]
+    paper = {
+        "id": "paper",
+        "kind": "arxiv",
+        "identifier": "2503.14738",
+        "locator": "Table 4",
+    }
+    missing_ref = {
+        "operation": "ratio",
+        "quantities": quantities,
+        "uncertainty_model": {
+            "kind": "correlation_matrix",
+            "matrix": [[1.0, 0.1], [0.1, 1.0]],
+        },
+        "sources": [paper],
+    }
+    user_supplied_ref = {
+        "operation": "ratio",
+        "quantities": quantities,
+        "uncertainty_model": {
+            "kind": "correlation_matrix",
+            "matrix": [[1.0, 0.1], [0.1, 1.0]],
+            "source_ref": "prompt",
+        },
+        "sources": [
+            paper,
+            {
+                "id": "prompt",
+                "kind": "user_supplied",
+                "identifier": "correlation supplied by model",
+                "locator": "current prompt",
+            },
+        ],
+    }
+
+    assert scalar_call_echo_violation(missing_ref, prompt) is not None
+    assert scalar_call_echo_violation(user_supplied_ref, prompt) is not None
+
+
+def test_echo_guard_binds_each_correlation_to_its_quantity_pair() -> None:
+    from app.services.agent_runtime.prompt_routing import scalar_call_echo_violation
+
+    prompt = (
+        "Weighted mean of A = 10 +/- 1, B = 20 +/- 2, and C = 30 +/- 3; "
+        "rho(A,B)=0.1, rho(A,C)=0.2, and rho(B,C)=0.3."
+    )
+    quantities = [
+        {
+            "id": label,
+            "label": label,
+            "value": value,
+            "standard_uncertainty": uncertainty,
+            "unit": "dimensionless",
+            "source_ref": "prompt",
+            "source_locator": "current prompt",
+        }
+        for label, value, uncertainty in (("A", 10.0, 1.0), ("B", 20.0, 2.0), ("C", 30.0, 3.0))
+    ]
+    source = {
+        "id": "prompt",
+        "kind": "user_supplied",
+        "identifier": "values in current user prompt",
+        "locator": "current prompt",
+    }
+
+    def call(matrix):
+        return {
+            "operation": "weighted_mean",
+            "quantities": quantities,
+            "uncertainty_model": {
+                "kind": "correlation_matrix",
+                "matrix": matrix,
+                "source_ref": "prompt",
+            },
+            "sources": [source],
+        }
+
+    correct = [[1.0, 0.1, 0.2], [0.1, 1.0, 0.3], [0.2, 0.3, 1.0]]
+    swapped = [[1.0, 0.3, 0.2], [0.3, 1.0, 0.1], [0.2, 0.1, 1.0]]
+
+    assert scalar_call_echo_violation(call(correct), prompt) is None
+    assert scalar_call_echo_violation(call(swapped), prompt) is not None
+
+
+def test_echo_guard_excludes_negated_correlation_values() -> None:
+    from app.services.agent_runtime.prompt_routing import scalar_call_echo_violation
+
+    prompt = (
+        "Ratio of A = 10 +/- 1 to B = 20 +/- 2. Do not use rho 0.5; "
+        "use the quoted cross term 0.1."
+    )
+    quantities = [
+        {
+            "id": label,
+            "label": label,
+            "value": value,
+            "standard_uncertainty": uncertainty,
+            "unit": "dimensionless",
+            "source_ref": "prompt",
+            "source_locator": "current prompt",
+        }
+        for label, value, uncertainty in (("A", 10.0, 1.0), ("B", 20.0, 2.0))
+    ]
+
+    def call(rho: float):
+        return {
+            "operation": "ratio",
+            "quantities": quantities,
+            "uncertainty_model": {
+                "kind": "correlation_matrix",
+                "matrix": [[1.0, rho], [rho, 1.0]],
+                "source_ref": "prompt",
+            },
+            "sources": [
+                {
+                    "id": "prompt",
+                    "kind": "user_supplied",
+                    "identifier": "values in current user prompt",
+                    "locator": "current prompt",
+                }
+            ],
+        }
+
+    assert scalar_call_echo_violation(call(0.5), prompt) is not None
+    assert scalar_call_echo_violation(call(0.1), prompt) is None
+
+
+def test_echo_guard_normalizes_locator_case_without_changing_locator_identity() -> None:
+    from app.services.agent_runtime.prompt_routing import scalar_call_echo_violation
+
+    prompt = (
+        "From arXiv:2503.14738 Table 4 LRG2, ratio of A = 10 +/- 1 to "
+        "B = 20 +/- 2, using the quoted cross term 0.1."
+    )
+
+    def call(locator: str):
+        return {
+            "operation": "ratio",
+            "quantities": [
+                {
+                    "id": label,
+                    "label": label,
+                    "value": value,
+                    "standard_uncertainty": uncertainty,
+                    "unit": "dimensionless",
+                    "source_ref": "paper",
+                    "source_locator": locator,
+                }
+                for label, value, uncertainty in (("A", 10.0, 1.0), ("B", 20.0, 2.0))
+            ],
+            "uncertainty_model": {
+                "kind": "correlation_matrix",
+                "matrix": [[1.0, 0.1], [0.1, 1.0]],
+                "source_ref": "paper",
+            },
+            "sources": [
+                {
+                    "id": "paper",
+                    "kind": "arxiv",
+                    "identifier": "2503.14738",
+                    "locator": locator,
+                }
+            ],
+        }
+
+    assert scalar_call_echo_violation(call("table 4, lrg2"), prompt) is None
+    assert scalar_call_echo_violation(call("Table 5, LRG2"), prompt) is not None
+
+
+def test_operation_negation_scope_resets_at_explicit_contrast() -> None:
+    contrast = classify_task_kind(
+        "Do not compute a ratio, but compute the difference between "
+        "A = 10 +/- 1 and B = 20 +/- 2, using the quoted cross term 0.1."
+    )
+    negated_list = classify_task_kind(
+        "Do not compute a ratio or a difference between A = 10 +/- 1 and "
+        "B = 20 +/- 2, using the quoted cross term 0.1."
+    )
+
+    assert contrast["requested_operation"] == "difference"
+    assert contrast["task_kind"] == "deterministic_source_check"
+    assert negated_list["requested_operation"] is None

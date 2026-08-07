@@ -134,6 +134,16 @@ def normalize_source(raw: Any) -> NormalizedSource:
     return NormalizedSource(source_id, kind, identifier, locator, url)
 
 
+def _canonical_httpx_hostname(hostname: str) -> str:
+    """Match the UTS-46/IDNA hostname form HTTPX passes to httpcore."""
+    return (
+        httpx.URL(scheme="https", host=hostname.rstrip("."))
+        .raw_host.decode("ascii")
+        .rstrip(".")
+        .lower()
+    )
+
+
 def _require_safe_https_url(value: str) -> str:
     try:
         parsed = urlparse(value)
@@ -148,7 +158,10 @@ def _require_safe_https_url(value: str) -> str:
         raise SourceResolutionError(
             "Source URL contains a forbidden authority component.", code="unsafe_url"
         )
-    hostname = parsed.hostname.rstrip(".").lower()
+    try:
+        hostname = _canonical_httpx_hostname(parsed.hostname)
+    except (httpx.InvalidURL, UnicodeError) as exc:
+        raise SourceResolutionError("Invalid source URL.", code="unsafe_url") from exc
     if hostname in {"localhost", "localhost.localdomain"}:
         raise SourceResolutionError("Private source hosts are forbidden.", code="ssrf_blocked")
     try:
@@ -160,7 +173,7 @@ def _require_safe_https_url(value: str) -> str:
     return value
 
 
-async def _require_public_dns(hostname: str) -> None:
+async def _require_public_dns(hostname: str) -> tuple[str, ...]:
     try:
         records = await asyncio.to_thread(
             socket.getaddrinfo, hostname, 443, type=socket.SOCK_STREAM
@@ -169,7 +182,9 @@ async def _require_public_dns(hostname: str) -> None:
         raise SourceResolutionError(
             "Source host could not be resolved.", code="dns_unavailable", retryable=True
         ) from exc
-    addresses = {ipaddress.ip_address(record[4][0]) for record in records}
+    addresses = list(
+        dict.fromkeys(ipaddress.ip_address(record[4][0]) for record in records)
+    )
     # Managed HTTPS proxies may synthesize RFC 2544 benchmark addresses for
     # public DNS names. Direct 198.18/15 URL literals are still rejected by
     # _require_safe_https_url; only a hostname resolution may use this range.
@@ -178,6 +193,71 @@ async def _require_public_dns(hostname: str) -> None:
 
     if not addresses or any(not public_or_proxy_synthetic(value) for value in addresses):
         raise SourceResolutionError("Private source hosts are forbidden.", code="ssrf_blocked")
+    return tuple(str(value) for value in addresses)
+
+
+class _PinnedAsyncNetworkBackend:
+    """Connect an HTTP origin only through addresses from its validated lookup.
+
+    HTTPX/httpcore still sees the original hostname as the request origin, so
+    the Host header, certificate verification, and TLS SNI all retain that
+    hostname. Only the TCP destination is substituted, closing the second-DNS-
+    lookup window that permits rebinding between validation and connection.
+    """
+
+    def __init__(self, hostname: str, addresses: tuple[str, ...]) -> None:
+        if not addresses:
+            raise ValueError("at least one validated address is required")
+        from httpcore._backends.auto import AutoBackend
+
+        self._hostname = _canonical_httpx_hostname(hostname)
+        self._addresses = addresses
+        self._backend = AutoBackend()
+
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Any = None,
+    ) -> Any:
+        connection_hostname = _canonical_httpx_hostname(host)
+        if connection_hostname != self._hostname:
+            raise RuntimeError("pinned transport received an unexpected hostname")
+        last_error: Exception | None = None
+        for address in self._addresses:
+            try:
+                return await self._backend.connect_tcp(
+                    address,
+                    port,
+                    timeout=timeout,
+                    local_address=local_address,
+                    socket_options=socket_options,
+                )
+            except Exception as exc:
+                last_error = exc
+        assert last_error is not None
+        raise last_error
+
+    async def connect_unix_socket(self, *_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("source downloads never use Unix sockets")
+
+    async def sleep(self, seconds: float) -> None:
+        await self._backend.sleep(seconds)
+
+
+def _pinned_https_transport(
+    hostname: str, addresses: tuple[str, ...]
+) -> httpx.AsyncHTTPTransport:
+    # trust_env=False is intentional: an environment proxy would become a
+    # second resolver outside this pinned TCP path. Managed transparent HTTPS
+    # proxies are represented by the validated 198.18/15 synthetic addresses.
+    transport = httpx.AsyncHTTPTransport(trust_env=False)
+    transport._pool._network_backend = _PinnedAsyncNetworkBackend(  # type: ignore[attr-defined]
+        hostname, addresses
+    )
+    return transport
 
 
 async def _download(
@@ -187,13 +267,17 @@ async def _download(
     allowed_mime_prefixes: tuple[str, ...],
 ) -> tuple[bytes, str, str]:
     current_url = _require_safe_https_url(url)
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(_ATTEMPT_TIMEOUT_SECONDS), follow_redirects=False
-    ) as client:
-        for redirect_index in range(_MAX_REDIRECTS + 1):
-            parsed = urlparse(current_url)
-            await _require_public_dns(str(parsed.hostname))
-            try:
+    for redirect_index in range(_MAX_REDIRECTS + 1):
+        parsed = urlparse(current_url)
+        hostname = _canonical_httpx_hostname(str(parsed.hostname))
+        addresses = await _require_public_dns(hostname)
+        transport = _pinned_https_transport(hostname, addresses)
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(_ATTEMPT_TIMEOUT_SECONDS),
+                follow_redirects=False,
+                transport=transport,
+            ) as client:
                 async with client.stream(
                     "GET",
                     current_url,
@@ -252,12 +336,12 @@ async def _download(
                             )
                         chunks.append(chunk)
                     return b"".join(chunks), current_url, content_type
-            except SourceResolutionError:
-                raise
-            except httpx.HTTPError as exc:
-                raise SourceResolutionError(
-                    "Source request failed.", code="source_network_error", retryable=True
-                ) from exc
+        except SourceResolutionError:
+            raise
+        except httpx.HTTPError as exc:
+            raise SourceResolutionError(
+                "Source request failed.", code="source_network_error", retryable=True
+            ) from exc
     raise SourceResolutionError(
         "Source exceeded the redirect limit.", code="redirect_limit", retryable=True
     )
