@@ -167,6 +167,8 @@ def test_explicitly_disclaimed_prompt_quantity_blocks_direct_call() -> None:
         "and B=8 +/- 2; independent errors.",
         "Compute the difference; do not use A=10 +/- 1, and "
         "B=8 +/- 2; independent errors.",
+        "Compute the difference A=10 +/- 1 and B=8 +/- 2; "
+        "independent errors. Do not use A.",
     ):
         decision = classify_task_kind(disclaimed_prompt)
 
@@ -180,6 +182,16 @@ def test_explicitly_disclaimed_prompt_quantity_blocks_direct_call() -> None:
         "independent errors. The unrelated calibration should not be used."
     )
     assert unrelated_later_disclaimer["direct_tool_call"] is not None
+
+    for article_disclaimer in (
+        "Do not use a later calibration.",
+        "A later calibration should not be used.",
+    ):
+        decision = classify_task_kind(
+            "Compute the difference A=10 +/- 1 and B=8 +/- 2; "
+            f"independent errors. {article_disclaimer}"
+        )
+        assert decision["direct_tool_call"] is not None
 
 
 def test_negated_independence_blocks_direct_and_fallback_calls() -> None:

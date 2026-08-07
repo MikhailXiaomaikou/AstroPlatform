@@ -295,6 +295,13 @@ _PROMPT_QUANTITY_PREFIX_REJECTION = re.compile(
     r"(?:ignore|discard|exclude|reject))\s*$",
     re.I,
 )
+_PROMPT_TARGETED_QUANTITY_REJECTION = re.compile(
+    r"\b(?:(?:do\s+not|don['’]t|never)\s+"
+    r"(?:use|include|adopt|accept|trust)|"
+    r"(?:ignore|discard|exclude|reject))\b"
+    r"(?P<targets>[^.;。；\n]*)",
+    re.I,
+)
 
 
 def _canonical_scalar_label(label: Any) -> str:
@@ -326,6 +333,36 @@ def _scalar_quantity_match_is_disclaimed(
     prefix = text[sentence_start + 1 : match.start()]
     if _PROMPT_QUANTITY_PREFIX_REJECTION.search(prefix):
         return True
+    label = match.group("label")
+    label_flags = 0 if len(label) == 1 and label.lower() == "a" else re.I
+    label_pattern = re.compile(
+        rf"(?<![A-Za-z0-9_]){re.escape(label)}(?![A-Za-z0-9_])",
+        label_flags,
+    )
+    # Codex review P1 (PR #46, round 24): a later clause can explicitly name
+    # an earlier quantity ("Do not use A"). This is safe to inspect beyond the
+    # local assignment window because the exact target label must co-occur in
+    # the rejection clause; unrelated later disclaimers remain non-retroactive.
+    for rejection in _PROMPT_TARGETED_QUANTITY_REJECTION.finditer(text, match.end()):
+        if label_pattern.search(rejection.group("targets")):
+            return True
+    trailing_text = text[match.end() :]
+    for repeated_label in label_pattern.finditer(trailing_text):
+        clause_end = min(
+            (
+                position
+                for separator in (".", ";", "。", "；", "\n")
+                if (position := trailing_text.find(separator, repeated_label.end()))
+                >= 0
+            ),
+            default=len(trailing_text),
+        )
+        label_suffix = trailing_text[repeated_label.end() : clause_end]
+        normalized_label_suffix = re.sub(
+            r"^\s*,?\s*(?:(?:which|that)\s+)?", "", label_suffix, flags=re.I
+        )
+        if _PROMPT_QUANTITY_DISCLAIMER.match(normalized_label_suffix):
+            return True
     # A disclaimer in a later sentence may concern an unrelated calibration;
     # it must not retroactively reject this assignment. Keep the suffix local
     # to the current sentence and, for multiple quantities, the next scalar.

@@ -100,6 +100,34 @@ async def test_exact_source_match_produces_full_receipt(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("source_ref", ["", "not-declared"])
+async def test_missing_quantity_source_ref_cannot_grant_exact_attribution(
+    monkeypatch, source_ref: str,
+) -> None:
+    # Codex review P1 (PR #46, round 24): an unreferenced quantity must not
+    # vanish from the external-source id set and inherit the other quantity's
+    # verified_exact status.
+    monkeypatch.setattr(
+        scalar_verification.settings, "lightweight_verification_enabled", True
+    )
+
+    async def verified(_sources, _claims):
+        return [{"id": "desi", "status": "verified_exact", "cache_hit": False}]
+
+    monkeypatch.setattr(scalar_verification, "resolve_sources", verified)
+    tool_input = _input()
+    tool_input["quantities"][1]["source_ref"] = source_ref
+
+    result = await execute_scalar_verification(tool_input)
+
+    assert result["source_status"] != "verified_exact"
+    assert result["response_disposition"] == "limited"
+    assert result["claim_scopes"]["source_measurement"] is False
+    assert result["supports_measurement_claims"] is False
+    assert result["__do_not_claim_source_measurement__"] is True
+
+
+@pytest.mark.asyncio
 async def test_exact_values_without_cross_covariance_are_limited(monkeypatch) -> None:
     monkeypatch.setattr(
         scalar_verification.settings, "lightweight_verification_enabled", True

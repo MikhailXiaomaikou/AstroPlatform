@@ -297,6 +297,23 @@ async def execute_scalar_verification(tool_input: dict[str, Any]) -> dict[str, A
         for source in sources
         if source.get("kind") == "user_supplied"
     }
+    declared_source_ids = {
+        str(source.get("id") or "").strip()
+        for source in sources
+        if str(source.get("id") or "").strip()
+    }
+    quantity_source_ref_issues: list[str] = []
+    for index, quantity in enumerate(quantities):
+        quantity_id = str(quantity.get("id") or index)
+        quantity_source_ref = str(quantity.get("source_ref") or "").strip()
+        if not quantity_source_ref:
+            quantity_source_ref_issues.append(
+                f"quantity_source_ref_missing:{quantity_id}"
+            )
+        elif quantity_source_ref not in declared_source_ids:
+            quantity_source_ref_issues.append(
+                f"quantity_source_ref_undeclared:{quantity_id}"
+            )
     referenced_source_ids = {
         str(quantity.get("source_ref") or "")
         for quantity in quantities
@@ -311,6 +328,12 @@ async def execute_scalar_verification(tool_input: dict[str, Any]) -> dict[str, A
         if source_error
         else _aggregate_source_status(source_evidence, referenced_source_ids)
     )
+    if quantity_source_ref_issues and source_status == "verified_exact":
+        # Codex review P1 (PR #46, round 24): every input quantity must be
+        # attributed to a declared external or user-supplied source. Otherwise
+        # an omitted ref can vanish from referenced_source_ids and inherit the
+        # exact status of the remaining paper-backed quantities.
+        source_status = "unavailable"
     if matrix_attribution_unverifiable and source_status == "verified_exact":
         # The quantities matched, but the source-attributed uncertainty matrix
         # has a shape we cannot match against the paper — the attribution as a
@@ -355,6 +378,7 @@ async def execute_scalar_verification(tool_input: dict[str, Any]) -> dict[str, A
         missing_dependencies.append(source_error.code)
     elif source_status != "verified_exact":
         missing_dependencies.append(f"source_status:{source_status}")
+    missing_dependencies.extend(quantity_source_ref_issues)
     if correlation_missing:
         missing_dependencies.append("cross_covariance_not_provided")
 
