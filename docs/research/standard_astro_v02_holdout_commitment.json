@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0",
+  "artifact_role": "holdout_commitment",
+  "status": "burned_and_retired",
+  "retired_on": "2026-08-07",
+  "plaintext_in_repository": false,
+  "retired_artifact": {
+    "original_repository_path": "docs/research/standard_astro_v02_holdout_tasks_SEALED.json",
+    "sha256": "c89718b3c37fd390d47c9f873bd463ada9b83dd4f21e93a3a865ea89b315a23f",
+    "size_bytes": 6806,
+    "acceptance_eligible": false,
+    "reason": "The candidate answer key appeared in pull-request history and must be treated as disclosed and contaminated."
+  },
+  "replacement_policy": {
+    "status": "required",
+    "custody": "An independent custodian outside the development and debugging loop must create and retain the replacement plaintext.",
+    "repository_record": "Commit only a SHA-256 commitment and non-sensitive metadata before acceptance.",
+    "allowed_use": "Unseal exactly once for acceptance, record the unseal event and results, and never reuse the set for debugging.",
+    "prohibited": [
+      "plaintext prompts",
+      "answer keys",
+      "ground-truth values",
+      "tolerances",
+      "expected tool traces"
+    ]
+  }
+}

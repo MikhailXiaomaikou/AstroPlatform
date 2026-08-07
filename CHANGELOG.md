@@ -29,15 +29,18 @@ need entries unless they change user-visible behavior or research validity.
   uploads are never advertised, and storage failures do not discard a
   completed scientific result.
 - Added pre-registered canonical and natural-phrasing evaluations, model-call
-  stratification, should-pass corpora, a sealed holdout set, formal report
-  artifacts, and an expert-review script. The deterministic canonical matrix
+  stratification, should-pass corpora, a repository-safe holdout commitment,
+  formal report artifacts, and an expert-review script. The original plaintext
+  candidate was retired as contaminated; a fresh set must be held by an
+  independent custodian outside the development loop. The deterministic canonical matrix
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Twelve adversarial review rounds tightened heavy-chain routing, number and
+- Fifteen adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
-  scale-relative covariance validation, source-field/window boundaries, and
+  scale-relative covariance validation, source-field/window boundaries,
+  multi-agent validation-summary preservation, holdout custody, and
   DNS-rebinding resistance without relaxing the existing claim gates.
 
 ### P0 production and local-automation hardening (2026-07-13)

@@ -51,6 +51,29 @@ def test_arxiv_version_identity_is_preserved_end_to_end_in_routing() -> None:
     assert scalar_call_echo_violation(changed_revision, prompt) is not None
 
 
+def test_scalar_values_are_not_misclassified_as_bare_arxiv_identifiers() -> None:
+    # Codex review P2 (PR #46, round 15): the optional arXiv prefix let any
+    # four-dot-four decimal in a scalar request masquerade as a paper ID.
+    prompt = (
+        "Compute the difference A=1234.5678 +/- 0.1 and "
+        "B=1230.0000 +/- 0.2, assuming independent errors."
+    )
+
+    decision = classify_task_kind(prompt)
+
+    assert decision["source_references"] == []
+    assert decision["task_kind"] == "deterministic_source_check"
+    assert decision["direct_tool_call"]["name"] == "verify_scalar_derivation"
+    assert decision["direct_tool_call"]["input"]["sources"] == [
+        {
+            "id": "user-supplied",
+            "kind": "user_supplied",
+            "identifier": "values in current user prompt",
+            "locator": "current prompt",
+        }
+    ]
+
+
 def test_dataset_names_alone_never_start_full_research() -> None:
     decision = classify_task_kind(
         "Explain what DESI BAO and Planck CMB measure. This is not dark-energy inference."

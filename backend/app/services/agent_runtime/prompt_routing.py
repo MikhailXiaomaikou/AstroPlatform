@@ -165,6 +165,15 @@ def _active_and_negated_heavy_signals(text: str) -> tuple[list[str], list[str]]:
 def _source_references_from_prompt(text: str) -> list[dict[str, str]]:
     references: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
+    # Codex review P2 (PR #46, round 15): a bare arXiv-shaped token can also
+    # be an ordinary scalar value (for example ``A=1234.5678 +/- 0.1``).
+    # Protect the exact value/uncertainty spans parsed from complete scalar
+    # assignments; an explicit arXiv prefix or URL remains authoritative.
+    scalar_number_spans = [
+        scalar_match.span(group)
+        for scalar_match in _SCALAR_QUANTITY_RE.finditer(text)
+        for group in ("value", "uncertainty")
+    ]
     patterns = (
         (
             "arxiv",
@@ -180,6 +189,14 @@ def _source_references_from_prompt(text: str) -> list[dict[str, str]]:
     )
     for kind, pattern in patterns:
         for match in pattern.finditer(text):
+            if kind == "arxiv" and "arxiv" not in match.group(0).lower():
+                identifier_span = match.span(1)
+                if any(
+                    identifier_span[0] < scalar_span[1]
+                    and scalar_span[0] < identifier_span[1]
+                    for scalar_span in scalar_number_spans
+                ):
+                    continue
             identifier = match.group(1) if match.lastindex else match.group(0)
             if kind == "url" and any(
                 host in identifier for host in ("arxiv.org/", "doi.org/", "zenodo.org/")

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import json
-
 import argparse
+import json
+from pathlib import Path
+
 import pytest
 
 from scripts import build_standard_astro_v02_expert_pack as expert_pack
@@ -10,6 +11,32 @@ from scripts import evaluate_standard_astro_v02 as evaluator
 from scripts import merge_standard_astro_v02_samples as merger
 from scripts import score_standard_astro_v02 as scorer
 from app.services.agent_runtime.evidence_receipts import finalize_evidence_receipt
+
+
+def test_v02_holdout_repository_contains_commitment_not_plaintext() -> None:
+    # Codex review P1 (PR #46, round 15): a file called SEALED still exposed
+    # its prompts, answer key, and tolerances in ordinary Git history.
+    repository = Path(__file__).resolve().parents[2]
+    research = repository / "docs" / "research"
+    plaintext = research / "standard_astro_v02_holdout_tasks_SEALED.json"
+    commitment_path = research / "standard_astro_v02_holdout_commitment.json"
+
+    assert not plaintext.exists()
+    commitment = json.loads(commitment_path.read_text(encoding="utf-8"))
+    assert set(commitment) == {
+        "schema_version",
+        "artifact_role",
+        "status",
+        "retired_on",
+        "plaintext_in_repository",
+        "retired_artifact",
+        "replacement_policy",
+    }
+    assert commitment["status"] == "burned_and_retired"
+    assert commitment["plaintext_in_repository"] is False
+    assert commitment["retired_artifact"]["acceptance_eligible"] is False
+    assert len(commitment["retired_artifact"]["sha256"]) == 64
+    assert commitment["replacement_policy"]["status"] == "required"
 
 
 def _evidence_receipt(kind: str, status: str) -> dict:
