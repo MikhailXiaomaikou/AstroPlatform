@@ -32,7 +32,22 @@ class RoutingDecision(TypedDict):
 _HEAVY_INTENT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("likelihood", re.compile(r"\b(?:likelihood|似然)\b", re.I)),
     ("fit", re.compile(r"\b(?:fit|fitting|拟合)\b", re.I)),
-    ("sampling", re.compile(r"\b(?:sample|sampling|sampler|mcmc|nested\s+sampl)|采样", re.I)),
+    # ``sample`` is also a common observational noun ("measured from the
+    # sample").  Only treat the bare form as sampler intent when it is tied to
+    # a sampling target; the unambiguous vocabulary remains sufficient on its
+    # own.  This keeps complete scalar receipts on the deterministic path.
+    ("sampling", re.compile(
+        r"\b(?:sampling|sampler|mcmc)\b|"
+        r"\bnested\s+sampl(?:e|ing|er)\b|"
+        r"\bsample\b\s+(?:(?:the|these|those)\s+)?"
+        r"(?:posterior|likelihood|parameters?)\b|"
+        r"\bsample\b[^.;。；]{0,20}\bfrom\s+(?:the\s+)?"
+        r"(?:posterior|likelihood|parameter\s+space|distribution)\b|"
+        r"\b(?:draw|generate|run)\b[^.;。；]{0,24}"
+        r"\b(?:posterior\s+)?samples?\b|"
+        r"采样",
+        re.I,
+    )),
     ("posterior", re.compile(r"\bposterior\b|后验", re.I)),
     ("model_likelihood_comparison", re.compile(r"(?:compare|comparison|比较).{0,40}(?:model|模型).{0,40}(?:likelihood|似然)", re.I)),
     # Codex review P1 (PR #46): an explicit chain-execution request phrased

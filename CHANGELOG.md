@@ -36,7 +36,7 @@ need entries unless they change user-visible behavior or research validity.
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Twenty-one adversarial review rounds tightened heavy-chain routing, number and
+- Twenty-two adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
   scale-relative covariance validation, negation-aware independence parsing,
@@ -44,7 +44,10 @@ need entries unless they change user-visible behavior or research validity.
   source-field/window boundaries, cosmology manifest/calculation baseline
   consistency, backend-owned receipt boundaries, operation-arity checks,
   multi-agent validation-summary preservation, holdout custody, and
-  DNS-rebinding resistance without relaxing the existing claim gates.
+  DNS-rebinding resistance. Observational uses of the noun `sample` no longer
+  trigger a heavy sampler route, while untrusted PDF parsing now runs in a
+  killable, resource-, page-, output-, and time-bounded subprocess. None of
+  these changes relaxes the existing claim gates.
 
 ### P0 production and local-automation hardening (2026-07-13)
 

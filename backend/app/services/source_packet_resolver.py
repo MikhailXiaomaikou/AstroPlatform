@@ -11,6 +11,8 @@ import json
 import math
 import re
 import socket
+import subprocess
+import sys
 import tarfile
 import time
 from dataclasses import dataclass
@@ -51,7 +53,124 @@ _ATTEMPT_TIMEOUT_SECONDS = 8.0
 _ADAPTER_DEADLINE_SECONDS = 15.0
 _TOTAL_TIMEOUT_SECONDS = 30.0
 _FAILURE_TTL_SECONDS = 5 * 60
+_PDF_EXTRACTION_TIMEOUT_SECONDS = 8.0
+_PDF_MAX_CPU_SECONDS = 6
+_PDF_MAX_ADDRESS_SPACE_BYTES = 512 * 1024 * 1024
+_PDF_MAX_PAGES = 512
+_PDF_MAX_TEXT_BYTES = _MAX_EXPANDED_BYTES
 _HTTPS_PROXY_SYNTHETIC_NETWORK = ipaddress.ip_network("198.18.0.0/15")
+
+# Untrusted PDF parsing happens in a fresh interpreter, never in the API
+# process.  The worker installs limits before importing pdfminer, suppresses
+# parser output, and exposes only a bounded result (or one fixed marker) over
+# its inherited result pipe.  ``-I`` also prevents cwd/user-site imports.
+_PDF_EXTRACTION_WORKER = f"""
+import io
+import os
+import sys
+import threading
+import time
+
+_RESULT_FD = os.dup(sys.stdout.fileno())
+_DEVNULL_FD = os.open(os.devnull, os.O_WRONLY)
+os.dup2(_DEVNULL_FD, sys.stdout.fileno())
+os.dup2(_DEVNULL_FD, sys.stderr.fileno())
+os.close(_DEVNULL_FD)
+
+
+def _write_result(data):
+    view = memoryview(data)
+    while view:
+        written = os.write(_RESULT_FD, view)
+        view = view[written:]
+
+
+def _fail(marker, status):
+    _write_result(marker.encode("ascii"))
+    os.close(_RESULT_FD)
+    os._exit(status)
+
+
+try:
+    import resource
+except Exception:
+    _fail("PDF_RESOURCE_LIMIT_SETUP", 70)
+
+
+def _set_limit(name, requested):
+    limit = getattr(resource, name, None)
+    if limit is None:
+        raise RuntimeError(name)
+    _soft, hard = resource.getrlimit(limit)
+    value = requested if hard == resource.RLIM_INFINITY else min(requested, hard)
+    resource.setrlimit(limit, (value, value))
+
+
+try:
+    _set_limit("RLIMIT_CPU", {_PDF_MAX_CPU_SECONDS})
+    _set_limit("RLIMIT_NOFILE", 32)
+    if hasattr(resource, "RLIMIT_CORE"):
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+except Exception:
+    _fail("PDF_RESOURCE_LIMIT_SETUP", 70)
+
+# Linux accepts a strict address-space ceiling.  Darwin's Python process has
+# very large framework mappings and refuses a useful RLIMIT_AS even while its
+# resident set is small, so keep the CPU limit and enforce the same memory
+# budget with an in-process watchdog there.  The parent can still kill this
+# whole interpreter on its independent wall-clock timeout.
+try:
+    _set_limit("RLIMIT_AS", {_PDF_MAX_ADDRESS_SPACE_BYTES})
+except Exception:
+    if sys.platform != "darwin":
+        _fail("PDF_RESOURCE_LIMIT_SETUP", 70)
+
+
+def _watch_resident_memory():
+    while True:
+        maximum_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if sys.platform != "darwin":
+            maximum_rss *= 1024
+        if maximum_rss > {_PDF_MAX_ADDRESS_SPACE_BYTES}:
+            _fail("PDF_RESOURCE_LIMIT", 75)
+        time.sleep(0.025)
+
+
+threading.Thread(target=_watch_resident_memory, daemon=True).start()
+
+payload = sys.stdin.buffer.read({_MAX_RESPONSE_BYTES + 1})
+if len(payload) > {_MAX_RESPONSE_BYTES}:
+    _fail("PDF_INPUT_LIMIT", 71)
+
+try:
+    from pdfminer.high_level import extract_text
+    from pdfminer.pdfpage import PDFPage
+except Exception:
+    _fail("PDF_EXTRACTOR_UNAVAILABLE", 72)
+
+try:
+    pages = PDFPage.get_pages(
+        io.BytesIO(payload),
+        maxpages={_PDF_MAX_PAGES + 1},
+        caching=False,
+        check_extractable=True,
+    )
+    if sum(1 for _page in pages) > {_PDF_MAX_PAGES}:
+        _fail("PDF_PAGE_LIMIT", 73)
+    text = extract_text(
+        io.BytesIO(payload), maxpages={_PDF_MAX_PAGES}, caching=False
+    )
+    encoded = text.encode("utf-8", errors="replace")
+    if len(encoded) > {_PDF_MAX_TEXT_BYTES}:
+        _fail("PDF_TEXT_LIMIT", 74)
+except MemoryError:
+    _fail("PDF_RESOURCE_LIMIT", 75)
+except BaseException:
+    _fail("PDF_TEXT_INVALID", 76)
+
+_write_result(encoded)
+os.close(_RESULT_FD)
+"""
 
 
 class SourceResolutionError(RuntimeError):
@@ -379,19 +498,65 @@ def _plain_text_document(
 
 
 def _extract_pdf_text(payload: bytes) -> str:
+    if len(payload) > _MAX_RESPONSE_BYTES:
+        raise SourceResolutionError(
+            "PDF source exceeds the 25 MB limit.", code="source_too_large"
+        )
     try:
-        from pdfminer.high_level import extract_text
-    except ImportError as exc:
+        completed = subprocess.run(
+            [sys.executable, "-I", "-c", _PDF_EXTRACTION_WORKER],
+            input=payload,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=_PDF_EXTRACTION_TIMEOUT_SECONDS,
+            check=False,
+            start_new_session=True,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise SourceResolutionError(
+            "PDF text extraction exceeded its time limit.",
+            code="pdf_text_timeout",
+            retryable=True,
+        ) from exc
+    except OSError as exc:
         raise SourceResolutionError(
             "PDF text extraction is unavailable in this runtime.",
             code="pdf_extractor_unavailable",
         ) from exc
-    try:
-        return extract_text(io.BytesIO(payload))
-    except Exception as exc:
-        raise SourceResolutionError(
-            "PDF text extraction failed.", code="pdf_text_invalid"
-        ) from exc
+
+    if completed.returncode == 0:
+        if len(completed.stdout) > _PDF_MAX_TEXT_BYTES:
+            raise SourceResolutionError(
+                "Extracted PDF text exceeds the 25 MB limit.",
+                code="pdf_text_too_large",
+            )
+        return completed.stdout.decode("utf-8", errors="replace")
+
+    marker = (completed.stdout + completed.stderr).decode(
+        "ascii", errors="ignore"
+    )
+    if "PDF_EXTRACTOR_UNAVAILABLE" in marker:
+        code = "pdf_extractor_unavailable"
+        message = "PDF text extraction is unavailable in this runtime."
+    elif "PDF_INPUT_LIMIT" in marker:
+        code = "source_too_large"
+        message = "PDF source exceeds the 25 MB limit."
+    elif "PDF_PAGE_LIMIT" in marker:
+        code = "pdf_page_limit"
+        message = "PDF exceeds the 512-page extraction limit."
+    elif "PDF_TEXT_LIMIT" in marker:
+        code = "pdf_text_too_large"
+        message = "Extracted PDF text exceeds the 25 MB limit."
+    elif (
+        "PDF_RESOURCE_LIMIT" in marker
+        or completed.returncode < 0
+    ):
+        code = "pdf_resource_limit"
+        message = "PDF text extraction exceeded a resource limit."
+    else:
+        code = "pdf_text_invalid"
+        message = "PDF text extraction failed."
+    raise SourceResolutionError(message, code=code)
 
 
 def _safe_arxiv_source_texts(payload: bytes) -> list[str]:

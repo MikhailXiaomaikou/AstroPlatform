@@ -99,6 +99,32 @@ def test_positive_heavy_intent_is_required_and_routes_full(prompt: str) -> None:
     assert decision["direct_tool_call"] is None
 
 
+def test_observational_sample_noun_is_not_sampling_intent() -> None:
+    # Codex review P1 (PR #46, round 22): ordinary observational use of the
+    # noun "sample" must not override an otherwise complete scalar receipt.
+    decision = classify_task_kind(
+        "Using values measured from the sample, compute the difference "
+        "A=10 +/- 1 and B=8 +/- 2; independent errors."
+    )
+
+    assert decision["task_kind"] == "deterministic_source_check"
+    assert decision["direct_tool_call"] is not None
+    assert decision["heavy_route_allowed"] is False
+
+    sample_distribution = classify_task_kind(
+        "Using the sample distribution, compute the difference "
+        "A=10 +/- 1 and B=8 +/- 2; independent errors."
+    )
+    assert sample_distribution["task_kind"] == "deterministic_source_check"
+    assert sample_distribution["heavy_route_allowed"] is False
+
+    actual_sampling = classify_task_kind(
+        "Sample from the distribution to produce 1,000 draws."
+    )
+    assert actual_sampling["task_kind"] == "full_research"
+    assert actual_sampling["heavy_route_allowed"] is True
+
+
 def test_incomplete_lightweight_input_reports_missing_fields_without_heavy_fallback() -> None:
     decision = classify_task_kind(
         "From arXiv:2503.14738 Table 4, compute the D_M/D_H ratio. "

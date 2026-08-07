@@ -375,6 +375,39 @@ def test_arxiv_tar_source_extracts_only_text_members() -> None:
     ]
 
 
+def test_pdf_extraction_uses_killable_resource_limited_subprocess(
+    monkeypatch,
+) -> None:
+    # Codex review P1 (PR #46, round 22): cancellation of a worker thread does
+    # not terminate pdfminer. The parser must live in a subprocess with hard
+    # resource/page/output limits and its own wall-clock timeout.
+    calls = []
+
+    def completed(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return resolver.subprocess.CompletedProcess(
+            cmd, 0, stdout=b"alpha = 10 +/- 1", stderr=b""
+        )
+
+    monkeypatch.setattr(resolver.subprocess, "run", completed)
+
+    assert resolver._extract_pdf_text(b"%PDF-safe") == "alpha = 10 +/- 1"
+    cmd, kwargs = calls[0]
+    assert cmd[:2] == [resolver.sys.executable, "-I"]
+    assert "setrlimit" in cmd[-1]
+    assert "PDF_PAGE_LIMIT" in cmd[-1]
+    assert kwargs["timeout"] == resolver._PDF_EXTRACTION_TIMEOUT_SECONDS
+    assert kwargs["start_new_session"] is True
+
+    def timed_out(cmd, **kwargs):
+        raise resolver.subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr(resolver.subprocess, "run", timed_out)
+    with pytest.raises(SourceResolutionError) as timeout_error:
+        resolver._extract_pdf_text(b"%PDF-pathological")
+    assert timeout_error.value.code == "pdf_text_timeout"
+
+
 @pytest.mark.asyncio
 async def test_doi_adapter_accepts_public_pdf(monkeypatch) -> None:
     async def download(*_args, **_kwargs):
