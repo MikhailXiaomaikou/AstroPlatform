@@ -36,7 +36,7 @@ need entries unless they change user-visible behavior or research validity.
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Twenty-five adversarial review rounds tightened heavy-chain routing, number and
+- Twenty-six adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
   scale-relative covariance validation, negation-aware independence parsing,
@@ -59,7 +59,11 @@ need entries unless they change user-visible behavior or research validity.
   article; appositive commas preserve their governing measurement negation;
   and products use the exact second-order variance identity only for
   explicitly independent inputs, failing closed when covariance alone leaves
-  the required higher mixed moment unidentified.
+  the required higher mixed moment unidentified. Ratio uncertainty is now
+  explicitly labeled as a first-order delta-method approximation, with its
+  method and distributional caveat carried into the receipt; bounded
+  postposed-negation parsing also recognizes controlled heavy-work noun
+  modifiers while preserving affirmative heavy-route requests.
 
 ### P0 production and local-automation hardening (2026-07-13)
 

@@ -1176,6 +1176,38 @@ def test_verified_scalar_propagated_error_survives_structural_anti_echo():
     assert result.ok, result.uncited
 
 
+def test_linearized_scalar_ratio_remains_claimable_with_explicit_status():
+    result = validate_claims(
+        "The controlled first-order ratio is 0.5 +/- 0.1.",
+        [
+            {
+                "tool": "verify_scalar_derivation",
+                "input": {
+                    "quantities": [
+                        {"value": 10.0, "standard_uncertainty": 1.0},
+                        {"value": 20.0, "standard_uncertainty": 2.0},
+                    ]
+                },
+                "result": {
+                    "success": True,
+                    "calculation_status": "linearized_approximation",
+                    "claim_scopes": {
+                        "derived_numeric": True,
+                        "source_measurement": True,
+                    },
+                    "result": {
+                        "value": 0.5,
+                        "standard_uncertainty": 0.1,
+                        "uncertainty_method": "first_order_delta",
+                    },
+                },
+            }
+        ],
+    )
+
+    assert result.ok, result.uncited
+
+
 def test_untrusted_tool_cannot_mint_typed_scalar_significance():
     result = validate_claims(
         "The absolute standardized difference is 4.5 sigma.",

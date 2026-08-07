@@ -348,7 +348,7 @@ def derive_scalar(
             )
         result_value = float(values[0] / values[1])
         jacobian = np.asarray([1.0 / values[1], -values[0] / values[1] ** 2])
-        formula = "q0 / q1"
+        formula = "q0 / q1; uncertainty = first-order delta method"
     elif operation == "difference":
         result_value = float(values[0] - values[1])
         jacobian = np.asarray([1.0, -1.0])
@@ -429,6 +429,13 @@ def derive_scalar(
             result_value, result_uncertainty, result_unit
         ),
     }
+    if operation == "ratio":
+        result_payload["uncertainty_method"] = "first_order_delta"
+        result_payload["approximation_caveat"] = (
+            "Ratio uncertainty is a first-order delta-method approximation; "
+            "means and covariance alone do not determine the exact ratio "
+            "distribution or guarantee finite moments near a zero denominator."
+        )
     if operation == "difference" and result_uncertainty > 0:
         standardized = abs(result_value) / result_uncertainty
         result_payload["standardized_difference_abs"] = standardized
@@ -452,6 +459,11 @@ def derive_scalar(
             result_payload[
                 "relative_uncertainty_change_percent_vs_independent"
             ] = 100.0 * relative_change
+    calculation_status = (
+        "linearized_approximation"
+        if operation == "ratio"
+        else "verified_deterministic"
+    )
     result = {
         "operation": operation,
         "result": result_payload,
@@ -459,6 +471,6 @@ def derive_scalar(
         "formula": formula,
         "jacobian": jacobian.tolist(),
         "uncertainty_model": normalized_uncertainty_model,
-        "calculation_status": "verified_deterministic",
+        "calculation_status": calculation_status,
     }
     return result

@@ -43,7 +43,9 @@ def test_desi_ratio_with_correlation_matches_preregistered_value() -> None:
         },
     )
 
-    assert result["calculation_status"] == "verified_deterministic"
+    assert result["calculation_status"] == "linearized_approximation"
+    assert result["result"]["uncertainty_method"] == "first_order_delta"
+    assert "first-order" in result["result"]["approximation_caveat"]
     assert result["result"]["unit"] == "dimensionless"
     assert result["result"]["value"] == pytest.approx(0.891852994, abs=1e-9)
     assert result["result"]["standard_uncertainty"] == pytest.approx(

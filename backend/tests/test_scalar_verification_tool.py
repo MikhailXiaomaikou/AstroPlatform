@@ -171,7 +171,8 @@ async def test_source_timeout_keeps_arithmetic_but_limits_attribution(
     result = await execute_scalar_verification(_input())
 
     assert result["success"] is True
-    assert result["calculation_status"] == "verified_deterministic"
+    assert result["calculation_status"] == "linearized_approximation"
+    assert any("first-order" in assumption for assumption in result["assumptions"])
     assert result["response_disposition"] == "limited"
     assert result["claim_scopes"]["derived_numeric"] is True
     assert result["claim_scopes"]["source_measurement"] is False

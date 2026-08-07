@@ -387,6 +387,7 @@ def test_postposed_heavy_negation_stays_on_deterministic_route() -> None:
     for disclaimer in (
         "A fit is not required.",
         "Fitting should not be performed.",
+        "A likelihood calculation is not required.",
     ):
         decision = classify_task_kind(
             "Compute the difference A=10 +/- 1 and B=8 +/- 2; "
@@ -396,6 +397,13 @@ def test_postposed_heavy_negation_stays_on_deterministic_route() -> None:
         assert decision["task_kind"] == "deterministic_source_check", disclaimer
         assert decision["heavy_route_allowed"] is False, disclaimer
         assert decision["direct_tool_call"] is not None, disclaimer
+
+    affirmative = classify_task_kind(
+        "Compute the difference A=10 +/- 1 and B=8 +/- 2; independent errors. "
+        "A likelihood calculation is required."
+    )
+    assert affirmative["task_kind"] == "full_research"
+    assert affirmative["heavy_route_allowed"] is True
 
 
 def test_chain_rule_homework_is_not_heavy_intent() -> None:

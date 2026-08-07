@@ -2381,6 +2381,7 @@ def _build_verified_scalar_typed_universe(
         if str(result.get("calculation_status") or "").lower() not in {
             "verified",
             "verified_deterministic",
+            "linearized_approximation",
         }:
             continue
         scopes = result.get("claim_scopes")
@@ -2430,6 +2431,7 @@ def _verified_scalar_derived_numbers(tool_results: Any) -> set[float]:
         if str(result.get("calculation_status") or "").lower() not in {
             "verified",
             "verified_deterministic",
+            "linearized_approximation",
         }:
             continue
         scopes = result.get("claim_scopes")

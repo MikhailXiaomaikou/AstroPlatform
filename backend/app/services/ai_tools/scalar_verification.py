@@ -353,6 +353,12 @@ async def execute_scalar_verification(tool_input: dict[str, Any]) -> dict[str, A
         "full" if source_measurement and not correlation_missing else "limited"
     )
     assumptions = []
+    if calculation["calculation_status"] == "linearized_approximation":
+        assumptions.append(
+            "Ratio uncertainty uses a first-order delta-method approximation; "
+            "the supplied means and covariance do not define the exact ratio "
+            "distribution."
+        )
     if uncertainty_model.get("kind") == "independent":
         assumptions.append("Input uncertainties were explicitly treated as independent.")
     if user_source_ids:
