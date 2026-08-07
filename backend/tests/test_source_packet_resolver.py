@@ -1050,6 +1050,90 @@ def test_relational_measurement_must_not_verify_exact() -> None:
         assert status != "verified_exact", text
 
 
+def test_postposed_measurement_disclaimer_must_not_verify_exact() -> None:
+    # Codex review P1 (PR #46, round 23): prefix-only negation handling let a
+    # complete-looking pair verify even when the rest of its field disclaimed
+    # that measurement.
+    claims = [
+        {
+            "id": "alpha",
+            "label": "alpha",
+            "value": 10.0,
+            "standard_uncertainty": 1.0,
+        }
+    ]
+
+    for text in (
+        "alpha = 10 +/- 1 was never measured.",
+        "alpha = 10 +/- 1 is not supported by the data.",
+        "alpha = 10 +/- 1 isn't supported by the data.",
+        "alpha = 10 +/- 1 cannot be used as a measurement.",
+    ):
+        status, _detail = match_expected_claims(
+            {"tables": [], "text": text}, claims, locator=""
+        )
+        assert status != "verified_exact", text
+
+    supported, _detail = match_expected_claims(
+        {"tables": [], "text": "alpha = 10 +/- 1 was measured."},
+        claims,
+        locator="",
+    )
+    assert supported == "verified_exact"
+
+
+def test_source_unit_must_match_for_exact_verification() -> None:
+    # Codex review P1 (PR #46, round 23): identical numeric tokens in a
+    # different unit cannot support the source measurement claim.
+    claim = {
+        "id": "alpha",
+        "label": "alpha",
+        "value": 10.0,
+        "standard_uncertainty": 1.0,
+        "unit": "Gpc",
+    }
+
+    mismatched, _detail = match_expected_claims(
+        {"tables": [], "text": "alpha = 10 +/- 1 Mpc."},
+        [claim],
+        locator="",
+    )
+    matched, _detail = match_expected_claims(
+        {"tables": [], "text": "alpha = 10 +/- 1 Gpc."},
+        [claim],
+        locator="",
+    )
+
+    assert mismatched != "verified_exact"
+    assert matched == "verified_exact"
+
+    dimensionless = dict(claim, unit="dimensionless")
+    dimensionless_conflict, _detail = match_expected_claims(
+        {"tables": [], "text": "alpha = 10 +/- 1 Mpc."},
+        [dimensionless],
+        locator="",
+    )
+    assert dimensionless_conflict != "verified_exact"
+
+    h0_claim = dict(
+        claim,
+        id="H0",
+        label="H0",
+        value=67.6,
+        standard_uncertainty=1.2,
+        unit="km/s/Mpc",
+    )
+    h0_matched, _detail = match_expected_claims(
+        {
+            "tables": [],
+            "text": "H0 = 67.6 +/- 1.2 km s^-1 Mpc^-1.",
+        },
+        [h0_claim],
+        locator="",
+    )
+    assert h0_matched == "verified_exact"
+
+
 def test_equation_locator_stops_before_the_next_equation() -> None:
     # Codex review P1 (PR #46, round 12): Equation 42 could borrow a requested
     # measurement from Equation 43 in the same section.
@@ -1205,9 +1289,11 @@ def test_cache_key_distinguishes_claim_locator_and_label() -> None:
             "standard_uncertainty": 0.177, "source_locator": "Table 4, LRG2"}
     relocated = dict(base, source_locator="Table 5, LRG2")
     relabeled = dict(base, label="D_H")
+    reunitized = dict(base, unit="Gpc")
 
     assert _cache_key(source, [base]) != _cache_key(source, [relocated])
     assert _cache_key(source, [base]) != _cache_key(source, [relabeled])
+    assert _cache_key(source, [base]) != _cache_key(source, [reunitized])
 
 
 def test_short_label_inside_unrelated_word_must_not_verify() -> None:

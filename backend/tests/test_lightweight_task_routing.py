@@ -152,6 +152,36 @@ def test_independence_must_be_stated_for_direct_tool_call() -> None:
     assert complete["direct_tool_call"]["input"]["uncertainty_model"]["kind"] == "independent"
 
 
+def test_explicitly_disclaimed_prompt_quantity_blocks_direct_call() -> None:
+    # Codex review P1 (PR #46, round 23): a syntactically complete quantity
+    # must not enter the deterministic receipt after the user rejects it.
+    from app.services.agent_runtime.prompt_routing import scalar_call_echo_violation
+
+    valid_prompt = (
+        "Compute the difference A=10 +/- 1 and B=8 +/- 2; "
+        "independent errors."
+    )
+    valid_input = classify_task_kind(valid_prompt)["direct_tool_call"]["input"]
+    for disclaimed_prompt in (
+        "Compute the difference A=10 +/- 1, which should not be used, "
+        "and B=8 +/- 2; independent errors.",
+        "Compute the difference; do not use A=10 +/- 1, and "
+        "B=8 +/- 2; independent errors.",
+    ):
+        decision = classify_task_kind(disclaimed_prompt)
+
+        assert decision["task_kind"] == "deterministic_source_check"
+        assert decision["direct_tool_call"] is None
+        assert "quantities" in decision["missing_inputs"]
+        assert scalar_call_echo_violation(valid_input, disclaimed_prompt) is not None
+
+    unrelated_later_disclaimer = classify_task_kind(
+        "Compute the difference A=10 +/- 1 and B=8 +/- 2; "
+        "independent errors. The unrelated calibration should not be used."
+    )
+    assert unrelated_later_disclaimer["direct_tool_call"] is not None
+
+
 def test_negated_independence_blocks_direct_and_fallback_calls() -> None:
     # Codex review P1 (PR #46, round 16): a bare keyword search interpreted
     # "do not assume independent errors" as permission to assume them.

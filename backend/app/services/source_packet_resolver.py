@@ -1181,6 +1181,38 @@ _NON_EXACT_MEASUREMENT_ASSIGNMENT = re.compile(
     r"(?:upper|lower)\s+(?:limit|bound))\b",
     re.I,
 )
+_POSTPOSED_MEASUREMENT_DISCLAIMER = re.compile(
+    r"\b(?:is|are|was|were|has|have|had|should|must|can|could|may|might|"
+    r"will|would)\s+"
+    r"(?:(?:explicitly|directly|clearly|statistically|currently)\s+){0,2}"
+    r"(?:not(?!\s+only)|never)\s+(?:(?:be|have\s+been)\s+)?"
+    r"(?:measured|reported|supported|used|included|adopted|accepted|"
+    r"validated|trusted|established|confirmed)\b|"
+    r"\b(?:(?:is|are|was|were|has|have|had|should|must|can|could|may|"
+    r"might|will|would)n['’]t|cannot)\s+"
+    r"(?:(?:be|have\s+been)\s+)?"
+    r"(?:measured|reported|supported|used|included|adopted|accepted|"
+    r"validated|trusted|established|confirmed)\b|"
+    r"\b(?:is|are|was|were)\s+"
+    r"(?:(?:explicitly|directly|clearly)\s+)?"
+    r"(?:unsupported|unmeasured|excluded|discarded|retracted|withdrawn|invalid)\b|"
+    r"\b(?:should|must)\s+be\s+(?:ignored|discarded|excluded|rejected)\b",
+    re.I,
+)
+_SOURCE_H0_UNIT = re.compile(
+    r"(?<![a-z0-9])km\s*"
+    r"(?:(?:/\s*s)|s\s*(?:\^?\s*\{?\s*[-−]\s*1\s*\}?|⁻¹))\s*"
+    r"(?:/\s*)?mpc"
+    r"(?:\s*(?:\^?\s*\{?\s*[-−]\s*1\s*\}?|⁻¹))?"
+    r"(?![a-z0-9])",
+    re.I,
+)
+_SOURCE_DISTANCE_UNIT = re.compile(
+    r"(?<![a-z0-9])(?P<base>gpc|mpc|kpc|pc)"
+    r"(?P<inverse>\s*(?:\^?\s*\{?\s*[-−]\s*1\s*\}?|⁻¹))?"
+    r"(?![a-z0-9])",
+    re.I,
+)
 
 
 def _measurement_assignment_is_non_exact(
@@ -1195,6 +1227,53 @@ def _measurement_assignment_is_non_exact(
     if last_comma >= 0:
         governing_text = governing_text[last_comma + 1 :]
     return _NON_EXACT_MEASUREMENT_ASSIGNMENT.search(governing_text) is not None
+
+
+def _measurement_suffix_is_non_exact(field_suffix: str) -> bool:
+    """Reject a value/uncertainty pair disclaimed later in its own field."""
+    return _POSTPOSED_MEASUREMENT_DISCLAIMER.search(field_suffix) is not None
+
+
+def _source_units(field: str) -> set[str]:
+    """Recognize the conservative unit vocabulary accepted by scalar inputs."""
+    from app.services.scalar_derivation import normalize_unit
+
+    units: set[str] = set()
+    composite_spans: list[tuple[int, int]] = []
+    for match in _SOURCE_H0_UNIT.finditer(field):
+        composite_spans.append(match.span())
+        units.add("km s^-1 Mpc^-1")
+    for match in _SOURCE_DISTANCE_UNIT.finditer(field):
+        if any(
+            start <= match.start() and match.end() <= end
+            for start, end in composite_spans
+        ):
+            continue
+        unit = normalize_unit(match.group("base"))
+        if match.group("inverse"):
+            unit = f"{unit}^-1"
+        units.add(unit)
+    return units
+
+
+def _measurement_unit_matches(claim_unit: Any, field: str) -> bool:
+    """Require a claim's unit to agree with its bounded source field."""
+    from app.services.scalar_derivation import normalize_unit
+
+    expected = normalize_unit(claim_unit)
+    detected = _source_units(field)
+    if expected == "dimensionless":
+        return not detected
+    if detected:
+        return detected == {expected}
+    # Unknown units are accepted only as their own complete literal token;
+    # recognized but different physical units have already failed above.
+    literal = _compact_text(expected)
+    if not literal:
+        return False
+    return re.search(
+        rf"(?<![a-z0-9]){re.escape(literal)}(?![a-z0-9])", field, re.I
+    ) is not None
 
 
 def _value_positions(value: float, window: str) -> list[int]:
@@ -1284,15 +1363,16 @@ def _values_follow_label_order(
                 window, label_position, position
             ):
                 continue
+            value_token = _GENERIC_NUMBER_TOKEN.match(window, position)
+            if value_token is None:
+                continue
+            measurement_end = value_token.end()
             # Codex review P1 (PR #46, round 6): the uncertainty must be
             # bound to its own value — it has to be the immediately
             # following numeric token, as in "17.351 +/- 0.177". A swapped
             # pair like "alpha 10 +/- 2" fails here instead of matching
             # window-wide.
             if uncertainty is not None:
-                value_token = _GENERIC_NUMBER_TOKEN.match(window, position)
-                if value_token is None:
-                    continue
                 following = _GENERIC_NUMBER_TOKEN.search(
                     window, value_token.end()
                 )
@@ -1308,6 +1388,23 @@ def _values_follow_label_order(
                     uncertainty, window
                 ):
                     continue
+                measurement_end = following.end()
+            field_limit = upper_bound if upper_bound is not None else len(window)
+            # Codex review P1 (PR #46, round 23): a suffix in the same field
+            # can disclaim a syntactically complete pair ("was never
+            # measured", "is not supported"). Prefix-only inspection is not
+            # enough to grant verified_exact.
+            if _measurement_suffix_is_non_exact(
+                window[measurement_end:field_limit]
+            ):
+                continue
+            # A numeric match in Mpc cannot support a Gpc claim. Require the
+            # normalized source unit inside this exact label/value field; an
+            # implicit dimensionless claim fails if a physical unit is shown.
+            if not _measurement_unit_matches(
+                claim.get("unit"), window[label_position:field_limit]
+            ):
+                continue
             chosen = position
             break
         if chosen is None:
@@ -1565,6 +1662,8 @@ def _cache_key(source: NormalizedSource, expected_claims: list[dict[str, Any]]) 
     # consumes must be part of the digest — id AND label AND the per-claim
     # source_locator — or a result verified for one attribution is replayed
     # for a different one straight from the cache.
+    from app.services.scalar_derivation import normalize_unit
+
     claims_digest = hashlib.sha256(
         repr(
             sorted(
@@ -1573,13 +1672,14 @@ def _cache_key(source: NormalizedSource, expected_claims: list[dict[str, Any]]) 
                     str(claim.get("label") or ""),
                     claim.get("value"),
                     claim.get("standard_uncertainty"),
+                    normalize_unit(claim.get("unit")),
                     str(claim.get("source_locator") or ""),
                 )
                 for claim in expected_claims
             )
         ).encode("utf-8")
     ).hexdigest()[:16]
-    return f"lightweight_source_v6:{source.kind}:{source.identifier}:{source.locator}:{claims_digest}"
+    return f"lightweight_source_v7:{source.kind}:{source.identifier}:{source.locator}:{claims_digest}"
 
 
 async def resolve_source(

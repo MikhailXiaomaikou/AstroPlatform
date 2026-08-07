@@ -272,6 +272,29 @@ _SCALAR_QUANTITY_RE = re.compile(
     rf"\s*(?P<unit>{_H0_UNIT}|Mpc|Gpc|kpc|pc)?",
     re.I,
 )
+_PROMPT_QUANTITY_DISCLAIMER = re.compile(
+    r"\b(?:is|are|was|were|has|have|had|should|must|can|could|may|might|"
+    r"will|would)\s+"
+    r"(?:(?:explicitly|directly|clearly|currently)\s+){0,2}"
+    r"(?:not(?!\s+only)|never)\s+(?:(?:be|have\s+been)\s+)?"
+    r"(?:used|included|adopted|accepted|trusted|reported|supported|"
+    r"measured|validated)\b|"
+    r"\b(?:(?:is|are|was|were|has|have|had|should|must|can|could|may|"
+    r"might|will|would)n['’]t|cannot)\s+"
+    r"(?:(?:be|have\s+been)\s+)?"
+    r"(?:used|included|adopted|accepted|trusted|reported|supported|"
+    r"measured|validated)\b|"
+    r"\b(?:is|are|was|were)\s+"
+    r"(?:invalid|disclaimed|retracted|withdrawn|excluded|discarded)\b|"
+    r"\b(?:should|must)\s+be\s+(?:ignored|discarded|excluded|rejected)\b",
+    re.I,
+)
+_PROMPT_QUANTITY_PREFIX_REJECTION = re.compile(
+    r"\b(?:(?:do\s+not|don't|never)\s+"
+    r"(?:use|include|adopt|accept|trust)|"
+    r"(?:ignore|discard|exclude|reject))\s*$",
+    re.I,
+)
 
 
 def _canonical_scalar_label(label: Any) -> str:
@@ -290,10 +313,47 @@ def _repeated_scalar_labels(text: str) -> list[str]:
     return repeated
 
 
+def _scalar_quantity_match_is_disclaimed(
+    text: str,
+    match: re.Match[str],
+    *,
+    next_match_start: int,
+) -> bool:
+    sentence_start = max(
+        text.rfind(separator, 0, match.start())
+        for separator in (".", ";", "。", "；", "\n")
+    )
+    prefix = text[sentence_start + 1 : match.start()]
+    if _PROMPT_QUANTITY_PREFIX_REJECTION.search(prefix):
+        return True
+    # A disclaimer in a later sentence may concern an unrelated calibration;
+    # it must not retroactively reject this assignment. Keep the suffix local
+    # to the current sentence and, for multiple quantities, the next scalar.
+    sentence_ends = [
+        position
+        for separator in (".", "。", "\n")
+        if (position := text.find(separator, match.end())) >= 0
+    ]
+    suffix_end = min(next_match_start, min(sentence_ends, default=len(text)))
+    suffix = text[match.end() : suffix_end]
+    return _PROMPT_QUANTITY_DISCLAIMER.search(suffix) is not None
+
+
 def _scalar_quantities_from_prompt(text: str) -> list[dict[str, Any]]:
     quantities: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for match in _SCALAR_QUANTITY_RE.finditer(text):
+    matches = list(_SCALAR_QUANTITY_RE.finditer(text))
+    for index, match in enumerate(matches):
+        next_match_start = (
+            matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        )
+        # Codex review P1 (PR #46, round 23): a complete-looking assignment
+        # explicitly rejected by the user must not feed either the direct
+        # verifier or the model-call echo allowlist.
+        if _scalar_quantity_match_is_disclaimed(
+            text, match, next_match_start=next_match_start
+        ):
+            continue
         label = match.group("label")
         if label.lower() in {"rho", "ρ"}:
             continue
