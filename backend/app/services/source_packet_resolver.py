@@ -742,6 +742,63 @@ def _number_token_present(token: str, window: str) -> bool:
     return re.search(pattern, window) is not None
 
 
+def _value_positions(value: float, window: str) -> list[int]:
+    """Start offsets of boundary-valid occurrences of the value in the window."""
+    positions: set[int] = set()
+    for token in _number_tokens(value):
+        token = token.lower()
+        value_preserving_suffix = "0*" if "." in token else r"(?:\.0+)?"
+        pattern = (
+            rf"(?<![0-9.eE+−-]){re.escape(token)}{value_preserving_suffix}"
+            rf"(?!\.?[0-9]|[eE][-+]?[0-9])"
+        )
+        positions.update(match.start() for match in re.finditer(pattern, window))
+    return sorted(positions)
+
+
+def _values_follow_label_order(
+    expected_claims: list[dict[str, Any]], window: str
+) -> bool:
+    """Require value order to be assignable consistently with label order.
+
+    Codex review P1 (PR #46, round 5): labels and numbers were checked as two
+    independent window-wide sets, so permuting values between labels still
+    verified. Sorting the labeled claims by their first label occurrence and
+    greedily assigning each claim's value to a strictly later position
+    accepts both prose ("Planck ... 67.36 ... SH0ES ... 73.04") and
+    column-major table rows, while rejecting swapped assignments. A prose
+    order reversed relative to the label order fails toward
+    resolved_unmatched, which is the safe direction.
+    """
+    ordered: list[tuple[int, dict[str, Any]]] = []
+    for claim in expected_claims:
+        labels = _label_tokens(claim.get("label") or claim.get("id"))
+        if not labels:
+            continue
+        label_positions = [
+            window.find(label) for label in labels if window.find(label) >= 0
+        ]
+        if not label_positions:
+            continue
+        ordered.append((min(label_positions), claim))
+    if len(ordered) < 2:
+        return True
+    ordered.sort(key=lambda item: item[0])
+    cursor = -1
+    for _, claim in ordered:
+        try:
+            value = float(claim["value"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        candidates = [
+            position for position in _value_positions(value, window) if position > cursor
+        ]
+        if not candidates:
+            return False
+        cursor = candidates[0]
+    return True
+
+
 def match_expected_claims(
     document: dict[str, Any], expected_claims: list[dict[str, Any]], *, locator: str
 ) -> tuple[str, dict[str, Any]]:
@@ -789,7 +846,11 @@ def match_expected_claims(
             )
             all_labels = all_labels and label_match
             all_numbers = all_numbers and number_match
-        if all_labels and all_numbers:
+        if (
+            all_labels
+            and all_numbers
+            and _values_follow_label_order(expected_claims, window)
+        ):
             return "verified_exact", {"reason": "labels_and_values_same_window"}
     if label_seen:
         return "conflict", {"reason": "labels_found_values_differ_or_missing"}
@@ -954,19 +1015,25 @@ async def _resolve_uncached(
 
 
 def _cache_key(source: NormalizedSource, expected_claims: list[dict[str, Any]]) -> str:
+    # Codex review P1 (PR #46, round 5): every field match_expected_claims
+    # consumes must be part of the digest — id AND label AND the per-claim
+    # source_locator — or a result verified for one attribution is replayed
+    # for a different one straight from the cache.
     claims_digest = hashlib.sha256(
         repr(
             sorted(
                 (
-                    str(claim.get("id") or claim.get("label") or ""),
+                    str(claim.get("id") or ""),
+                    str(claim.get("label") or ""),
                     claim.get("value"),
                     claim.get("standard_uncertainty"),
+                    str(claim.get("source_locator") or ""),
                 )
                 for claim in expected_claims
             )
         ).encode("utf-8")
     ).hexdigest()[:16]
-    return f"lightweight_source_v5:{source.kind}:{source.identifier}:{source.locator}:{claims_digest}"
+    return f"lightweight_source_v6:{source.kind}:{source.identifier}:{source.locator}:{claims_digest}"
 
 
 async def resolve_source(

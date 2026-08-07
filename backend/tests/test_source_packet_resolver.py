@@ -531,3 +531,53 @@ def test_matching_claim_level_locator_still_verifies_exact() -> None:
 
     assert status == "verified_exact"
     assert detail["reason"] == "labels_and_values_same_window"
+
+
+def test_permuted_label_value_pairs_must_not_verify_exact() -> None:
+    # Codex review P1 (PR #46, round 5): labels and numbers were collected as
+    # independent window-wide sets, so alpha=10±1, beta=20±2 verified against
+    # a row stating alpha=20±2, beta=10±1.
+    document = {
+        "final_url": "https://ar5iv.labs.arxiv.org/html/2503.14738",
+        "mime": "text/html",
+        "sha256": "a" * 64,
+        "extraction_method": "ar5iv_html",
+        "tables": [
+            {
+                "label": "Table 4",
+                "caption": "parameters",
+                "columns": [],
+                "rows": [["LRG2 alpha 20 +/- 2 beta 10 +/- 1"]],
+            }
+        ],
+        "text": "",
+    }
+    claims = [
+        {"id": "alpha", "label": "alpha", "value": 10.0, "standard_uncertainty": 1.0},
+        {"id": "beta", "label": "beta", "value": 20.0, "standard_uncertainty": 2.0},
+    ]
+
+    status, _detail = match_expected_claims(
+        document, claims, locator="Table 4, LRG2"
+    )
+
+    assert status != "verified_exact"
+
+
+def test_cache_key_distinguishes_claim_locator_and_label() -> None:
+    # Codex review P1 (PR #46, round 5): the claims digest omitted
+    # source_locator (and label whenever id exists), so a verified result
+    # cached for Table 4 was replayed for the same numbers attributed to
+    # Table 5 or to a different label.
+    from app.services.source_packet_resolver import _cache_key, normalize_source
+
+    source = normalize_source(
+        {"id": "s1", "kind": "arxiv", "identifier": "2503.14738", "locator": "Table 4"}
+    )
+    base = {"id": "q1", "label": "D_M", "value": 17.351,
+            "standard_uncertainty": 0.177, "source_locator": "Table 4, LRG2"}
+    relocated = dict(base, source_locator="Table 5, LRG2")
+    relabeled = dict(base, label="D_H")
+
+    assert _cache_key(source, [base]) != _cache_key(source, [relocated])
+    assert _cache_key(source, [base]) != _cache_key(source, [relabeled])

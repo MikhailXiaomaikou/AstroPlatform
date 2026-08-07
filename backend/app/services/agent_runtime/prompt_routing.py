@@ -348,6 +348,18 @@ def _deterministic_tool_call_from_prompt(
     missing: list[str] = []
     if operation is None:
         missing.append("operation")
+    # Codex review P2 (PR #46, round 5): with two distinct primary citations
+    # the compact prompt parser cannot know which quantity belongs to which
+    # paper; binding everything to references[:1] could verify the wrong
+    # paper. Abstain on the ambiguity instead (mirror URLs of a single arXiv
+    # id do not count as a second paper).
+    primary_identifiers = {
+        (reference["kind"], reference["identifier"])
+        for reference in references
+        if reference["kind"] in ("arxiv", "doi", "zenodo")
+    }
+    if len(primary_identifiers) > 1:
+        missing.append("unambiguous_source_mapping")
     required_count = 2
     if len(quantities) < required_count:
         missing.append("quantities")

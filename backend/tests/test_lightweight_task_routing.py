@@ -239,3 +239,33 @@ def test_prompt_leading_operation_word_is_recognized() -> None:
     assert decision["task_kind"] == "deterministic_source_check"
     assert decision["requested_operation"] == "product"
     assert decision["direct_tool_call"] is not None
+
+
+def test_two_distinct_papers_make_source_mapping_ambiguous() -> None:
+    # Codex review P2 (PR #46, round 5): references[:1] silently discarded a
+    # second cited paper and bound every quantity to the first, so a
+    # cross-paper comparison could be verified against the wrong paper.
+    decision = classify_task_kind(
+        "Ratio of D_M/r_d = 17.351 +/- 0.177 (arXiv:2503.14738 Table 4 LRG2) "
+        "to D_H/r_d = 19.455 +/- 0.330 (arXiv:2503.14452 Table 5), "
+        "with a correlation of -0.404."
+    )
+
+    assert decision["task_kind"] == "deterministic_source_check"
+    assert decision["direct_tool_call"] is None
+    assert "unambiguous_source_mapping" in decision["missing_inputs"]
+
+
+def test_single_paper_with_mirror_url_still_builds_direct_call() -> None:
+    # Guard: one arXiv id plus its non-arXiv mirror URL (the V02_03 pattern)
+    # is a single-paper citation and must keep the deterministic call.
+    decision = classify_task_kind(
+        "Using arXiv:2503.14452 (official PDF: "
+        "https://act.princeton.edu/sites/g/files/toruqf1171/files/documents/act_dr6_lcdm.pdf), "
+        "Equation 42, compute the difference between ACT_EE_H0=67.6 +/- 1.2 "
+        "km/s/Mpc and fixed_reference_H0=73 +/- 0 km/s/Mpc. Assume "
+        "independent errors."
+    )
+
+    assert decision["task_kind"] == "deterministic_source_check"
+    assert decision["direct_tool_call"] is not None
