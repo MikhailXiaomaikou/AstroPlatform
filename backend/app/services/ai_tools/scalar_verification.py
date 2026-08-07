@@ -123,7 +123,15 @@ def _source_expected_claims(
     quantities: list[dict[str, Any]],
     uncertainty_model: dict[str, Any],
     sources: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], bool]:
+    """Expected paper claims plus whether a matrix attribution is unmatchable.
+
+    Codex review P1 (PR #46, round 3): only the 2x2 correlation-matrix shape
+    can be matched against the paper text. Any other source-attributed
+    uncertainty matrix (covariance kind, larger correlation) must be flagged
+    so the caller caps the aggregate below verified_exact instead of letting
+    unchecked matrix values ride along on the quantities' match.
+    """
     user_source_ids = {
         str(source.get("id") or "")
         for source in sources
@@ -136,23 +144,30 @@ def _source_expected_claims(
     ]
     source_ref = str(uncertainty_model.get("source_ref") or "").strip()
     matrix = uncertainty_model.get("matrix")
-    if (
-        uncertainty_model.get("kind") == "correlation_matrix"
-        and source_ref
-        and isinstance(matrix, list)
-        and len(matrix) == 2
-        and all(isinstance(row, list) and len(row) == 2 for row in matrix)
-    ):
-        claims.append(
-            {
-                "id": "correlation",
-                "label": "rho",
-                "value": matrix[0][1],
-                "standard_uncertainty": None,
-                "source_ref": source_ref,
-            }
-        )
-    return claims
+    matrix_attribution_unverifiable = False
+    has_matrix_attribution = (
+        uncertainty_model.get("kind") in ("correlation_matrix", "covariance_matrix")
+        or matrix is not None
+    )
+    if source_ref and source_ref not in user_source_ids and has_matrix_attribution:
+        if (
+            uncertainty_model.get("kind") == "correlation_matrix"
+            and isinstance(matrix, list)
+            and len(matrix) == 2
+            and all(isinstance(row, list) and len(row) == 2 for row in matrix)
+        ):
+            claims.append(
+                {
+                    "id": "correlation",
+                    "label": "rho",
+                    "value": matrix[0][1],
+                    "standard_uncertainty": None,
+                    "source_ref": source_ref,
+                }
+            )
+        else:
+            matrix_attribution_unverifiable = True
+    return claims, matrix_attribution_unverifiable
 
 
 def _aggregate_source_status(
@@ -164,11 +179,16 @@ def _aggregate_source_status(
         if str(source.get("id") or "") in referenced_source_ids
     ]
     statuses = {str(source.get("status") or "unavailable") for source in relevant}
+    # Codex review P1 (PR #46, round 3): a referenced source with no evidence
+    # record at all must count as missing, not silently drop out of the
+    # aggregation and leave verified_exact standing on the rest.
+    covered_ids = {str(source.get("id") or "") for source in relevant}
+    missing_ids = referenced_source_ids - covered_ids
     if "conflict" in statuses:
         return "conflict"
-    if relevant and statuses == {"verified_exact"}:
+    if relevant and not missing_ids and statuses == {"verified_exact"}:
         return "verified_exact"
-    if "unavailable" in statuses:
+    if "unavailable" in statuses or missing_ids:
         return "unavailable"
     if "resolved_unmatched" in statuses:
         return "resolved_unmatched"
@@ -273,9 +293,12 @@ async def execute_scalar_verification(tool_input: dict[str, Any]) -> dict[str, A
         return receipt
 
     source_error: SourceResolutionError | None = None
+    _expected_claims, matrix_attribution_unverifiable = _source_expected_claims(
+        quantities, uncertainty_model, sources
+    )
     try:
         source_evidence = await resolve_sources(
-            sources, _source_expected_claims(quantities, uncertainty_model, sources)
+            sources, _expected_claims
         )
     except SourceResolutionError as exc:
         source_error = exc
@@ -299,6 +322,11 @@ async def execute_scalar_verification(tool_input: dict[str, Any]) -> dict[str, A
         if source_error
         else _aggregate_source_status(source_evidence, referenced_source_ids)
     )
+    if matrix_attribution_unverifiable and source_status == "verified_exact":
+        # The quantities matched, but the source-attributed uncertainty matrix
+        # has a shape we cannot match against the paper — the attribution as a
+        # whole is not exact.
+        source_status = "resolved_unmatched"
     source_measurement = source_status == "verified_exact"
     nonzero_uncertainty_count = sum(
         1

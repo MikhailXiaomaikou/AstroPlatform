@@ -221,3 +221,40 @@ def test_feature_flag_controls_tool_visibility(monkeypatch) -> None:
         "compare_luminosity_distances",
         "verify_scalar_derivation",
     }
+
+
+def test_aggregate_requires_evidence_for_every_referenced_source() -> None:
+    # Codex review P1 (PR #46, round 3): a referenced source with no evidence
+    # record at all must not vanish from the aggregation and leave
+    # verified_exact standing on the sources that happened to resolve.
+    from app.services.ai_tools.scalar_verification import _aggregate_source_status
+
+    status = _aggregate_source_status(
+        [{"id": "A", "status": "verified_exact"}],
+        {"A", "B"},
+    )
+
+    assert status != "verified_exact"
+
+
+def test_unsupported_uncertainty_matrix_attribution_is_not_verified_exact() -> None:
+    # Codex review P1 (PR #46, round 3): only the 2x2 correlation matrix shape
+    # is matchable against the paper; any other source-attributed uncertainty
+    # matrix must flag as unverifiable instead of riding along on the
+    # quantities' verified_exact.
+    from app.services.ai_tools.scalar_verification import _source_expected_claims
+
+    _claims_out, unverifiable = _source_expected_claims(
+        [
+            {"id": "a", "label": "A", "value": 1.0, "standard_uncertainty": 0.1, "source_ref": "s1"},
+            {"id": "b", "label": "B", "value": 2.0, "standard_uncertainty": 0.2, "source_ref": "s1"},
+        ],
+        {
+            "kind": "covariance_matrix",
+            "matrix": [[0.01, 0.002], [0.002, 0.04]],
+            "source_ref": "s1",
+        },
+        [{"id": "s1", "kind": "arxiv", "identifier": "2503.14738"}],
+    )
+
+    assert unverifiable is True

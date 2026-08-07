@@ -68,6 +68,64 @@ def _normalized_task_text(text: str) -> str:
     return re.sub(r"\s+", " ", normalized).strip()
 
 
+_VERB_NEGATOR = re.compile(
+    r"\b(?:do\s+not|don't|does\s+not|cannot|can't|must\s+not|never|not)\b|"
+    r"不要|不得|不能|别",
+    re.I,
+)
+_NOUN_NEGATOR = re.compile(
+    r"\b(?:without|avoid|exclude|excluding)\b|无需|不需要|避免|排除|不是|并非",
+    re.I,
+)
+_EXECUTION_VERB = re.compile(
+    r"\b(?:run|rerun|re-run|running|execute|executing|launch|perform|compute)\b|"
+    r"跑|执行|运行",
+    re.I,
+)
+_CLAUSE_BOUNDARY = re.compile(r"[,:，：]")
+
+
+def _prefix_negates(prefix: str) -> bool:
+    """Whether the sentence prefix negates a heavy match right after it.
+
+    Codex review P1 (PR #46, round 3): a negation anywhere in the sentence
+    used to negate every later heavy signal, so "Don't explain it, execute
+    the cosmology chain" lost its tools. Scope rules:
+
+    - The LAST negator in the prefix governs.
+    - No clause boundary between negator and match: negated (covers
+      "Do not run a likelihood." and "without running a fit").
+    - Boundary present, verb negator: negated only when an execution verb
+      occurs before the first boundary — a negated imperative whose object
+      list runs across commas ("Do not run a likelihood, fit, sampler").
+    - Boundary present, noun negator: not negated — its scope ends with its
+      clause ("Without approximations, run a Planck likelihood fit").
+
+    Known limitation, deliberately accepted: a parenthetical between the
+    negator and its verb ("Do not, under any circumstances, run the chain")
+    reads as active; the paraphrase-variant suite probes this class.
+    """
+    last_negator: re.Match[str] | None = None
+    negator_is_verb = False
+    for candidate in _VERB_NEGATOR.finditer(prefix):
+        if last_negator is None or candidate.start() >= last_negator.start():
+            last_negator = candidate
+            negator_is_verb = True
+    for candidate in _NOUN_NEGATOR.finditer(prefix):
+        if last_negator is None or candidate.start() > last_negator.start():
+            last_negator = candidate
+            negator_is_verb = False
+    if last_negator is None:
+        return False
+    tail = prefix[last_negator.end() :]
+    boundary = _CLAUSE_BOUNDARY.search(tail)
+    if boundary is None:
+        return True
+    if not negator_is_verb:
+        return False
+    return bool(_EXECUTION_VERB.search(tail[: boundary.start()]))
+
+
 def _active_and_negated_heavy_signals(text: str) -> tuple[list[str], list[str]]:
     matched: list[str] = []
     negated: list[str] = []
@@ -80,7 +138,7 @@ def _active_and_negated_heavy_signals(text: str) -> tuple[list[str], list[str]]:
                 for separator in (".", ";", "。", "；", "\n")
             )
             prefix = text[sentence_start + 1 : match.start()]
-            if _NEGATION_TOKEN.search(prefix):
+            if _prefix_negates(prefix):
                 was_negated = True
             else:
                 active = True

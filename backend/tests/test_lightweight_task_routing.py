@@ -180,3 +180,46 @@ def test_chain_rule_homework_is_not_heavy_intent() -> None:
     )
 
     assert decision["task_kind"] != "full_research"
+
+
+def test_negation_of_unrelated_clause_does_not_negate_chain_execution() -> None:
+    # Codex review P1 (PR #46, round 3): a negation anywhere earlier in the
+    # sentence negated every later heavy signal, so "Don't explain it,
+    # execute the cosmology chain" was classified general and lost its tools.
+    decision = classify_task_kind(
+        "Don't explain it, execute the cosmology chain with Planck"
+    )
+
+    assert decision["task_kind"] == "full_research"
+    assert decision["heavy_route_allowed"] is True
+
+
+def test_noun_negation_in_leading_clause_does_not_negate_run_request() -> None:
+    decision = classify_task_kind(
+        "Without approximations, run a Planck likelihood fit"
+    )
+
+    assert decision["task_kind"] == "full_research"
+    assert decision["heavy_route_allowed"] is True
+
+
+def test_negated_list_of_heavy_terms_stays_negated_across_commas() -> None:
+    decision = classify_task_kind(
+        "Use arXiv:2503.14738 Table 4 LRG2 to recompute D_M/D_H. "
+        "D_M/r_d=17.351 +/- 0.177 and D_H/r_d=19.455 +/- 0.330, rho=-0.404. "
+        "Do not run a likelihood, fit, sampler, or posterior of any kind."
+    )
+
+    assert decision["task_kind"] == "deterministic_source_check"
+    assert decision["heavy_route_allowed"] is False
+
+
+def test_gerund_noun_negation_stays_negated_in_clause() -> None:
+    decision = classify_task_kind(
+        "Use arXiv:2503.14738 Table 4 LRG2 to recompute D_M/D_H. "
+        "D_M/r_d=17.351 +/- 0.177 and D_H/r_d=19.455 +/- 0.330, rho=-0.404. "
+        "Report it without running a likelihood fit."
+    )
+
+    assert decision["task_kind"] == "deterministic_source_check"
+    assert decision["heavy_route_allowed"] is False

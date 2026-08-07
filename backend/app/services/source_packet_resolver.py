@@ -724,8 +724,11 @@ def _number_token_present(token: str, window: str) -> bool:
     ``.0…`` tail after an integer token (73 matches 73.0 but never 73.04).
     """
     value_preserving_suffix = "0*" if "." in token else r"(?:\.0+)?"
+    # Codex review P1 (PR #46, round 3): also reject exponent continuations —
+    # supplied 17 must not match the source text 17e2.
     pattern = (
-        rf"(?<![0-9.eE+−-]){re.escape(token)}{value_preserving_suffix}(?!\.?[0-9])"
+        rf"(?<![0-9.eE+−-]){re.escape(token)}{value_preserving_suffix}"
+        rf"(?!\.?[0-9]|[eE][-+]?[0-9])"
     )
     return re.search(pattern, window) is not None
 
