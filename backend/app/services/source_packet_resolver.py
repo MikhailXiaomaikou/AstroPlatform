@@ -700,8 +700,14 @@ def _label_tokens(label: Any) -> set[str]:
     for key, values in aliases.items():
         if compact == key:
             return values
-    words = {word for word in re.split(r"[^a-z0-9ρ]+", text) if len(word) >= 2}
-    return words or ({compact} if compact else set())
+    words = [word for word in re.split(r"[^a-z0-9ρ]+", text) if len(word) >= 2]
+    # Codex review P1 (PR #46, round 10): generic multiword labels are one
+    # semantic name, not a bag of independently sufficient common words.
+    # Known aliases above remain explicit alternatives; every other label
+    # must occur as its complete normalized phrase.
+    if len(words) > 1:
+        return {" ".join(words)}
+    return set(words) or ({compact} if compact else set())
 
 
 def _compact_text(value: Any) -> str:
@@ -948,8 +954,10 @@ def _number_token_present(token: str, window: str) -> bool:
 
 
 _GENERIC_NUMBER_TOKEN = re.compile(
-    r"(?<![0-9.eE+−-])[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?(?!\.?[0-9]|[eE][-+]?[0-9])"
+    r"(?<![0-9.eE+−-])[-+−]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?"
+    r"(?!\.?[0-9]|[eE][-+]?[0-9])"
 )
+_UNCERTAINTY_BINDING = re.compile(r"\s*(?:±|\+/-|\+-|\\pm)\s*", re.I)
 
 
 def _value_positions(value: float, window: str) -> list[int]:
@@ -997,7 +1005,7 @@ def _values_follow_label_order(
         return True
     ordered.sort(key=lambda item: item[0])
     cursor = -1
-    for _, claim in ordered:
+    for label_position, claim in ordered:
         try:
             value = float(claim["value"])
         except (KeyError, TypeError, ValueError):
@@ -1009,7 +1017,9 @@ def _values_follow_label_order(
             uncertainty = None
         chosen: int | None = None
         for position in _value_positions(value, window):
-            if position <= cursor:
+            # Codex review P1 (PR #46, round 10): a measurement cannot be
+            # assigned to a label introduced only later in the row/prose.
+            if position <= max(cursor, label_position):
                 continue
             # Codex review P1 (PR #46, round 6): the uncertainty must be
             # bound to its own value — it has to be the immediately
@@ -1017,10 +1027,19 @@ def _values_follow_label_order(
             # pair like "alpha 10 +/- 2" fails here instead of matching
             # window-wide.
             if uncertainty is not None:
+                value_token = _GENERIC_NUMBER_TOKEN.match(window, position)
+                if value_token is None:
+                    continue
                 following = _GENERIC_NUMBER_TOKEN.search(
-                    window, position + len(f"{value:g}")
+                    window, value_token.end()
                 )
                 if following is None:
+                    continue
+                # Codex review P1 (PR #46, round 10): the next number is not
+                # automatically an uncertainty.  Require an explicit
+                # plus/minus marker with no intervening prose or field.
+                binding = window[value_token.end() : following.start()]
+                if _UNCERTAINTY_BINDING.fullmatch(binding) is None:
                     continue
                 if following.start() not in _value_positions(
                     uncertainty, window
@@ -1040,9 +1059,39 @@ def match_expected_claims(
     """Require every label and numeric value to coexist in one source window."""
     if not expected_claims:
         return "resolved_unmatched", {"reason": "no_expected_claims"}
-    windows = _candidate_windows(document, locator)
-    label_seen = False
     compact_source_locator = _compact_text(locator)
+    claim_locators = {
+        str(claim.get("source_locator") or "").strip()
+        for claim in expected_claims
+        if str(claim.get("source_locator") or "").strip()
+    }
+    if len(claim_locators) > 1:
+        return "conflict", {"reason": "claims_use_different_source_locators"}
+    effective_locator = locator
+    if claim_locators:
+        claim_locator = next(iter(claim_locators))
+        compact_claim_locator = _compact_text(claim_locator)
+        if compact_claim_locator != compact_source_locator:
+            source_fragments = [
+                part.strip()
+                for part in compact_source_locator.split(",")
+                if part.strip()
+            ]
+            if compact_source_locator and not all(
+                _locator_fragment_present(fragment, compact_claim_locator)
+                for fragment in source_fragments
+            ):
+                return "conflict", {
+                    "reason": "claim_locator_conflicts_with_source_locator"
+                }
+            # Codex review P1 (PR #46, round 10): a more specific claim-level
+            # locator must scope candidate construction before any label/value
+            # matching.  Treating it as a later table-wide predicate can pair
+            # an LRG2 locator with LRG1 measurements.
+            effective_locator = claim_locator
+    windows = _candidate_windows(document, effective_locator)
+    label_seen = False
+    compact_source_locator = _compact_text(effective_locator)
     for window in windows:
         all_labels = True
         all_numbers = True

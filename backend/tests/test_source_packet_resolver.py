@@ -749,6 +749,115 @@ def test_row_locator_token_must_not_match_a_longer_row_name() -> None:
     assert status != "verified_exact"
 
 
+def test_value_before_its_label_must_not_verify_exact() -> None:
+    # Codex review P1 (PR #46, round 10): value ordering was enforced only
+    # between claims, so a value printed before its own label could still be
+    # assigned to that later label.
+    document = {
+        "tables": [],
+        "text": "10 +/- 1 is a calibration result; alpha is discussed later.",
+    }
+    claims = [
+        {"id": "alpha", "label": "alpha", "value": 10.0,
+         "standard_uncertainty": 1.0}
+    ]
+
+    status, _detail = match_expected_claims(document, claims, locator="")
+
+    assert status != "verified_exact"
+
+
+def test_unrelated_following_number_must_not_become_uncertainty() -> None:
+    # Codex review P1 (PR #46, round 10): the next numeric token was accepted
+    # as uncertainty even without a syntactic uncertainty marker.
+    document = {
+        "tables": [],
+        "text": "alpha was 10, measured from 1 object.",
+    }
+    claims = [
+        {"id": "alpha", "label": "alpha", "value": 10.0,
+         "standard_uncertainty": 1.0}
+    ]
+
+    status, _detail = match_expected_claims(document, claims, locator="")
+
+    assert status != "verified_exact"
+
+
+def test_claim_level_row_locator_scopes_candidates_before_matching() -> None:
+    # Codex review P1 (PR #46, round 10): when the source named only Table 4,
+    # a more specific claim locator (Table 4, LRG2) was checked as a
+    # table-wide predicate after values from LRG1 had already matched.
+    document = {
+        "tables": [],
+        "text": (
+            "Table 4 BAO measurements. "
+            "LRG1 D_M = 17.351 +/- 0.177 and D_H = 19.455 +/- 0.330. "
+            "LRG2 D_M = 30.000 +/- 0.300 and D_H = 40.000 +/- 0.400."
+        ),
+    }
+    claims = _claims()
+    for claim in claims:
+        claim["source_locator"] = "Table 4, LRG2"
+
+    status, _detail = match_expected_claims(document, claims, locator="Table 4")
+
+    assert status != "verified_exact"
+
+
+def test_more_specific_claim_locator_verifies_its_own_target_row() -> None:
+    document = {
+        "tables": [],
+        "text": (
+            "Table 4 BAO measurements. "
+            "LRG1 D_M = 30.000 +/- 0.300 and D_H = 40.000 +/- 0.400. "
+            "LRG2 D_M = 17.351 +/- 0.177 and D_H = 19.455 +/- 0.330."
+        ),
+    }
+    claims = _claims()
+    for claim in claims:
+        claim["source_locator"] = "Table 4, LRG2"
+
+    status, detail = match_expected_claims(document, claims, locator="Table 4")
+
+    assert status == "verified_exact"
+    assert detail["reason"] == "labels_and_values_same_window"
+
+
+def test_generic_multiword_label_requires_the_complete_phrase() -> None:
+    # Codex review P1 (PR #46, round 10): matching any word in a generic
+    # multiword label let common words such as "constant" stand in for the
+    # complete measurement label "Hubble constant".
+    document = {
+        "tables": [],
+        "text": "The constant offset was 70 +/- 2 in this calibration.",
+    }
+    claims = [
+        {"id": "h0", "label": "Hubble constant", "value": 70.0,
+         "standard_uncertainty": 2.0}
+    ]
+
+    status, _detail = match_expected_claims(document, claims, locator="")
+
+    assert status != "verified_exact"
+
+
+def test_complete_generic_multiword_label_still_verifies() -> None:
+    document = {
+        "tables": [],
+        "text": "The Hubble constant was 70 +/- 2 in this calibration.",
+    }
+    claims = [
+        {"id": "h0", "label": "Hubble constant", "value": 70.0,
+         "standard_uncertainty": 2.0}
+    ]
+
+    status, detail = match_expected_claims(document, claims, locator="")
+
+    assert status == "verified_exact"
+    assert detail["reason"] == "labels_and_values_same_window"
+
+
 def test_exponent_suffix_must_not_match_plain_number() -> None:
     # Codex review P1 (PR #46, round 3): the trailing boundary accepted an
     # exponent continuation, so supplied 17 matched source text 17e2.
