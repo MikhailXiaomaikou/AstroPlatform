@@ -624,6 +624,18 @@ def _compact_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).lower()
 
 
+def _label_token_present(token: str, window: str) -> re.Match[str] | None:
+    """Boundary-aware label containment.
+
+    Codex review P1 (PR #46, round 6): bare substring matching let "ns"
+    match inside "constraints". A label token must stand on its own
+    alphanumeric boundary.
+    """
+    return re.search(
+        rf"(?<![a-z0-9ρ_]){re.escape(token)}(?![a-z0-9ρ_])", window
+    )
+
+
 def _locator_fragment_alternatives(fragment: str) -> tuple[str, ...]:
     """Accepted renderings of one locator fragment inside a compacted window."""
     alternatives = [fragment]
@@ -742,6 +754,11 @@ def _number_token_present(token: str, window: str) -> bool:
     return re.search(pattern, window) is not None
 
 
+_GENERIC_NUMBER_TOKEN = re.compile(
+    r"(?<![0-9.eE+−-])[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?(?!\.?[0-9]|[eE][-+]?[0-9])"
+)
+
+
 def _value_positions(value: float, window: str) -> list[int]:
     """Start offsets of boundary-valid occurrences of the value in the window."""
     positions: set[int] = set()
@@ -776,12 +793,14 @@ def _values_follow_label_order(
         if not labels:
             continue
         label_positions = [
-            window.find(label) for label in labels if window.find(label) >= 0
+            match.start()
+            for match in (_label_token_present(label, window) for label in labels)
+            if match is not None
         ]
         if not label_positions:
             continue
         ordered.append((min(label_positions), claim))
-    if len(ordered) < 2:
+    if not ordered:
         return True
     ordered.sort(key=lambda item: item[0])
     cursor = -1
@@ -790,12 +809,35 @@ def _values_follow_label_order(
             value = float(claim["value"])
         except (KeyError, TypeError, ValueError):
             continue
-        candidates = [
-            position for position in _value_positions(value, window) if position > cursor
-        ]
-        if not candidates:
+        uncertainty: float | None
+        try:
+            uncertainty = float(claim["standard_uncertainty"])
+        except (KeyError, TypeError, ValueError):
+            uncertainty = None
+        chosen: int | None = None
+        for position in _value_positions(value, window):
+            if position <= cursor:
+                continue
+            # Codex review P1 (PR #46, round 6): the uncertainty must be
+            # bound to its own value — it has to be the immediately
+            # following numeric token, as in "17.351 +/- 0.177". A swapped
+            # pair like "alpha 10 +/- 2" fails here instead of matching
+            # window-wide.
+            if uncertainty is not None:
+                following = _GENERIC_NUMBER_TOKEN.search(
+                    window, position + len(f"{value:g}")
+                )
+                if following is None:
+                    continue
+                if following.start() not in _value_positions(
+                    uncertainty, window
+                ):
+                    continue
+            chosen = position
+            break
+        if chosen is None:
             return False
-        cursor = candidates[0]
+        cursor = chosen
     return True
 
 
@@ -813,7 +855,9 @@ def match_expected_claims(
         all_numbers = True
         for claim in expected_claims:
             labels = _label_tokens(claim.get("label") or claim.get("id"))
-            label_match = not labels or any(label in window for label in labels)
+            label_match = not labels or any(
+                _label_token_present(label, window) for label in labels
+            )
             label_seen = label_seen or label_match
             # Codex review P1 (PR #46, round 4): a claim that carries its own
             # source_locator must be verified inside a window that actually

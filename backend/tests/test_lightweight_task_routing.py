@@ -269,3 +269,52 @@ def test_single_paper_with_mirror_url_still_builds_direct_call() -> None:
 
     assert decision["task_kind"] == "deterministic_source_check"
     assert decision["direct_tool_call"] is not None
+
+
+def test_echo_guard_rejects_values_not_assigned_to_that_quantity() -> None:
+    # Codex review P1 (PR #46, round 6): the echo guard pooled every number
+    # in the prompt, so a model-authored call could borrow the locator's
+    # digit (A=4 from "Table 4") or swap the two quantities' values.
+    from app.services.agent_runtime.prompt_routing import scalar_call_echo_violation
+
+    prompt = (
+        "From arXiv:2503.14738 Table 4 LRG2, A = 10 +/- 1 and B = 20 +/- 2; "
+        "the two share a cross term of -0.404. What is A/B?"
+    )
+    borrowed_digit = {
+        "operation": "ratio",
+        "quantities": [
+            {"id": "A", "label": "A", "value": 4.0, "standard_uncertainty": 1.0},
+            {"id": "B", "label": "B", "value": 20.0, "standard_uncertainty": 2.0},
+        ],
+        "uncertainty_model": {
+            "kind": "correlation_matrix",
+            "matrix": [[1.0, -0.404], [-0.404, 1.0]],
+        },
+    }
+    swapped = {
+        "operation": "ratio",
+        "quantities": [
+            {"id": "A", "label": "A", "value": 20.0, "standard_uncertainty": 2.0},
+            {"id": "B", "label": "B", "value": 10.0, "standard_uncertainty": 1.0},
+        ],
+        "uncertainty_model": {
+            "kind": "correlation_matrix",
+            "matrix": [[1.0, -0.404], [-0.404, 1.0]],
+        },
+    }
+    faithful = {
+        "operation": "ratio",
+        "quantities": [
+            {"id": "A", "label": "A", "value": 10.0, "standard_uncertainty": 1.0},
+            {"id": "B", "label": "B", "value": 20.0, "standard_uncertainty": 2.0},
+        ],
+        "uncertainty_model": {
+            "kind": "correlation_matrix",
+            "matrix": [[1.0, -0.404], [-0.404, 1.0]],
+        },
+    }
+
+    assert scalar_call_echo_violation(borrowed_digit, prompt) is not None
+    assert scalar_call_echo_violation(swapped, prompt) is not None
+    assert scalar_call_echo_violation(faithful, prompt) is None

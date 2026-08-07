@@ -267,11 +267,15 @@ def scalar_call_echo_violation(
 ) -> str | None:
     """Echo-validate a model-authored verify_scalar_derivation call.
 
-    Fabrication guard for the incomplete-packet fallback: the model may
-    complete the parse the deterministic parser missed, but every numeric
-    input must appear in the user's own prompt, and an independence
-    assumption must have been stated by the user. Returns a violation
-    description, or None when the call is fully echoed.
+    Fabrication guard for the incomplete-packet fallback: the model may only
+    complete the uncertainty model the deterministic parser missed — the
+    quantities must be exactly the (label, value, uncertainty) tuples parsed
+    from the user's own prompt. Codex review P1 (PR #46, round 6): pooling
+    every prompt number let a call borrow the locator's digit (A=4 from
+    "Table 4") or swap the two quantities' assignments; pairing is now
+    one-to-one against the parsed tuples, and a call label that names a
+    parsed quantity must carry that quantity's own numbers. Returns a
+    violation description, or None when the call is fully echoed.
     """
     numbers = _prompt_numbers(prompt_text)
 
@@ -281,14 +285,59 @@ def scalar_call_echo_violation(
             for candidate in numbers
         )
 
+    def close(left: float, right: float) -> bool:
+        return abs(left - right) <= 1e-9 * max(1.0, abs(right))
+
+    def canonical(label: Any) -> str:
+        return re.sub(r"[^a-z0-9]+", "", str(label or "").lower())
+
+    parsed = _scalar_quantities_from_prompt(_normalized_task_text(prompt_text))
+    parsed_by_key = {
+        canonical(quantity.get("label") or quantity.get("id")): quantity
+        for quantity in parsed
+    }
+    unused = list(parsed)
     for quantity in call_input.get("quantities") or []:
         for field in ("value", "standard_uncertainty"):
             raw = quantity.get(field)
-            if not isinstance(raw, (int, float)) or not echoed(float(raw)):
+            if not isinstance(raw, (int, float)):
                 label = quantity.get("label") or quantity.get("id") or "quantity"
+                return f"{label} {field} {raw!r} is not numeric"
+        label = quantity.get("label") or quantity.get("id") or "quantity"
+        value = float(quantity["value"])
+        uncertainty = float(quantity["standard_uncertainty"])
+        key = canonical(label)
+        target = parsed_by_key.get(key)
+        if target is not None:
+            if not (
+                close(value, float(target["value"]))
+                and close(uncertainty, float(target["standard_uncertainty"]))
+            ):
                 return (
-                    f"{label} {field} {raw!r} does not appear in the user prompt"
+                    f"{label} does not carry the prompt's own numbers for "
+                    f"that quantity ({target['value']} ± "
+                    f"{target['standard_uncertainty']})"
                 )
+            if target in unused:
+                unused.remove(target)
+        else:
+            match = next(
+                (
+                    candidate
+                    for candidate in unused
+                    if close(value, float(candidate["value"]))
+                    and close(
+                        uncertainty, float(candidate["standard_uncertainty"])
+                    )
+                ),
+                None,
+            )
+            if match is None:
+                return (
+                    f"{label} {value!r} ± {uncertainty!r} does not correspond "
+                    "to any quantity stated in the user prompt"
+                )
+            unused.remove(match)
     model = call_input.get("uncertainty_model") or {}
     kind = model.get("kind")
     if kind == "correlation_matrix":

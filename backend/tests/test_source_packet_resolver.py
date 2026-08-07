@@ -581,3 +581,55 @@ def test_cache_key_distinguishes_claim_locator_and_label() -> None:
 
     assert _cache_key(source, [base]) != _cache_key(source, [relocated])
     assert _cache_key(source, [base]) != _cache_key(source, [relabeled])
+
+
+def test_short_label_inside_unrelated_word_must_not_verify() -> None:
+    # Codex review P1 (PR #46, round 6): bare substring label matching let
+    # "ns" match inside "constraints", verifying a field the text never
+    # states.
+    document = {
+        "final_url": "https://ar5iv.labs.arxiv.org/html/2503.14452",
+        "mime": "text/html",
+        "sha256": "a" * 64,
+        "extraction_method": "ar5iv_html",
+        "tables": [],
+        "text": "The constraints were 0.965 +/- 0.004 in the joint analysis.",
+    }
+    claims = [
+        {"id": "ns", "label": "ns", "value": 0.965, "standard_uncertainty": 0.004}
+    ]
+
+    status, _detail = match_expected_claims(document, claims, locator="")
+
+    assert status != "verified_exact"
+
+
+def test_swapped_uncertainties_must_not_verify_exact() -> None:
+    # Codex review P1 (PR #46, round 6): the value-order fix left
+    # uncertainties as window-wide matches, so alpha=10±1, beta=20±2 still
+    # verified against "alpha 10 +/- 2 beta 20 +/- 1".
+    document = {
+        "final_url": "https://ar5iv.labs.arxiv.org/html/2503.14738",
+        "mime": "text/html",
+        "sha256": "a" * 64,
+        "extraction_method": "ar5iv_html",
+        "tables": [
+            {
+                "label": "Table 4",
+                "caption": "parameters",
+                "columns": [],
+                "rows": [["LRG2 alpha 10 +/- 2 beta 20 +/- 1"]],
+            }
+        ],
+        "text": "",
+    }
+    claims = [
+        {"id": "alpha", "label": "alpha", "value": 10.0, "standard_uncertainty": 1.0},
+        {"id": "beta", "label": "beta", "value": 20.0, "standard_uncertainty": 2.0},
+    ]
+
+    status, _detail = match_expected_claims(
+        document, claims, locator="Table 4, LRG2"
+    )
+
+    assert status != "verified_exact"
