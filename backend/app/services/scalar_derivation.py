@@ -342,17 +342,33 @@ def derive_scalar(
                 "treated, or drop it from the combination.",
                 code="zero_uncertainty_weighted_mean",
             )
-        precision = np.linalg.pinv(covariance, hermitian=True)
         ones = np.ones(len(parsed))
-        denominator = float(ones @ precision @ ones)
+        # Codex review P1 (PR #46, round 9): a singular covariance can have
+        # nonzero diagonal entries.  For C=[[1,2],[2,4]], pinv(C) produces a
+        # nonzero-variance weighting even though a normalized nullspace
+        # vector gives zero variance.  The v0.2 contract does not specify how
+        # to choose among exact constrained solutions, so accept only a
+        # positive-definite covariance and fail closed on every singular case.
+        eigenvalues = np.linalg.eigvalsh(covariance)
+        singular_tolerance = max(
+            1.0, float(np.max(np.abs(eigenvalues)))
+        ) * 1e-10
+        if float(np.min(eigenvalues)) <= singular_tolerance:
+            raise ScalarDerivationError(
+                "A singular covariance matrix cannot define an unambiguous "
+                "weighted mean in v0.2.",
+                code="singular_weighted_mean",
+            )
+        precision_ones = np.linalg.solve(covariance, ones)
+        denominator = float(ones @ precision_ones)
         if denominator <= 0 or not math.isfinite(denominator):
             raise ScalarDerivationError(
                 "The covariance matrix cannot define a weighted mean.",
                 code="singular_weighted_mean",
             )
-        jacobian = np.asarray((precision @ ones) / denominator, dtype=float)
+        jacobian = np.asarray(precision_ones / denominator, dtype=float)
         result_value = float(jacobian @ values)
-        formula = "(1ᵀ C⁺ q) / (1ᵀ C⁺ 1)"
+        formula = "(1ᵀ C⁻¹ q) / (1ᵀ C⁻¹ 1)"
 
     propagated_variance = float(jacobian @ covariance @ jacobian.T)
     tolerance = max(1.0, abs(result_value)) * 1e-12

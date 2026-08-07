@@ -679,6 +679,76 @@ def test_locator_window_must_not_cross_into_next_table() -> None:
     assert status != "verified_exact"
 
 
+def test_compound_locator_must_bind_claims_to_the_target_row() -> None:
+    # Codex review P1 (PR #46, round 9): structural bounding kept a text
+    # candidate inside Table 4, but the table-wide window could still combine
+    # the requested LRG2 locator with LRG1's measurements.  A compound row
+    # locator must restrict exact matching to the target row itself.
+    document = {
+        "final_url": "https://arxiv.org/pdf/2503.14738",
+        "mime": "application/pdf",
+        "sha256": "a" * 64,
+        "extraction_method": "pdf_text",
+        "tables": [],
+        "text": (
+            "Table 4 BAO measurements. "
+            "LRG1 D_M = 17.351 +/- 0.177 and D_H = 19.455 +/- 0.330. "
+            "LRG2 D_M = 30.000 +/- 0.300 and D_H = 40.000 +/- 0.400."
+        ),
+    }
+
+    status, _detail = match_expected_claims(
+        document, _claims(), locator="Table 4, LRG2"
+    )
+
+    assert status != "verified_exact"
+
+
+def test_compound_locator_target_row_still_verifies_in_plain_text() -> None:
+    document = {
+        "final_url": "https://arxiv.org/pdf/2503.14738",
+        "mime": "application/pdf",
+        "sha256": "a" * 64,
+        "extraction_method": "pdf_text",
+        "tables": [],
+        "text": (
+            "Table 4 BAO measurements. "
+            "LRG1 D_M = 30.000 +/- 0.300 and D_H = 40.000 +/- 0.400. "
+            "LRG2 D_M = 17.351 +/- 0.177 and D_H = 19.455 +/- 0.330. "
+            "LRG3 D_M = 50.000 +/- 0.500 and D_H = 60.000 +/- 0.600."
+        ),
+    }
+
+    status, detail = match_expected_claims(
+        document, _claims(), locator="Table 4, LRG2"
+    )
+
+    assert status == "verified_exact"
+    assert detail["reason"] == "labels_and_values_same_window"
+
+
+def test_row_locator_token_must_not_match_a_longer_row_name() -> None:
+    # The row-local repair must preserve the same token-boundary rule as
+    # claim labels: LRG2 is not a valid locator for the distinct LRG20 row.
+    document = {
+        "final_url": "https://arxiv.org/pdf/2503.14738",
+        "mime": "application/pdf",
+        "sha256": "a" * 64,
+        "extraction_method": "pdf_text",
+        "tables": [],
+        "text": (
+            "Table 4 BAO measurements. "
+            "LRG20 D_M = 17.351 +/- 0.177 and D_H = 19.455 +/- 0.330."
+        ),
+    }
+
+    status, _detail = match_expected_claims(
+        document, _claims(), locator="Table 4, LRG2"
+    )
+
+    assert status != "verified_exact"
+
+
 def test_exponent_suffix_must_not_match_plain_number() -> None:
     # Codex review P1 (PR #46, round 3): the trailing boundary accepted an
     # exponent continuation, so supplied 17 matched source text 17e2.

@@ -220,3 +220,25 @@ def test_weighted_mean_rejects_zero_uncertainty_inputs() -> None:
         )
 
     assert exc_info.value.code == "zero_uncertainty_weighted_mean"
+
+
+def test_weighted_mean_rejects_singular_nonzero_covariance() -> None:
+    # Codex review P1 (PR #46, round 9): with sigma=(1, 2) and rho=1,
+    # C=[[1, 2], [2, 4]] is singular despite its nonzero diagonal.  The
+    # pseudoinverse returns a non-minimum-variance estimator, while weights
+    # (2, -1) lie in C's nullspace and have exactly zero variance.  Fail
+    # closed instead of reporting the pseudoinverse result as deterministic.
+    with pytest.raises(ScalarDerivationError) as exc_info:
+        derive_scalar(
+            operation="weighted_mean",
+            quantities=[
+                _quantity("a", 10.0, 1.0, unit="km/s/Mpc"),
+                _quantity("b", 14.0, 2.0, unit="km/s/Mpc"),
+            ],
+            uncertainty_model={
+                "kind": "correlation_matrix",
+                "matrix": [[1.0, 1.0], [1.0, 1.0]],
+            },
+        )
+
+    assert exc_info.value.code == "singular_weighted_mean"

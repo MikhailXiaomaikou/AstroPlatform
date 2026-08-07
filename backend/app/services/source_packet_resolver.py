@@ -730,9 +730,27 @@ def _locator_fragment_alternatives(fragment: str) -> tuple[str, ...]:
     return tuple(alternatives)
 
 
+def _locator_fragment_present(fragment: str, window: str) -> bool:
+    """Require locator renderings on alphanumeric token boundaries."""
+    return any(
+        re.search(
+            rf"(?<![a-z0-9]){re.escape(alternative)}(?![a-z0-9])",
+            window,
+            re.I,
+        )
+        is not None
+        for alternative in _locator_fragment_alternatives(fragment)
+    )
+
+
 _TEXT_STRUCTURE_BOUNDARY = re.compile(
     r"(?<![a-z0-9])(?:table|tab\.?|section|sec\.?)\s*"
     r"\d+(?:\.\d+)*[a-z]?(?![a-z0-9])",
+    re.I,
+)
+
+_ROW_LOCATOR_FAMILY = re.compile(
+    r"(?<![a-z0-9])([a-z][a-z0-9_-]*?)\s*(\d+[a-z]?)(?![a-z0-9])",
     re.I,
 )
 
@@ -756,6 +774,47 @@ def _bounded_locator_window(text: str, locator_index: int) -> str:
     return text[start:end]
 
 
+def _bounded_row_locator_window(
+    text: str, locator_index: int, row_fragment: str
+) -> str | None:
+    """Keep a compound locator candidate inside its target row.
+
+    Plain-text/PDF extraction has no structured ``rows`` collection.  A
+    table-wide window is therefore unsafe for a locator such as
+    ``Table 4, LRG2``: LRG2 can coexist with measurements printed on LRG1.
+    Accept only numbered row-family anchors, start matching at the requested
+    row, and stop at the next sibling row or structural boundary.  Other
+    compound text locators fail closed; structured HTML tables still use the
+    explicit per-row path above.
+    """
+    family = _ROW_LOCATOR_FAMILY.fullmatch(row_fragment.strip())
+    if family is None:
+        return None
+    family_name = family.group(1)
+    start = locator_index
+    end = min(len(text), locator_index + 12000)
+    previous_boundary: re.Match[str] | None = None
+    for boundary in _TEXT_STRUCTURE_BOUNDARY.finditer(text):
+        if boundary.start() <= locator_index:
+            previous_boundary = boundary
+            continue
+        end = min(end, boundary.start())
+        break
+    sibling_pattern = re.compile(
+        rf"(?<![a-z0-9]){re.escape(family_name)}\s*\d+[a-z]?(?![a-z0-9])",
+        re.I,
+    )
+    for sibling in sibling_pattern.finditer(text, locator_index + len(row_fragment), end):
+        end = sibling.start()
+        break
+    # Carry only the containing structure label into the row-local window so
+    # the compound-locator filter can prove that this row belongs to the
+    # requested table/section.  Measurements before the row anchor remain
+    # unavailable to exact matching.
+    structure = previous_boundary.group() if previous_boundary is not None else ""
+    return _compact_text(f"{structure} {text[start:end]}")
+
+
 def _candidate_windows(document: dict[str, Any], locator: str) -> list[str]:
     windows: list[str] = []
     locator_text = _compact_text(locator)
@@ -777,17 +836,35 @@ def _candidate_windows(document: dict[str, Any], locator: str) -> list[str]:
     text = _compact_text(document.get("text"))
     if text:
         if locator_text:
-            locator_indices: list[int] = []
-            exact_index = text.find(locator_text)
-            if exact_index >= 0:
-                locator_indices.append(exact_index)
-            for locator_part in (
+            fragments = [
                 part.strip() for part in locator_text.split(",") if part.strip()
-            ):
+            ]
+            row_fragment = fragments[-1] if len(fragments) > 1 else ""
+            row_family = _ROW_LOCATOR_FAMILY.fullmatch(row_fragment)
+            locator_indices: list[int] = []
+            if row_family is not None:
+                # Codex review P1 (PR #46, round 9): compound row locators
+                # must never re-enable table-wide candidates. Anchor only on
+                # the requested row fragment and trim to its row-local region.
                 locator_indices.extend(
                     match.start()
                     for match in list(
-                        re.finditer(re.escape(locator_part), text, re.I)
+                        re.finditer(
+                            rf"(?<![a-z0-9]){re.escape(row_fragment)}"
+                            rf"(?![a-z0-9])",
+                            text,
+                            re.I,
+                        )
+                    )[:12]
+                )
+            elif len(fragments) <= 1:
+                exact_index = text.find(locator_text)
+                if exact_index >= 0:
+                    locator_indices.append(exact_index)
+                locator_indices.extend(
+                    match.start()
+                    for match in list(
+                        re.finditer(re.escape(locator_text), text, re.I)
                     )[:12]
                 )
             if not locator_indices:
@@ -811,7 +888,14 @@ def _candidate_windows(document: dict[str, Any], locator: str) -> list[str]:
                 # values from Table 5. Bound both sides to the containing
                 # table/section so compound locator fragments cannot be
                 # assembled across source structures.
-                windows.append(_bounded_locator_window(text, locator_index))
+                if row_family is not None:
+                    row_window = _bounded_row_locator_window(
+                        text, locator_index, row_fragment
+                    )
+                    if row_window is not None:
+                        windows.append(row_window)
+                else:
+                    windows.append(_bounded_locator_window(text, locator_index))
         # Codex review P1 (PR #46): the document-head fallback may only run
         # when no locator was requested. Otherwise labels and numbers elsewhere
         # in the paper could earn verified_exact for a table/equation that was
@@ -836,10 +920,7 @@ def _candidate_windows(document: dict[str, Any], locator: str) -> list[str]:
                 window
                 for window in windows
                 if all(
-                    any(
-                        alternative in window
-                        for alternative in _locator_fragment_alternatives(fragment)
-                    )
+                    _locator_fragment_present(fragment, window)
                     for fragment in fragments
                 )
             ]
@@ -984,10 +1065,7 @@ def match_expected_claims(
                     if part.strip()
                 ]
                 if not all(
-                    any(
-                        alternative in window
-                        for alternative in _locator_fragment_alternatives(fragment)
-                    )
+                    _locator_fragment_present(fragment, window)
                     for fragment in fragments
                 ):
                     all_labels = False
