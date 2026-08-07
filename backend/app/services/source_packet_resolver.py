@@ -989,9 +989,7 @@ _GENERIC_NUMBER_TOKEN = re.compile(
 )
 _UNCERTAINTY_BINDING = re.compile(r"\s*(?:±|\+/-|\+-|\\pm)\s*", re.I)
 _FIELD_TERMINATOR = re.compile(
-    r";|(?<!\d)[.!?]|[.!?](?!\d)|"
-    r"(?:,|，)\s*(?=(?:while|whereas|but|however|although|though|yet|instead|rather)\b|"
-    r"而|但|然而|不过)",
+    r";|,|，|(?<!\d)[.!?]|[.!?](?!\d)",
     re.I,
 )
 

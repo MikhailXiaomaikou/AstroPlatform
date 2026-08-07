@@ -85,6 +85,59 @@ def test_compare_luminosity_distances_returns_per_source_deltas():
     assert "ΔDL" in out["__message_to_model__"]
 
 
+def test_sample_comparison_uses_explicit_baseline_for_distances():
+    # Codex review P1 (PR #46, round 18): the result manifest honored an
+    # explicit baseline while the numerical distances still used the configured
+    # default cosmology, misattributing every reported shift.
+    class FakeDistance:
+        def __init__(self, value):
+            self.value = value
+
+        def to(self, _unit):
+            return self
+
+    class FakeCosmology:
+        def __init__(self, scale):
+            self.scale = scale
+
+        def luminosity_distance(self, redshift):
+            return FakeDistance(self.scale * redshift)
+
+    resolved_names = []
+
+    def resolve_cosmology(name=None):
+        resolved_names.append(name)
+        return {
+            None: FakeCosmology(100.0),
+            "planck18_bao": FakeCosmology(200.0),
+            "planck18": FakeCosmology(300.0),
+        }[name]
+
+    with (
+        patch(
+            "app.services.ai_tools._resolve_literature_measurement_cache",
+            return_value=(_sample_rows()[:1], "lit_test"),
+        ),
+        patch(
+            "app.services.cosmology.get_cosmology",
+            side_effect=resolve_cosmology,
+        ),
+    ):
+        out = _exec_compare_luminosity_distances({
+            "cache_key": "lit_test",
+            "baseline_cosmology": "planck18_bao",
+            "target_cosmology": "planck18",
+            "comparison_mode": "sample",
+        })
+
+    assert out["success"] is True
+    assert resolved_names == ["planck18_bao", "planck18"]
+    assert out["current_cosmology"]["name"] == "planck18_bao"
+    assert out["per_source"][0]["DL_current_Mpc"] == 100.0
+    assert out["per_source"][0]["DL_target_Mpc"] == 150.0
+    assert out["per_source"][0]["delta_pct"] == 50.0
+
+
 def test_compare_requires_target_cosmology():
     out = _exec_compare_luminosity_distances({"cache_key": "x"})
     assert out["success"] is False

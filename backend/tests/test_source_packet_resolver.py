@@ -924,6 +924,28 @@ def test_claim_must_not_cross_a_comma_delimited_contrast_clause() -> None:
     assert status != "verified_exact"
 
 
+def test_claim_must_not_cross_a_comma_delimited_measurement_field() -> None:
+    # Codex review P1 (PR #46, round 18): an ordinary comma could introduce a
+    # new measurement field, yet the denied label before it could still borrow
+    # that field's value and uncertainty.
+    document = {
+        "tables": [],
+        "text": "alpha was not measured, calibration was 10 +/- 1.",
+    }
+    claims = [
+        {
+            "id": "alpha",
+            "label": "alpha",
+            "value": 10.0,
+            "standard_uncertainty": 1.0,
+        }
+    ]
+
+    status, _detail = match_expected_claims(document, claims, locator="")
+
+    assert status != "verified_exact"
+
+
 def test_equation_locator_stops_before_the_next_equation() -> None:
     # Codex review P1 (PR #46, round 12): Equation 42 could borrow a requested
     # measurement from Equation 43 in the same section.

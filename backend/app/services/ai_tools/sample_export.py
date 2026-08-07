@@ -467,7 +467,10 @@ def _exec_compare_luminosity_distances(
             "error": f"No cached line_measurements found for cache_key={cache_key!r}.",
             "error_class": "missing_measurement_cache",
         }
-    current_cosmo = _get(None)
+    # The manifest and the numerical sample comparison must resolve the same
+    # baseline.  An explicit baseline cannot be display-only while distances
+    # are silently computed from the configured default cosmology.
+    current_cosmo = _get(baseline_name or None)
     target_cosmo = _get(target_name)
 
     per_source: list[dict[str, Any]] = []
