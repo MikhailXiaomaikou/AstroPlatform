@@ -94,7 +94,7 @@ def test_negative_correlation_increases_ratio_uncertainty() -> None:
     ("operation", "expected_value", "expected_uncertainty", "expected_unit"),
     [
         ("difference", 2.0, math.sqrt(0.05), "Mpc"),
-        ("product", 15.0, math.sqrt(1.09), "Mpc · Mpc"),
+        ("product", 15.0, math.sqrt(1.0904), "Mpc · Mpc"),
     ],
 )
 def test_two_quantity_operations(
@@ -114,6 +114,35 @@ def test_two_quantity_operations(
         expected_uncertainty
     )
     assert result["result"]["unit"] == expected_unit
+
+
+def test_independent_product_includes_exact_second_order_variance() -> None:
+    # Codex review P1 (PR #46, round 25): a Jacobian-only product gives zero
+    # uncertainty for two independent zero-mean uncertain inputs. Independence
+    # makes Var(XY) identifiable from the two means and variances exactly.
+    result = derive_scalar(
+        operation="product",
+        quantities=[_quantity("a", 0.0, 1.0), _quantity("b", 0.0, 1.0)],
+        uncertainty_model={"kind": "independent"},
+    )
+
+    assert result["result"]["value"] == 0.0
+    assert result["result"]["standard_uncertainty"] == pytest.approx(1.0)
+    assert result["calculation_status"] == "verified_deterministic"
+
+
+def test_correlated_product_abstains_without_higher_moments() -> None:
+    with pytest.raises(ScalarDerivationError) as exc_info:
+        derive_scalar(
+            operation="product",
+            quantities=[_quantity("a", 2.0, 1.0), _quantity("b", 3.0, 1.0)],
+            uncertainty_model={
+                "kind": "correlation_matrix",
+                "matrix": [[1.0, 0.5], [0.5, 1.0]],
+            },
+        )
+
+    assert exc_info.value.code == "nonlinear_uncertainty_requires_independence"
 
 
 def test_weighted_mean_uses_generalized_inverse_covariance() -> None:

@@ -36,7 +36,7 @@ need entries unless they change user-visible behavior or research validity.
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Twenty-four adversarial review rounds tightened heavy-chain routing, number and
+- Twenty-five adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
   scale-relative covariance validation, negation-aware independence parsing,
@@ -54,7 +54,12 @@ need entries unless they change user-visible behavior or research validity.
   prompt disclaimers also reject the named earlier quantity without treating
   unrelated prose as a rejection, and exact source attribution now requires
   every input quantity to reference a declared external or user-supplied
-  source.
+  source. Postposed heavy-work negation now keeps bounded scalar tasks off the
+  expensive route; lowercase `a` labels no longer collide with the English
+  article; appositive commas preserve their governing measurement negation;
+  and products use the exact second-order variance identity only for
+  explicitly independent inputs, failing closed when covariance alone leaves
+  the required higher mixed moment unidentified.
 
 ### P0 production and local-automation hardening (2026-07-13)
 

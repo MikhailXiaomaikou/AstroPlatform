@@ -2,9 +2,10 @@
 
 The service intentionally supports a small operation vocabulary.  It never
 evaluates model-authored expressions or executes generated code.  Every result
-is produced from an analytic Jacobian and an explicitly declared covariance
-model so that missing correlation information cannot silently become an
-independence assumption.
+is produced from an analytic Jacobian (or the exact independent-product
+variance identity) and an explicitly declared covariance model so that
+missing correlation information cannot silently become an independence
+assumption.
 """
 
 from __future__ import annotations
@@ -325,6 +326,18 @@ def derive_scalar(
     covariance, normalized_uncertainty_model = build_covariance(
         parsed, uncertainty_model
     )
+    if (
+        operation == "product"
+        and normalized_uncertainty_model["kind"] != "independent"
+    ):
+        # Covariance alone does not determine Var(XY): the fourth mixed moment
+        # is missing. Do not certify a first-order approximation as exact.
+        raise ScalarDerivationError(
+            "Exact product uncertainty requires explicitly independent inputs; "
+            "a correlation or covariance matrix does not supply the higher "
+            "mixed moment needed by this nonlinear operation.",
+            code="nonlinear_uncertainty_requires_independence",
+        )
     values = np.asarray([quantity.value for quantity in parsed], dtype=float)
     result_unit = _result_unit(operation, parsed)
 
@@ -343,7 +356,10 @@ def derive_scalar(
     elif operation == "product":
         result_value = float(values[0] * values[1])
         jacobian = np.asarray([values[1], values[0]])
-        formula = "q0 × q1"
+        formula = (
+            "q0 × q1; Var = q1² Var(q0) + q0² Var(q1) + "
+            "Var(q0) Var(q1) for independent inputs"
+        )
     else:
         # Codex review P1 (PR #46, round 2): the pseudoinverse maps a
         # zero-variance direction to zero precision, so an exact input
@@ -394,6 +410,10 @@ def derive_scalar(
         formula = "(1ᵀ C⁻¹ q) / (1ᵀ C⁻¹ 1)"
 
     propagated_variance = float(jacobian @ covariance @ jacobian.T)
+    if operation == "product":
+        # For independent X and Y this is exact and distribution-free:
+        # Var(XY)=mu_y² Var(X)+mu_x² Var(Y)+Var(X)Var(Y).
+        propagated_variance += float(covariance[0, 0] * covariance[1, 1])
     tolerance = max(1.0, abs(result_value)) * 1e-12
     if propagated_variance < -tolerance:
         raise ScalarDerivationError(

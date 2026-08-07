@@ -104,6 +104,18 @@ _REPEATED_COMMAND = re.compile(
     re.I,
 )
 _CLAUSE_BOUNDARY = re.compile(r"[,:，：]")
+_POSTPOSED_HEAVY_NEGATION = re.compile(
+    r"\s*(?:"
+    r"(?:is|are|was|were|should|must|can|could|may|might|will|would)\s+"
+    r"(?:not|never)\s+(?:(?:be|have\s+been)\s+)?"
+    r"(?:required|needed|performed|run|executed|used|done|necessary)|"
+    r"(?:(?:is|are|was|were|should|must|can|could|may|might|will|would)"
+    r"n['’]t|cannot)\s+(?:(?:be|have\s+been)\s+)?"
+    r"(?:required|needed|performed|run|executed|used|done|necessary)|"
+    r"(?:is|are|was|were)\s+(?:unnecessary|unneeded)"
+    r")\b",
+    re.I,
+)
 
 
 def _prefix_negates(prefix: str) -> bool:
@@ -154,6 +166,16 @@ def _prefix_negates(prefix: str) -> bool:
     return bool(_EXECUTION_VERB.search(tail[: boundary.start()]))
 
 
+def _heavy_match_is_postposed_negated(text: str, match: re.Match[str]) -> bool:
+    clause_ends = [
+        position
+        for separator in (".", ";", "。", "；", "\n")
+        if (position := text.find(separator, match.end())) >= 0
+    ]
+    clause_end = min(clause_ends, default=len(text))
+    return _POSTPOSED_HEAVY_NEGATION.match(text[match.end() : clause_end]) is not None
+
+
 def _active_and_negated_heavy_signals(text: str) -> tuple[list[str], list[str]]:
     matched: list[str] = []
     negated: list[str] = []
@@ -166,7 +188,9 @@ def _active_and_negated_heavy_signals(text: str) -> tuple[list[str], list[str]]:
                 for separator in (".", ";", "。", "；", "\n")
             )
             prefix = text[sentence_start + 1 : match.start()]
-            if _prefix_negates(prefix):
+            if _prefix_negates(prefix) or _heavy_match_is_postposed_negated(
+                text, match
+            ):
                 was_negated = True
             else:
                 active = True
@@ -308,6 +332,26 @@ def _canonical_scalar_label(label: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(label or "").lower())
 
 
+def _targeted_rejection_names_scalar_label(
+    targets: str, label_pattern: re.Pattern[str], label: str
+) -> bool:
+    """Disambiguate the scalar label A/a from the English article."""
+    for occurrence in label_pattern.finditer(targets):
+        if label.lower() != "a":
+            return True
+        before = targets[: occurrence.start()]
+        after = targets[occurrence.end() :]
+        if re.search(
+            r"\b(?:quantity|value|measurement|parameter|variable|label)\s*$",
+            before,
+            re.I,
+        ):
+            return True
+        if re.match(r"\s*(?:$|,|(?:and|or|only|alone)\b)", after, re.I):
+            return True
+    return False
+
+
 def _repeated_scalar_labels(text: str) -> list[str]:
     seen: set[str] = set()
     repeated: list[str] = []
@@ -334,17 +378,18 @@ def _scalar_quantity_match_is_disclaimed(
     if _PROMPT_QUANTITY_PREFIX_REJECTION.search(prefix):
         return True
     label = match.group("label")
-    label_flags = 0 if len(label) == 1 and label.lower() == "a" else re.I
     label_pattern = re.compile(
         rf"(?<![A-Za-z0-9_]){re.escape(label)}(?![A-Za-z0-9_])",
-        label_flags,
+        re.I,
     )
     # Codex review P1 (PR #46, round 24): a later clause can explicitly name
     # an earlier quantity ("Do not use A"). This is safe to inspect beyond the
     # local assignment window because the exact target label must co-occur in
     # the rejection clause; unrelated later disclaimers remain non-retroactive.
     for rejection in _PROMPT_TARGETED_QUANTITY_REJECTION.finditer(text, match.end()):
-        if label_pattern.search(rejection.group("targets")):
+        if _targeted_rejection_names_scalar_label(
+            rejection.group("targets"), label_pattern, label
+        ):
             return True
     trailing_text = text[match.end() :]
     for repeated_label in label_pattern.finditer(trailing_text):

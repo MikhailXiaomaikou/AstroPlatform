@@ -1025,6 +1025,40 @@ def test_explicitly_negated_measurement_must_not_verify_exact() -> None:
         assert status != "verified_exact", text
 
 
+def test_governing_negation_survives_appositive_commas() -> None:
+    # Codex review P1 (PR #46, round 25): keeping only the text after the last
+    # comma erased the governing "is not" around an inserted appositive.
+    claim = {
+        "id": "alpha",
+        "label": "alpha",
+        "value": 10.0,
+        "standard_uncertainty": 1.0,
+    }
+
+    negated, _detail = match_expected_claims(
+        {
+            "tables": [],
+            "text": "alpha is not, contrary to prior work, 10 +/- 1.",
+        },
+        [claim],
+        locator="",
+    )
+    unrelated, _detail = match_expected_claims(
+        {
+            "tables": [],
+            "text": (
+                "alpha, unlike a calibration that was not measured, "
+                "was 10 +/- 1."
+            ),
+        },
+        [claim],
+        locator="",
+    )
+
+    assert negated != "verified_exact"
+    assert unrelated == "verified_exact"
+
+
 def test_relational_measurement_must_not_verify_exact() -> None:
     # Codex review P1 (PR #46, round 21): an upper/lower limit contains the
     # same tokens as an equality but cannot support an exact assignment.

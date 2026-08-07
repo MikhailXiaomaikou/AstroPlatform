@@ -187,11 +187,18 @@ def test_explicitly_disclaimed_prompt_quantity_blocks_direct_call() -> None:
         "Do not use a later calibration.",
         "A later calibration should not be used.",
     ):
-        decision = classify_task_kind(
-            "Compute the difference A=10 +/- 1 and B=8 +/- 2; "
-            f"independent errors. {article_disclaimer}"
-        )
-        assert decision["direct_tool_call"] is not None
+        for first_label in ("A", "a"):
+            decision = classify_task_kind(
+                f"Compute the difference {first_label}=10 +/- 1 and B=8 +/- 2; "
+                f"independent errors. {article_disclaimer}"
+            )
+            assert decision["direct_tool_call"] is not None
+
+    lowercase_targeted = classify_task_kind(
+        "Compute the difference a=10 +/- 1 and B=8 +/- 2; "
+        "independent errors. Do not use A."
+    )
+    assert lowercase_targeted["direct_tool_call"] is None
 
 
 def test_negated_independence_blocks_direct_and_fallback_calls() -> None:
@@ -372,6 +379,23 @@ def test_negated_chain_execution_stays_lightweight() -> None:
 
     assert decision["task_kind"] == "deterministic_source_check"
     assert decision["heavy_route_allowed"] is False
+
+
+def test_postposed_heavy_negation_stays_on_deterministic_route() -> None:
+    # Codex review P1 (PR #46, round 25): prefix-only heavy-intent negation
+    # treated "a fit is not required" as an affirmative fit request.
+    for disclaimer in (
+        "A fit is not required.",
+        "Fitting should not be performed.",
+    ):
+        decision = classify_task_kind(
+            "Compute the difference A=10 +/- 1 and B=8 +/- 2; "
+            f"independent errors. {disclaimer}"
+        )
+
+        assert decision["task_kind"] == "deterministic_source_check", disclaimer
+        assert decision["heavy_route_allowed"] is False, disclaimer
+        assert decision["direct_tool_call"] is not None, disclaimer
 
 
 def test_chain_rule_homework_is_not_heavy_intent() -> None:

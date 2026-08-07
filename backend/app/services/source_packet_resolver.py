@@ -1220,12 +1220,14 @@ def _measurement_assignment_is_non_exact(
 ) -> bool:
     """Reject negated or relational label-to-value assignments."""
     governing_text = window[label_position:value_position]
-    # Appositive clauses may themselves contain unrelated negation. The final
-    # comma-delimited segment governs the value (for example, "..., was 70"),
-    # while actual new measurement fields are bounded separately above.
-    last_comma = max(governing_text.rfind(","), governing_text.rfind("，"))
-    if last_comma >= 0:
-        governing_text = governing_text[last_comma + 1 :]
+    # Appositive clauses may themselves contain unrelated negation, but the
+    # governing predicate can straddle them ("alpha is not, contrary to ...,"
+    # 10). Collapse paired comma-delimited appositives instead of discarding
+    # the entire prefix before the final comma. New measurement fields are
+    # bounded separately by _FIELD_TERMINATOR.
+    comma_segments = re.split(r"[,，]", governing_text)
+    if len(comma_segments) >= 3:
+        governing_text = " ".join(comma_segments[::2])
     return _NON_EXACT_MEASUREMENT_ASSIGNMENT.search(governing_text) is not None
 
 
