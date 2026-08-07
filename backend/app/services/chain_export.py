@@ -196,8 +196,16 @@ def persist_chain_artifacts(
         logger.warning("chain artifact upload failed: %s", exc)
         return failed
 
-    for entry in uploaded:
-        renew_artifact_cleanup_grace_sync(entry["output_path"])
+    try:
+        for entry in uploaded:
+            renew_artifact_cleanup_grace_sync(entry["output_path"])
+    except Exception as exc:
+        # Codex review P2 (PR #46, round 4): a renewal failure must stay
+        # fail-open like the upload path — never escape and let the caller
+        # discard the completed posterior as a chain-execution failure.
+        # Un-renewed strays are removed by the artifact janitor.
+        logger.warning("chain artifact cleanup renewal failed: %s", exc)
+        return failed
 
     return {
         "run_id": run_id,

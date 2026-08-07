@@ -265,3 +265,25 @@ async def test_execute_tool_channel_normalizes_and_registers(monkeypatch, tmp_pa
     discovered = account_deletion.collect_result_output_paths(result)
     for entry in block["files"]:
         assert entry["output_path"] in discovered
+
+
+def test_cleanup_renewal_failure_stays_fail_open(monkeypatch, tmp_path):
+    # Codex review P2 (PR #46, round 4): a failure in the post-upload
+    # cleanup-renewal loop escaped persist_chain_artifacts, and the caller
+    # then discarded the completed posterior as a chain-execution failure.
+    # Renewal failures must return the labelled fail-open block instead.
+    from app import storage
+    from app.services import artifact_cleanup
+
+    monkeypatch.setattr(storage.settings, "local_storage_dir", str(tmp_path / "objects"))
+
+    def _renewal_boom(path: str) -> None:
+        raise RuntimeError("database down during renewal")
+
+    monkeypatch.setattr(
+        artifact_cleanup, "renew_artifact_cleanup_grace_sync", _renewal_boom
+    )
+    block = chain_export.persist_chain_artifacts(_payload(), owner_id=OWNER_ID)
+
+    assert block["status"] == "persist_failed"
+    assert block["files"] == []

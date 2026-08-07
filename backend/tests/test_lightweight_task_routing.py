@@ -223,3 +223,19 @@ def test_gerund_noun_negation_stays_negated_in_clause() -> None:
 
     assert decision["task_kind"] == "deterministic_source_check"
     assert decision["heavy_route_allowed"] is False
+
+
+def test_prompt_leading_operation_word_is_recognized() -> None:
+    # Codex review P1 (PR #46, round 4): operation words were matched with a
+    # leading space, so a prompt beginning with the operation word (e.g.
+    # "Product ...") fell to general and lost the deterministic route. (The
+    # review's "Ratio ..." example was rescued by the "ratio of" token; the
+    # leading-boundary defect is real for the other forms.)
+    decision = classify_task_kind(
+        "Product of H0 = 67.36 +/- 0.54 km/s/Mpc and s8 = 0.81 +/- 0.02, "
+        "treated as independent (arXiv:2503.14738 Table 4 LRG2)."
+    )
+
+    assert decision["task_kind"] == "deterministic_source_check"
+    assert decision["requested_operation"] == "product"
+    assert decision["direct_tool_call"] is not None

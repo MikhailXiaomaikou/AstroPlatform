@@ -174,16 +174,18 @@ def _source_references_from_prompt(text: str) -> list[dict[str, str]]:
 
 
 def _requested_scalar_operation(text: str) -> str | None:
+    # Codex review P1 (PR #46, round 4): leading-space tokens missed
+    # operation words at the very start of a prompt ("Product of A and B"),
+    # dropping a complete verification request to general. Use token
+    # boundaries instead.
     lowered = text.lower()
-    if "d_m/d_h" in lowered or any(
-        token in lowered for token in (" ratio", "ratio of", "比值", "相除")
-    ):
+    if "d_m/d_h" in lowered or re.search(r"\bratios?\b|比值|相除", lowered):
         return "ratio"
-    if any(token in lowered for token in ("weighted mean", "weighted average", "加权平均")):
+    if re.search(r"\bweighted\s+(?:mean|average)\b|加权平均", lowered):
         return "weighted_mean"
-    if any(token in lowered for token in (" difference", "difference between", "差值", "相减")):
+    if re.search(r"\bdifferences?\b|差值|相减", lowered):
         return "difference"
-    if any(token in lowered for token in (" product", "multiply", "乘积", "相乘")):
+    if re.search(r"\bproducts?\b|\bmultipl(?:y|ied|ication)\b|乘积|相乘", lowered):
         return "product"
     return None
 

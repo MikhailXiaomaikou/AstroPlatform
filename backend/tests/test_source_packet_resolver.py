@@ -486,3 +486,48 @@ def test_exponent_suffix_must_not_match_plain_number() -> None:
     )
 
     assert status != "verified_exact"
+
+
+def test_lossy_six_digit_rendering_must_not_verify_exact() -> None:
+    # Codex review P1 (PR #46, round 4): _number_tokens emitted lossy
+    # six-significant-digit variants, so supplied 17.35144 matched a paper
+    # that only prints 17.3514 — the extra supplied precision was never
+    # verified.
+    document = _document()
+    document["tables"][0]["rows"] = [["LRG2", "17.3514 +/- 0.177", "19.455 +/- 0.330"]]
+    claims = _claims()
+    claims[0]["value"] = 17.35144
+
+    status, _detail = match_expected_claims(
+        document, claims, locator="Table 4, LRG2"
+    )
+
+    assert status != "verified_exact"
+
+
+def test_claim_level_locator_conflict_must_not_verify_exact() -> None:
+    # Codex review P1 (PR #46, round 4): matching used only the source-level
+    # locator, so a quantity recorded as coming from Table 5 could be
+    # verified from Table 4 values while the receipt kept saying Table 5.
+    claims = _claims()
+    for claim in claims:
+        claim["source_locator"] = "Table 5, LRG2"
+
+    status, _detail = match_expected_claims(
+        _document(), claims, locator="Table 4, LRG2"
+    )
+
+    assert status != "verified_exact"
+
+
+def test_matching_claim_level_locator_still_verifies_exact() -> None:
+    claims = _claims()
+    for claim in claims:
+        claim["source_locator"] = "Table 4, LRG2"
+
+    status, detail = match_expected_claims(
+        _document(), claims, locator="Table 4, LRG2"
+    )
+
+    assert status == "verified_exact"
+    assert detail["reason"] == "labels_and_values_same_window"

@@ -583,6 +583,15 @@ def _number_tokens(value: float) -> set[str]:
     }
     tokens: set[str] = set()
     for item in rendered:
+        # Codex review P1 (PR #46, round 4): only keep renderings that parse
+        # back to the exact supplied value. A lossy six-digit variant let
+        # 17.35144 match a paper that only prints 17.3514, granting
+        # verified_exact to precision the paper never stated.
+        try:
+            if float(item) != value:
+                continue
+        except ValueError:
+            continue
         tokens.add(item)
         tokens.add(item.replace("-", "−"))
     return tokens
@@ -741,6 +750,7 @@ def match_expected_claims(
         return "resolved_unmatched", {"reason": "no_expected_claims"}
     windows = _candidate_windows(document, locator)
     label_seen = False
+    compact_source_locator = _compact_text(locator)
     for window in windows:
         all_labels = True
         all_numbers = True
@@ -748,6 +758,26 @@ def match_expected_claims(
             labels = _label_tokens(claim.get("label") or claim.get("id"))
             label_match = not labels or any(label in window for label in labels)
             label_seen = label_seen or label_match
+            # Codex review P1 (PR #46, round 4): a claim that carries its own
+            # source_locator must be verified inside a window that actually
+            # contains that locator — a Table 5 quantity must not be granted
+            # verified_exact from a Table 4 window just because the source
+            # object pointed there.
+            claim_locator = _compact_text(claim.get("source_locator") or "")
+            if claim_locator and claim_locator != compact_source_locator:
+                fragments = [
+                    part.strip()
+                    for part in claim_locator.split(",")
+                    if part.strip()
+                ]
+                if not all(
+                    any(
+                        alternative in window
+                        for alternative in _locator_fragment_alternatives(fragment)
+                    )
+                    for fragment in fragments
+                ):
+                    all_labels = False
             expected_numbers = [_number_tokens(float(claim["value"]))]
             if claim.get("standard_uncertainty") is not None:
                 expected_numbers.append(
