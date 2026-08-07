@@ -946,6 +946,50 @@ def test_claim_must_not_cross_a_comma_delimited_measurement_field() -> None:
     assert status != "verified_exact"
 
 
+def test_appositive_commas_stay_inside_the_measurement_field() -> None:
+    # Codex review P2 (PR #46, round 19): commas around a scientific qualifier
+    # are not a new field boundary and must not block the label's own value.
+    document = {
+        "tables": [],
+        "text": "The Hubble constant, measured from the sample, was 70 +/- 2.",
+    }
+    claims = [
+        {
+            "id": "h0",
+            "label": "Hubble constant",
+            "value": 70.0,
+            "standard_uncertainty": 2.0,
+        }
+    ]
+
+    status, detail = match_expected_claims(document, claims, locator="")
+
+    assert status == "verified_exact"
+    assert detail["reason"] == "labels_and_values_same_window"
+
+
+def test_explicitly_negated_measurement_must_not_verify_exact() -> None:
+    # Codex review P1 (PR #46, round 19): co-located label, value, and
+    # uncertainty tokens cannot support a claim when the source negates the
+    # assignment itself.
+    document = {
+        "tables": [],
+        "text": "alpha is not 10 +/- 1.",
+    }
+    claims = [
+        {
+            "id": "alpha",
+            "label": "alpha",
+            "value": 10.0,
+            "standard_uncertainty": 1.0,
+        }
+    ]
+
+    status, _detail = match_expected_claims(document, claims, locator="")
+
+    assert status != "verified_exact"
+
+
 def test_equation_locator_stops_before_the_next_equation() -> None:
     # Codex review P1 (PR #46, round 12): Equation 42 could borrow a requested
     # measurement from Equation 43 in the same section.

@@ -989,9 +989,40 @@ _GENERIC_NUMBER_TOKEN = re.compile(
 )
 _UNCERTAINTY_BINDING = re.compile(r"\s*(?:±|\+/-|\+-|\\pm)\s*", re.I)
 _FIELD_TERMINATOR = re.compile(
-    r";|,|，|(?<!\d)[.!?]|[.!?](?!\d)",
+    r";|(?<!\d)[.!?]|[.!?](?!\d)|"
+    r"(?:,|，)\s*(?="
+    r"(?:while|whereas|but|however|although|though|yet|instead|rather)\b|"
+    r"而|但|然而|不过|"
+    r"(?:(?:the|a|an)\s+)?"
+    r"(?:[^\W\d_][\w-]*(?:\s+[^\W\d_][\w-]*){0,4})"
+    r"(?:\s+(?:(?:was|were|is|are)\s+"
+    r"(?:measured\s+(?:as|at)\s+)?|"
+    r"(?:equals?|equaled|measures?|measured|reports?|reported|"
+    r"estimates?|estimated|gives?|gave|yields?|yielded)\s+)"
+    r"|\s*(?:=|:))[-+−]?\d|"
+    r"[一-鿿]{1,12}\s*(?:为|是|=|:|：)\s*[-+−]?\d)",
     re.I,
 )
+_NEGATED_MEASUREMENT_ASSIGNMENT = re.compile(
+    r"\b(?:is|are|was|were|should|must|can|could|may|might|will|would|"
+    r"does|do|did)\s+(?:(?:explicitly|definitely|clearly|directly|simply)\s+){0,2}"
+    r"(?:not|never)\b|(?:!=|≠)",
+    re.I,
+)
+
+
+def _measurement_assignment_is_negated(
+    window: str, label_position: int, value_position: int
+) -> bool:
+    """Reject a value whose local label-to-value assignment is negated."""
+    governing_text = window[label_position:value_position]
+    # Appositive clauses may themselves contain unrelated negation. The final
+    # comma-delimited segment governs the value (for example, "..., was 70"),
+    # while actual new measurement fields are bounded separately above.
+    last_comma = max(governing_text.rfind(","), governing_text.rfind("，"))
+    if last_comma >= 0:
+        governing_text = governing_text[last_comma + 1 :]
+    return _NEGATED_MEASUREMENT_ASSIGNMENT.search(governing_text) is not None
 
 
 def _value_positions(value: float, window: str) -> list[int]:
@@ -1073,6 +1104,13 @@ def _values_follow_label_order(
             # tables are rendered above as local header/cell pairs, so the
             # same field boundary works for prose and tables.
             if upper_bound is not None and position >= upper_bound:
+                continue
+            # Codex review P1 (PR #46, round 19): token co-occurrence cannot
+            # prove a measurement that the source explicitly negates, such as
+            # "alpha is not 10 +/- 1".
+            if _measurement_assignment_is_negated(
+                window, label_position, position
+            ):
                 continue
             # Codex review P1 (PR #46, round 6): the uncertainty must be
             # bound to its own value — it has to be the immediately
