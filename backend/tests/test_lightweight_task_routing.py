@@ -915,3 +915,21 @@ def test_operation_negation_scope_resets_at_explicit_contrast() -> None:
     assert contrast["requested_operation"] == "difference"
     assert contrast["task_kind"] == "deterministic_source_check"
     assert negated_list["requested_operation"] is None
+
+
+def test_operation_negation_scope_resets_at_repeated_command() -> None:
+    # Codex review P2 (PR #46, round 8): without an explicit "but" or
+    # "instead", the comma-list rule treated the repeated corrective command
+    # as part of the original negation.
+    for command in (
+        "Don't compute a ratio, compute the difference",
+        "Don't calculate a ratio, calculate the difference",
+        "Do not compute a ratio, and compute the difference",
+    ):
+        correction = classify_task_kind(
+            f"{command} between A = 10 +/- 1 and B = 20 +/- 2, "
+            "using the quoted cross term 0.1."
+        )
+
+        assert correction["requested_operation"] == "difference"
+        assert correction["task_kind"] == "deterministic_source_check"

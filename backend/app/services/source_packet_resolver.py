@@ -730,6 +730,32 @@ def _locator_fragment_alternatives(fragment: str) -> tuple[str, ...]:
     return tuple(alternatives)
 
 
+_TEXT_STRUCTURE_BOUNDARY = re.compile(
+    r"(?<![a-z0-9])(?:table|tab\.?|section|sec\.?)\s*"
+    r"\d+(?:\.\d+)*[a-z]?(?![a-z0-9])",
+    re.I,
+)
+
+
+def _bounded_locator_window(text: str, locator_index: int) -> str:
+    """Keep a locator candidate inside its containing table/section."""
+    start = max(0, locator_index - 500)
+    end = min(len(text), locator_index + 12000)
+    previous_boundary: re.Match[str] | None = None
+    next_boundary: re.Match[str] | None = None
+    for boundary in _TEXT_STRUCTURE_BOUNDARY.finditer(text):
+        if boundary.start() <= locator_index:
+            previous_boundary = boundary
+            continue
+        next_boundary = boundary
+        break
+    if previous_boundary is not None:
+        start = max(start, previous_boundary.start())
+    if next_boundary is not None:
+        end = min(end, next_boundary.start())
+    return text[start:end]
+
+
 def _candidate_windows(document: dict[str, Any], locator: str) -> list[str]:
     windows: list[str] = []
     locator_text = _compact_text(locator)
@@ -780,15 +806,17 @@ def _candidate_windows(document: dict[str, Any], locator: str) -> list[str]:
                         if index >= 0
                     )
             for locator_index in sorted(set(locator_indices))[:24]:
-                windows.append(
-                    text[max(0, locator_index - 500) : locator_index + 12000]
-                )
+                # Codex review P1 (PR #46, round 8): a fixed 12,000-character
+                # forward window could start at Table 4 and borrow labels and
+                # values from Table 5. Bound both sides to the containing
+                # table/section so compound locator fragments cannot be
+                # assembled across source structures.
+                windows.append(_bounded_locator_window(text, locator_index))
         # Codex review P1 (PR #46): the document-head fallback may only run
-        # when no locator was requested or the requested locator was actually
-        # found. Otherwise labels and numbers occurring elsewhere in the paper
-        # would earn verified_exact for a table/equation that was never
-        # checked — a false source attribution.
-        if not locator_text or locator_indices:
+        # when no locator was requested. Otherwise labels and numbers elsewhere
+        # in the paper could earn verified_exact for a table/equation that was
+        # never checked — or cross a later structural boundary.
+        if not locator_text:
             windows.extend(
                 text[index : index + 3000]
                 for index in range(0, min(len(text), 12000), 3000)

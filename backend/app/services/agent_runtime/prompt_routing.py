@@ -78,8 +78,14 @@ _NOUN_NEGATOR = re.compile(
     re.I,
 )
 _EXECUTION_VERB = re.compile(
-    r"\b(?:run|rerun|re-run|running|execute|executing|launch|perform|compute)\b|"
+    r"\b(?:run|rerun|re-run|running|execute|executing|launch|perform|compute|calculate)\b|"
     r"跑|执行|运行",
+    re.I,
+)
+_REPEATED_COMMAND = re.compile(
+    r"\s*(?:(?:but|instead|then|and)\s+)?(?:please\s+)?"
+    r"(?:run|rerun|re-run|execute|launch|perform|compute|calculate)\b|"
+    r"\s*(?:但|而是|然后)?\s*(?:请)?(?:跑|执行|运行|计算)",
     re.I,
 )
 _CLAUSE_BOUNDARY = re.compile(r"[,:，：]")
@@ -122,6 +128,13 @@ def _prefix_negates(prefix: str) -> bool:
     if boundary is None:
         return True
     if not negator_is_verb:
+        return False
+    # Codex review P2 (PR #46, round 8): a repeated command starts a new
+    # corrective clause even without an explicit contrast word: "Don't
+    # compute a ratio, compute the difference". It must not inherit the
+    # first command's negation. Bare object lists ("don't run A, B, C") keep
+    # the existing negated-list behavior because they have no repeated verb.
+    if _REPEATED_COMMAND.match(tail[boundary.end() :]):
         return False
     return bool(_EXECUTION_VERB.search(tail[: boundary.start()]))
 

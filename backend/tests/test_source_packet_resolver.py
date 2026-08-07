@@ -654,6 +654,31 @@ def test_partial_compound_locator_must_not_verify_from_other_regions() -> None:
     assert status != "verified_exact"
 
 
+def test_locator_window_must_not_cross_into_next_table() -> None:
+    # Codex review P1 (PR #46, round 8): a 12,000-character forward window
+    # starting at Table 4 could borrow the requested labels and values from a
+    # later Table 5 while still satisfying the Table 4 locator fragment.
+    document = {
+        "final_url": "https://ar5iv.labs.arxiv.org/html/2503.14738",
+        "mime": "text/html",
+        "sha256": "a" * 64,
+        "extraction_method": "ar5iv_html",
+        "tables": [],
+        "text": (
+            "Table 4 BAO measurements. LRG1 D_M = 99 +/- 9 and "
+            "D_H = 88 +/- 8. "
+            "Table 5 BAO measurements. LRG2 D_M = 17.351 +/- 0.177 and "
+            "D_H = 19.455 +/- 0.330."
+        ),
+    }
+
+    status, _detail = match_expected_claims(
+        document, _claims(), locator="Table 4, LRG2"
+    )
+
+    assert status != "verified_exact"
+
+
 def test_exponent_suffix_must_not_match_plain_number() -> None:
     # Codex review P1 (PR #46, round 3): the trailing boundary accepted an
     # exponent continuation, so supplied 17 matched source text 17e2.
