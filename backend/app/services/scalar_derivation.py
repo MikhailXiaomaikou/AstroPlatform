@@ -155,7 +155,16 @@ def _matrix_from_input(raw: Any, *, count: int, label: str) -> np.ndarray:
             f"{label} must be a finite {count}x{count} matrix.",
             code="invalid_matrix",
         )
-    if not np.allclose(matrix, matrix.T, rtol=1e-10, atol=1e-12):
+    # Codex review P1 (PR #46, round 16): a fixed 1e-12 floor accepted a
+    # maximally asymmetric covariance whose entire variance scale was 1e-18.
+    # Keep the existing relative policy, but scale it to this matrix instead
+    # of one implicit unit.
+    symmetry_scale = float(np.max(np.abs(matrix)))
+    symmetry_tolerance = max(
+        np.finfo(float).tiny,
+        symmetry_scale * 1e-10,
+    )
+    if float(np.max(np.abs(matrix - matrix.T))) > symmetry_tolerance:
         raise ScalarDerivationError(
             f"{label} must be symmetric.", code="non_symmetric_matrix"
         )

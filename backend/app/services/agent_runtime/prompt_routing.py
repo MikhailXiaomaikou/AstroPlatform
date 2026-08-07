@@ -349,6 +349,28 @@ def _correlation_match_is_inactive(
     )
 
 
+_INDEPENDENCE_STATED_RE = re.compile(
+    r"\b(?:independent|uncorrelated)\b|相互独立|假设独立|忽略相关", re.I
+)
+
+
+def _active_independence_stated(text: str) -> bool:
+    """Return whether independence is asserted rather than negated."""
+    normalized = _normalized_task_text(text)
+    for match in _INDEPENDENCE_STATED_RE.finditer(normalized):
+        clause_start = max(
+            normalized.rfind(separator, 0, match.start())
+            for separator in (".", ";", "。", "；", "\n")
+        )
+        prefix = normalized[clause_start + 1 : match.start()]
+        contrasts = list(_CORRELATION_CONTRAST_BOUNDARY.finditer(prefix))
+        if contrasts:
+            prefix = prefix[contrasts[-1].end() :]
+        if not _prefix_negates(prefix):
+            return True
+    return False
+
+
 def _uncertainty_model_from_prompt(text: str, quantity_count: int) -> dict[str, Any] | None:
     # Connector accepts natural phrasings ("a correlation of -0.404", "the
     # correlation is -0.404") in addition to spec-style "rho=-0.404"; the
@@ -370,14 +392,11 @@ def _uncertainty_model_from_prompt(text: str, quantity_count: int) -> dict[str, 
             "kind": "correlation_matrix",
             "matrix": [[1.0, rho], [rho, 1.0]],
         }
-    if re.search(r"\b(?:independent|uncorrelated)\b|相互独立|假设独立|忽略相关", text, re.I):
+    # Codex review P1 (PR #46, round 16): a keyword-only search interpreted
+    # "do not assume independent errors" as a positive uncertainty model.
+    if _active_independence_stated(text):
         return {"kind": "independent"}
     return None
-
-
-_INDEPENDENCE_STATED_RE = re.compile(
-    r"\b(?:independent|uncorrelated)\b|相互独立|假设独立|忽略相关", re.I
-)
 
 
 _CORRELATION_VALUE_RE = re.compile(
@@ -682,7 +701,7 @@ def scalar_call_echo_violation(
                             "correlation statement in the user prompt"
                         )
     elif kind == "independent":
-        if not _INDEPENDENCE_STATED_RE.search(prompt_text):
+        if not _active_independence_stated(prompt_text):
             return "independence was not stated by the user"
     else:
         return (

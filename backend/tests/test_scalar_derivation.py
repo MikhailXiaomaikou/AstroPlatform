@@ -299,3 +299,22 @@ def test_small_scale_covariance_diagonal_mismatch_fails_closed() -> None:
         )
 
     assert exc_info.value.code == "covariance_uncertainty_mismatch"
+
+
+def test_small_scale_asymmetric_covariance_fails_closed() -> None:
+    # Codex review P1 (PR #46, round 16): an absolute 1e-12 symmetry
+    # tolerance accepted a maximally asymmetric covariance at 1e-18 scale.
+    with pytest.raises(ScalarDerivationError) as exc_info:
+        derive_scalar(
+            operation="weighted_mean",
+            quantities=[
+                _quantity("a", 10.0, 1e-9, unit="km/s/Mpc"),
+                _quantity("b", 14.0, 1e-9, unit="km/s/Mpc"),
+            ],
+            uncertainty_model={
+                "kind": "covariance_matrix",
+                "matrix": [[1e-18, 1e-18], [0.0, 1e-18]],
+            },
+        )
+
+    assert exc_info.value.code == "non_symmetric_matrix"

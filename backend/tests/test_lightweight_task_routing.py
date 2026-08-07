@@ -126,6 +126,27 @@ def test_independence_must_be_stated_for_direct_tool_call() -> None:
     assert complete["direct_tool_call"]["input"]["uncertainty_model"]["kind"] == "independent"
 
 
+def test_negated_independence_blocks_direct_and_fallback_calls() -> None:
+    # Codex review P1 (PR #46, round 16): a bare keyword search interpreted
+    # "do not assume independent errors" as permission to assume them.
+    from app.services.agent_runtime.prompt_routing import scalar_call_echo_violation
+
+    valid_prompt = (
+        "Compute the difference A=10 +/- 1 and B=8 +/- 2, "
+        "assuming independent errors."
+    )
+    negated_prompt = (
+        "Compute the difference A=10 +/- 1 and B=8 +/- 2; "
+        "do not assume independent errors."
+    )
+    valid_call = classify_task_kind(valid_prompt)["direct_tool_call"]["input"]
+    negated = classify_task_kind(negated_prompt)
+
+    assert negated["direct_tool_call"] is None
+    assert "uncertainty_model" in negated["missing_inputs"]
+    assert scalar_call_echo_violation(valid_call, negated_prompt) is not None
+
+
 def test_open_method_question_stays_exploratory() -> None:
     decision = classify_task_kind(
         "Explore which method could test a possible systematic in the BAO table."
