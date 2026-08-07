@@ -1003,20 +1003,25 @@ _FIELD_TERMINATOR = re.compile(
     r"[一-鿿]{1,12}\s*(?:为|是|=|:|：)\s*[-+−]?\d)",
     re.I,
 )
-_NEGATED_MEASUREMENT_ASSIGNMENT = re.compile(
+_NON_EXACT_MEASUREMENT_ASSIGNMENT = re.compile(
     r"\b(?:is|are|was|were|should|must|can|could|may|might|will|would|"
     r"does|do|did)\s+(?:(?:explicitly|definitely|clearly|directly|simply)\s+){0,2}"
     r"(?:not|never)\b|"
     r"\b(?:(?:is|are|was|were|should|must|could|might|would|does|do|did|"
-    r"has|have|had)n['’]t|can['’]t|won['’]t|cannot)\b|(?:!=|≠)",
+    r"has|have|had)n['’]t|can['’]t|won['’]t|cannot)\b|"
+    r"(?:!=|≠|<=|>=|<|>|≤|≥|≲|≳)|"
+    r"\b(?:less|lower|smaller|greater|higher|larger)\s+than"
+    r"(?:\s+or\s+equal\s+to)?\b|"
+    r"\b(?:at\s+(?:most|least)|no\s+(?:more|less)\s+than|"
+    r"(?:upper|lower)\s+(?:limit|bound))\b",
     re.I,
 )
 
 
-def _measurement_assignment_is_negated(
+def _measurement_assignment_is_non_exact(
     window: str, label_position: int, value_position: int
 ) -> bool:
-    """Reject a value whose local label-to-value assignment is negated."""
+    """Reject negated or relational label-to-value assignments."""
     governing_text = window[label_position:value_position]
     # Appositive clauses may themselves contain unrelated negation. The final
     # comma-delimited segment governs the value (for example, "..., was 70"),
@@ -1024,7 +1029,7 @@ def _measurement_assignment_is_negated(
     last_comma = max(governing_text.rfind(","), governing_text.rfind("，"))
     if last_comma >= 0:
         governing_text = governing_text[last_comma + 1 :]
-    return _NEGATED_MEASUREMENT_ASSIGNMENT.search(governing_text) is not None
+    return _NON_EXACT_MEASUREMENT_ASSIGNMENT.search(governing_text) is not None
 
 
 def _value_positions(value: float, window: str) -> list[int]:
@@ -1110,7 +1115,7 @@ def _values_follow_label_order(
             # Codex review P1 (PR #46, round 19): token co-occurrence cannot
             # prove a measurement that the source explicitly negates, such as
             # "alpha is not 10 +/- 1".
-            if _measurement_assignment_is_negated(
+            if _measurement_assignment_is_non_exact(
                 window, label_position, position
             ):
                 continue

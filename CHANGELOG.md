@@ -36,12 +36,13 @@ need entries unless they change user-visible behavior or research validity.
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Twenty adversarial review rounds tightened heavy-chain routing, number and
+- Twenty-one adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
   scale-relative covariance validation, negation-aware independence parsing,
   negation-aware source assignments and independence parsing, grammatical
-  source-field/window boundaries, cosmology manifest/calculation baseline consistency,
+  source-field/window boundaries, cosmology manifest/calculation baseline
+  consistency, backend-owned receipt boundaries, operation-arity checks,
   multi-agent validation-summary preservation, holdout custody, and
   DNS-rebinding resistance without relaxing the existing claim gates.
 

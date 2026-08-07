@@ -200,6 +200,30 @@ async def test_invalid_covariance_returns_actionable_abstention(monkeypatch) -> 
     assert result["missing_dependencies"] == ["non_psd_matrix"]
 
 
+@pytest.mark.asyncio
+async def test_boundary_statement_is_backend_controlled(monkeypatch) -> None:
+    # Codex review P1 (PR #46, round 21): a model-authored tool call must not
+    # stamp arbitrary prose into a digest-backed deterministic receipt.
+    monkeypatch.setattr(
+        scalar_verification.settings, "lightweight_verification_enabled", True
+    )
+    invalid = _input(
+        boundary_statement="The posterior was reproduced.",
+        uncertainty_model={
+            "kind": "correlation_matrix",
+            "matrix": [[1, 2], [2, 1]],
+            "source_ref": "desi",
+        },
+    )
+
+    result = await execute_scalar_verification(invalid)
+
+    assert "posterior was reproduced" not in result["boundary_statement"].lower()
+    assert result["boundary_statement"].startswith(
+        "This is a controlled ratio consistency calculation"
+    )
+
+
 def test_feature_flag_controls_tool_visibility(monkeypatch) -> None:
     from app.api import chat
 

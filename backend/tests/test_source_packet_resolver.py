@@ -992,6 +992,31 @@ def test_explicitly_negated_measurement_must_not_verify_exact() -> None:
         assert status != "verified_exact", text
 
 
+def test_relational_measurement_must_not_verify_exact() -> None:
+    # Codex review P1 (PR #46, round 21): an upper/lower limit contains the
+    # same tokens as an equality but cannot support an exact assignment.
+    claims = [
+        {
+            "id": "alpha",
+            "label": "alpha",
+            "value": 10.0,
+            "standard_uncertainty": 1.0,
+        }
+    ]
+
+    for text in (
+        "alpha < 10 +/- 1.",
+        "alpha > 10 +/- 1.",
+        "alpha ≤ 10 +/- 1.",
+        "alpha ≥ 10 +/- 1.",
+        "alpha is greater than 10 +/- 1.",
+        "alpha is at most 10 +/- 1.",
+    ):
+        document = {"tables": [], "text": text}
+        status, _detail = match_expected_claims(document, claims, locator="")
+        assert status != "verified_exact", text
+
+
 def test_equation_locator_stops_before_the_next_equation() -> None:
     # Codex review P1 (PR #46, round 12): Equation 42 could borrow a requested
     # measurement from Equation 43 in the same section.

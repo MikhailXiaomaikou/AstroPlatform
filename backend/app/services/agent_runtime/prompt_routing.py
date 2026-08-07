@@ -607,6 +607,8 @@ def scalar_call_echo_violation(
     parsed quantity must carry that quantity's own numbers. Returns a
     violation description, or None when the call is fully echoed.
     """
+    if "boundary_statement" in call_input:
+        return "boundary_statement is backend-controlled"
     requested_operation = _requested_scalar_operation(
         _normalized_task_text(prompt_text)
     )
@@ -786,9 +788,13 @@ def _deterministic_tool_call_from_prompt(
         missing.append("unambiguous_source_mapping")
     if _repeated_scalar_labels(text):
         missing.append("unambiguous_quantities")
-    required_count = 2
-    if len(quantities) < required_count:
+    if len(quantities) < 2:
         missing.append("quantities")
+    elif operation in {"ratio", "difference", "product"} and len(quantities) != 2:
+        # Binary derivations cannot infer which pair the user intended when a
+        # third complete assignment is present. Do not construct a call that
+        # the scalar engine will inevitably reject.
+        missing.append("unambiguous_quantities")
     uncertainty_model = _uncertainty_model_from_prompt(text, len(quantities))
     if uncertainty_model is None:
         missing.append("uncertainty_model")
@@ -851,10 +857,6 @@ def _deterministic_tool_call_from_prompt(
             "quantities": quantities,
             "uncertainty_model": uncertainty_model,
             "sources": sources,
-            "boundary_statement": (
-                "This is a source-table consistency calculation, not a likelihood "
-                "fit, sampler run, posterior reconstruction, or dark-energy inference."
-            ),
         },
     }, []
 

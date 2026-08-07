@@ -373,6 +373,25 @@ def test_prompt_leading_operation_word_is_recognized() -> None:
     assert decision["direct_tool_call"] is not None
 
 
+def test_binary_direct_routes_reject_surplus_quantities() -> None:
+    # Codex review P2 (PR #46, round 21): binary operations with a third
+    # complete assignment must be treated as ambiguous instead of constructing
+    # a call that the scalar engine will inevitably reject.
+    for operation in ("Ratio", "Difference", "Product"):
+        decision = classify_task_kind(
+            f"{operation} of A = 10 +/- 1, B = 20 +/- 2, and "
+            "calibration = 30 +/- 3, assuming independent errors."
+        )
+        assert decision["direct_tool_call"] is None, operation
+        assert "unambiguous_quantities" in decision["missing_inputs"], operation
+
+    weighted = classify_task_kind(
+        "Weighted mean of A = 10 +/- 1, B = 20 +/- 2, and C = 30 +/- 3, "
+        "assuming independent errors."
+    )
+    assert weighted["direct_tool_call"] is not None
+
+
 def test_two_distinct_papers_make_source_mapping_ambiguous() -> None:
     # Codex review P2 (PR #46, round 5): references[:1] silently discarded a
     # second cited paper and bound every quantity to the first, so a
@@ -475,6 +494,9 @@ def test_echo_guard_rejects_values_not_assigned_to_that_quantity() -> None:
     assert scalar_call_echo_violation(borrowed_digit, prompt) is not None
     assert scalar_call_echo_violation(swapped, prompt) is not None
     assert scalar_call_echo_violation(faithful, prompt) is None
+    forged_boundary = deepcopy(faithful)
+    forged_boundary["boundary_statement"] = "The posterior was reproduced."
+    assert scalar_call_echo_violation(forged_boundary, prompt) is not None
 
 
 def test_echo_guard_rejects_changed_small_magnitude_values() -> None:

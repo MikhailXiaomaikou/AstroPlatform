@@ -104,13 +104,6 @@ TOOL_SCHEMAS = [
                         "additionalProperties": False,
                     },
                 },
-                "boundary_statement": {
-                    "type": "string",
-                    "description": (
-                        "Optional narrow boundary, for example: this is a table "
-                        "consistency calculation, not a likelihood rerun."
-                    ),
-                },
             },
             "required": ["operation", "quantities", "uncertainty_model", "sources"],
             "additionalProperties": False,
@@ -195,10 +188,8 @@ def _aggregate_source_status(
     return "user_supplied_unverified"
 
 
-def _boundary_statement(operation: str, supplied: Any) -> str:
-    text = str(supplied or "").strip()
-    if text:
-        return text
+def _boundary_statement(operation: str) -> str:
+    """Return the backend-owned receipt boundary for this operation."""
     return (
         f"This is a controlled {operation} consistency calculation from the "
         "listed scalar inputs. It is not a likelihood fit, sampler run, posterior "
@@ -271,9 +262,7 @@ async def execute_scalar_verification(tool_input: dict[str, Any]) -> dict[str, A
             },
             "source_evidence": [],
             "assumptions": [],
-            "boundary_statement": _boundary_statement(
-                operation, tool_input.get("boundary_statement")
-            ),
+            "boundary_statement": _boundary_statement(operation),
             "response_disposition": "abstention",
             "earliest_limiting_stage": "calculation_input",
             "missing_dependencies": [exc.code],
@@ -386,9 +375,7 @@ async def execute_scalar_verification(tool_input: dict[str, Any]) -> dict[str, A
         },
         "source_evidence": source_evidence,
         "assumptions": assumptions,
-        "boundary_statement": _boundary_statement(
-            operation, tool_input.get("boundary_statement")
-        ),
+        "boundary_statement": _boundary_statement(operation),
         "response_disposition": disposition,
         "earliest_limiting_stage": limiting_stage,
         "missing_dependencies": missing_dependencies,
