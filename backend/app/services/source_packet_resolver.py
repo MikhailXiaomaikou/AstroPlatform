@@ -34,7 +34,10 @@ SOURCE_STATUSES = frozenset(
     }
 )
 
-_ARXIV_RE = re.compile(r"(?:arxiv:\s*|arxiv\.org/(?:abs|pdf)/)?([\d]{4}\.[\d]{4,5})(?:v\d+)?", re.I)
+_ARXIV_RE = re.compile(
+    r"(?:arxiv:\s*|arxiv\.org/(?:abs|pdf)/)?([\d]{4}\.[\d]{4,5}(?:v\d+)?)",
+    re.I,
+)
 _DOI_RE = re.compile(r"(?:https?://(?:dx\.)?doi\.org/|doi:\s*)?(10\.\d{4,9}/\S+)", re.I)
 _ZENODO_RE = re.compile(r"(?:zenodo\.org/(?:records?|record)/|10\.5281/zenodo\.)(\d+)", re.I)
 _REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})

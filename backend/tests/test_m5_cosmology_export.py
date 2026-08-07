@@ -126,6 +126,34 @@ def test_compare_h0_anchors_does_not_require_literature_cache():
     assert "per-source luminosity distance" in out["limitations"][0]
 
 
+def test_h0_anchor_comparison_honors_explicit_planck_baseline():
+    from app.services.cosmology import cosmology_manifest
+
+    freedman = {
+        "name": "freedman21_trgb",
+        "H0_km_s_Mpc": 69.8,
+        "H0_err": 0.8,
+        "bibcode": "2021ApJ...919...16F",
+    }
+
+    def configured_manifest(name=None):
+        return cosmology_manifest(name) if name else freedman
+
+    with patch(
+        "app.services.cosmology.cosmology_manifest",
+        side_effect=configured_manifest,
+    ):
+        out = _exec_compare_luminosity_distances({
+            "baseline_cosmology": "planck18",
+            "target_cosmology": "riess22_shoes",
+            "comparison_mode": "h0_anchors",
+        })
+
+    assert out["success"] is True
+    assert out["current_cosmology"]["name"] == "planck18"
+    assert out["current_cosmology"]["H0_km_s_Mpc"] == 67.36
+
+
 def test_compare_h0_anchors_rejects_uncited_legacy_target():
     out = _exec_compare_luminosity_distances({
         "target_cosmology": "WMAP9",

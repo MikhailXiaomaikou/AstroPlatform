@@ -554,12 +554,15 @@ def scalar_call_echo_violation(
 
     def correlation_echoed(value: float) -> bool:
         return any(
-            abs(value - candidate) <= 1e-9 * max(1.0, abs(candidate))
+            value == candidate
+            or abs(value - candidate) <= 1e-12 * max(abs(value), abs(candidate))
             for candidate in correlation_values
         )
 
     def close(left: float, right: float) -> bool:
-        return abs(left - right) <= 1e-9 * max(1.0, abs(right))
+        return left == right or abs(left - right) <= 1e-12 * max(
+            abs(left), abs(right)
+        )
 
     parsed = _scalar_quantities_from_prompt(_normalized_task_text(prompt_text))
     parsed_by_key = {
@@ -3009,6 +3012,7 @@ def _cosmology_direct_route_from_prompt(text: str) -> list[dict[str, Any]] | Non
             "id": f"direct_route_{uuid.uuid4().hex}",
             "name": "compare_luminosity_distances",
             "input": {
+                "baseline_cosmology": "planck18",
                 "target_cosmology": "riess22_shoes",
                 "comparison_mode": "h0_anchors",
             },

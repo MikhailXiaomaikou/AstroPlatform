@@ -280,3 +280,22 @@ def test_small_scale_non_psd_covariance_fails_closed() -> None:
         )
 
     assert exc_info.value.code == "non_psd_matrix"
+
+
+def test_small_scale_covariance_diagonal_mismatch_fails_closed() -> None:
+    # Codex review P1 (PR #46, round 13): atol=1e-12 treated zero variance as
+    # matching the 1e-18 variance implied by a 1e-9 uncertainty.
+    with pytest.raises(ScalarDerivationError) as exc_info:
+        derive_scalar(
+            operation="difference",
+            quantities=[
+                _quantity("a", 10.0, 1e-9, unit="km/s/Mpc"),
+                _quantity("b", 0.0, 1e-9, unit="km/s/Mpc"),
+            ],
+            uncertainty_model={
+                "kind": "covariance_matrix",
+                "matrix": [[0.0, 0.0], [0.0, 0.0]],
+            },
+        )
+
+    assert exc_info.value.code == "covariance_uncertainty_mismatch"

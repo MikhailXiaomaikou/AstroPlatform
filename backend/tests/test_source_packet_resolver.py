@@ -136,7 +136,8 @@ def test_source_identifier_normalization() -> None:
         _source(id="supp", kind="zenodo", identifier="10.5281/zenodo.123456")
     )
 
-    assert arxiv.identifier == "2503.14738"
+    assert arxiv.identifier == "2503.14738v2"
+    assert arxiv.url == "https://arxiv.org/abs/2503.14738v2"
     assert doi.identifier == "10.1234/example"
     assert doi.url == "https://doi.org/10.1234/example"
     assert zenodo.identifier == "123456"

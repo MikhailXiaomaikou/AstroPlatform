@@ -381,6 +381,34 @@ def test_echo_guard_rejects_values_not_assigned_to_that_quantity() -> None:
     assert scalar_call_echo_violation(faithful, prompt) is None
 
 
+def test_echo_guard_rejects_changed_small_magnitude_values() -> None:
+    # Codex review P1 (PR #46, round 13): the unit-scale tolerance allowed
+    # A_s=2.1e-9 to be rewritten as 3e-9 in a model-authored fallback call.
+    from app.services.agent_runtime.prompt_routing import scalar_call_echo_violation
+
+    prompt = (
+        "Difference between A_s = 2.1e-9 +/- 0.1e-9 and "
+        "B_s = 1.0e-9 +/- 0.1e-9, assuming independent errors."
+    )
+    changed = {
+        "operation": "difference",
+        "quantities": [
+            {"id": "A_s", "label": "A_s", "value": 3e-9,
+             "standard_uncertainty": 0.1e-9, "unit": "dimensionless",
+             "source_ref": "prompt"},
+            {"id": "B_s", "label": "B_s", "value": 1e-9,
+             "standard_uncertainty": 0.1e-9, "unit": "dimensionless",
+             "source_ref": "prompt"},
+        ],
+        "uncertainty_model": {"kind": "independent"},
+        "sources": [
+            {"id": "prompt", "kind": "user_supplied", "identifier": "prompt"}
+        ],
+    }
+
+    assert scalar_call_echo_violation(changed, prompt) is not None
+
+
 def test_echo_guard_rejects_changed_operation() -> None:
     # Codex review P1 (PR #46, round 7): a fallback call could faithfully
     # echo every quantity while changing the requested ratio into a

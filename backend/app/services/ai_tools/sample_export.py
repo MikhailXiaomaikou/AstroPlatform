@@ -35,6 +35,14 @@ TOOL_SCHEMAS = [
                     "type": "string",
                     "description": "Source cache key. Default: latest_literature_tables.",
                 },
+                "baseline_cosmology": {
+                    "type": "string",
+                    "description": (
+                        "Optional explicit baseline cosmology. When omitted, the "
+                        "configured current cosmology is used. Direct Planck-SH0ES "
+                        "anchor comparisons set this to 'planck18'."
+                    ),
+                },
                 "target_cosmology": {
                     "type": "string",
                     "description": (
@@ -325,6 +333,7 @@ def _exec_compare_luminosity_distances(
         inp.get("cache_key") or "latest_literature_tables"
     ).strip() or "latest_literature_tables"
     comparison_mode = str(inp.get("comparison_mode") or "sample").strip().lower()
+    baseline_name = str(inp.get("baseline_cosmology") or "").strip()
     target_name = str(inp.get("target_cosmology") or "").strip()
     if not target_name:
         return {
@@ -346,7 +355,11 @@ def _exec_compare_luminosity_distances(
         get_cosmology as _get,
     )
 
-    current_manifest = _current_manifest()
+    current_manifest = (
+        _cosmology_manifest_for(baseline_name)
+        if baseline_name
+        else _current_manifest()
+    )
     target_manifest = _cosmology_manifest_for(target_name)
 
     if comparison_mode == "h0_anchors":

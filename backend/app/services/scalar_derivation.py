@@ -228,7 +228,7 @@ def build_covariance(
         _validate_positive_semidefinite(covariance)
         expected_variances = np.square(standard_uncertainties)
         if not np.allclose(
-            np.diag(covariance), expected_variances, rtol=1e-6, atol=1e-12
+            np.diag(covariance), expected_variances, rtol=1e-6, atol=0.0
         ):
             raise ScalarDerivationError(
                 "Covariance diagonal must match the supplied standard uncertainties.",

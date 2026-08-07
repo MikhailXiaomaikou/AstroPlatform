@@ -1506,6 +1506,7 @@ class TestCosmologyDirectRouting:
         assert calls
         assert calls[0]["name"] == "compare_luminosity_distances"
         assert calls[0]["input"]["target_cosmology"] == "riess22_shoes"
+        assert calls[0]["input"]["baseline_cosmology"] == "planck18"
         assert calls[0]["input"]["comparison_mode"] == "h0_anchors"
 
         registered_anchor_calls = _cosmology_direct_route_from_prompt(
