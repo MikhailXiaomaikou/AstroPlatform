@@ -164,7 +164,14 @@ def _matrix_from_input(raw: Any, *, count: int, label: str) -> np.ndarray:
 
 def _validate_positive_semidefinite(matrix: np.ndarray) -> None:
     eigenvalues = np.linalg.eigvalsh(matrix)
-    tolerance = max(1.0, float(np.max(np.abs(eigenvalues)))) * 1e-10
+    # Codex review P1 (PR #46, round 12): PSD is scale-relative. An absolute
+    # 1.0 floor let a materially negative 1e-12 eigenvalue pass whenever the
+    # covariance happened to be expressed in small units.
+    spectral_scale = float(np.max(np.abs(eigenvalues)))
+    tolerance = max(
+        np.finfo(float).tiny,
+        spectral_scale * len(eigenvalues) * np.finfo(float).eps,
+    )
     if float(np.min(eigenvalues)) < -tolerance:
         raise ScalarDerivationError(
             "The uncertainty matrix must be positive semidefinite.",

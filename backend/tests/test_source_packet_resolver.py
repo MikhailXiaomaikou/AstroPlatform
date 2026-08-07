@@ -880,6 +880,64 @@ def test_claim_must_not_borrow_a_value_after_the_next_claim_label() -> None:
     assert status != "verified_exact"
 
 
+def test_last_claim_must_not_borrow_from_a_later_field() -> None:
+    # Codex review P1 (PR #46, round 12): the final expected claim had no next
+    # label bound and could consume a later calibration field.
+    document = {
+        "tables": [],
+        "text": (
+            "alpha was 10 +/- 1; beta was not measured; "
+            "calibration was 20 +/- 2."
+        ),
+    }
+    claims = [
+        {"id": "alpha", "label": "alpha", "value": 10.0,
+         "standard_uncertainty": 1.0},
+        {"id": "beta", "label": "beta", "value": 20.0,
+         "standard_uncertainty": 2.0},
+    ]
+
+    status, _detail = match_expected_claims(document, claims, locator="")
+
+    assert status != "verified_exact"
+
+
+def test_equation_locator_stops_before_the_next_equation() -> None:
+    # Codex review P1 (PR #46, round 12): Equation 42 could borrow a requested
+    # measurement from Equation 43 in the same section.
+    document = {
+        "tables": [],
+        "text": (
+            "Section 2. Equation 42: alpha is not measured. "
+            "Equation 43: alpha = 10 +/- 1."
+        ),
+    }
+    claims = [
+        {"id": "alpha", "label": "alpha", "value": 10.0,
+         "standard_uncertainty": 1.0}
+    ]
+
+    status, _detail = match_expected_claims(
+        document, claims, locator="Equation 42"
+    )
+
+    assert status != "verified_exact"
+
+
+def test_structured_row_ignores_caption_label_mentions() -> None:
+    # Codex review P2 (PR #46, round 12): caption mentions precede the
+    # interleaved row fields and must not replace their local label positions.
+    document = _document()
+    document["tables"][0]["caption"] = "Measurements of D_M and D_H"
+
+    status, detail = match_expected_claims(
+        document, _claims(), locator="Table 4, LRG2"
+    )
+
+    assert status == "verified_exact"
+    assert detail["reason"] == "labels_and_values_same_window"
+
+
 def test_exponent_suffix_must_not_match_plain_number() -> None:
     # Codex review P1 (PR #46, round 3): the trailing boundary accepted an
     # exponent continuation, so supplied 17 matched source text 17e2.

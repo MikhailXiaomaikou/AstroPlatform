@@ -714,16 +714,22 @@ def _compact_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).lower()
 
 
-def _label_token_present(token: str, window: str) -> re.Match[str] | None:
+def _label_token_present(
+    token: str, window: str, *, last: bool = False
+) -> re.Match[str] | None:
     """Boundary-aware label containment.
 
     Codex review P1 (PR #46, round 6): bare substring matching let "ns"
     match inside "constraints". A label token must stand on its own
     alphanumeric boundary.
     """
-    return re.search(
-        rf"(?<![a-z0-9ρ_]){re.escape(token)}(?![a-z0-9ρ_])", window
-    )
+    pattern = rf"(?<![a-z0-9ρ_]){re.escape(token)}(?![a-z0-9ρ_])"
+    found: re.Match[str] | None = None
+    for candidate in re.finditer(pattern, window):
+        found = candidate
+        if not last:
+            break
+    return found
 
 
 def _locator_fragment_alternatives(fragment: str) -> tuple[str, ...]:
@@ -750,8 +756,9 @@ def _locator_fragment_present(fragment: str, window: str) -> bool:
 
 
 _TEXT_STRUCTURE_BOUNDARY = re.compile(
-    r"(?<![a-z0-9])(?:table|tab\.?|section|sec\.?)\s*"
-    r"\d+(?:\.\d+)*[a-z]?(?![a-z0-9])",
+    r"(?<![a-z0-9])(?:(?:table|tab\.?|section|sec\.?|equation|eq\.?)\s*"
+    r"\d+(?:\.\d+)*[a-z]?|\(\s*\d+(?:\.\d+)*[a-z]?\s*\))"
+    r"(?![a-z0-9])",
     re.I,
 )
 
@@ -978,6 +985,7 @@ _GENERIC_NUMBER_TOKEN = re.compile(
     r"(?!\.?[0-9]|[eE][-+]?[0-9])"
 )
 _UNCERTAINTY_BINDING = re.compile(r"\s*(?:±|\+/-|\+-|\\pm)\s*", re.I)
+_FIELD_TERMINATOR = re.compile(r";|(?<!\d)[.!?]|[.!?](?!\d)")
 
 
 def _value_positions(value: float, window: str) -> list[int]:
@@ -1015,7 +1023,10 @@ def _values_follow_label_order(
             continue
         label_positions = [
             match.start()
-            for match in (_label_token_present(label, window) for label in labels)
+            for match in (
+                _label_token_present(label, window, last=True)
+                for label in labels
+            )
             if match is not None
         ]
         if not label_positions:
@@ -1029,6 +1040,13 @@ def _values_follow_label_order(
         next_label_position = (
             ordered[index + 1][0] if index + 1 < len(ordered) else None
         )
+        field_terminator = _FIELD_TERMINATOR.search(window, label_position + 1)
+        field_end = field_terminator.start() if field_terminator else None
+        upper_bound = next_label_position
+        if field_end is not None:
+            upper_bound = (
+                field_end if upper_bound is None else min(upper_bound, field_end)
+            )
         try:
             value = float(claim["value"])
         except (KeyError, TypeError, ValueError):
@@ -1048,7 +1066,7 @@ def _values_follow_label_order(
             # first matching number after the next claim's label. Structured
             # tables are rendered above as local header/cell pairs, so the
             # same field boundary works for prose and tables.
-            if next_label_position is not None and position >= next_label_position:
+            if upper_bound is not None and position >= upper_bound:
                 continue
             # Codex review P1 (PR #46, round 6): the uncertainty must be
             # bound to its own value — it has to be the immediately

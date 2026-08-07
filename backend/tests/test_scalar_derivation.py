@@ -261,3 +261,22 @@ def test_weighted_mean_accepts_small_scale_positive_definite_covariance() -> Non
     assert result["result"]["standard_uncertainty"] == pytest.approx(
         1e-6 / math.sqrt(2.0)
     )
+
+
+def test_small_scale_non_psd_covariance_fails_closed() -> None:
+    # Codex review P1 (PR #46, round 12): the absolute PSD tolerance allowed
+    # a covariance with eigenvalue -1e-12 to produce zero uncertainty.
+    with pytest.raises(ScalarDerivationError) as exc_info:
+        derive_scalar(
+            operation="difference",
+            quantities=[
+                _quantity("a", 10.0, 1e-6, unit="km/s/Mpc"),
+                _quantity("b", 0.0, 1e-6, unit="km/s/Mpc"),
+            ],
+            uncertainty_model={
+                "kind": "covariance_matrix",
+                "matrix": [[1e-12, 2e-12], [2e-12, 1e-12]],
+            },
+        )
+
+    assert exc_info.value.code == "non_psd_matrix"
