@@ -16,6 +16,7 @@ Welcome to Standard Astro, an AI-native observational-cosmology research platfor
 | "Plot an HR diagram of stars within 50 pc" | Searches Gaia, plots color-magnitude diagram |
 | "Find recent papers about Type Ia supernovae" | Searches NASA ADS — **requires `ADS_API_KEY`**, see note below |
 | "Fit the [CII] luminosity vs FWHM relation from these cited tables" | Runs `extract_literature_tables` then `fit_line_lfr` |
+| "From DESI DR2 Table 4, compute `(17.351±0.177)/(19.455±0.330)` with `ρ=-0.404`" | When the v0.2 flag is enabled, routes to the controlled scalar verifier and returns a source/uncertainty receipt |
 
 The cosmology examples come first because that is the platform's focus, and they run on a fresh deployment with no extra setup beyond a model-provider key: the datasets are vendored and pinned in the repo, and CAMB runs in-process.
 
@@ -23,11 +24,36 @@ The cosmology examples come first because that is the platform's focus, and they
 
 > Spectrum-analysis tools (`analyze_spectrum`) also exist, but they take a FITS file path on the backend filesystem — a fresh deployment has no FITS files, so that is not a first-run example.
 
-*(Example verification status, as of 2026-07-07: every tool named above was checked to be registered and visible under cosmology focus via `build_allowed_tools("cosmology")`. The prompts themselves were not each re-run end-to-end on a live deployment for this revision; actual routing also depends on the model provider you configure.)*
+*(Example verification status, as of 2026-08-07: every tool named above was checked to be registered and visible under cosmology focus via `build_allowed_tools("cosmology")`. The exact prompts still need to be re-run end-to-end after the latest source-matching hardening; actual routing also depends on the model provider you configure.)*
 
-The AI has access to a global tool catalog of **77 tools** (measured 2026-07-07) covering search, literature, statistics, and observational-cosmology likelihood building. The active research module (`ASTRO_RESEARCH_FOCUS`, which fails closed to `cosmology`) narrows the per-turn surface — currently **57 tools** are visible under cosmology focus (measured 2026-07-07), as declared in `backend/app/prompts/modules/cosmology/manifest.yaml` plus the core tool manifest. The AI selects the right tool from the visible set based on your request.
+The AI has access to a global tool catalog of **81 tools** (live import,
+2026-08-07) covering search, literature, statistics, observational-cosmology
+likelihoods, and scalar verification. The active research module
+(`ASTRO_RESEARCH_FOCUS`, which fails closed to `cosmology`) has **61 tools** in
+its manifest allowlist. Because v0.2 is off by default, the wire-visible surface
+is normally **60 tools**; enabling the flag exposes
+`verify_scalar_derivation` as the 61st. The AI selects from that filtered set
+based on your request.
 
 When a tool result includes provenance, the chat card shows a **Data Sources** panel with `archive_version`, bibcodes, and source authority. The **Copy Acknowledgement** button assembles acknowledgement text from the conversation's provenance. If the AI tries a gated source such as SDSS or Chandra, the card appears as **Maintenance** rather than a generic error and suggests the active alternatives.
+
+### Optional: v0.2 scalar verification
+
+This path is off by default. For a local evaluation session, set
+`LIGHTWEIGHT_VERIFICATION_ENABLED=1` before starting the backend. A qualifying
+paper-table question can then produce a Scalar Verification Receipt that keeps
+two claims separate:
+
+- `calculation_status` says whether the controlled arithmetic succeeded;
+- `source_status` says whether the cited values matched the requested source
+  and locator exactly.
+
+The receipt also records the formula, covariance assumption, source evidence,
+boundary statement, response disposition, and a canonical SHA-256 hash. A
+correct calculation does not by itself prove that the paper reported the
+inputs. Missing cross-covariance normally yields a useful `limited` answer,
+not a fabricated full verification. This path does not run arbitrary formulas,
+likelihoods, samplers, or posterior reconstructions.
 
 Literature-only searches support context and citations, not measurement claims. For relation fits such as `[CII]` luminosity versus FWHM, the assistant must extract cited literature tables and run the dedicated line-relation fit before it can report slope, intercept, scatter, or correlation values. If the current tools do not return usable measurement rows, the assistant should say that directly instead of filling gaps from memory.
 

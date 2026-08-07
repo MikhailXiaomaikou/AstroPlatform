@@ -4,6 +4,8 @@
 
 本研究评估 Standard Astro v0.2 能否在保留模型研究灵活性的同时，把公开论文中的小型、可验证计算从重型 likelihood 工作流中分离。实验在实现前冻结 8 道任务，并对五个模型执行直接回答与 Standard Astro 两种条件、每题三次重复，共 `240/240` 个预注册样本。自动审计结果为：直接模型 `839/1440`（58.3%），Standard Astro `1440/1440`（100.0%），差值 `+41.7` 个百分点。自动发布门状态：**全部通过**。最初冻结的四模型 `192` 样本结果仍可单独复核；新增 Kimi K3 构成同题同口径的 48 样本扩展。该结论只适用于本题集和冻结评分规则；博士后 12 组匿名 A/B 复核尚须独立完成，不能以自动评分替代。
 
+> **版本说明（2026-08-07）**：上述 Standard Astro `1440/1440` 是确定性管道与自动审计规则的自检，模型没有在回路，不能作为模型行为增益的头条证据。模型真实参与的修复后自然措辞层为 `651/720`（90.4%，n=60），详见战役报告。评分文件生成后，代码又完成十轮来源核验与路由加固；完整矩阵尚未在最新 `HEAD` 上重跑，所以本文数字是历史评测快照。
+
 ## 研究问题
 
 1. 混合路由能否把明确表格计算送入轻量验证，而不因 DESI、BAO、CMB 等领域词误入完整研究矩阵？
@@ -13,13 +15,13 @@
 
 ## 系统设计
 
-v0.2 统一输出 `deterministic_source_check`、`research_exploration`、`full_research` 和 `general` 四种任务类型。高置信度轻量任务绕过模型生成代码，使用受控的 ratio、difference、product 或 generalized inverse-covariance weighted mean，并以解析 Jacobian 传播一阶不确定性。来源解析器支持 arXiv/ar5iv、arXiv 源/PDF、DOI 公开页面/PDF、Zenodo 官方附件、HTTPS URL 与带哈希缓存。来源匹配与派生数值分别授权，计算正确不会自动升级为“论文报告了该值”。
+v0.2 统一输出 `deterministic_source_check`、`research_exploration`、`full_research` 和 `general` 四种任务类型。高置信度轻量任务绕过模型生成代码，使用受控的 ratio、difference、product 或 inverse-covariance weighted mean，并以解析 Jacobian 传播一阶不确定性；奇异协方差不在 v0.2 定义域内，会明确拒绝。来源解析器支持 arXiv/ar5iv、arXiv 源/PDF、DOI 公开页面/PDF、Zenodo 官方附件、HTTPS URL 与带哈希缓存。来源匹配与派生数值分别授权，计算正确不会自动升级为“论文报告了该值”。
 
 ![总体评分](./assets/standard_astro_v02_overall.svg)
 
 ## 实验设计与评分
 
-- 模型：`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`claude-fable-5`。
+- 模型：`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`claude-fable-5`、`kimi-k3`。
 - 条件：裸模型闭卷回答；Standard Astro 真实工具与门禁路径。
 - 任务：8 道预注册观测宇宙学任务，每个实验单元重复 3 次。
 - 评分：来源可追踪性、数值证据约束、不确定性校准、能力缺口处理、端到端成功、明显错误风险六维，每维 0–2 分，总分 12。
@@ -100,7 +102,7 @@ Standard Astro 的来源与数值证据两维联合达成率为 `100.0%`。120 �
 
 ## 结论
 
-v0.2 的判断标准不是“模型是否显得更聪明”，而是小型研究核查能否更快进入正确路径、留下可验算凭证，并在证据不足时给出有用而准确的边界。是否标记 Alpha v0.2 取决于上述自动门与独立专家门共同通过。
+v0.2 的判断标准不是“模型是否显得更聪明”，而是小型研究核查能否更快进入正确路径、留下可验算凭证，并在证据不足时给出有用而准确的边界。是否标记 Alpha v0.2 取决于当前代码上的矩阵复跑、上述自动门与独立专家门共同通过。
 
 ## 复现
 

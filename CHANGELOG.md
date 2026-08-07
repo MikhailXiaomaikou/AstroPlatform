@@ -8,6 +8,38 @@ need entries unless they change user-visible behavior or research validity.
 
 ## Unreleased
 
+### Lightweight verification v0.2 hardening (2026-08-03 → 2026-08-07)
+
+- Added a dark-launched deterministic source-check path for bounded scalar
+  ratio, difference, product, and inverse-covariance weighted-mean
+  calculations. It validates units and covariance explicitly, never evaluates
+  a model-authored expression, and separately authorizes the derived number
+  and the cited source measurement.
+- Added bounded arXiv, DOI, Zenodo, and public-HTTPS source resolution with
+  locator-scoped label/value matching, content-addressed caching, pinned DNS
+  connections, response/expansion limits, and explicit conflict, unmatched,
+  unverified, and unavailable states.
+- Added hashed Scalar Verification Receipts and general Evidence Receipt cards
+  in the chat UI. Response dispositions now distinguish full, limited,
+  abstention, refusal, and hard block instead of flattening every incomplete
+  source check into a failure.
+- Added durable getdist chain exports. In-process chains disclose that their
+  equal weights and zero `-loglike` column reflect unavailable per-sample
+  likelihoods; external Cobaya chain files are preserved verbatim. Partial
+  uploads are never advertised, and storage failures do not discard a
+  completed scientific result.
+- Added pre-registered canonical and natural-phrasing evaluations, model-call
+  stratification, should-pass corpora, a sealed holdout set, formal report
+  artifacts, and an expert-review script. The deterministic canonical matrix
+  is reported as a pipeline self-check, not model behavior; the post-fix
+  natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
+  independent expert review.
+- Ten adversarial review rounds tightened heavy-chain routing, number and
+  uncertainty binding, compound table/row locators, multi-paper ambiguity,
+  cache identity, operation/source/unit echo guards, singular weighted means,
+  source-window boundaries, and DNS-rebinding resistance without relaxing the
+  existing claim gates.
+
 ### P0 production and local-automation hardening (2026-07-13)
 
 - Added a loopback-only Bot Console for the local weekly cosmology-research and

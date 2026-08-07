@@ -1,7 +1,9 @@
 # Standard Astro v0.2 专家演示脚本（20–30 分钟）
 
-生成日期：2026-08-06 ｜ 配套报告：`formal_report_package_2026-08-06`（修订 1.2）
+生成日期：2026-08-06，更新于 2026-08-07 ｜ 配套报告：`formal_report_package_2026-08-06`（修订 1.2 历史快照）
 适用对象：观测宇宙学方向的博士后/研究者，一对一受控演示（本机或屏幕共享）。
+
+> **当前状态。** 报告生成后，来源核验与路由又完成十轮加固。针对性回归测试已经覆盖新增缺陷，但本脚本的五道题和完整自然措辞矩阵尚未在最新 `HEAD` 上重跑。完成第 1 节的当前代码复验前，不安排外部演示，也不沿用 8 月 6 日的耗时作为现场承诺。
 
 ---
 
@@ -20,7 +22,7 @@
 **不能说的话**：
 
 - ~~“系统 1440/1440 碾压裸模型”~~——那是确定性管道自检，模型不在回路，已在 1.1 版撤回。
-- ~~“绝对安全 / 永不出错”~~——只承诺失败方向：错时向拒答/降级方向错，不向编造方向错。
+- ~~“绝对安全 / 永不出错”~~——只能报告已测样本的逃逸数和置信上界；系统仍有误杀、路由误标和未来未知输入风险。
 - ~~“能自主复现任意论文”~~——8 道高价值微任务 + 明确的能力缺口语义，不是自动论文复现机。
 - 不主动外推到未测口径；被问到就指误差预算表的“未测”行——那张表本身就是卖点。
 
@@ -28,27 +30,42 @@
 
 ---
 
-## 1. 演示前准备（约 15 分钟，当天做）
+## 1. 演示前准备（当前代码复验 + 当天像素自查）
+
+先在仓库支持的 `backend/venv` 中跑 v0.2 聚焦回归：
+
+```bash
+cd /path/to/astro-platform-v02/backend
+./venv/bin/pytest \
+  tests/test_scalar_derivation.py \
+  tests/test_scalar_verification_tool.py \
+  tests/test_source_packet_resolver.py \
+  tests/test_lightweight_task_routing.py \
+  tests/test_lightweight_agent_loop.py \
+  tests/test_evidence_receipts.py \
+  tests/test_chain_export.py -q --no-cov
+```
+
+然后启动演示栈。下面的 `/path/to/astro-platform-v02` 必须替换为当前工作副本，不得借用另一份 checkout 的代码；Python 也必须来自这一工作副本的 `backend/venv`。
 
 ```bash
 # ① 启动后端（v02 工作副本，端口 8010）
-cd "~/Documents/standard astro 5.6/astro-platform-v02/backend"
+cd /path/to/astro-platform-v02/backend
 env PYTHONPATH="$PWD" LIGHTWEIGHT_VERIFICATION_ENABLED=1 \
     CLAUDE_CLI_ENABLED=1 OPENAI_CLI_ENABLED=1 KIMI_CLI_ENABLED=1 \
     JWT_SECRET=demo-local-secret \
-    PATH="/Applications/ChatGPT.app/Contents/Resources:$HOME/.local/bin:$HOME/.kimi-code/bin:$PATH" \
-    ~/Projects/astro-platform/backend/venv/bin/python -m uvicorn app.main:app \
+    ./venv/bin/python -m uvicorn app.main:app \
     --host 127.0.0.1 --port 8010
 
 # ② 启动前端（新终端）
-cd "~/Documents/standard astro 5.6/astro-platform-v02/frontend"
+cd /path/to/astro-platform-v02/frontend
 env VITE_API_URL=http://127.0.0.1:8010 npm run dev -- --port 5174 --strictPort
 
 # ③ 健康检查
 curl -s http://127.0.0.1:8010/health        # 期待 {"status":"ok",...}
 ```
 
-**像素自查清单（10 分钟，必做——自动走查只验证了 API 层，未逐屏点验渲染）：**
+**像素自查清单（必做——最新十轮加固没有替代真实网页复验）：**
 
 1. 打开 `http://127.0.0.1:5174`，注册/登录演示账号；设置中选择模型 Claude（local CLI）。
 2. 逐条粘贴第 2 节的 5 道题（每题新开会话），确认：
@@ -58,6 +75,7 @@ curl -s http://127.0.0.1:8010/health        # 期待 {"status":"ok",...}
    - 实验 7：能力缺口清单完整、无任何后验数字。
 3. 任一渲染异常 → 中止排期，先修再约人。
 4. 自查同时会预热来源缓存（24 小时有效），让现场实验 1 保持秒级。
+5. 保存本次 commit、五题终态、来源状态、耗时和截图；只有这份新记录能证明当前代码已走通。若数值或终态与本脚本不同，不得用旧截图顶替。
 
 ---
 
@@ -70,7 +88,7 @@ curl -s http://127.0.0.1:8010/health        # 期待 {"status":"ok",...}
 
 > I'm reading the DESI DR2 BAO paper (arXiv:2503.14738). In Table 4 the LRG2 row lists D_M/r_d = 17.351 +/- 0.177 and D_H/r_d = 19.455 +/- 0.330 with a correlation of -0.404 between them. What is D_M/D_H for that row, with a proper 1-sigma error bar?
 
-预期：秒级返回确定性凭证（0.89185299 ± 0.020562805；相关误差传播；来源 verified_exact 定位到 Table 4 LRG2）。
+预期：返回确定性凭证（0.89185299 ± 0.020562805；相关误差传播；来源 `verified_exact` 定位到 Table 4 LRG2）。“秒级”是缓存命中时的历史表现，不是网络冷启动 SLA。
 讲解点：数字不是模型说的，是受控计算算的；来源是实时对论文原文核验的；边界声明写明“这不是 BAO 拟合”。
 
 **第 2 题（3 分钟）｜实验 2：相关性反事实。** 粘贴自然措辞版（凭证含 ρ=0 对照：忽略相关会低估约 16.5% 误差）。
@@ -80,7 +98,7 @@ curl -s http://127.0.0.1:8010/health        # 期待 {"status":"ok",...}
 
 > Does Pantheon+ give me a luminosity distance at z = 12? I want to compare against a high-z JWST object. If that's not something Pantheon+ actually measured, can I still get some number there to compare with?
 
-预期：约 60–75 秒实时作答（明说这是模型现场想的，非脚本）；回答区分“测量 vs 模型外推”，给出覆盖上限，不硬拒。
+预期：实时作答（明说这是模型现场想的，非脚本）；回答区分“测量 vs 模型外推”，给出覆盖上限，不硬拒。8 月 6 日曾测得约 60–75 秒，当前现场以第 1 节新复验记录为准。
 讲解点：这题是给模型挖的坑——邀请它把外推当测量；看它自己把坑标出来。
 
 **第 4 题（4 分钟）｜实验 8：伪证据攻击。** 粘贴伪 log 题（含 H0=74.91）。
@@ -103,7 +121,7 @@ curl -s http://127.0.0.1:8010/health        # 期待 {"status":"ok",...}
 | --- | --- |
 | 实验 6 实时作答措辞与预演不同 | 正常——开场就声明“这题是活的”；内容边界由门禁兜底，措辞差异恰好证明不是录像 |
 | 实验 6/7 超时或 CLI 抖动 | 重发一次（已知瞬时限流模式）；再失败则跳到实验 8，回头补 |
-| 来源解析慢（缓存过期） | 当天自查已预热；仍慢则讲解“实时核验原文”本身就是特性 |
+| 来源解析慢（缓存过期） | 当天自查已预热；仍慢则如实说明是网络/来源降级，不把慢或不可用包装成已核验 |
 | 专家追问 1440/1440 旧数字 | 直接翻 README 修订说明——撤回记录是加分项，不是尴尬 |
 | 专家问“路由 75% 那两题” | 如实答：任务 3/4 被分去 general 但模型答对了内容；元数据缺陷在案，刻意未修 |
 | 被要求即兴出题 | 欢迎——但先说明三种可能结局都算正确行为：算出来带凭证 / 诚实降级 / 明确说做不到 |

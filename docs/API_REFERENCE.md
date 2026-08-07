@@ -63,6 +63,32 @@ The source registry currently exposes 23 connector keys. The active provenance-v
 | GET | `/api/chat/sessions` | List chat sessions |
 | GET | `/api/chat/sessions/{session_id}` | Get session messages |
 
+When `LIGHTWEIGHT_VERIFICATION_ENABLED=1`, qualifying chat turns may include
+the model-visible `verify_scalar_derivation` tool. It is deliberately bounded
+to `ratio`, `difference`, `product`, and inverse-covariance
+`weighted_mean`; it does not accept arbitrary expressions or execute generated
+code. Inputs require explicit quantities, units, standard uncertainties,
+source references/locators, and one of `independent`, `correlation_matrix`, or
+`covariance_matrix`.
+
+The resulting receipt exposes these stable semantics:
+
+| Field | Meaning |
+|---|---|
+| `task_kind` | `deterministic_source_check` |
+| `calculation_status` | Whether the controlled derivation ran successfully |
+| `source_status` | `verified_exact`, `resolved_unmatched`, `user_supplied_unverified`, `conflict`, or `unavailable` |
+| `claim_scopes` | Separately authorizes the derived number and the source-measurement attribution |
+| `response_disposition` | The scalar tool returns `full`, `limited`, or `abstention`; the enclosing chat validation may also return `refusal` or `hard_block` |
+| `receipt_sha256` | Canonical hash of the receipt payload |
+
+Source adapters support arXiv, DOI, Zenodo, public HTTPS URLs, and explicitly
+unverified user-supplied comparators. Public downloads are size/time bounded;
+HTTPS redirects and resolved addresses are revalidated to keep private-network
+targets outside the source resolver. A `verified_exact` receipt verifies the
+requested labels and values in the scoped source region. It does not validate
+the paper's method or make the result publication-ready.
+
 ### Pipeline
 
 | Method | Endpoint | Description |
@@ -100,6 +126,12 @@ The source registry currently exposes 23 connector keys. The active provenance-v
 | GET | `/api/provenance/{id}/requirements.txt` | Pinned environment |
 
 Tool results also carry inline provenance. The backward-compatible top-level fields (`reproducibility`, `data_origin`, `analysis_status`, `source_urls`, `archive_ids`, `warnings`) remain, and provenance-v2 adds a nested `provenance` object with `datasets`, `field_bibcodes`, `coverage`, and copied reproducibility metadata. Generated papers and the frontend acknowledgement button read from this nested object.
+
+Chat validation summaries may additionally contain `evidence_receipts` for
+dataset-coverage checks, untrusted pasted transcripts, capability gaps, and
+scalar derivations. The frontend renders these separately from ordinary tool
+cards so that a useful derived number can remain visible even when its paper
+attribution is limited.
 
 For literature-derived measurement workflows, `search_literature` is paper/abstract-level evidence only. Measurement claims such as line-luminosity/FWHM slopes, intercepts, intrinsic scatter, and correlation values require extracted table rows or a publication-ready fit result in the same tool turn. Built-in cosmology presets likewise do not make their manifest bibcodes globally citeable; the relevant cosmology or fit tool must return the preset provenance in the current turn.
 
