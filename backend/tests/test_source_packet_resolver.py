@@ -903,6 +903,27 @@ def test_last_claim_must_not_borrow_from_a_later_field() -> None:
     assert status != "verified_exact"
 
 
+def test_claim_must_not_cross_a_comma_delimited_contrast_clause() -> None:
+    # Codex review P1 (PR #46, round 17): a semicolon/sentence-only field
+    # bound let a denied measurement borrow a calibration after ", while".
+    document = {
+        "tables": [],
+        "text": "alpha was not measured, while calibration was 10 +/- 1.",
+    }
+    claims = [
+        {
+            "id": "alpha",
+            "label": "alpha",
+            "value": 10.0,
+            "standard_uncertainty": 1.0,
+        }
+    ]
+
+    status, _detail = match_expected_claims(document, claims, locator="")
+
+    assert status != "verified_exact"
+
+
 def test_equation_locator_stops_before_the_next_equation() -> None:
     # Codex review P1 (PR #46, round 12): Equation 42 could borrow a requested
     # measurement from Equation 43 in the same section.

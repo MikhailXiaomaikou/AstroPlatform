@@ -139,12 +139,20 @@ def test_negated_independence_blocks_direct_and_fallback_calls() -> None:
         "Compute the difference A=10 +/- 1 and B=8 +/- 2; "
         "do not assume independent errors."
     )
+    postposed_negation = (
+        "Compute the difference A=10 +/- 1 and B=8 +/- 2; "
+        "independent errors are not assumed."
+    )
     valid_call = classify_task_kind(valid_prompt)["direct_tool_call"]["input"]
     negated = classify_task_kind(negated_prompt)
+    postposed = classify_task_kind(postposed_negation)
 
     assert negated["direct_tool_call"] is None
     assert "uncertainty_model" in negated["missing_inputs"]
     assert scalar_call_echo_violation(valid_call, negated_prompt) is not None
+    assert postposed["direct_tool_call"] is None
+    assert "uncertainty_model" in postposed["missing_inputs"]
+    assert scalar_call_echo_violation(valid_call, postposed_negation) is not None
 
 
 def test_open_method_question_stays_exploratory() -> None:

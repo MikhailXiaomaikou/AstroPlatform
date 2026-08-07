@@ -988,7 +988,12 @@ _GENERIC_NUMBER_TOKEN = re.compile(
     r"(?!\.?[0-9]|[eE][-+]?[0-9])"
 )
 _UNCERTAINTY_BINDING = re.compile(r"\s*(?:±|\+/-|\+-|\\pm)\s*", re.I)
-_FIELD_TERMINATOR = re.compile(r";|(?<!\d)[.!?]|[.!?](?!\d)")
+_FIELD_TERMINATOR = re.compile(
+    r";|(?<!\d)[.!?]|[.!?](?!\d)|"
+    r"(?:,|，)\s*(?=(?:while|whereas|but|however|although|though|yet|instead|rather)\b|"
+    r"而|但|然而|不过)",
+    re.I,
+)
 
 
 def _value_positions(value: float, window: str) -> list[int]:

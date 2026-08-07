@@ -350,7 +350,15 @@ def _correlation_match_is_inactive(
 
 
 _INDEPENDENCE_STATED_RE = re.compile(
-    r"\b(?:independent|uncorrelated)\b|相互独立|假设独立|忽略相关", re.I
+    r"\b(?:independent|independence|uncorrelated)\b|相互独立|假设独立|忽略相关",
+    re.I,
+)
+_POSTPOSED_INDEPENDENCE_NEGATION = re.compile(
+    r"^\s*(?:(?:errors?|uncertainties?|measurements?)\s+)?"
+    r"(?:(?:is|are|was|were|should|must|can|may|will|would)\s+)?"
+    r"(?:explicitly\s+)?not\s+(?:to\s+)?(?:be\s+)?"
+    r"(?:assum(?:e|ed)|used|adopted|available|provided|valid)\b",
+    re.I,
 )
 
 
@@ -366,7 +374,20 @@ def _active_independence_stated(text: str) -> bool:
         contrasts = list(_CORRELATION_CONTRAST_BOUNDARY.finditer(prefix))
         if contrasts:
             prefix = prefix[contrasts[-1].end() :]
-        if not _prefix_negates(prefix):
+        clause_end_candidates = [
+            position
+            for separator in (".", ";", "。", "；", "\n")
+            if (position := normalized.find(separator, match.end())) >= 0
+        ]
+        clause_end = min(clause_end_candidates, default=len(normalized))
+        suffix = normalized[match.end() : clause_end]
+        # Codex review P1 (PR #46, round 17): the negator may follow the
+        # keyword ("independent errors are not assumed"), so prefix-only
+        # scope is insufficient.
+        if (
+            not _prefix_negates(prefix)
+            and _POSTPOSED_INDEPENDENCE_NEGATION.match(suffix) is None
+        ):
             return True
     return False
 
