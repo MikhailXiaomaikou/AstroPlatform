@@ -972,10 +972,6 @@ def test_explicitly_negated_measurement_must_not_verify_exact() -> None:
     # Codex review P1 (PR #46, round 19): co-located label, value, and
     # uncertainty tokens cannot support a claim when the source negates the
     # assignment itself.
-    document = {
-        "tables": [],
-        "text": "alpha is not 10 +/- 1.",
-    }
     claims = [
         {
             "id": "alpha",
@@ -985,9 +981,15 @@ def test_explicitly_negated_measurement_must_not_verify_exact() -> None:
         }
     ]
 
-    status, _detail = match_expected_claims(document, claims, locator="")
-
-    assert status != "verified_exact"
+    for text in (
+        "alpha is not 10 +/- 1.",
+        "alpha isn't 10 +/- 1.",
+        "alpha cannot be 10 +/- 1.",
+        "alpha can't be 10 +/- 1.",
+    ):
+        document = {"tables": [], "text": text}
+        status, _detail = match_expected_claims(document, claims, locator="")
+        assert status != "verified_exact", text
 
 
 def test_equation_locator_stops_before_the_next_equation() -> None:

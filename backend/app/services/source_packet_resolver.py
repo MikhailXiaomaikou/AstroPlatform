@@ -1006,7 +1006,9 @@ _FIELD_TERMINATOR = re.compile(
 _NEGATED_MEASUREMENT_ASSIGNMENT = re.compile(
     r"\b(?:is|are|was|were|should|must|can|could|may|might|will|would|"
     r"does|do|did)\s+(?:(?:explicitly|definitely|clearly|directly|simply)\s+){0,2}"
-    r"(?:not|never)\b|(?:!=|≠)",
+    r"(?:not|never)\b|"
+    r"\b(?:(?:is|are|was|were|should|must|could|might|would|does|do|did|"
+    r"has|have|had)n['’]t|can['’]t|won['’]t|cannot)\b|(?:!=|≠)",
     re.I,
 )
 

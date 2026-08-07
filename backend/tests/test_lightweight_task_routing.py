@@ -147,6 +147,11 @@ def test_negated_independence_blocks_direct_and_fallback_calls() -> None:
         "Compute the difference A=10 +/- 1 and B=8 +/- 2; "
         "independent errors should never be assumed."
     )
+    contracted_postposed_negations = [
+        "independent errors shouldn't be assumed.",
+        "independent errors cannot be assumed.",
+        "independent errors can't be assumed.",
+    ]
     valid_call = classify_task_kind(valid_prompt)["direct_tool_call"]["input"]
     negated = classify_task_kind(negated_prompt)
     postposed = classify_task_kind(postposed_negation)
@@ -161,6 +166,12 @@ def test_negated_independence_blocks_direct_and_fallback_calls() -> None:
     assert never["direct_tool_call"] is None
     assert "uncertainty_model" in never["missing_inputs"]
     assert scalar_call_echo_violation(valid_call, postposed_never) is not None
+    for suffix in contracted_postposed_negations:
+        prompt = f"Compute the difference A=10 +/- 1 and B=8 +/- 2; {suffix}"
+        decision = classify_task_kind(prompt)
+        assert decision["direct_tool_call"] is None
+        assert "uncertainty_model" in decision["missing_inputs"]
+        assert scalar_call_echo_violation(valid_call, prompt) is not None
 
 
 def test_open_method_question_stays_exploratory() -> None:

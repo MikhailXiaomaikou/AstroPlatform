@@ -355,8 +355,12 @@ _INDEPENDENCE_STATED_RE = re.compile(
 )
 _POSTPOSED_INDEPENDENCE_NEGATION = re.compile(
     r"^\s*(?:(?:errors?|uncertainties?|measurements?)\s+)?"
+    r"(?:"
     r"(?:(?:is|are|was|were|should|must|can|may|will|would)\s+)?"
-    r"(?:explicitly\s+)?(?:not|never)\s+(?:to\s+)?(?:be\s+)?"
+    r"(?:explicitly\s+)?(?:not|never)|"
+    r"(?:(?:is|are|was|were|should|must|could|might|would|does|do|did|"
+    r"has|have|had)n['’]t|can['’]t|won['’]t|cannot)"
+    r")\s+(?:to\s+)?(?:be\s+)?"
     r"(?:assum(?:e|ed)|used|adopted|available|provided|valid)\b",
     re.I,
 )
