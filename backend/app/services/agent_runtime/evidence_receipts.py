@@ -34,7 +34,7 @@ _RESPONSE_DISPOSITIONS = frozenset({
 })
 _ARXIV_RE = re.compile(
     r"(?:(?:arxiv\s*[:#]?\s*)|(?:arxiv\.org/(?:abs|pdf)/))"
-    r"(?P<identifier>\d{4}\.\d{4,5})(?:v\d+)?",
+    r"(?P<identifier>\d{4}\.\d{4,5}(?:v\d+)?)",
     re.IGNORECASE,
 )
 _DEFAULT_CAPABILITY_GAP_DEPENDENCIES = (

@@ -26,6 +26,31 @@ def test_distance_ratio_aliases_route_to_lightweight_check(expression: str) -> N
     assert "negated_heavy_intent:likelihood" in decision["negated_signals"]
 
 
+def test_arxiv_version_identity_is_preserved_end_to_end_in_routing() -> None:
+    # Codex review P1 (PR #46, round 14): the routing parser and echo
+    # canonicalizer both discarded vN, allowing a v1 request to resolve or
+    # echo-validate against a different revision.
+    from app.services.agent_runtime.prompt_routing import scalar_call_echo_violation
+    from app.services.agent_runtime.evidence_receipts import (
+        _requested_arxiv_sources,
+    )
+
+    prompt = (
+        "Use arXiv:2503.14738v1 Table 4 LRG2 to recompute D_M/D_H. "
+        "D_M/r_d=17.351 +/- 0.177 and D_H/r_d=19.455 +/- 0.330, "
+        "rho=-0.404. Do not run a likelihood."
+    )
+    decision = classify_task_kind(prompt)
+    call_input = decision["direct_tool_call"]["input"]
+
+    assert call_input["sources"][0]["identifier"] == "2503.14738v1"
+    assert _requested_arxiv_sources(prompt)[0]["identifier"] == "2503.14738v1"
+
+    changed_revision = deepcopy(call_input)
+    changed_revision["sources"][0]["identifier"] = "2503.14738v2"
+    assert scalar_call_echo_violation(changed_revision, prompt) is not None
+
+
 def test_dataset_names_alone_never_start_full_research() -> None:
     decision = classify_task_kind(
         "Explain what DESI BAO and Planck CMB measure. This is not dark-energy inference."

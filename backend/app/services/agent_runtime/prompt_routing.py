@@ -166,7 +166,14 @@ def _source_references_from_prompt(text: str) -> list[dict[str, str]]:
     references: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
     patterns = (
-        ("arxiv", re.compile(r"(?:arxiv:\s*|arxiv\.org/(?:abs|pdf)/)?(\d{4}\.\d{4,5})(?:v\d+)?", re.I)),
+        (
+            "arxiv",
+            re.compile(
+                r"(?:arxiv:\s*|arxiv\.org/(?:abs|pdf)/)?"
+                r"(\d{4}\.\d{4,5}(?:v\d+)?)",
+                re.I,
+            ),
+        ),
         ("doi", re.compile(r"(?:doi:\s*|doi\.org/)(10\.\d{4,9}/[^\s,;]+)", re.I)),
         ("zenodo", re.compile(r"(?:zenodo\.org/(?:records?|record)/|10\.5281/zenodo\.)(\d+)", re.I)),
         ("url", re.compile(r"https://[^\s)\]>]+", re.I)),
@@ -406,9 +413,14 @@ def _canonical_source_identity(kind: Any, identifier: Any) -> tuple[str, str]:
     source_kind = str(kind or "").strip().lower()
     value = str(identifier or "").strip().rstrip(".,;)")
     if source_kind == "arxiv":
-        match = re.search(r"(?:arxiv:\s*|arxiv\.org/(?:abs|pdf)/)?(\d{4}\.\d{4,5})", value, re.I)
+        match = re.search(
+            r"(?:arxiv:\s*|arxiv\.org/(?:abs|pdf)/)?"
+            r"(\d{4}\.\d{4,5}(?:v\d+)?)",
+            value,
+            re.I,
+        )
         if match:
-            value = match.group(1)
+            value = match.group(1).lower()
     elif source_kind == "doi":
         match = re.search(r"(?:doi:\s*|doi\.org/)?(10\.\d{4,9}/\S+)", value, re.I)
         if match:

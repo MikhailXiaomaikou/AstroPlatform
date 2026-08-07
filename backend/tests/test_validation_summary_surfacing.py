@@ -424,6 +424,95 @@ def test_loop_qualitative_no_tool_reply_reports_skipped_no_data():
     assert summary["blocked"] is False
 
 
+def test_multi_agent_merge_preserves_v2_receipt_contract(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.services.agent_runtime.evidence_receipts import (
+        finalize_evidence_receipt,
+    )
+
+    receipt = finalize_evidence_receipt({
+        "schema_version": 1,
+        "receipt_kind": "capability_gap",
+        "task_kind": "full_research",
+        "response_disposition": "limited",
+        "source_status": "verified_current_turn",
+        "subject": {"request": "registered full-research workflow"},
+        "facts": {"publication_ready": False},
+        "source_evidence": [],
+        "missing_dependencies": ["production sampler"],
+        "boundary_statement": (
+            "No posterior or fit result was produced in the current turn."
+        ),
+    })
+
+    async def fake_loop(**_kwargs):
+        return {
+            "reply": "The specialist found a registered capability gap.",
+            "actions": [],
+            "tool_results": [],
+            "hit_deadline": False,
+            "hit_iteration_cap": False,
+            "validation_summary": {
+                "schema_version": 2,
+                "numeric_gate": "skipped_no_data",
+                "citation_gate": "passed",
+                "regen_count": 0,
+                "blocked": False,
+                "limited": True,
+                "response_disposition": "limited",
+                "task_kind": "full_research",
+                "earliest_limiting_stage": "capability_gap",
+                "missing_dependencies": ["production sampler"],
+                "safe_fallback": "Enable the production sampler and rerun.",
+                "interventions": [],
+                "evidence_receipts": [receipt],
+            },
+        }
+
+    async def fake_handoff(source, target, _reply):
+        return SimpleNamespace(
+            source_agent=source,
+            target_agent=target,
+            context_summary="Capability gap recorded.",
+            instruction="Review the registered dependency gap.",
+        )
+
+    async def fake_merge(_agent_results):
+        return "The merged response remains limited pending registered dependencies."
+
+    monkeypatch.setattr(chat_mod, "_run_agent_loop", fake_loop)
+    monkeypatch.setattr(
+        chat_mod.orchestrator,
+        "get_agent_runtime",
+        lambda _name, _context: {"system_prompt": "specialist", "tool_names": []},
+    )
+    monkeypatch.setattr(chat_mod.orchestrator, "summarize_handoff", fake_handoff)
+    monkeypatch.setattr(chat_mod.orchestrator, "merge_responses", fake_merge)
+
+    result = asyncio.run(chat_mod._run_orchestrated_chat(
+        runtime={
+            "agent_names": ["analyst", "reviewer"],
+            "base_system": "test multi-agent system",
+            "toolset": [],
+        },
+        messages=[{
+            "role": "user",
+            "content": "Give a cautious summary of the registered dependency gap.",
+        }],
+        provider_api_keys={},
+        python_session_id="merged-v2-receipt-test",
+    ))
+
+    summary = result["validation_summary"]
+    assert summary["schema_version"] == 2
+    assert summary["task_kind"] == "full_research"
+    assert summary["response_disposition"] == "limited"
+    assert summary["missing_dependencies"] == ["production sampler"]
+    assert summary["safe_fallback"] == "Enable the production sampler and rerun."
+    assert summary["evidence_receipts"] == [receipt]
+
+
 # ---------- 3. API boundary (both endpoints) ----------
 
 

@@ -1616,6 +1616,70 @@ async def _run_orchestrated_chat(
         merged_actions.extend(result["actions"])
         merged_tool_results.extend(result.get("tool_results", []))
 
+    # Schema-v2 validation metadata is backend-owned state, not model prose.
+    # Preserve it across a multi-specialist merge so capability-gap and
+    # evidence receipts remain visible on the final assistant message.  Only
+    # receipts with a valid deterministic digest are carried forward.
+    _member_summaries = [
+        result.get("validation_summary")
+        for result in agent_results
+        if isinstance(result.get("validation_summary"), dict)
+    ]
+    _task_kind_rank = {
+        "general": 0,
+        "research_exploration": 1,
+        "deterministic_source_check": 2,
+        "full_research": 3,
+    }
+    _member_task_kinds = [
+        str(summary.get("task_kind") or "general")
+        for summary in _member_summaries
+    ]
+    _merged_task_kind = max(
+        _member_task_kinds or ["general"],
+        key=lambda value: _task_kind_rank.get(value, -1),
+    )
+
+    def _unique_member_strings(field: str) -> list[str]:
+        values: list[str] = []
+        for summary in _member_summaries:
+            raw_values = summary.get(field) or []
+            if isinstance(raw_values, str):
+                raw_values = [raw_values]
+            for raw in raw_values if isinstance(raw_values, list) else []:
+                value = str(raw or "").strip()
+                if value and value not in values:
+                    values.append(value)
+        return values
+
+    _member_missing_dependencies = _unique_member_strings(
+        "missing_dependencies"
+    )
+    _member_safe_fallbacks = _unique_member_strings("safe_fallback")
+    _member_limiting_stages = _unique_member_strings(
+        "earliest_limiting_stage"
+    )
+    _member_summary_limited = any(
+        bool(summary.get("limited"))
+        or str(summary.get("response_disposition") or "full") != "full"
+        for summary in _member_summaries
+    )
+    from app.services.agent_runtime.evidence_receipts import (
+        validate_evidence_receipt,
+    )
+
+    _member_evidence_receipts: list[dict[str, Any]] = []
+    _seen_receipt_digests: set[str] = set()
+    for summary in _member_summaries:
+        for receipt in summary.get("evidence_receipts") or []:
+            if not validate_evidence_receipt(receipt):
+                continue
+            digest = str(receipt.get("receipt_sha256") or "")
+            if digest in _seen_receipt_digests:
+                continue
+            _seen_receipt_digests.add(digest)
+            _member_evidence_receipts.append(deepcopy(receipt))
+
     if agent_results and all(
         bool(result.get("honest_abstention")) for result in agent_results
     ):
@@ -1667,6 +1731,29 @@ async def _run_orchestrated_chat(
                 logger.debug(
                     "Final merged abstention event emission failed: %s", exc
                 )
+        abstention_validation_summary: dict[str, Any] = {
+            "schema_version": 2,
+            "numeric_gate": "not_run",
+            "citation_gate": "not_run",
+            "regen_count": 0,
+            "blocked": False,
+            "limited": bool(_member_missing_dependencies),
+            "response_disposition": "abstention",
+            "task_kind": _merged_task_kind,
+            "earliest_limiting_stage": "all_specialists_honest_abstention",
+            "missing_dependencies": _member_missing_dependencies,
+            "safe_fallback": (
+                _member_safe_fallbacks[0]
+                if _member_safe_fallbacks
+                else "Provide the required registered evidence and rerun."
+            ),
+            "reason": "all_specialists_honest_abstention",
+            "interventions": [],
+        }
+        if _member_evidence_receipts:
+            abstention_validation_summary["evidence_receipts"] = (
+                _member_evidence_receipts
+            )
         return {
             "reply": _render_abstention_card(
                 final_abstention_payload,
@@ -1683,15 +1770,7 @@ async def _run_orchestrated_chat(
             ),
             "honest_abstention": True,
             "abstention_reason": final_abstention_reason,
-            "validation_summary": {
-                "schema_version": 1,
-                "numeric_gate": "not_run",
-                "citation_gate": "not_run",
-                "regen_count": 0,
-                "blocked": False,
-                "reason": "all_specialists_honest_abstention",
-                "interventions": [],
-            },
+            "validation_summary": abstention_validation_summary,
         }
     merged_reply = await orchestrator.merge_responses(agent_results)
     if not merged_reply.strip():
@@ -2270,10 +2349,6 @@ async def _run_orchestrated_chat(
         _VALIDATION_SUMMARY_MAX_INTERVENTIONS,
     )
 
-    _member_summaries = [
-        r.get("validation_summary") for r in agent_results
-        if isinstance(r.get("validation_summary"), dict)
-    ]
     _member_interventions: list[dict] = list(_merged_gate_interventions)
     for s in _member_summaries:
         for item in s.get("interventions") or []:
@@ -2314,17 +2389,57 @@ async def _run_orchestrated_chat(
             _merged_limited = True
         elif citation_interventions:
             _merged_citation_state = "regenerated"
+    merged_limited = (
+        _merged_limited
+        or _member_summary_limited
+        or bool(_member_missing_dependencies)
+    )
+    merged_limiting_intervention = next(
+        (
+            item
+            for item in _member_interventions
+            if item.get("action")
+            in _BLOCKING_GATE_ACTIONS | _LIMITING_GATE_ACTIONS
+        ),
+        None,
+    )
     merged_validation_summary: dict = {
-        "schema_version": 1,
+        "schema_version": 2,
         "numeric_gate": _merged_numeric_state,
         "citation_gate": _merged_citation_state,
         "regen_count": sum(
             int(s.get("regen_count", 0) or 0) for s in _member_summaries
         ),
         "blocked": _merged_blocked,
-        "limited": _merged_limited,
+        "limited": merged_limited,
+        "response_disposition": (
+            "hard_block"
+            if _merged_blocked
+            else "limited" if merged_limited else "full"
+        ),
+        "task_kind": _merged_task_kind,
+        "earliest_limiting_stage": (
+            _merged_summary_reason
+            or str((merged_limiting_intervention or {}).get("gate") or "")
+            or (_member_limiting_stages[0] if _member_limiting_stages else None)
+        ),
+        "missing_dependencies": _member_missing_dependencies,
+        "safe_fallback": (
+            "Review the merged gate interventions and rerun the failed "
+            "validation path before relying on the result."
+            if _merged_blocked
+            else (
+                _member_safe_fallbacks[0]
+                if _member_safe_fallbacks
+                else None
+            )
+        ),
         "interventions": _member_interventions[:_VALIDATION_SUMMARY_MAX_INTERVENTIONS],
     }
+    if _member_evidence_receipts:
+        merged_validation_summary["evidence_receipts"] = (
+            _member_evidence_receipts
+        )
     if _merged_summary_reason:
         merged_validation_summary["reason"] = _merged_summary_reason
 
