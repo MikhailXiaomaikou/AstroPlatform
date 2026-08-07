@@ -350,9 +350,16 @@ def derive_scalar(
         # to choose among exact constrained solutions, so accept only a
         # positive-definite covariance and fail closed on every singular case.
         eigenvalues = np.linalg.eigvalsh(covariance)
+        # Codex review P2 (PR #46, round 11): scale the singularity threshold
+        # to the covariance spectrum. An absolute 1.0 floor rejects perfectly
+        # conditioned measurements merely because their units make every
+        # variance small (for example sigma=1e-6). The machine-precision floor
+        # still treats numerical zero as singular without imposing a unit.
+        spectral_scale = float(np.max(np.abs(eigenvalues)))
         singular_tolerance = max(
-            1.0, float(np.max(np.abs(eigenvalues)))
-        ) * 1e-10
+            np.finfo(float).tiny,
+            spectral_scale * len(parsed) * np.finfo(float).eps,
+        )
         if float(np.min(eigenvalues)) <= singular_tolerance:
             raise ScalarDerivationError(
                 "A singular covariance matrix cannot define an unambiguous "

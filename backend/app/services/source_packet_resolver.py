@@ -835,10 +835,30 @@ def _candidate_windows(document: dict[str, Any], locator: str) -> list[str]:
             header_number = re.search(r"\d+", table_header)
             if locator_number and header_number and locator_number.group() != header_number.group():
                 continue
-        columns = " ".join(str(value) for value in table.get("columns") or [])
+        column_values = [str(value) for value in table.get("columns") or []]
+        columns = " ".join(column_values)
         for row in table.get("rows") or []:
-            row_text = " ".join(str(value) for value in row) if isinstance(row, list) else str(row)
-            windows.append(_compact_text(f"{table_header} {columns} {row_text}"))
+            if isinstance(row, list):
+                row_values = [str(value) for value in row]
+                # Codex review P1 (PR #46, round 11): keep structured table
+                # fields local by interleaving each header with its own cell.
+                # A flat "all headers, then all cells" window cannot prove
+                # which measurement belongs to which label.
+                if column_values and len(column_values) == len(row_values):
+                    row_text = " ".join(
+                        f"{column} {value}"
+                        for column, value in zip(column_values, row_values)
+                    )
+                    columns_for_window = ""
+                else:
+                    row_text = " ".join(row_values)
+                    columns_for_window = columns
+            else:
+                row_text = str(row)
+                columns_for_window = columns
+            windows.append(
+                _compact_text(f"{table_header} {columns_for_window} {row_text}")
+            )
     text = _compact_text(document.get("text"))
     if text:
         if locator_text:
@@ -1005,7 +1025,10 @@ def _values_follow_label_order(
         return True
     ordered.sort(key=lambda item: item[0])
     cursor = -1
-    for label_position, claim in ordered:
+    for index, (label_position, claim) in enumerate(ordered):
+        next_label_position = (
+            ordered[index + 1][0] if index + 1 < len(ordered) else None
+        )
         try:
             value = float(claim["value"])
         except (KeyError, TypeError, ValueError):
@@ -1020,6 +1043,12 @@ def _values_follow_label_order(
             # Codex review P1 (PR #46, round 10): a measurement cannot be
             # assigned to a label introduced only later in the row/prose.
             if position <= max(cursor, label_position):
+                continue
+            # Codex review P1 (PR #46, round 11): a claim cannot borrow the
+            # first matching number after the next claim's label. Structured
+            # tables are rendered above as local header/cell pairs, so the
+            # same field boundary works for prose and tables.
+            if next_label_position is not None and position >= next_label_position:
                 continue
             # Codex review P1 (PR #46, round 6): the uncertainty must be
             # bound to its own value — it has to be the immediately

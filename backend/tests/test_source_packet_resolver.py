@@ -858,6 +858,28 @@ def test_complete_generic_multiword_label_still_verifies() -> None:
     assert detail["reason"] == "labels_and_values_same_window"
 
 
+def test_claim_must_not_borrow_a_value_after_the_next_claim_label() -> None:
+    # Codex review P1 (PR #46, round 11): own-label ordering alone still let
+    # alpha consume beta's measurement and beta consume a later calibration.
+    document = {
+        "tables": [],
+        "text": (
+            "alpha was not measured; beta was 10 +/- 1; "
+            "calibration was 20 +/- 2."
+        ),
+    }
+    claims = [
+        {"id": "alpha", "label": "alpha", "value": 10.0,
+         "standard_uncertainty": 1.0},
+        {"id": "beta", "label": "beta", "value": 20.0,
+         "standard_uncertainty": 2.0},
+    ]
+
+    status, _detail = match_expected_claims(document, claims, locator="")
+
+    assert status != "verified_exact"
+
+
 def test_exponent_suffix_must_not_match_plain_number() -> None:
     # Codex review P1 (PR #46, round 3): the trailing boundary accepted an
     # exponent continuation, so supplied 17 matched source text 17e2.

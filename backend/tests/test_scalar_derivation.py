@@ -242,3 +242,22 @@ def test_weighted_mean_rejects_singular_nonzero_covariance() -> None:
         )
 
     assert exc_info.value.code == "singular_weighted_mean"
+
+
+def test_weighted_mean_accepts_small_scale_positive_definite_covariance() -> None:
+    # Codex review P2 (PR #46, round 11): singularity is about conditioning,
+    # not absolute units. Two independent 1e-6 uncertainties have a valid
+    # covariance with 1e-12 eigenvalues and must not be rejected.
+    result = derive_scalar(
+        operation="weighted_mean",
+        quantities=[
+            _quantity("a", 10.0, 1e-6, unit="km/s/Mpc"),
+            _quantity("b", 14.0, 1e-6, unit="km/s/Mpc"),
+        ],
+        uncertainty_model={"kind": "independent"},
+    )
+
+    assert result["result"]["value"] == pytest.approx(12.0)
+    assert result["result"]["standard_uncertainty"] == pytest.approx(
+        1e-6 / math.sqrt(2.0)
+    )
