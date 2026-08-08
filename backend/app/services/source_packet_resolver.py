@@ -1253,12 +1253,15 @@ _PRELABEL_PROPOSITION_REJECTION = re.compile(
 _PRELABEL_NON_MEASUREMENT_CONTEXT = re.compile(
     r"\b(?:"
     r"(?:for|in|using|from)\s+(?:(?:the|an?|our)\s+)?"
+    r"(?:"
+    r"(?:[a-z][\w-]*\s+){0,3}"
+    r"(?:cosmolog(?:y|ies)|configuration|setup|scenario|model)|"
     r"(?:mock|simulated|synthetic|fiducial|illustrative|baseline|reference|"
-    r"benchmark|assumed|adopted)"
-    r"(?:\s+(?:catalog(?:ue)?|data(?:set)?|sample|case|scenario|model|value|"
-    r"cosmolog(?:y|ies)|configuration|setup))?|"
+    r"benchmark|assumed|adopted|default|nominal|fixed|input)"
+    r"(?:\s+(?:catalog(?:ue)?|data(?:set)?|sample|case|value))?"
+    r")|"
     r"(?:our|the|an?)\s+(?:fiducial|mock|simulated|synthetic|illustrative|"
-    r"baseline|reference|benchmark|assumed|adopted)\s+"
+    r"baseline|reference|benchmark|assumed|adopted|default|nominal|fixed|input)\s+"
     r"(?:value|parameter|case|scenario|catalog(?:ue)?|data(?:set)?|sample)\s+"
     r"(?:is|was)|"
     r"for\s+(?:illustration|illustrative\s+purposes)(?:\s+only)?"
@@ -1318,12 +1321,15 @@ def _measurement_assignment_is_non_exact(
     window: str, label_position: int, value_position: int
 ) -> bool:
     """Reject negated or relational label-to-value assignments."""
-    # Codex review P1 (PR #46, round 42): a bare equality can describe a
-    # configuration rather than an observation (mock/simulated/fiducial/
-    # illustrative). Inspect the full pre-label clause because the comma that
-    # introduces the label is itself a field boundary. The anchored grammar
-    # deliberately does not reject an unrelated comparison such as "Unlike
-    # the mock catalogue, the observed alpha has been measured as ...".
+    # Codex review P1 (PR #46, rounds 42-46): a bare equality can describe a
+    # configuration rather than an observation. Inspect the full pre-label
+    # clause because the comma that introduces the label is itself a field
+    # boundary. Configuration nouns (cosmology/model/setup/etc.) are generic
+    # rather than a brittle adjective allowlist; observational container nouns
+    # (data/sample/catalogue) still require an explicit synthetic/configuration
+    # qualifier. The anchored grammar deliberately does not reject an unrelated
+    # comparison such as "Unlike the mock catalogue, the observed alpha has
+    # been measured as ...".
     if _PRELABEL_NON_MEASUREMENT_CONTEXT.search(window[:label_position]):
         return True
     field_start = 0
