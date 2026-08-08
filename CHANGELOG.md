@@ -36,7 +36,7 @@ need entries unless they change user-visible behavior or research validity.
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Forty-seven adversarial review rounds tightened heavy-chain routing, number and
+- Forty-eight adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
   scale-relative covariance validation, negation-aware independence parsing,
@@ -121,6 +121,11 @@ need entries unless they change user-visible behavior or research validity.
   measured/reported/estimated/found predicate can still certify an explicit
   model-scoped result, while bare or `given` configuration assignments remain
   fail-closed.
+  `with` and clause-leading `given` configuration scopes are fail-closed too.
+  Controlled standardized differences remain ordinary derived numbers rather
+  than being promoted to Gaussian sigma significance without a distribution,
+  and the Kimi CLI bridge rejects prompts above a 120 KiB argv safety bound
+  before process creation.
   Clause-leading determiners such as `No fit is necessary` now suppress that
   explicitly rejected heavy route while preserving a complete scalar call.
 

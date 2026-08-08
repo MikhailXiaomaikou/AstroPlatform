@@ -1110,9 +1110,44 @@ def test_blocked_reply_text_does_not_leak_internal_group_labels():
     assert "73.0" in text
 
 
-def test_verified_scalar_standardized_difference_is_typed_significance():
+def test_verified_scalar_standardized_difference_is_not_typed_significance():
     result = validate_claims(
         "The absolute standardized difference is 4.5 sigma.",
+        [
+            {
+                "tool": "verify_scalar_derivation",
+                "input": {
+                    "quantities": [
+                        {"value": 67.6, "standard_uncertainty": 1.2},
+                        {"value": 73.0, "standard_uncertainty": 0.0},
+                    ]
+                },
+                "result": {
+                    "success": True,
+                    "calculation_status": "verified_deterministic",
+                    "claim_scopes": {
+                        "derived_numeric": True,
+                        "source_measurement": True,
+                    },
+                    "result": {
+                        "value": -5.4,
+                        "standard_uncertainty": 1.2,
+                        "standardized_difference_abs": 4.5,
+                    },
+                    "source_status": "verified_exact",
+                },
+            }
+        ],
+        require_typed_scientific_match=True,
+    )
+
+    assert not result.ok
+    assert [claim.label for claim in result.uncited] == ["significance_sigma"]
+
+
+def test_verified_scalar_standardized_difference_remains_claimable_as_number():
+    result = validate_claims(
+        "The absolute standardized difference is 4.5.",
         [
             {
                 "tool": "verify_scalar_derivation",

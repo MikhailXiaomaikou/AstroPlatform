@@ -603,6 +603,35 @@ class TestInferenceRouting:
         assert "MOONSHOT_API_KEY" not in child_env
         assert "JWT_SECRET" not in child_env
 
+    @pytest.mark.asyncio
+    async def test_kimi_cli_rejects_oversized_prompt_before_spawn(self, monkeypatch):
+        from app.ai.inference_router import InferenceError, LocalBackend
+        from app.ai.model_profiles import resolve_model_profile
+
+        spawned = False
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            nonlocal spawned
+            spawned = True
+            raise AssertionError("oversized prompt reached process creation")
+
+        monkeypatch.setenv("KIMI_CLI_ENABLED", "1")
+        monkeypatch.setattr(
+            "app.ai.inference_router.shutil.which", lambda name: "/usr/bin/kimi"
+        )
+        monkeypatch.setattr(
+            "app.ai.inference_router.asyncio.create_subprocess_exec",
+            fake_create_subprocess_exec,
+        )
+
+        with pytest.raises(InferenceError, match="prompt exceeds.*argv safety limit"):
+            await LocalBackend().complete(
+                [{"role": "user", "content": "x" * 130_000}],
+                model_profile=resolve_model_profile("local", "local:kimi-cli"),
+            )
+
+        assert spawned is False
+
     def test_kimi_cli_stream_surfaces_errors(self):
         from app.ai.inference_router import InferenceError, LocalBackend
 

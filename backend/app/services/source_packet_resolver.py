@@ -1252,7 +1252,8 @@ _PRELABEL_PROPOSITION_REJECTION = re.compile(
 )
 _PRELABEL_NON_MEASUREMENT_CONTEXT = re.compile(
     r"\b(?:"
-    r"(?:for|in|using|from|under|within)\s+(?:(?:the|an?|our)\s+)?"
+    r"(?:for|in|using|from|under|within|with|given)\s+"
+    r"(?:(?:the|an?|our)\s+)?"
     r"(?:"
     r"(?:[a-z][\w-]*\s+){0,3}"
     r"(?:cosmolog(?:y|ies)|configuration|setup|scenario|model)|"

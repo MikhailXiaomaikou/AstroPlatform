@@ -22,6 +22,7 @@ from app.models.schemas import InferenceLog
 logger = logging.getLogger(__name__)
 
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+_KIMI_CLI_MAX_PROMPT_BYTES = 120 * 1024
 
 INFERENCE_ERROR_CLASSES = frozenset(
     {
@@ -1131,9 +1132,10 @@ class LocalBackend(OpenAICompatibleBackend):
         """Complete through Kimi Code OAuth in an empty, non-approved workspace.
 
         Kimi Code 0.26 exposes prompt mode as an argument rather than stdin.
-        The process therefore receives only the compact JSON bridge prompt, runs
-        in a fresh empty directory, loads no project skills, and is never given
-        auto/yolo permission. Platform secrets remain outside the child env.
+        The process therefore receives only a size-bounded JSON bridge prompt,
+        runs in a fresh empty directory, loads no project skills, and is never
+        given auto/yolo permission. Platform secrets remain outside the child
+        env.
         """
         command = os.getenv("KIMI_CLI_COMMAND", "kimi")
         cli_path = shutil.which(command) or command
@@ -1159,6 +1161,12 @@ class LocalBackend(OpenAICompatibleBackend):
                     "Standard Astro JSON bridge protocol below.\n\n"
                     + bridge_prompt
                 )
+                prompt_bytes = len(prompt.encode("utf-8"))
+                if prompt_bytes > _KIMI_CLI_MAX_PROMPT_BYTES:
+                    raise InferenceError(
+                        "Kimi CLI bridge prompt exceeds the 120 KiB argv safety "
+                        f"limit ({prompt_bytes} bytes); shorten this request"
+                    )
                 cmd = [
                     cli_path,
                     "--model",

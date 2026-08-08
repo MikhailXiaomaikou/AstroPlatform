@@ -2357,47 +2357,6 @@ def _build_publication_typed_universe(
     return out
 
 
-def _build_verified_scalar_typed_universe(
-    tool_results: Any,
-) -> dict[str, set[float]]:
-    """Collect typed claims emitted by the controlled scalar verifier.
-
-    ``standardized_difference_abs`` is a derived Gaussian-equivalent
-    significance, but its deliberately explicit field name is not part of the
-    legacy publication-result key catalogue.  Admit it only from a successful
-    ``verify_scalar_derivation`` receipt whose calculation is verified and
-    whose derived-numeric scope is enabled.  This keeps arbitrary tool output
-    (including model-authored ``run_python`` dictionaries) from minting typed
-    significance evidence by copying the field name.
-    """
-    typed: dict[str, set[float]] = {}
-    entries = tool_results if isinstance(tool_results, list) else [tool_results]
-    for entry in entries or []:
-        tool_name, result = _entry_tool_and_result(entry)
-        if tool_name != "verify_scalar_derivation" or not isinstance(result, dict):
-            continue
-        if not _payload_is_claimable_success(tool_name, result):
-            continue
-        if str(result.get("calculation_status") or "").lower() not in {
-            "verified",
-            "verified_deterministic",
-            "linearized_approximation",
-        }:
-            continue
-        scopes = result.get("claim_scopes")
-        if not isinstance(scopes, dict) or scopes.get("derived_numeric") is not True:
-            continue
-        derived = result.get("result")
-        if not isinstance(derived, dict):
-            continue
-        value = derived.get("standardized_difference_abs")
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            numeric = float(value)
-            if math.isfinite(numeric):
-                typed.setdefault("significance_sigma", set()).add(numeric)
-    return typed
-
-
 _VERIFIED_SCALAR_DERIVED_NUMERIC_KEYS = frozenset(
     {
         "value",
@@ -2588,10 +2547,11 @@ def validate_claims(
                 label: values - input_numbers
                 for label, values in typed_universe.items()
             }
-        for label, values in _build_verified_scalar_typed_universe(
-            tool_results
-        ).items():
-            typed_universe.setdefault(label, set()).update(values)
+        # A scalar verifier receipt provides central values, standard
+        # uncertainties, and covariance, but no distributional model.
+        # Its standardized_difference_abs remains claimable through the
+        # controlled derived-number pool; it must not mint a Gaussian-equivalent
+        # significance_sigma claim without publication-provided significance.
 
     uncited: list[Claim] = []
     for c in claims:
