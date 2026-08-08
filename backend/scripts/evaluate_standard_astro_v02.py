@@ -156,53 +156,48 @@ def _completed_keys(path: Path) -> set[str]:
     return keys
 
 
+_SIGNED_SCALAR_RECEIPT_FIELDS = (
+    "success",
+    "schema_version",
+    "task_kind",
+    "operation",
+    "result",
+    "inputs",
+    "formula",
+    "uncertainty_model",
+    "calculation_status",
+    "source_status",
+    "claim_scopes",
+    "source_evidence",
+    "assumptions",
+    "boundary_statement",
+    "response_disposition",
+    "earliest_limiting_stage",
+    "missing_dependencies",
+    "safe_fallback",
+    "publication_ready",
+    "supports_measurement_claims",
+    "supports_derived_numeric_claims",
+    "__tool_status__",
+    "__do_not_claim_source_measurement__",
+    "__do_not_claim__",
+    "error",
+    "error_class",
+    "receipt_sha256",
+)
+
+
 def _compact_scalar_receipt(payload: dict[str, Any]) -> dict[str, Any]:
-    source_evidence = []
-    for item in payload.get("source_evidence") or []:
-        if not isinstance(item, dict):
-            continue
-        source_evidence.append(
-            {
-                key: item.get(key)
-                for key in (
-                    "id",
-                    "kind",
-                    "identifier",
-                    "locator",
-                    "status",
-                    "final_url",
-                    "extraction_method",
-                    "fetched_at_unix",
-                    "sha256",
-                    "cache_hit",
-                    "error_class",
-                )
-                if item.get(key) is not None
-            }
-        )
+    # The receipt digest was created before generic dispatcher provenance was
+    # attached. Preserve every field in that signed contract, including full
+    # source evidence, and exclude only later unsigned dispatcher metadata.
+    # Crucially, absent fields stay absent: inserting ``None`` would also change
+    # the canonical JSON and invalidate the original digest.
     return {
-        key: payload.get(key)
-        for key in (
-            "schema_version",
-            "task_kind",
-            "operation",
-            "result",
-            "formula",
-            "uncertainty_model",
-            "calculation_status",
-            "source_status",
-            "claim_scopes",
-            "assumptions",
-            "boundary_statement",
-            "response_disposition",
-            "earliest_limiting_stage",
-            "missing_dependencies",
-            "safe_fallback",
-            "publication_ready",
-            "receipt_sha256",
-            "error_class",
-        )
-    } | {"source_evidence": source_evidence}
+        key: payload[key]
+        for key in _SIGNED_SCALAR_RECEIPT_FIELDS
+        if key in payload
+    }
 
 
 def _compact_tools(result: dict[str, Any]) -> list[dict[str, Any]]:

@@ -11,6 +11,7 @@ from scripts import evaluate_standard_astro_v02 as evaluator
 from scripts import merge_standard_astro_v02_samples as merger
 from scripts import score_standard_astro_v02 as scorer
 from app.services.agent_runtime.evidence_receipts import finalize_evidence_receipt
+from app.services.scalar_derivation import canonical_receipt_sha256
 
 
 def test_v02_holdout_repository_contains_commitment_not_plaintext() -> None:
@@ -54,6 +55,105 @@ def _evidence_receipt(kind: str, status: str) -> dict:
     })
 
 
+def _signed_scalar_receipt(payload: dict) -> dict:
+    receipt = dict(payload)
+    receipt["receipt_sha256"] = canonical_receipt_sha256(receipt)
+    return receipt
+
+
+def test_compact_scalar_receipt_preserves_verifiable_digest() -> None:
+    # Codex review P1 (PR #46, round 64): the compact evaluator artifact kept
+    # the digest of the full receipt after dropping signed fields, making the
+    # projection impossible to verify.
+    receipt = _signed_scalar_receipt(
+        {
+            "success": True,
+            "schema_version": 1,
+            "task_kind": "deterministic_source_check",
+            "operation": "difference",
+            "result": {"value": -5.4, "standardized_difference": 4.5},
+            "inputs": [{"id": "act", "value": 67.6}],
+            "formula": "a-b",
+            "uncertainty_model": {"kind": "independent"},
+            "calculation_status": "verified_deterministic",
+            "source_status": "verified_exact",
+            "claim_scopes": {"derived_numeric": True, "source_measurement": True},
+            "source_evidence": [
+                {
+                    "identifier": "2503.14452",
+                    "locator": "Equation 42",
+                    "status": "verified_exact",
+                }
+            ],
+            "assumptions": [],
+            "boundary_statement": "Not a likelihood fit.",
+            "response_disposition": "full",
+            "earliest_limiting_stage": None,
+            "missing_dependencies": [],
+            "safe_fallback": None,
+            "publication_ready": False,
+            "supports_measurement_claims": True,
+            "supports_derived_numeric_claims": True,
+            "__tool_status__": "COMPLETED",
+            "__do_not_claim_source_measurement__": False,
+        }
+    )
+    normalized = {**receipt, "reproducibility": {"run_id": "dispatcher-only"}}
+
+    compact = evaluator._compact_scalar_receipt(normalized)
+
+    assert compact["receipt_sha256"] == canonical_receipt_sha256(compact)
+    assert compact["success"] is True
+    assert compact["inputs"] == receipt["inputs"]
+    assert compact["supports_measurement_claims"] is True
+
+
+def test_v02_scorer_rejects_tampered_scalar_receipt() -> None:
+    task = {
+        "id": "V02_01_desi_dr2_ratio",
+        "expected_task_kind": "deterministic_source_check",
+        "expected_disposition": "full",
+    }
+    receipt = _signed_scalar_receipt(
+        {
+            "source_status": "verified_exact",
+            "result": {"value": 999.0, "standard_uncertainty": 999.0},
+            "source_evidence": [
+                {
+                    "identifier": "2503.14738",
+                    "locator": "Table 4 LRG2",
+                    "status": "verified_exact",
+                }
+            ],
+        }
+    )
+    receipt["result"] = {
+        "value": 0.891852994,
+        "standard_uncertainty": 0.020562805,
+    }
+    sample = {
+        "condition": "standard_astro",
+        "status": "completed",
+        "reply": (
+            "From arXiv:2503.14738 Table 4 LRG2, D_M/D_H is "
+            "0.891852994 +/- 0.020562805 using rho=-0.404. "
+            "This is not a likelihood fit."
+        ),
+        "validation_summary": {
+            "task_kind": "deterministic_source_check",
+            "response_disposition": "full",
+        },
+        "tools": [{"tool": "verify_scalar_derivation", "receipt": receipt}],
+    }
+
+    scores, flags = scorer._audit_task(sample, task)
+
+    assert "scalar_receipt_invalid_hash" in flags
+    assert scores["source_traceability"] == 1
+    assert scores["numeric_evidence_constraint"] == 0
+    assert scores["end_to_end_success"] == 0
+
+
 def test_v02_scorer_recognizes_verified_desi_ratio() -> None:
     task = {
         "id": "V02_01_desi_dr2_ratio",
@@ -75,21 +175,20 @@ def test_v02_scorer_recognizes_verified_desi_ratio() -> None:
         "tools": [
             {
                 "tool": "verify_scalar_derivation",
-                    "receipt": {
-                        "receipt_sha256": "a" * 64,
-                        "source_status": "verified_exact",
-                        "result": {
-                            "value": 0.891852994,
-                            "standard_uncertainty": 0.020562805,
-                        },
-                        "source_evidence": [
+                "receipt": _signed_scalar_receipt({
+                    "source_status": "verified_exact",
+                    "result": {
+                        "value": 0.891852994,
+                        "standard_uncertainty": 0.020562805,
+                    },
+                    "source_evidence": [
                         {
                             "identifier": "2503.14738",
                             "locator": "Table 4 LRG2",
                             "status": "verified_exact",
                         }
                     ],
-                },
+                }),
             }
         ],
     }
@@ -122,8 +221,7 @@ def test_v02_scorer_does_not_count_hidden_receipt_as_user_visible_citation() -> 
         "tools": [
             {
                 "tool": "verify_scalar_derivation",
-                "receipt": {
-                    "receipt_sha256": "a" * 64,
+                "receipt": _signed_scalar_receipt({
                     "source_status": "verified_exact",
                     "result": {
                         "value": 0.891852994,
@@ -136,7 +234,7 @@ def test_v02_scorer_does_not_count_hidden_receipt_as_user_visible_citation() -> 
                             "status": "verified_exact",
                         }
                     ],
-                },
+                }),
             }
         ],
     }
@@ -168,8 +266,7 @@ def test_v02_ratio_requires_values_in_the_user_visible_reply() -> None:
         "tools": [
             {
                 "tool": "verify_scalar_derivation",
-                "receipt": {
-                    "receipt_sha256": "a" * 64,
+                "receipt": _signed_scalar_receipt({
                     "source_status": "verified_exact",
                     "result": {
                         "value": 0.891852994,
@@ -185,7 +282,7 @@ def test_v02_ratio_requires_values_in_the_user_visible_reply() -> None:
                             "status": "verified_exact",
                         }
                     ],
-                },
+                }),
             }
         ],
     }
@@ -247,8 +344,7 @@ def test_v02_scalar_tasks_require_source_locator_in_visible_reply(
         "tools": [
             {
                 "tool": "verify_scalar_derivation",
-                "receipt": {
-                    "receipt_sha256": "a" * 64,
+                "receipt": _signed_scalar_receipt({
                     "source_status": "verified_exact",
                     "source_evidence": [
                         {
@@ -257,7 +353,7 @@ def test_v02_scalar_tasks_require_source_locator_in_visible_reply(
                             "status": "verified_exact",
                         }
                     ],
-                },
+                }),
             }
         ],
     }
@@ -366,8 +462,7 @@ def test_v02_02_to_05_require_numeric_results_in_visible_reply(
         tools = [
             {
                 "tool": "verify_scalar_derivation",
-                "receipt": {
-                    "receipt_sha256": "a" * 64,
+                "receipt": _signed_scalar_receipt({
                     "source_status": "verified_exact",
                     "result": hidden_result,
                     "source_evidence": [
@@ -377,7 +472,7 @@ def test_v02_02_to_05_require_numeric_results_in_visible_reply(
                             "status": "verified_exact",
                         }
                     ],
-                },
+                }),
             }
         ]
     else:
@@ -457,6 +552,59 @@ def test_v02_05_full_scores_require_visible_anchor_errors() -> None:
     assert visible_scores["uncertainty_calibration"] == 2
     assert visible_scores["end_to_end_success"] == 2
     assert visible_scores["obvious_error_risk"] == 2
+
+
+def test_v02_03_full_end_to_end_requires_visible_difference() -> None:
+    # Codex review P1 (PR #46, round 64): visible significance alone could earn
+    # full end-to-end credit despite omitting the requested +/-5.4 difference.
+    task = {
+        "id": "V02_03_act_dr6_ee_h0",
+        "expected_task_kind": "deterministic_source_check",
+        "expected_disposition": "full",
+    }
+    sample = {
+        "condition": "standard_astro",
+        "status": "completed",
+        "reply": (
+            "From arXiv:2503.14452 Equation 42, the significance is 4.5 sigma. "
+            "The reference was fixed and this was not a likelihood fit."
+        ),
+        "validation_summary": {
+            "task_kind": "deterministic_source_check",
+            "response_disposition": "full",
+        },
+        "tools": [
+            {
+                "tool": "verify_scalar_derivation",
+                "receipt": _signed_scalar_receipt(
+                    {
+                        "source_status": "verified_exact",
+                        "result": {"value": -5.4, "standardized_difference": 4.5},
+                        "source_evidence": [
+                            {
+                                "identifier": "2503.14452",
+                                "locator": "Equation 42",
+                                "status": "verified_exact",
+                            }
+                        ],
+                    }
+                ),
+            }
+        ],
+    }
+
+    scores, flags = scorer._audit_task(sample, task)
+
+    assert flags == []
+    assert scores["numeric_evidence_constraint"] == 1
+    assert scores["end_to_end_success"] == 1
+
+    sample["reply"] += " The difference is -5.4."
+    visible_scores, visible_flags = scorer._audit_task(sample, task)
+
+    assert visible_flags == []
+    assert visible_scores["numeric_evidence_constraint"] == 2
+    assert visible_scores["end_to_end_success"] == 2
 
 
 def test_v02_scorer_accepts_exact_h0_anchor_bibcodes() -> None:

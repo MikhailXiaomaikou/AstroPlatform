@@ -326,6 +326,43 @@ async def test_execute_tool_blocks_normalized_chain_before_persistence(
     assert uploaded == []
 
 
+async def test_execute_tool_offloads_chain_artifact_finalization(monkeypatch):
+    # Codex review P2 (PR #46, round 64): post-normalization rendering, database
+    # work, and object uploads must not run on the async request-loop thread.
+    import threading
+
+    from app.services import ai_tools, ai_tools_cosmology
+
+    async def chain_result(*_args, **_kwargs):
+        return {
+            "success": True,
+            "__tool_status__": "COMPLETED",
+            "chain_tier": "publication",
+            "_pending_chain_artifacts": {"payload": _payload()},
+        }
+
+    finalizer_threads: list[int] = []
+
+    def capture_finalizer(result, _pending, *, user_id):
+        assert user_id is None
+        finalizer_threads.append(threading.get_ident())
+        return result
+
+    monkeypatch.setattr(ai_tools, "_execute_tool_inner", chain_result)
+    monkeypatch.setattr(
+        ai_tools_cosmology, "finalize_chain_artifacts", capture_finalizer
+    )
+    request_loop_thread = threading.get_ident()
+
+    await ai_tools.execute_tool(
+        "run_cosmology_likelihood_chain",
+        {"model": "lcdm", "dataset_keys": ["desi_dr1_bao"]},
+    )
+
+    assert finalizer_threads
+    assert finalizer_threads[0] != request_loop_thread
+
+
 def test_cleanup_renewal_failure_stays_fail_open(monkeypatch, tmp_path):
     # Codex review P2 (PR #46, round 4): a failure in the post-upload
     # cleanup-renewal loop escaped persist_chain_artifacts, and the caller

@@ -924,7 +924,8 @@ async def execute_tool(
     if pending_chain_artifacts is not None:
         from app.services.ai_tools_cosmology import finalize_chain_artifacts
 
-        normalized_result = finalize_chain_artifacts(
+        normalized_result = await asyncio.to_thread(
+            finalize_chain_artifacts,
             normalized_result,
             pending_chain_artifacts,
             user_id=user_id,

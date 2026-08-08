@@ -36,7 +36,7 @@ need entries unless they change user-visible behavior or research validity.
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Sixty-three adversarial review rounds tightened heavy-chain routing, number and
+- Sixty-four adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
   scale-relative covariance validation, negation-aware independence parsing,
@@ -184,6 +184,11 @@ need entries unless they change user-visible behavior or research validity.
   finishes, so a production-version or reproducibility downgrade cannot leave
   blocked posterior files downloadable. V02_05 full end-to-end and low-risk
   credit now also requires both anchor uncertainties in the visible reply.
+  Evaluation artifacts now preserve the complete signed scalar-receipt
+  projection and the scorer rejects any digest mismatch before grounding
+  source or numeric credit. V02_03 full end-to-end credit requires both the
+  requested difference and significance, and post-normalization chain
+  rendering, database work, and uploads run off the async request loop.
 
 ### P0 production and local-automation hardening (2026-07-13)
 

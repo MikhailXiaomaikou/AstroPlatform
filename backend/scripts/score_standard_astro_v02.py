@@ -18,6 +18,8 @@ from pathlib import Path
 import re
 from typing import Any
 
+from app.services.scalar_derivation import canonical_receipt_sha256
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_TASKS = REPO_ROOT / "docs/research/standard_astro_v02_preregistered_tasks.json"
@@ -84,13 +86,25 @@ def _has_all(text: str, groups: tuple[tuple[str, ...], ...]) -> bool:
     return all(any(term.lower() in lowered for term in group) for group in groups)
 
 
-def _scalar_receipt(sample: dict[str, Any]) -> dict[str, Any] | None:
+def _raw_scalar_receipt(sample: dict[str, Any]) -> dict[str, Any] | None:
     for tool in sample.get("tools") or []:
         if tool.get("tool") == "verify_scalar_derivation" and isinstance(
             tool.get("receipt"), dict
         ):
             return tool["receipt"]
     return None
+
+
+def _scalar_receipt(sample: dict[str, Any]) -> dict[str, Any] | None:
+    receipt = _raw_scalar_receipt(sample)
+    if receipt is None:
+        return None
+    digest = receipt.get("receipt_sha256")
+    try:
+        expected = canonical_receipt_sha256(receipt)
+    except (TypeError, ValueError):
+        return None
+    return receipt if isinstance(digest, str) and digest == expected else None
 
 
 def _scalar_result_has_number(
@@ -327,6 +341,7 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
     lower = reply.lower()
     evidence = _evidence_text(sample)
     evidence_lower = evidence.lower()
+    raw_receipt = _raw_scalar_receipt(sample)
     receipt = _scalar_receipt(sample)
     route_ok, disposition_ok = _route_and_disposition(sample, task)
     flags: list[str] = []
@@ -433,7 +448,11 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
         )
         gap = _score_level(boundary_ok, fixed_ok)
         end_to_end = _score_level(
-            route_ok and disposition_ok and source >= 1 and significance_ok,
+            route_ok
+            and disposition_ok
+            and source >= 1
+            and difference_ok
+            and significance_ok,
             significance_ok,
         )
         risk = 2 if difference_ok and significance_ok and boundary_ok else 1 if numeric else 0
@@ -635,8 +654,11 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
             strict=True,
         )
     )
-    if receipt and receipt.get("receipt_sha256") is None:
-        flags.append("scalar_receipt_missing_hash")
+    if raw_receipt is not None and receipt is None:
+        if raw_receipt.get("receipt_sha256") is None:
+            flags.append("scalar_receipt_missing_hash")
+        else:
+            flags.append("scalar_receipt_invalid_hash")
     return scores, flags
 
 
