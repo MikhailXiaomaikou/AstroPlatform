@@ -267,6 +267,149 @@ def test_v02_scalar_tasks_require_source_locator_in_visible_reply(
     assert scores["source_traceability"] == 0
 
 
+@pytest.mark.parametrize(
+    (
+        "task_id",
+        "disposition",
+        "reply",
+        "visible_results",
+        "hidden_result",
+        "identifier",
+        "locator",
+    ),
+    [
+        (
+            "V02_02_desi_dr2_correlation",
+            "full",
+            "From arXiv:2503.14738 Table 4 LRG2, negative correlation increases "
+            "the uncertainty. This is not a likelihood fit.",
+            " The correlated uncertainty is 0.020562805, versus 0.017652837 "
+            "if treated as independent, a 16.5% increase.",
+            {
+                "value": 0.891852994,
+                "standard_uncertainty": 0.020562805,
+                "independent_standard_uncertainty": 0.017652837,
+                "relative_uncertainty_change": 0.165,
+                "relative_uncertainty_change_percent": 16.5,
+            },
+            "2503.14738",
+            "Table 4 LRG2",
+        ),
+        (
+            "V02_03_act_dr6_ee_h0",
+            "full",
+            "From arXiv:2503.14452 Equation 42, the comparison holds the "
+            "reference fixed and did not run a likelihood.",
+            " The difference is -5.4 and the significance is 4.5 sigma.",
+            {"value": -5.4, "standardized_difference": 4.5},
+            "2503.14452",
+            "Equation 42",
+        ),
+        (
+            "V02_04_act_dr6_ns",
+            "limited",
+            "From arXiv:2503.14452 Table 5 Equation 36, use an independent-error "
+            "approximation because cross covariance is missing.",
+            " The difference is 0.0009, the propagated sigma is 0.006365532, "
+            "and the standardized difference is 0.141386.",
+            {
+                "value": 0.0009,
+                "standard_uncertainty": 0.006365532,
+                "standardized_difference": 0.141386,
+            },
+            "2503.14452",
+            "Table 5 Equation 36",
+        ),
+        (
+            "V02_05_h0_anchor_regression",
+            "full",
+            "Planck 2018 and SH0ES (Riess 2022) are the registered anchors. "
+            "This is an anchor comparison, not a distance fit.",
+            " The anchors are 67.36 +/- 0.54 and 73.04 +/- 1.04; "
+            "the offset is 8.43% and 4.85 sigma.",
+            {
+                "planck_h0": 67.36,
+                "planck_sigma": 0.54,
+                "shoes_h0": 73.04,
+                "shoes_sigma": 1.04,
+                "percent_offset": 8.43,
+                "standardized_offset": 4.85,
+            },
+            None,
+            None,
+        ),
+    ],
+)
+def test_v02_02_to_05_require_numeric_results_in_visible_reply(
+    task_id: str,
+    disposition: str,
+    reply: str,
+    visible_results: str,
+    hidden_result: dict[str, float],
+    identifier: str | None,
+    locator: str | None,
+) -> None:
+    task = {
+        "id": task_id,
+        "expected_task_kind": (
+            "general" if task_id.startswith("V02_05") else "deterministic_source_check"
+        ),
+        "expected_disposition": disposition,
+    }
+    summary = {
+        "task_kind": task["expected_task_kind"],
+        "response_disposition": disposition,
+        "citation_gate": "passed",
+    }
+    tools = []
+    if identifier and locator:
+        tools = [
+            {
+                "tool": "verify_scalar_derivation",
+                "receipt": {
+                    "receipt_sha256": "a" * 64,
+                    "source_status": "verified_exact",
+                    "result": hidden_result,
+                    "source_evidence": [
+                        {
+                            "identifier": identifier,
+                            "locator": locator,
+                            "status": "verified_exact",
+                        }
+                    ],
+                },
+            }
+        ]
+    else:
+        summary["registered_anchor_facts"] = hidden_result
+    sample = {
+        "condition": "standard_astro",
+        "status": "completed",
+        "reply": reply,
+        "validation_summary": summary,
+        "tools": tools,
+    }
+
+    scores, flags = scorer._audit_task(sample, task)
+
+    assert flags == []
+    assert scores["source_traceability"] == 2
+    assert scores["numeric_evidence_constraint"] == 0
+    assert scores["uncertainty_calibration"] < 2
+    assert scores["end_to_end_success"] == 0
+    assert scores["obvious_error_risk"] == 0
+
+    sample["reply"] += visible_results
+    visible_scores, visible_flags = scorer._audit_task(sample, task)
+
+    assert visible_flags == []
+    assert visible_scores["source_traceability"] == 2
+    assert visible_scores["numeric_evidence_constraint"] == 2
+    assert visible_scores["uncertainty_calibration"] == 2
+    assert visible_scores["end_to_end_success"] == 2
+    assert visible_scores["obvious_error_risk"] == 2
+
+
 def test_v02_scorer_accepts_exact_h0_anchor_bibcodes() -> None:
     task = {
         "id": "V02_05_h0_anchor_regression",

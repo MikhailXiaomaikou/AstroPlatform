@@ -105,6 +105,20 @@ def _scalar_result_has_number(
     )
 
 
+def _visible_grounded_scalar_number(
+    sample: dict[str, Any],
+    reply: str,
+    receipt: dict[str, Any] | None,
+    target: float,
+    tolerance: float,
+) -> bool:
+    if not _has_number(reply, target, tolerance):
+        return False
+    return sample.get("condition") != "standard_astro" or _scalar_result_has_number(
+        receipt, target, tolerance
+    )
+
+
 def _valid_evidence_receipt(
     sample: dict[str, Any],
     *,
@@ -321,16 +335,12 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
             reply, (("2503.14738",), ("table 4",), ("lrg2",))
         )
         source = _verified_source_score(sample, receipt, source_cited)
-        value_visible = _has_number(reply, 0.891852994, 0.00005)
-        sigma_visible = _has_number(reply, 0.020562805, 0.00005)
-        value_grounded = sample.get("condition") != "standard_astro" or (
-            _scalar_result_has_number(receipt, 0.891852994, 0.00005)
+        value_ok = _visible_grounded_scalar_number(
+            sample, reply, receipt, 0.891852994, 0.00005
         )
-        sigma_grounded = sample.get("condition") != "standard_astro" or (
-            _scalar_result_has_number(receipt, 0.020562805, 0.00005)
+        sigma_ok = _visible_grounded_scalar_number(
+            sample, reply, receipt, 0.020562805, 0.00005
         )
-        value_ok = value_visible and value_grounded
-        sigma_ok = sigma_visible and sigma_grounded
         numeric = _score_level(value_ok and sigma_ok, value_ok or sigma_ok)
         rho_ok = _has_number(evidence, -0.404, 0.0001)
         boundary_ok = _has_all(
@@ -349,10 +359,16 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
             reply, (("2503.14738",), ("table 4",), ("lrg2",))
         )
         source = _verified_source_score(sample, receipt, source_cited)
-        correlated_ok = _has_number(evidence, 0.020562805, 0.00005)
-        independent_ok = _has_number(evidence, 0.017652837, 0.00005)
-        relative_ok = _has_number(evidence, 0.165, 0.005) or _has_number(
-            evidence, 16.5, 0.5
+        correlated_ok = _visible_grounded_scalar_number(
+            sample, reply, receipt, 0.020562805, 0.00005
+        )
+        independent_ok = _visible_grounded_scalar_number(
+            sample, reply, receipt, 0.017652837, 0.00005
+        )
+        relative_ok = _visible_grounded_scalar_number(
+            sample, reply, receipt, 0.165, 0.005
+        ) or _visible_grounded_scalar_number(
+            sample, reply, receipt, 16.5, 0.5
         )
         numeric = _score_level(
             correlated_ok and independent_ok and relative_ok,
@@ -388,14 +404,18 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
             receipt,
             source_cited,
         )
-        difference_ok = _has_number(evidence, -5.4, 0.05) or _has_number(
-            evidence, 5.4, 0.05
+        difference_ok = _visible_grounded_scalar_number(
+            sample, reply, receipt, -5.4, 0.05
+        ) or _visible_grounded_scalar_number(
+            sample, reply, receipt, 5.4, 0.05
         )
-        significance_ok = _has_number(evidence, 4.5, 0.05)
+        significance_ok = _visible_grounded_scalar_number(
+            sample, reply, receipt, 4.5, 0.05
+        )
         numeric = _score_level(
             difference_ok and significance_ok, difference_ok or significance_ok
         )
-        fixed_ok = "fixed" in evidence_lower or "固定" in reply
+        fixed_ok = "fixed" in lower or "固定" in reply
         boundary_ok = _has_all(
             reply, (("not", "did not", "不是", "未"), ("likelihood", "似然"))
         )
@@ -414,9 +434,15 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
             reply, (("2503.14452",), ("table 5",), ("equation 36",))
         )
         source = _verified_source_score(sample, receipt, source_cited)
-        difference_ok = _has_number(evidence, 0.0009, 0.00005)
-        sigma_ok = _has_number(evidence, 0.006365532, 0.00005)
-        standardized_ok = _has_number(evidence, 0.141386, 0.005)
+        difference_ok = _visible_grounded_scalar_number(
+            sample, reply, receipt, 0.0009, 0.00005
+        )
+        sigma_ok = _visible_grounded_scalar_number(
+            sample, reply, receipt, 0.006365532, 0.00005
+        )
+        standardized_ok = _visible_grounded_scalar_number(
+            sample, reply, receipt, 0.141386, 0.005
+        )
         numeric = _score_level(
             difference_ok and sigma_ok and standardized_ok,
             difference_ok and sigma_ok,
@@ -430,7 +456,7 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
             ),
         )
         uncertainty = _score_level(independence_ok and sigma_ok, independence_ok)
-        missing_ok = "cross_covariance_not_provided" in evidence or _has_all(
+        missing_ok = _has_all(
             reply, (("covariance", "协方差", "相关"), ("missing", "not supplied", "缺失", "未提供"))
         )
         gap = _score_level(missing_ok, independence_ok)
@@ -460,16 +486,16 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
             human_source_full or bibcode_source_full,
         )
         anchors_ok = all(
-            _has_number(evidence, target, tolerance)
+            _has_number(reply, target, tolerance)
             for target, tolerance in ((67.36, 0.02), (73.04, 0.02))
         )
         derived_ok = all(
-            _has_number(evidence, target, tolerance)
+            _has_number(reply, target, tolerance)
             for target, tolerance in ((8.43, 0.05), (4.85, 0.05))
         )
         numeric = _score_level(anchors_ok and derived_ok, anchors_ok)
-        errors_ok = _has_number(evidence, 0.54, 0.02) and _has_number(
-            evidence, 1.04, 0.02
+        errors_ok = _has_number(reply, 0.54, 0.02) and _has_number(
+            reply, 1.04, 0.02
         )
         boundary_ok = _has_all(
             reply,
