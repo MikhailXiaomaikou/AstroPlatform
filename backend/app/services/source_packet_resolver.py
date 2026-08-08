@@ -1207,7 +1207,13 @@ _POSTPOSED_MEASUREMENT_DISCLAIMER = re.compile(
     re.I,
 )
 _POSTPOSED_HYPOTHETICAL_CONDITION = re.compile(
-    r"\b(?:if(?!\s+anything\b)|unless|assuming|supposing|provided\s+that)\b",
+    r"\b(?:if|unless|assuming|supposing|provided\s+that)\b", re.I
+)
+_POSTPOSED_IF_ANYTHING_QUALIFIER = re.compile(
+    r"\bif\s+anything(?:\s*,)?\s+(?:an?\s+)?(?:(?:more|less)\s+)?"
+    r"(?:conservative|cautious|generous|stringent|strict|robust)\s+"
+    r"(?:estimate|bound|limit|result|measurement|value)\b"
+    r"(?=\s*(?:[,;.]|$))",
     re.I,
 )
 _PRELABEL_PROPOSITION_REJECTION = re.compile(
@@ -1296,9 +1302,10 @@ def _measurement_assignment_is_non_exact(
 
 def _measurement_suffix_is_non_exact(field_suffix: str) -> bool:
     """Reject a value/uncertainty pair disclaimed later in its own field."""
+    conditional_scope = _POSTPOSED_IF_ANYTHING_QUALIFIER.sub("", field_suffix)
     return (
         _POSTPOSED_MEASUREMENT_DISCLAIMER.search(field_suffix) is not None
-        or _POSTPOSED_HYPOTHETICAL_CONDITION.search(field_suffix) is not None
+        or _POSTPOSED_HYPOTHETICAL_CONDITION.search(conditional_scope) is not None
     )
 
 

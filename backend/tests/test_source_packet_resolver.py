@@ -502,6 +502,7 @@ def test_modal_or_trailing_conditional_measurement_must_not_verify_exact() -> No
         "alpha might have been measured as 10 +/- 1 under another pipeline.",
         "alpha would be 10 +/- 1 if the calibration changed.",
         "alpha = 10 +/- 1 if the calibration changed.",
+        "alpha = 10 +/- 1 if anything in the calibration changes.",
     ):
         status, _detail = match_expected_claims(
             {"tables": [], "text": text}, claims, locator=""
@@ -524,15 +525,14 @@ def test_if_anything_qualifier_does_not_false_kill_exact_measurement() -> None:
             "unit": "dimensionless",
         }
     ]
-    qualified, _detail = match_expected_claims(
-        {
-            "tables": [],
-            "text": "alpha = 10 +/- 1, if anything a conservative estimate.",
-        },
-        claims,
-        locator="",
-    )
-    assert qualified == "verified_exact"
+    for text in (
+        "alpha = 10 +/- 1, if anything a conservative estimate.",
+        "alpha = 10 +/- 1, if anything, a conservative estimate.",
+    ):
+        qualified, _detail = match_expected_claims(
+            {"tables": [], "text": text}, claims, locator=""
+        )
+        assert qualified == "verified_exact", text
 
 
 def test_repeated_label_with_later_conflicting_measurement_stays_closed() -> None:
