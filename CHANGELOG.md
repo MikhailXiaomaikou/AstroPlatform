@@ -36,7 +36,7 @@ need entries unless they change user-visible behavior or research validity.
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Thirty-two adversarial review rounds tightened heavy-chain routing, number and
+- Thirty-three adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
   scale-relative covariance validation, negation-aware independence parsing,
@@ -82,6 +82,9 @@ need entries unless they change user-visible behavior or research validity.
   instead of being borrowed from an unrelated later quantity in the field.
   Conditional and hypothetical source assignments are now excluded from exact
   measurement evidence while affirmative source-reporting syntax remains valid.
+  Post-label modal or trailing conditional measurements are likewise non-exact,
+  and do-support phrases such as `does not need to be performed` now suppress
+  explicitly rejected heavy routes without dropping a valid lightweight call.
 
 ### P0 production and local-automation hardening (2026-07-13)
 

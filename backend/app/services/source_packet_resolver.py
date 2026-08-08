@@ -1174,6 +1174,9 @@ _NON_EXACT_MEASUREMENT_ASSIGNMENT = re.compile(
     r"(?:not|never)\b|"
     r"\b(?:(?:is|are|was|were|should|must|could|might|would|does|do|did|"
     r"has|have|had)n['’]t|can['’]t|won['’]t|cannot)\b|"
+    r"\b(?:can|could|may|might|would|should|will)\s+"
+    r"(?:(?:possibly|plausibly|hypothetically|counterfactually)\s+){0,2}"
+    r"(?:be|equal|measure)\b|"
     r"(?:!=|≠|<=|>=|<|>|≤|≥|≲|≳)|"
     r"\b(?:less|lower|smaller|greater|higher|larger)\s+than"
     r"(?:\s+or\s+equal\s+to)?\b|"
@@ -1198,6 +1201,9 @@ _POSTPOSED_MEASUREMENT_DISCLAIMER = re.compile(
     r"(?:unsupported|unmeasured|excluded|discarded|retracted|withdrawn|invalid)\b|"
     r"\b(?:should|must)\s+be\s+(?:ignored|discarded|excluded|rejected)\b",
     re.I,
+)
+_POSTPOSED_HYPOTHETICAL_CONDITION = re.compile(
+    r"\b(?:if|unless|assuming|supposing|provided\s+that)\b", re.I
 )
 _PRELABEL_PROPOSITION_REJECTION = re.compile(
     r"\b(?:"
@@ -1285,7 +1291,10 @@ def _measurement_assignment_is_non_exact(
 
 def _measurement_suffix_is_non_exact(field_suffix: str) -> bool:
     """Reject a value/uncertainty pair disclaimed later in its own field."""
-    return _POSTPOSED_MEASUREMENT_DISCLAIMER.search(field_suffix) is not None
+    return (
+        _POSTPOSED_MEASUREMENT_DISCLAIMER.search(field_suffix) is not None
+        or _POSTPOSED_HYPOTHETICAL_CONDITION.search(field_suffix) is not None
+    )
 
 
 def _immediate_source_unit(measurement_suffix: str) -> str | None:

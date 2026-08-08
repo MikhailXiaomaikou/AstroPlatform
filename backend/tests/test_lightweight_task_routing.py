@@ -420,6 +420,8 @@ def test_postposed_heavy_negation_stays_on_deterministic_route() -> None:
         "A fit is not required.",
         "Fitting should not be performed.",
         "A fit is not to be performed.",
+        "A fit does not need to be performed.",
+        "A fit doesn't need to be performed.",
         "A likelihood calculation is not required.",
     ):
         decision = classify_task_kind(
