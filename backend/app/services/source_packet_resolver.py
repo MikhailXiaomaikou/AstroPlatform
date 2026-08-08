@@ -1228,7 +1228,10 @@ _PRELABEL_PROPOSITION_REJECTION = re.compile(
     r"\b(?:"
     r"(?:it|this|that)\s+(?:is|was)\s+(?:not|never)\s+"
     r"(?:true|established|supported|shown|demonstrated)\s+that|"
-    r"(?:we|the\s+(?:data|analysis|study|source|paper|results?))\s+"
+    r"(?:we|(?:(?:the|this|that)\s+)?"
+    r"(?:(?:available|current|existing|reported|observed|observational|"
+    r"combined|presented)\s+){0,2}"
+    r"(?:data|analysis|study|source|paper|results?|evidence|observations?))\s+"
     r"(?:cannot|can['’]t|do\s+not|don['’]t|does\s+not|doesn['’]t|"
     r"did\s+not|didn['’]t)\s+"
     r"(?:conclude|infer|claim|show|support|establish|confirm|demonstrate|find)"
@@ -1247,6 +1250,18 @@ _PRELABEL_PROPOSITION_REJECTION = re.compile(
     r")\s*$",
     re.I,
 )
+_PRELABEL_NON_MEASUREMENT_CONTEXT = re.compile(
+    r"\b(?:"
+    r"(?:for|in|using|from)\s+(?:(?:the|an?|our)\s+)?"
+    r"(?:mock|simulated|synthetic|fiducial|illustrative)"
+    r"(?:\s+(?:catalog(?:ue)?|data(?:set)?|sample|case|scenario|model|value))?|"
+    r"(?:our|the|an?)\s+(?:fiducial|mock|simulated|synthetic|illustrative)\s+"
+    r"(?:value|parameter|case|scenario|catalog(?:ue)?|data(?:set)?|sample)\s+"
+    r"(?:is|was)|"
+    r"for\s+(?:illustration|illustrative\s+purposes)(?:\s+only)?"
+    r")\s*[,，]?\s*$",
+    re.I,
+)
 _PRELABEL_HYPOTHETICAL_SCOPE = re.compile(
     r"\b(?:what\s+if|if|suppose|supposing|assuming|assume|imagine|let|"
     r"hypothetically|counterfactually|were|had|should)\b[^.;!?]*$",
@@ -1255,6 +1270,9 @@ _PRELABEL_HYPOTHETICAL_SCOPE = re.compile(
 _EXPLICIT_MEASUREMENT_ASSIGNMENT_PREFIX = re.compile(
     r"\s*(?:"
     r"(?:=|:|：)|"
+    r"(?:has|have|had)\s+been\s+"
+    r"(?:measured|reported|estimated|given|found)\s+"
+    r"(?:(?:as|at|to\s+be)\s*)?|"
     r"(?:is|are|was|were)\s*"
     r"(?:(?:measured|reported|estimated|given|found)\s+)?"
     r"(?:(?:as|at|to\s+be)\s*)?|"
@@ -1297,6 +1315,14 @@ def _measurement_assignment_is_non_exact(
     window: str, label_position: int, value_position: int
 ) -> bool:
     """Reject negated or relational label-to-value assignments."""
+    # Codex review P1 (PR #46, round 42): a bare equality can describe a
+    # configuration rather than an observation (mock/simulated/fiducial/
+    # illustrative). Inspect the full pre-label clause because the comma that
+    # introduces the label is itself a field boundary. The anchored grammar
+    # deliberately does not reject an unrelated comparison such as "Unlike
+    # the mock catalogue, the observed alpha has been measured as ...".
+    if _PRELABEL_NON_MEASUREMENT_CONTEXT.search(window[:label_position]):
+        return True
     field_start = 0
     for terminator in _FIELD_TERMINATOR.finditer(window, 0, label_position):
         field_start = terminator.end()

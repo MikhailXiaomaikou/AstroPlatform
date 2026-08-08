@@ -386,6 +386,7 @@ def test_repeated_label_after_valid_measurement_still_verifies_exact() -> None:
         "It is not true that alpha = 10 +/- 1.",
         "We cannot conclude that alpha = 10 +/- 1.",
         "The data do not support alpha = 10 +/- 1.",
+        "The available evidence does not support alpha = 10 +/- 1.",
         "There is no evidence that alpha = 10 +/- 1.",
         "There is no evidence to support alpha = 10 +/- 1.",
         "No evidence supports alpha = 10 +/- 1.",
@@ -500,6 +501,79 @@ def test_prose_cooccurrence_requires_positive_measurement_syntax() -> None:
 
     assert unrelated != "verified_exact"
     assert structured == "verified_exact"
+
+
+def test_perfect_aspect_measurement_syntax_verifies_exact() -> None:
+    claims = [
+        {
+            "id": "alpha",
+            "label": "alpha",
+            "value": 10.0,
+            "standard_uncertainty": 1.0,
+            "unit": "dimensionless",
+        }
+    ]
+
+    status, _detail = match_expected_claims(
+        {"tables": [], "text": "alpha has been measured as 10 +/- 1."},
+        claims,
+        locator="",
+    )
+
+    assert status == "verified_exact"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "For the mock catalogue, alpha = 10 +/- 1.",
+        "In the simulated data, alpha = 10 +/- 1.",
+        "Our fiducial value is alpha = 10 +/- 1.",
+        "For illustration, alpha = 10 +/- 1.",
+    ],
+)
+def test_configuration_assignments_must_not_verify_exact(text: str) -> None:
+    claims = [
+        {
+            "id": "alpha",
+            "label": "alpha",
+            "value": 10.0,
+            "standard_uncertainty": 1.0,
+            "unit": "dimensionless",
+        }
+    ]
+
+    status, _detail = match_expected_claims(
+        {"tables": [], "text": text}, claims, locator=""
+    )
+
+    assert status != "verified_exact", text
+
+
+def test_mock_comparison_does_not_hide_a_real_measurement() -> None:
+    claims = [
+        {
+            "id": "alpha",
+            "label": "alpha",
+            "value": 10.0,
+            "standard_uncertainty": 1.0,
+            "unit": "dimensionless",
+        }
+    ]
+
+    status, _detail = match_expected_claims(
+        {
+            "tables": [],
+            "text": (
+                "Unlike the mock catalogue, the observed alpha has been "
+                "measured as 10 +/- 1."
+            ),
+        },
+        claims,
+        locator="",
+    )
+
+    assert status == "verified_exact"
 
 
 def test_hypothetical_measurement_must_not_verify_exact() -> None:

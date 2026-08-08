@@ -36,7 +36,7 @@ need entries unless they change user-visible behavior or research validity.
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Forty adversarial review rounds tightened heavy-chain routing, number and
+- Forty-two adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
   scale-relative covariance validation, negation-aware independence parsing,
@@ -104,7 +104,13 @@ need entries unless they change user-visible behavior or research validity.
   actionable `non_finite_result` abstention before receipt construction.
   Modal disclaimers such as `a fit need not be performed` now keep complete
   scalar requests on the lightweight route, and `not enough evidence` source
-  propositions cannot earn exact attribution.
+  propositions cannot earn exact attribution. Qualified evidence denials such
+  as `the available evidence does not support` likewise fail closed, while
+  non-modal perfect-aspect reporting such as `has been measured as` remains a
+  valid positive measurement form. Mock, simulated, synthetic, fiducial, and
+  illustrative assignments are now excluded from exact observational
+  attribution without hiding a real observed measurement mentioned in a
+  comparison against those configurations.
 
 ### P0 production and local-automation hardening (2026-07-13)
 
