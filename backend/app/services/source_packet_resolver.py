@@ -1413,13 +1413,27 @@ def _measurement_assignment_is_non_exact(
     return _NON_EXACT_MEASUREMENT_ASSIGNMENT.search(governing_text) is not None
 
 
+def _suffix_after_immediate_source_unit(field_suffix: str) -> str:
+    """Remove a bound physical unit before inspecting postposed semantics."""
+    suffix = field_suffix.lstrip()
+    for pattern in (
+        _SOURCE_H0_UNIT,
+        _SOURCE_DISTANCE_UNIT,
+        _SOURCE_PHYSICAL_UNIT_PREFIX,
+    ):
+        if match := pattern.match(suffix):
+            return suffix[match.end() :]
+    return suffix
+
+
 def _measurement_suffix_is_non_exact(field_suffix: str) -> bool:
     """Reject a value/uncertainty pair disclaimed later in its own field."""
     conditional_scope = _POSTPOSED_IF_ANYTHING_QUALIFIER.sub("", field_suffix)
+    configuration_scope = _suffix_after_immediate_source_unit(field_suffix)
     return (
         _POSTPOSED_MEASUREMENT_DISCLAIMER.search(field_suffix) is not None
         or _POSTPOSED_HYPOTHETICAL_CONDITION.search(conditional_scope) is not None
-        or _POSTPOSED_CONFIGURATION_ASSIGNMENT.search(field_suffix) is not None
+        or _POSTPOSED_CONFIGURATION_ASSIGNMENT.search(configuration_scope) is not None
     )
 
 

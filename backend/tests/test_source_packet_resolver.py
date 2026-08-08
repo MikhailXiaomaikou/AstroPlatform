@@ -604,6 +604,57 @@ def test_configuration_assignments_must_not_verify_exact(text: str) -> None:
     assert status != "verified_exact", text
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "H0 = 70 +/- 2 km/s/Mpc was assumed as an input.",
+        "H0 = 70 +/- 2 km/s/Mpc is held fixed in the analysis.",
+        "H0 = 70 +/- 2 km/s/Mpc is the fiducial value.",
+    ],
+)
+def test_postposed_configuration_after_physical_unit_is_not_exact(
+    text: str,
+) -> None:
+    claims = [
+        {
+            "id": "h0",
+            "label": "H0",
+            "value": 70.0,
+            "standard_uncertainty": 2.0,
+            "unit": "km s^-1 Mpc^-1",
+        }
+    ]
+
+    status, _detail = match_expected_claims(
+        {"tables": [], "text": text}, claims, locator=""
+    )
+
+    assert status != "verified_exact", text
+
+
+def test_physical_unit_measurement_without_configuration_stays_exact() -> None:
+    claims = [
+        {
+            "id": "h0",
+            "label": "H0",
+            "value": 70.0,
+            "standard_uncertainty": 2.0,
+            "unit": "km s^-1 Mpc^-1",
+        }
+    ]
+
+    status, _detail = match_expected_claims(
+        {
+            "tables": [],
+            "text": "H0 has been measured as 70 +/- 2 km/s/Mpc.",
+        },
+        claims,
+        locator="",
+    )
+
+    assert status == "verified_exact"
+
+
 def test_configuration_context_preserves_explicit_measurement() -> None:
     claims = [
         {

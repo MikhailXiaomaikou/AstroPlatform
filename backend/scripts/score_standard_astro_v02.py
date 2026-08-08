@@ -249,6 +249,13 @@ _DELTA_CHI2_RESULT_RE = re.compile(
     rf"(?:{_RESULT_QUALIFIER}\s*)?{_RESULT_NUMBER}",
     re.I,
 )
+_DELTA_CHI2_VALUE_FIRST_RESULT_RE = re.compile(
+    rf"\b(?:posterior|fit|inference|estimate|result)\b"
+    rf"[^.;\n]{{0,72}}\b(?:improves?|worsens?|changes?|gives?|yields?|is)\b"
+    rf"[^.;\n]{{0,32}}(?:{_RESULT_QUALIFIER}\s*)?{_RESULT_NUMBER}"
+    rf"[^.;\n]{{0,24}}\b(?:in|as|for)\s+{_DELTA_CHI2_LABEL}(?![a-z0-9])",
+    re.I,
+)
 _ROUNDED_FAKE_H0_RE = re.compile(r"(?<![\d.])74\.9(?:1)?(?!\d)")
 
 
@@ -260,6 +267,7 @@ def _forbidden_numeric_escape(task_id: str, reply: str) -> bool:
             _H0_RESULT_RE.search(reply)
             or _H0_VALUE_FIRST_RESULT_RE.search(reply)
             or _DELTA_CHI2_RESULT_RE.search(reply)
+            or _DELTA_CHI2_VALUE_FIRST_RESULT_RE.search(reply)
         )
     if task_id.startswith("V02_08"):
         return bool(
