@@ -1213,6 +1213,11 @@ _PRELABEL_PROPOSITION_REJECTION = re.compile(
     r")\s*$",
     re.I,
 )
+_PRELABEL_HYPOTHETICAL_SCOPE = re.compile(
+    r"\b(?:what\s+if|if|suppose|supposing|assuming|assume|imagine|let|"
+    r"hypothetically|counterfactually|were|had|should)\b[^.;!?]*$",
+    re.I,
+)
 _EXPLICIT_MEASUREMENT_ASSIGNMENT_PREFIX = re.compile(
     r"\s*(?:"
     r"(?:=|:|：)|"
@@ -1261,9 +1266,10 @@ def _measurement_assignment_is_non_exact(
     field_start = 0
     for terminator in _FIELD_TERMINATOR.finditer(window, 0, label_position):
         field_start = terminator.end()
+    field_prefix = window[field_start:label_position]
     if _PRELABEL_PROPOSITION_REJECTION.search(
-        window[field_start:label_position]
-    ):
+        field_prefix
+    ) or _PRELABEL_HYPOTHETICAL_SCOPE.search(field_prefix):
         return True
     governing_text = window[label_position:value_position]
     # Appositive clauses may themselves contain unrelated negation, but the

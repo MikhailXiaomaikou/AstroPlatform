@@ -456,6 +456,35 @@ def test_affirmed_prelabel_proposition_still_verifies_exact() -> None:
     assert status == "verified_exact"
 
 
+def test_hypothetical_measurement_must_not_verify_exact() -> None:
+    claims = [
+        {
+            "id": "alpha",
+            "label": "alpha",
+            "value": 10.0,
+            "standard_uncertainty": 1.0,
+            "unit": "dimensionless",
+        }
+    ]
+
+    for text in (
+        "If alpha were 10 +/- 1, the conclusion would change.",
+        "Suppose alpha = 10 +/- 1 for illustration.",
+        "Assuming alpha = 10 +/- 1, the model would shift.",
+    ):
+        status, _detail = match_expected_claims(
+            {"tables": [], "text": text}, claims, locator=""
+        )
+        assert status != "verified_exact", text
+
+    affirmed, _detail = match_expected_claims(
+        {"tables": [], "text": "The source reports alpha = 10 +/- 1."},
+        claims,
+        locator="",
+    )
+    assert affirmed == "verified_exact"
+
+
 def test_repeated_label_with_later_conflicting_measurement_stays_closed() -> None:
     # Reverse guard for occurrence-aware matching: a neutral later mention is
     # harmless, but a later numeric field for the same label cannot be ignored.
