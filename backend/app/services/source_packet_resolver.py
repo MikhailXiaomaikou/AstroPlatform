@@ -1237,7 +1237,11 @@ _PRELABEL_PROPOSITION_REJECTION = re.compile(
     r"(?:concluded|inferred|claimed|shown|supported|established|confirmed)\s+that"
     r"|there\s+(?:is|was|remains)\s+no\s+"
     r"(?:evidence|support|basis|indication)\s+"
-    r"(?:that|for|to\s+(?:support|establish|show|demonstrate|confirm))"
+    r"(?:that|for|to\s+(?:support|establish|show|demonstrate|confirm))|"
+    r"no\s+(?:evidence|support|basis|indication)\s+"
+    r"(?:that|for|to\s+(?:support|establish|show|demonstrate|confirm)|"
+    r"supports?|establishes?|shows?|demonstrates?|confirms?|"
+    r"(?:exists?|remains?)\s+(?:that|for|to\s+(?:support|establish|show)))"
     r")\s*$",
     re.I,
 )

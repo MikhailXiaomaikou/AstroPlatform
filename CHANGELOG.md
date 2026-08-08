@@ -36,7 +36,7 @@ need entries unless they change user-visible behavior or research validity.
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Thirty-seven adversarial review rounds tightened heavy-chain routing, number and
+- Thirty-eight adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
   scale-relative covariance validation, negation-aware independence parsing,
@@ -97,7 +97,8 @@ need entries unless they change user-visible behavior or research validity.
   infinitival denials such as `there is no evidence to support` also fail
   closed. Prose exact attribution now requires positive assignment/reporting
   syntax, while explicitly structured table rows retain their bounded bare
-  `label value +/- uncertainty` form.
+  `label value +/- uncertainty` form. Subject-first source denials such as
+  `no evidence supports` are also rejected before exact attribution.
 
 ### P0 production and local-automation hardening (2026-07-13)
 

@@ -388,6 +388,7 @@ def test_repeated_label_after_valid_measurement_still_verifies_exact() -> None:
         "The data do not support alpha = 10 +/- 1.",
         "There is no evidence that alpha = 10 +/- 1.",
         "There is no evidence to support alpha = 10 +/- 1.",
+        "No evidence supports alpha = 10 +/- 1.",
         "There was no support for alpha = 10 +/- 1.",
     ],
 )
