@@ -699,6 +699,7 @@ def _scalar_source_echo_violation(
     sources_by_id: dict[str, dict[str, Any]] = {}
     actual_external: set[tuple[str, str]] = set()
     expected_locator = _source_locator_from_prompt(normalized)
+    prompt_user_supplied_labels = _prompt_user_supplied_quantity_labels(normalized)
     for source in sources:
         if not isinstance(source, dict):
             return "each source must be an object"
@@ -734,7 +735,18 @@ def _scalar_source_echo_violation(
             return f"quantity source_ref {source_ref!r} is not declared"
         referenced_ids.add(source_ref)
         is_fixed = _is_fixed_comparator(str(quantity.get("label") or ""))
-        if expected_identities and not is_fixed:
+        quantity_label = _canonical_scalar_label(
+            quantity.get("label") or quantity.get("id")
+        )
+        is_prompt_user_supplied = quantity_label in prompt_user_supplied_labels
+        if is_prompt_user_supplied:
+            if source.get("kind") != "user_supplied":
+                return "a prompt-declared user quantity was changed to an external source"
+            if _canonical_source_locator(quantity.get("source_locator")) != (
+                _canonical_source_locator("current prompt")
+            ):
+                return "prompt-declared user quantity locator is not the current prompt"
+        elif expected_identities and not is_fixed:
             if source.get("kind") == "user_supplied":
                 return "a cited prompt quantity was changed to user_supplied"
             if _canonical_source_locator(quantity.get("source_locator")) != (

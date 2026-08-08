@@ -387,6 +387,7 @@ def test_repeated_label_after_valid_measurement_still_verifies_exact() -> None:
         "We cannot conclude that alpha = 10 +/- 1.",
         "The data do not support alpha = 10 +/- 1.",
         "There is no evidence that alpha = 10 +/- 1.",
+        "There is no evidence to support alpha = 10 +/- 1.",
         "There was no support for alpha = 10 +/- 1.",
     ],
 )
@@ -456,6 +457,45 @@ def test_affirmed_prelabel_proposition_still_verifies_exact() -> None:
     )
 
     assert status == "verified_exact"
+
+
+def test_prose_cooccurrence_requires_positive_measurement_syntax() -> None:
+    claims = [
+        {
+            "id": "alpha",
+            "label": "alpha",
+            "value": 10.0,
+            "standard_uncertainty": 1.0,
+            "unit": "dimensionless",
+        }
+    ]
+
+    unrelated, _detail = match_expected_claims(
+        {
+            "tables": [],
+            "text": "We compare alpha against a calibration result of 10 +/- 1.",
+        },
+        claims,
+        locator="",
+    )
+    structured, _detail = match_expected_claims(
+        {
+            "tables": [
+                {
+                    "label": "Table 4",
+                    "caption": "parameters",
+                    "columns": [],
+                    "rows": [["LRG2 alpha 10 +/- 1"]],
+                }
+            ],
+            "text": "",
+        },
+        claims,
+        locator="Table 4, LRG2",
+    )
+
+    assert unrelated != "verified_exact"
+    assert structured == "verified_exact"
 
 
 def test_hypothetical_measurement_must_not_verify_exact() -> None:

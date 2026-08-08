@@ -996,8 +996,11 @@ def _bounded_row_locator_window(
     return _compact_text(f"{structure} {text[start:end]}")
 
 
-def _candidate_windows(document: dict[str, Any], locator: str) -> list[str]:
-    windows: list[str] = []
+def _candidate_windows(
+    document: dict[str, Any], locator: str
+) -> list[tuple[str, bool]]:
+    """Return compact windows paired with structured-table-row provenance."""
+    windows: list[tuple[str, bool]] = []
     locator_text = _compact_text(locator)
     for table in document.get("tables") or []:
         if not isinstance(table, dict):
@@ -1032,7 +1035,10 @@ def _candidate_windows(document: dict[str, Any], locator: str) -> list[str]:
                 row_text = str(row)
                 columns_for_window = columns
             windows.append(
-                _compact_text(f"{table_header} {columns_for_window} {row_text}")
+                (
+                    _compact_text(f"{table_header} {columns_for_window} {row_text}"),
+                    True,
+                )
             )
     text = _compact_text(document.get("text"))
     if text:
@@ -1094,16 +1100,18 @@ def _candidate_windows(document: dict[str, Any], locator: str) -> list[str]:
                         text, locator_index, row_fragment
                     )
                     if row_window is not None:
-                        windows.append(row_window)
+                        windows.append((row_window, False))
                 else:
-                    windows.append(_bounded_locator_window(text, locator_index))
+                    windows.append(
+                        (_bounded_locator_window(text, locator_index), False)
+                    )
         # Codex review P1 (PR #46): the document-head fallback may only run
         # when no locator was requested. Otherwise labels and numbers elsewhere
         # in the paper could earn verified_exact for a table/equation that was
         # never checked — or cross a later structural boundary.
         if not locator_text:
             windows.extend(
-                text[index : index + 3000]
+                (text[index : index + 3000], False)
                 for index in range(0, min(len(text), 12000), 3000)
             )
     # Codex review P1 (PR #46, round 2): a compound locator counted as found
@@ -1118,8 +1126,8 @@ def _candidate_windows(document: dict[str, Any], locator: str) -> list[str]:
         ]
         if fragments:
             windows = [
-                window
-                for window in windows
+                (window, is_structured_table_row)
+                for window, is_structured_table_row in windows
                 if all(
                     _locator_fragment_present(fragment, window)
                     for fragment in fragments
@@ -1228,7 +1236,8 @@ _PRELABEL_PROPOSITION_REJECTION = re.compile(
     r"(?:cannot|can['’]t)\s+be\s+"
     r"(?:concluded|inferred|claimed|shown|supported|established|confirmed)\s+that"
     r"|there\s+(?:is|was|remains)\s+no\s+"
-    r"(?:evidence|support|basis|indication)\s+(?:that|for)"
+    r"(?:evidence|support|basis|indication)\s+"
+    r"(?:that|for|to\s+(?:support|establish|show|demonstrate|confirm))"
     r")\s*$",
     re.I,
 )
@@ -1366,7 +1375,10 @@ def _value_positions(value: float, window: str) -> list[int]:
 
 
 def _values_follow_label_order(
-    expected_claims: list[dict[str, Any]], window: str
+    expected_claims: list[dict[str, Any]],
+    window: str,
+    *,
+    structured_table_row: bool = False,
 ) -> bool:
     """Require value order to be assignable consistently with label order.
 
@@ -1484,6 +1496,7 @@ def _values_follow_label_order(
     def matching_measurement_end(
         claim: dict[str, Any],
         label_position: int,
+        label_end: int,
         label_occurrences: list[tuple[int, int]],
         cursor: int,
         next_label_position: int | None,
@@ -1495,12 +1508,6 @@ def _values_follow_label_order(
             if next_label_position is None
             else min(next_label_position, field_end)
         )
-        measurement_end = measurement_end_in_field(
-            claim, label_position, cursor, field_limit
-        )
-        if measurement_end is None:
-            return None
-
         def has_measurement_assignment_syntax(
             label_end: int, field_limit: int
         ) -> bool:
@@ -1508,13 +1515,19 @@ def _values_follow_label_order(
             if numeric is None:
                 return False
             prefix = window[label_end:numeric.start()]
-            if _EXPLICIT_MEASUREMENT_ASSIGNMENT_PREFIX.fullmatch(prefix):
+            assignment_prefix = prefix
+            comma_segments = re.split(r"[,，]", assignment_prefix)
+            if len(comma_segments) >= 3:
+                assignment_prefix = " ".join(comma_segments[::2])
+            if _EXPLICIT_MEASUREMENT_ASSIGNMENT_PREFIX.fullmatch(
+                assignment_prefix
+            ):
                 return True
             # Structured table renderings can be the bare "label 20 +/- 2"
             # form. Treat that as a measurement only when the number is
             # immediately uncertainty-bound; "Section 2" / "Equation 42"
             # and citation numbers remain ordinary cross-references.
-            if prefix.strip():
+            if not structured_table_row or prefix.strip():
                 return False
             following = _GENERIC_NUMBER_TOKEN.search(
                 window, numeric.end(), field_limit
@@ -1522,6 +1535,14 @@ def _values_follow_label_order(
             return following is not None and _UNCERTAINTY_BINDING.fullmatch(
                 window[numeric.end():following.start()]
             ) is not None
+
+        if not has_measurement_assignment_syntax(label_end, field_limit):
+            return None
+        measurement_end = measurement_end_in_field(
+            claim, label_position, cursor, field_limit
+        )
+        if measurement_end is None:
+            return None
 
         # Occurrence-aware matching must not turn into first-match wins. A
         # neutral later mention is harmless, but a later numeric field for the
@@ -1571,7 +1592,7 @@ def _values_follow_label_order(
                 for index in other_indices
                 for occurrence in labeled_claims[index][1]
             )
-            for label_position, _label_end in label_occurrences:
+            for label_position, label_end in label_occurrences:
                 if label_position <= cursor:
                     continue
                 next_label_position = next(
@@ -1585,6 +1606,7 @@ def _values_follow_label_order(
                 measurement_end = matching_measurement_end(
                     claim,
                     label_position,
+                    label_end,
                     label_occurrences,
                     cursor,
                     next_label_position,
@@ -1639,7 +1661,7 @@ def match_expected_claims(
     windows = _candidate_windows(document, effective_locator)
     label_seen = False
     compact_source_locator = _compact_text(effective_locator)
-    for window in windows:
+    for window, is_structured_table_row in windows:
         all_labels = True
         all_numbers = True
         for claim in expected_claims:
@@ -1679,7 +1701,11 @@ def match_expected_claims(
         if (
             all_labels
             and all_numbers
-            and _values_follow_label_order(expected_claims, window)
+            and _values_follow_label_order(
+                expected_claims,
+                window,
+                structured_table_row=is_structured_table_row,
+            )
         ):
             return "verified_exact", {"reason": "labels_and_values_same_window"}
     if label_seen:

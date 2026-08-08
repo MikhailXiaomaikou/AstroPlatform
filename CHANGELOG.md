@@ -36,7 +36,7 @@ need entries unless they change user-visible behavior or research validity.
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Thirty-six adversarial review rounds tightened heavy-chain routing, number and
+- Thirty-seven adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
   scale-relative covariance validation, negation-aware independence parsing,
@@ -93,6 +93,11 @@ need entries unless they change user-visible behavior or research validity.
   prose that locally marks an operand as user-supplied now keeps that operand
   off a cited paper's source packet, and existential source denials such as
   `there is no evidence that` cannot certify the proposition they reject.
+  Model-authored fallback calls preserve the same prompt-local provenance;
+  infinitival denials such as `there is no evidence to support` also fail
+  closed. Prose exact attribution now requires positive assignment/reporting
+  syntax, while explicitly structured table rows retain their bounded bare
+  `label value +/- uncertainty` form.
 
 ### P0 production and local-automation hardening (2026-07-13)
 

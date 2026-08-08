@@ -1083,6 +1083,60 @@ def test_echo_guard_requires_cited_uncertainty_source() -> None:
     assert scalar_call_echo_violation(user_supplied_ref, prompt) is not None
 
 
+def test_echo_guard_preserves_prompt_declared_user_provenance_on_fallback() -> None:
+    from app.services.agent_runtime.prompt_routing import scalar_call_echo_violation
+
+    prompt = (
+        "From arXiv:2503.14738 Table 4, compute the difference between "
+        "alpha = 10 +/- 1 and my user-supplied comparator B = 8 +/- 2, "
+        "using the quoted cross term = -0.4."
+    )
+    faithful = {
+        "operation": "difference",
+        "quantities": [
+            {
+                "id": "alpha",
+                "label": "alpha",
+                "value": 10.0,
+                "standard_uncertainty": 1.0,
+                "unit": "dimensionless",
+                "source_ref": "paper",
+                "source_locator": "Table 4",
+            },
+            {
+                "id": "B",
+                "label": "B",
+                "value": 8.0,
+                "standard_uncertainty": 2.0,
+                "unit": "dimensionless",
+                "source_ref": "prompt",
+                "source_locator": "current prompt",
+            },
+        ],
+        "uncertainty_model": {
+            "kind": "correlation_matrix",
+            "matrix": [[1.0, -0.4], [-0.4, 1.0]],
+            "source_ref": "paper",
+        },
+        "sources": [
+            {
+                "id": "paper",
+                "kind": "arxiv",
+                "identifier": "2503.14738",
+                "locator": "Table 4",
+            },
+            {
+                "id": "prompt",
+                "kind": "user_supplied",
+                "identifier": "values in current user prompt",
+                "locator": "current prompt",
+            },
+        ],
+    }
+
+    assert scalar_call_echo_violation(faithful, prompt) is None
+
+
 def test_echo_guard_binds_each_correlation_to_its_quantity_pair() -> None:
     from app.services.agent_runtime.prompt_routing import scalar_call_echo_violation
 
