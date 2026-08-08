@@ -1,5 +1,7 @@
 """Shared test fixtures for the standard-astro backend tests."""
 
+import asyncio
+import multiprocessing as mp
 import os
 from pathlib import Path
 import uuid
@@ -91,6 +93,37 @@ TEST_DB_URL = "sqlite+aiosqlite://"
 
 engine = create_async_engine(TEST_DB_URL, echo=False)
 TestSession = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def close_shared_test_runtime():
+    """Release suite-owned async/process resources before pytest exits.
+
+    The in-memory AsyncEngine keeps its aiosqlite worker alive until it is
+    explicitly disposed.  On GitHub's Python 3.11 runner that kept pytest open
+    after the success summary, so the otherwise-green job hit its 90-minute
+    backstop.  Any multiprocessing child still alive at this boundary is a
+    separate test leak: terminate it so the runner can exit, then fail the
+    suite with the concrete process identity instead of silently masking it.
+    """
+    yield
+
+    asyncio.run(engine.dispose())
+
+    leaked_children = [child for child in mp.active_children() if child.is_alive()]
+    if not leaked_children:
+        return
+
+    identities = [f"{child.name}(pid={child.pid})" for child in leaked_children]
+    for child in leaked_children:
+        child.terminate()
+        child.join(timeout=2.0)
+        if child.is_alive() and hasattr(child, "kill"):
+            child.kill()
+            child.join(timeout=2.0)
+    pytest.fail(
+        "backend tests leaked multiprocessing children: " + ", ".join(identities)
+    )
 
 
 @pytest.fixture
