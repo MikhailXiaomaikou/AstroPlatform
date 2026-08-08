@@ -1290,14 +1290,16 @@ _PRELABEL_HYPOTHETICAL_SCOPE = re.compile(
 _PRELABEL_TRANSITIVE_CONFIGURATION_ASSIGNMENT = re.compile(
     r"(?:"
     r"(?:^|[,，]\s*)"
-    r"(?:set|fix|adopt|use|take|assume)\s+|"
+    r"(?:set|fix|adopt|use|take|assume|choose|select|impose)\s+|"
     r"\b(?:"
     r"(?:we|i|they)|"
     r"(?:(?:the|this|our)\s+)?"
     r"(?:analysis|study|work|model|pipeline|authors?)"
     r")\s+"
-    r"(?:set|sets|fix(?:ed|es)?|adopt(?:ed|s)?|use(?:d|s)?|"
-    r"take(?:n|s)?|took|assum(?:e|ed|es))\s+"
+    r"(?:(?:has|have|had)\s+(?:chosen|selected|imposed)|"
+    r"set|sets|fix(?:ed|es)?|adopt(?:ed|s)?|use(?:d|s)?|"
+    r"take(?:n|s)?|took|assum(?:e|ed|es)|choos(?:e|es)|chose|"
+    r"select(?:ed|s)?|impos(?:e|ed|es))\s+"
     r")(?:(?:the|an?|our)\s+)?$",
     re.I,
 )

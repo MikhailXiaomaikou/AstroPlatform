@@ -36,7 +36,7 @@ need entries unless they change user-visible behavior or research validity.
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Fifty-three adversarial review rounds tightened heavy-chain routing, number and
+- Fifty-four adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
   scale-relative covariance validation, negation-aware independence parsing,
@@ -148,6 +148,9 @@ need entries unless they change user-visible behavior or research validity.
   The V02_03 visible reply must now co-locate the exact arXiv identifier and
   Equation 42; a broad `ACT DR6` product name cannot substitute for that source
   locator even when the backend receipt verified the measurement.
+  Transitive `choose`, `select`, and `impose` configuration predicates, including
+  present, past, and perfect forms, can no longer certify a deliberately chosen
+  model input as an exact paper measurement.
 
 ### P0 production and local-automation hardening (2026-07-13)
 
