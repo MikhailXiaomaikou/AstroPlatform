@@ -1206,7 +1206,8 @@ _PRELABEL_PROPOSITION_REJECTION = re.compile(
     r"(?:we|the\s+(?:data|analysis|study|source|paper|results?))\s+"
     r"(?:cannot|can['’]t|do\s+not|don['’]t|does\s+not|doesn['’]t|"
     r"did\s+not|didn['’]t)\s+"
-    r"(?:conclude|infer|claim|show|support|establish|confirm|demonstrate|find)\s+that|"
+    r"(?:conclude|infer|claim|show|support|establish|confirm|demonstrate|find)"
+    r"(?:\s+that)?|"
     r"(?:cannot|can['’]t)\s+be\s+"
     r"(?:concluded|inferred|claimed|shown|supported|established|confirmed)\s+that"
     r")\s*$",
@@ -1281,49 +1282,43 @@ def _measurement_suffix_is_non_exact(field_suffix: str) -> bool:
     return _POSTPOSED_MEASUREMENT_DISCLAIMER.search(field_suffix) is not None
 
 
-def _source_units(field: str) -> set[str]:
-    """Recognize the conservative unit vocabulary accepted by scalar inputs."""
+def _immediate_source_unit(measurement_suffix: str) -> str | None:
+    """Return a recognized unit only when it is bound to the measurement."""
     from app.services.scalar_derivation import normalize_unit
 
-    units: set[str] = set()
-    composite_spans: list[tuple[int, int]] = []
-    for match in _SOURCE_H0_UNIT.finditer(field):
-        composite_spans.append(match.span())
-        units.add("km s^-1 Mpc^-1")
-    for match in _SOURCE_DISTANCE_UNIT.finditer(field):
-        if any(
-            start <= match.start() and match.end() <= end
-            for start, end in composite_spans
-        ):
-            continue
-        unit = normalize_unit(match.group("base"))
-        if match.group("inverse"):
-            unit = f"{unit}^-1"
-        units.add(unit)
-    return units
+    suffix = measurement_suffix.lstrip()
+    if _SOURCE_H0_UNIT.match(suffix):
+        return "km s^-1 Mpc^-1"
+    distance = _SOURCE_DISTANCE_UNIT.match(suffix)
+    if distance is None:
+        return None
+    unit = normalize_unit(distance.group("base"))
+    if distance.group("inverse"):
+        unit = f"{unit}^-1"
+    return unit
 
 
 def _measurement_unit_matches(
-    claim_unit: Any, field: str, measurement_suffix: str
+    claim_unit: Any, measurement_suffix: str
 ) -> bool:
-    """Require a claim's unit to agree with its bounded source field."""
+    """Require a claim's unit to be attached to the matched measurement."""
     from app.services.scalar_derivation import normalize_unit
 
     expected = normalize_unit(claim_unit)
-    detected = _source_units(field)
+    detected = _immediate_source_unit(measurement_suffix)
     if expected == "dimensionless":
-        return not detected and _SOURCE_PHYSICAL_UNIT_PREFIX.match(
+        return detected is None and _SOURCE_PHYSICAL_UNIT_PREFIX.match(
             measurement_suffix
         ) is None
-    if detected:
-        return detected == {expected}
+    if detected is not None:
+        return detected == expected
     # Unknown units are accepted only as their own complete literal token;
     # recognized but different physical units have already failed above.
     literal = _compact_text(expected)
     if not literal:
         return False
-    return re.search(
-        rf"(?<![a-z0-9]){re.escape(literal)}(?![a-z0-9])", field, re.I
+    return re.match(
+        rf"^\s*{re.escape(literal)}(?![a-z0-9])", measurement_suffix, re.I
     ) is not None
 
 
@@ -1451,7 +1446,6 @@ def _values_follow_label_order(
             # implicit dimensionless claim fails if a physical unit is shown.
             if not _measurement_unit_matches(
                 claim.get("unit"),
-                window[label_position:field_limit],
                 window[measurement_end:field_limit],
             ):
                 continue

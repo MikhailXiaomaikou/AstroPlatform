@@ -385,6 +385,7 @@ def test_repeated_label_after_valid_measurement_still_verifies_exact() -> None:
     [
         "It is not true that alpha = 10 +/- 1.",
         "We cannot conclude that alpha = 10 +/- 1.",
+        "The data do not support alpha = 10 +/- 1.",
     ],
 )
 def test_prelabel_proposition_rejection_must_not_verify_exact(field: str) -> None:
@@ -1284,9 +1285,18 @@ def test_source_unit_must_match_for_exact_verification() -> None:
         [claim],
         locator="",
     )
+    borrowed_unit, _detail = match_expected_claims(
+        {
+            "tables": [],
+            "text": "alpha = 10 +/- 1 and the calibration radius was 2 Gpc.",
+        },
+        [claim],
+        locator="",
+    )
 
     assert mismatched != "verified_exact"
     assert matched == "verified_exact"
+    assert borrowed_unit != "verified_exact"
 
     dimensionless = dict(claim, unit="dimensionless")
     dimensionless_conflict, _detail = match_expected_claims(

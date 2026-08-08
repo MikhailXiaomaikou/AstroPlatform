@@ -36,7 +36,7 @@ need entries unless they change user-visible behavior or research validity.
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Thirty adversarial review rounds tightened heavy-chain routing, number and
+- Thirty-one adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
   scale-relative covariance validation, negation-aware independence parsing,
@@ -77,6 +77,9 @@ need entries unless they change user-visible behavior or research validity.
   outside the original distance-unit vocabulary, and infinitival disclaimers
   such as `is not to be used` now fail closed across scalar quantities,
   source measurements, correlations, and postposed heavy-intent phrases.
+  Complementizer-free source denials now remain inside the assignment scope,
+  and a physical unit must be immediately attached to the matched measurement
+  instead of being borrowed from an unrelated later quantity in the field.
 
 ### P0 production and local-automation hardening (2026-07-13)
 
