@@ -459,6 +459,18 @@ def test_postposed_heavy_negation_stays_on_deterministic_route() -> None:
     assert affirmative["heavy_route_allowed"] is True
 
 
+def test_clause_leading_no_heavy_noun_stays_on_deterministic_route() -> None:
+    decision = classify_task_kind(
+        "Compute the difference A=10 +/- 1 and B=8 +/- 2; independent errors. "
+        "No fit is necessary."
+    )
+
+    assert decision["task_kind"] == "deterministic_source_check"
+    assert decision["heavy_route_allowed"] is False
+    assert decision["direct_tool_call"] is not None
+    assert "negated_heavy_intent:fit" in decision["negated_signals"]
+
+
 def test_chain_rule_homework_is_not_heavy_intent() -> None:
     decision = classify_task_kind(
         "Explain how to run through the chain rule in my calculus homework"
@@ -480,12 +492,14 @@ def test_negation_of_unrelated_clause_does_not_negate_chain_execution() -> None:
 
 
 def test_noun_negation_in_leading_clause_does_not_negate_run_request() -> None:
-    decision = classify_task_kind(
-        "Without approximations, run a Planck likelihood fit"
-    )
+    for prompt in (
+        "Without approximations, run a Planck likelihood fit",
+        "No approximations, run a Planck likelihood fit",
+    ):
+        decision = classify_task_kind(prompt)
 
-    assert decision["task_kind"] == "full_research"
-    assert decision["heavy_route_allowed"] is True
+        assert decision["task_kind"] == "full_research", prompt
+        assert decision["heavy_route_allowed"] is True, prompt
 
 
 def test_negated_list_of_heavy_terms_stays_negated_across_commas() -> None:

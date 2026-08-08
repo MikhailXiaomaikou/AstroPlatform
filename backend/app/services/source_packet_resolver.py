@@ -1253,10 +1253,11 @@ _PRELABEL_PROPOSITION_REJECTION = re.compile(
 _PRELABEL_NON_MEASUREMENT_CONTEXT = re.compile(
     r"\b(?:"
     r"(?:for|in|using|from)\s+(?:(?:the|an?|our)\s+)?"
-    r"(?:mock|simulated|synthetic|fiducial|illustrative)"
+    r"(?:mock|simulated|synthetic|fiducial|illustrative|baseline|reference|benchmark)"
     r"(?:\s+(?:catalog(?:ue)?|data(?:set)?|sample|case|scenario|model|value|"
     r"cosmolog(?:y|ies)|configuration|setup))?|"
-    r"(?:our|the|an?)\s+(?:fiducial|mock|simulated|synthetic|illustrative)\s+"
+    r"(?:our|the|an?)\s+(?:fiducial|mock|simulated|synthetic|illustrative|"
+    r"baseline|reference|benchmark)\s+"
     r"(?:value|parameter|case|scenario|catalog(?:ue)?|data(?:set)?|sample)\s+"
     r"(?:is|was)|"
     r"for\s+(?:illustration|illustrative\s+purposes)(?:\s+only)?"

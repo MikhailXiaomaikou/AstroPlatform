@@ -92,6 +92,11 @@ _NOUN_NEGATOR = re.compile(
     r"\b(?:without|avoid|exclude|excluding)\b|无需|不需要|避免|排除|不是|并非",
     re.I,
 )
+_DETERMINER_NO_PREFIX = re.compile(
+    r"(?:^|[,:，：])\s*(?:(?:but|and)\s+)?no\s+"
+    r"(?:(?:new|additional|further|full|heavy)\s+){0,2}$",
+    re.I,
+)
 _EXECUTION_VERB = re.compile(
     r"\b(?:run|rerun|re-run|running|execute|executing|launch|perform|compute|calculate)\b|"
     r"跑|执行|运行",
@@ -144,6 +149,13 @@ def _prefix_negates(prefix: str) -> bool:
     negator and its verb ("Do not, under any circumstances, run the chain")
     reads as active; the paraphrase-variant suite probes this class.
     """
+    # Codex review P1 (PR #46, round 44): clause-leading determiner ``no``
+    # directly governs the following heavy noun ("No fit is necessary").
+    # Keep this anchored at the match boundary so an unrelated clause such as
+    # "No approximations, run a fit" still leaves the fit request active.
+    if _DETERMINER_NO_PREFIX.search(prefix):
+        return True
+
     last_negator: re.Match[str] | None = None
     negator_is_verb = False
     for candidate in _VERB_NEGATOR.finditer(prefix):

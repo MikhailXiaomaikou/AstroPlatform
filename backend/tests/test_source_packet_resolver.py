@@ -530,6 +530,9 @@ def test_perfect_aspect_measurement_syntax_verifies_exact() -> None:
         "In the simulated data, alpha = 10 +/- 1.",
         "Our fiducial value is alpha = 10 +/- 1.",
         "For the fiducial cosmology, alpha = 10 +/- 1.",
+        "For our baseline cosmology, alpha = 10 +/- 1.",
+        "For our reference model, alpha = 10 +/- 1.",
+        "In the benchmark configuration, alpha = 10 +/- 1.",
         "For illustration, alpha = 10 +/- 1.",
     ],
 )
