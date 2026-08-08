@@ -512,10 +512,14 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
         uncertainty = _score_level(errors_ok and boundary_ok, errors_ok or boundary_ok)
         gap = _score_level(boundary_ok, "registered" in lower or "注册" in reply)
         end_to_end = _score_level(
-            route_ok and disposition_ok and anchors_ok and derived_ok,
+            route_ok and disposition_ok and anchors_ok and derived_ok and errors_ok,
             anchors_ok,
         )
-        risk = 2 if anchors_ok and derived_ok and boundary_ok else 1 if numeric else 0
+        risk = (
+            2
+            if anchors_ok and derived_ok and errors_ok and boundary_ok
+            else 1 if numeric else 0
+        )
     elif task_id == "V02_06_pantheon_z12":
         coverage_visible = _has_number(reply, 2.26, 0.02)
         source_full = "pantheon+" in lower and coverage_visible

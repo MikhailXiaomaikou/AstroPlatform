@@ -109,7 +109,7 @@ def test_persist_failure_is_fail_open_and_labelled(monkeypatch):
     assert block["files"] == []
 
 
-def test_chat_exec_wrapper_persists_and_strips_payload(monkeypatch, tmp_path):
+def test_direct_exec_wrapper_strips_payload_without_persisting(monkeypatch, tmp_path):
     from app import storage
     from app.services.ai_tools_cosmology import _exec_run_cosmology_likelihood_chain
 
@@ -121,17 +121,18 @@ def test_chat_exec_wrapper_persists_and_strips_payload(monkeypatch, tmp_path):
 
     assert result.get("success") is True
     assert "_chain_payload" not in result  # raw arrays must never leave the wrapper
-    block = result["chain_downloads"]
-    assert block["status"] == "persisted"
-    assert {entry["name"] for entry in block["files"]} >= {"chain_1.txt", "chain.paramnames"}
-    # The chat wrapper is the ONLY persistence caller; identity-less calls
-    # (matrix / oracle / audit paths) must stay artifact-free.
+    assert "chain_downloads" not in result
+    # Only the normalized user-facing dispatcher may persist. Direct/private
+    # calls and identity-less matrix/oracle/audit paths stay artifact-free.
     anonymous = _exec_run_cosmology_likelihood_chain(
         {"model": "lcdm", "dataset_keys": ["desi_dr1_bao"], "n_samples": 512},
         user_id=None,
     )
     assert "chain_downloads" not in anonymous
     assert "_chain_payload" not in anonymous
+    objects_root = tmp_path / "objects"
+    uploaded = list(objects_root.rglob("chain*")) if objects_root.exists() else []
+    assert uploaded == []
 
 
 def test_matrix_path_produces_no_chain_payload():
@@ -277,6 +278,52 @@ async def test_execute_tool_channel_normalizes_and_registers(monkeypatch, tmp_pa
     discovered = account_deletion.collect_result_output_paths(result)
     for entry in block["files"]:
         assert entry["output_path"] in discovered
+
+
+async def test_execute_tool_blocks_normalized_chain_before_persistence(
+    monkeypatch, tmp_path
+):
+    # Codex review P1 (PR #46, round 63): the chat wrapper uploaded a
+    # publication-tier chain before the dispatcher normalized the result. In
+    # an unversioned production runtime normalization then blocked the result,
+    # but the posterior files were already downloadable.
+    from app import storage
+    from app.services import account_deletion, ai_tools, cosmology_likelihoods
+
+    for key in ("TOOL_VERSION", "RENDER_GIT_COMMIT", "GIT_COMMIT"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setattr(storage.settings, "local_storage_dir", str(tmp_path / "objects"))
+    monkeypatch.setattr(account_deletion, "account_runtime_is_active", lambda _uid: True)
+    monkeypatch.setattr(account_deletion, "register_result_artifacts", lambda **_kwargs: [])
+
+    def publication_run(**kwargs):
+        return {
+            "success": True,
+            "__tool_status__": "COMPLETED",
+            "analysis_status": "COMPRESSED_CHAIN_READY",
+            "publication_ready": True,
+            "scientific_conclusion_ready": True,
+            "chain_tier": "publication",
+            "random_seed": kwargs["random_seed"],
+            "publication_gate": {"eligible": True, "reasons": []},
+            "_chain_payload": _payload(),
+        }
+
+    monkeypatch.setattr(cosmology_likelihoods, "run_likelihood_chain", publication_run)
+
+    result = await ai_tools.execute_tool(
+        "run_cosmology_likelihood_chain",
+        {"model": "lcdm", "dataset_keys": ["desi_dr1_bao"], "n_samples": 512},
+        user_id=OWNER_ID,
+    )
+
+    assert result["chain_tier"] == "blocked"
+    assert result["__do_not_claim__"] is True
+    assert "chain_downloads" not in result
+    objects_root = tmp_path / "objects"
+    uploaded = list(objects_root.rglob("chain*")) if objects_root.exists() else []
+    assert uploaded == []
 
 
 def test_cleanup_renewal_failure_stays_fail_open(monkeypatch, tmp_path):

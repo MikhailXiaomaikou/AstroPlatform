@@ -50,6 +50,11 @@ COSMOLOGY_TOOL_NAMES = frozenset(
 # load-bearing, not defensive. One CAMB call at a time per process.
 _CAMB_LOCK = asyncio.Lock()
 
+# Raw posterior draws may cross the private dispatch boundary only under this
+# key. ``ai_tools.execute_tool`` removes it before provenance normalization and
+# persists it only after every authoritative publication gate has run.
+_PENDING_CHAIN_ARTIFACTS_KEY = "_pending_chain_artifacts"
+
 
 COSMOLOGY_TOOL_SCHEMAS = [
     {
@@ -999,7 +1004,12 @@ def _exec_build_cosmology_likelihood(inp: dict) -> dict:
         }
 
 
-def _exec_run_cosmology_likelihood_chain(inp: dict, user_id: str | None = None) -> dict:
+def _exec_run_cosmology_likelihood_chain(
+    inp: dict,
+    user_id: str | None = None,
+    *,
+    defer_chain_artifacts: bool = False,
+) -> dict:
     from app.services.cosmology_likelihoods import run_likelihood_chain
 
     try:
@@ -1030,34 +1040,17 @@ def _exec_run_cosmology_likelihood_chain(inp: dict, user_id: str | None = None) 
             # payload for blocked tiers; if one ever leaks through, exporting
             # it would bypass the blocked-tier redaction.
             payload = None
-        if user_id and result.get("success") and not blocked:
-            if payload is not None:
-                from app.services.chain_export import persist_chain_artifacts
-
-                chain_downloads = persist_chain_artifacts(
-                    payload, owner_id=str(user_id)
-                )
-                result["chain_downloads"] = chain_downloads
-                # Deliberately NOT threaded into result["reproducibility"]:
-                # the normalizer treats tool-returned envelopes as untrusted
-                # payload (anti-forged-receipt wall). chain_downloads.run_id
-                # IS the chain identity; the storage key carries the same id
-                # by construction.
-                if chain_downloads["status"] != "persisted":
-                    result.setdefault("warnings", []).append(
-                        "Chain artifact persistence failed; posterior "
-                        "summaries are unaffected but no downloadable "
-                        "getdist chain exists for this run."
-                    )
-            else:
-                # Loud, not silent: some paths (legacy compressed-analytic,
-                # external cobaya until capture ships end-to-end) do not
-                # expose chain draws — say so instead of quietly omitting.
-                result["chain_downloads"] = {
-                    "status": "unavailable",
-                    "reason": "this sampling path does not expose chain draws",
-                    "files": [],
-                }
+        if (
+            defer_chain_artifacts
+            and user_id
+            and result.get("success")
+            and not blocked
+        ):
+            # Never persist here. The dispatcher can still downgrade this raw
+            # result (for example, an unversioned production publication or a
+            # seed mismatch). Keep the payload private until normalization has
+            # made the authoritative publication decision.
+            result[_PENDING_CHAIN_ARTIFACTS_KEY] = {"payload": payload}
         return result
     except Exception as exc:
         return {
@@ -1072,6 +1065,55 @@ def _exec_run_cosmology_likelihood_chain(inp: dict, user_id: str | None = None) 
                 "posterior constraints, S8/H0/Omega_m tensions, AIC/BIC, or significance."
             ),
         }
+
+
+def pop_pending_chain_artifacts(result: Any) -> tuple[Any, dict | None]:
+    """Remove private posterior draws before provenance normalization."""
+    if not isinstance(result, dict):
+        return result, None
+    clean_result = dict(result)
+    pending = clean_result.pop(_PENDING_CHAIN_ARTIFACTS_KEY, None)
+    return clean_result, pending if isinstance(pending, dict) else None
+
+
+def finalize_chain_artifacts(
+    result: dict,
+    pending: dict,
+    *,
+    user_id: str | None,
+) -> dict:
+    """Persist draws only when the normalized result remains claimable."""
+    finalized = dict(result)
+    blocked = (
+        finalized.get("chain_tier") == "blocked"
+        or finalized.get("__do_not_claim__") is True
+    )
+    if not user_id or not finalized.get("success") or blocked:
+        return finalized
+
+    payload = pending.get("payload")
+    if payload is not None:
+        from app.services.chain_export import persist_chain_artifacts
+
+        chain_downloads = persist_chain_artifacts(payload, owner_id=str(user_id))
+        finalized["chain_downloads"] = chain_downloads
+        # Deliberately NOT threaded into result["reproducibility"]: the
+        # normalizer owns the authoritative receipt. chain_downloads.run_id is
+        # the chain identity and the storage key carries it by construction.
+        if chain_downloads["status"] != "persisted":
+            finalized.setdefault("warnings", []).append(
+                "Chain artifact persistence failed; posterior summaries are "
+                "unaffected but no downloadable getdist chain exists for this run."
+            )
+    else:
+        # Loud, not silent: some paths (legacy compressed-analytic, external
+        # cobaya until capture ships end-to-end) do not expose chain draws.
+        finalized["chain_downloads"] = {
+            "status": "unavailable",
+            "reason": "this sampling path does not expose chain draws",
+            "files": [],
+        }
+    return finalized
 
 
 def _exec_run_cmb_rotation_likelihood(inp: dict) -> dict:
@@ -1345,7 +1387,10 @@ async def dispatch_cosmology(
         # deadline, which can only fire at an await point. Mirror the siblings
         # (fit_cosmology_emcee / compute_theory_cmb_spectrum) that use to_thread.
         return await asyncio.to_thread(
-            _exec_run_cosmology_likelihood_chain, tool_input, user_id
+            _exec_run_cosmology_likelihood_chain,
+            tool_input,
+            user_id,
+            defer_chain_artifacts=True,
         )
     elif tool_name == "run_cmb_rotation_likelihood":
         # Off the event loop (mirror run_cosmology_likelihood_chain): this runs a

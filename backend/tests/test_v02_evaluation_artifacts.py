@@ -410,6 +410,55 @@ def test_v02_02_to_05_require_numeric_results_in_visible_reply(
     assert visible_scores["obvious_error_risk"] == 2
 
 
+def test_v02_05_full_scores_require_visible_anchor_errors() -> None:
+    # Codex review P1 (PR #46, round 63): anchors plus derived values could
+    # receive full end-to-end/risk scores while omitting both quoted errors.
+    task = {
+        "id": "V02_05_h0_anchor_regression",
+        "expected_task_kind": "general",
+        "expected_disposition": "full",
+    }
+    sample = {
+        "condition": "standard_astro",
+        "status": "completed",
+        "reply": (
+            "Planck 2018 and SH0ES (Riess 2022) are the registered anchors. "
+            "The anchors are 67.36 and 73.04; the offset is 8.43% and "
+            "4.85 sigma. This is an anchor comparison, not a distance fit."
+        ),
+        "validation_summary": {
+            "task_kind": "general",
+            "response_disposition": "full",
+            "citation_gate": "passed",
+            "registered_anchor_facts": {
+                "planck_h0": 67.36,
+                "planck_sigma": 0.54,
+                "shoes_h0": 73.04,
+                "shoes_sigma": 1.04,
+                "percent_offset": 8.43,
+                "standardized_offset": 4.85,
+            },
+        },
+        "tools": [],
+    }
+
+    scores, flags = scorer._audit_task(sample, task)
+
+    assert flags == []
+    assert scores["numeric_evidence_constraint"] == 2
+    assert scores["uncertainty_calibration"] == 1
+    assert scores["end_to_end_success"] == 1
+    assert scores["obvious_error_risk"] == 1
+
+    sample["reply"] += " The quoted one-sigma errors are 0.54 and 1.04."
+    visible_scores, visible_flags = scorer._audit_task(sample, task)
+
+    assert visible_flags == []
+    assert visible_scores["uncertainty_calibration"] == 2
+    assert visible_scores["end_to_end_success"] == 2
+    assert visible_scores["obvious_error_risk"] == 2
+
+
 def test_v02_scorer_accepts_exact_h0_anchor_bibcodes() -> None:
     task = {
         "id": "V02_05_h0_anchor_regression",

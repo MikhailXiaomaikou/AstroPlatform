@@ -887,6 +887,11 @@ async def execute_tool(
         tool_name, execution_input, api_key, provider_api_keys,
         runtime_python_session_id, user_id, chat_session_id, progress_callback,
     )
+    pending_chain_artifacts: dict | None = None
+    if tool_name == "run_cosmology_likelihood_chain":
+        from app.services.ai_tools_cosmology import pop_pending_chain_artifacts
+
+        result, pending_chain_artifacts = pop_pending_chain_artifacts(result)
 
     # 2026-05-20: write ai.tool_called to user_events so the telemetry/tool_usage
     # endpoint has data. The consumer (admin_stats.py) was already implemented
@@ -916,6 +921,14 @@ async def execute_tool(
         normalize_kwargs["random_seed"] = execution_seed
         normalize_kwargs["random_seed_source"] = seed_source
     normalized_result = normalize_tool_result(tool_name, result, **normalize_kwargs)
+    if pending_chain_artifacts is not None:
+        from app.services.ai_tools_cosmology import finalize_chain_artifacts
+
+        normalized_result = finalize_chain_artifacts(
+            normalized_result,
+            pending_chain_artifacts,
+            user_id=user_id,
+        )
     if user_id:
         from app.services.account_deletion import (
             AccountArtifactOwnerInactive,
