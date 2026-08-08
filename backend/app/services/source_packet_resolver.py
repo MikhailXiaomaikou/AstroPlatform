@@ -1289,7 +1289,7 @@ _PRELABEL_HYPOTHETICAL_SCOPE = re.compile(
     re.I,
 )
 _PRELABEL_PRIOR_ASSIGNMENT = re.compile(
-    r"\bprior(?:\s+distribution)?\s+(?:for|on)\s*$",
+    r"\bprior(?:\s+distribution)?\s+(?:for|on|is|was|equals?)\s*$",
     re.I,
 )
 _PRELABEL_TRANSITIVE_CONFIGURATION_ASSIGNMENT = re.compile(

@@ -509,6 +509,27 @@ def test_existential_no_need_for_heavy_noun_stays_on_deterministic_route() -> No
     assert "negated_heavy_intent:fit" in decision["negated_signals"]
 
 
+@pytest.mark.parametrize(
+    "disclaimer",
+    [
+        "There is no need to run a fit.",
+        "There is no need to perform a fit.",
+    ],
+)
+def test_existential_no_need_to_run_heavy_noun_stays_lightweight(
+    disclaimer: str,
+) -> None:
+    decision = classify_task_kind(
+        "Compute the difference A=10 +/- 1 and B=8 +/- 2; independent errors. "
+        f"{disclaimer}"
+    )
+
+    assert decision["task_kind"] == "deterministic_source_check", disclaimer
+    assert decision["heavy_route_allowed"] is False, disclaimer
+    assert decision["direct_tool_call"] is not None, disclaimer
+    assert "negated_heavy_intent:fit" in decision["negated_signals"], disclaimer
+
+
 def test_chain_rule_homework_is_not_heavy_intent() -> None:
     decision = classify_task_kind(
         "Explain how to run through the chain rule in my calculus homework"

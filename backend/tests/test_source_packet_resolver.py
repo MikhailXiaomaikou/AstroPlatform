@@ -577,6 +577,8 @@ def test_perfect_aspect_measurement_syntax_verifies_exact() -> None:
         "The analysis has kept alpha = 10 +/- 1 fixed.",
         "We adopt a Gaussian prior for alpha = 10 +/- 1.",
         "The analysis uses a normal prior on alpha = 10 +/- 1.",
+        "The Gaussian prior is alpha = 10 +/- 1.",
+        "The normal prior equals alpha = 10 +/- 1.",
         "For illustration, alpha = 10 +/- 1.",
     ],
 )
