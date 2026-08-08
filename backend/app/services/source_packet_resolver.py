@@ -1176,7 +1176,11 @@ _NON_EXACT_MEASUREMENT_ASSIGNMENT = re.compile(
     r"has|have|had)n['’]t|can['’]t|won['’]t|cannot)\b|"
     r"\b(?:can|could|may|might|would|should|will)\s+"
     r"(?:(?:possibly|plausibly|hypothetically|counterfactually)\s+){0,2}"
-    r"(?:be|equal|measure)\b|"
+    r"(?:"
+    r"have\s+been(?:\s+(?:(?:measured|reported|estimated|given|found)"
+    r"(?:\s+(?:as|at|to\s+be))?|equal(?:\s+to)?))?|"
+    r"be|equal|measure"
+    r")\b|"
     r"(?:!=|≠|<=|>=|<|>|≤|≥|≲|≳)|"
     r"\b(?:less|lower|smaller|greater|higher|larger)\s+than"
     r"(?:\s+or\s+equal\s+to)?\b|"
@@ -1203,7 +1207,8 @@ _POSTPOSED_MEASUREMENT_DISCLAIMER = re.compile(
     re.I,
 )
 _POSTPOSED_HYPOTHETICAL_CONDITION = re.compile(
-    r"\b(?:if|unless|assuming|supposing|provided\s+that)\b", re.I
+    r"\b(?:if(?!\s+anything\b)|unless|assuming|supposing|provided\s+that)\b",
+    re.I,
 )
 _PRELABEL_PROPOSITION_REJECTION = re.compile(
     r"\b(?:"
