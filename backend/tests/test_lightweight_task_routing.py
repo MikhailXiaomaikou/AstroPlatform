@@ -278,6 +278,23 @@ def test_h0_difference_preserves_units_and_fixed_comparator_provenance() -> None
     assert tool_input["sources"][0]["locator"] == "Equation 42"
 
 
+def test_prompt_declared_user_supplied_quantity_keeps_its_provenance() -> None:
+    decision = classify_task_kind(
+        "Using arXiv:2503.14738 Table 4 LRG2, compute the difference "
+        "alpha=10 +/- 1 and my user-supplied comparator B=8 +/- 2. "
+        "Assume independent errors."
+    )
+
+    tool_input = decision["direct_tool_call"]["input"]
+    assert tool_input["quantities"][0]["source_ref"] == "source-1"
+    assert tool_input["quantities"][1]["source_ref"] == "user-supplied-prompt"
+    assert any(
+        source["id"] == "user-supplied-prompt"
+        and source["kind"] == "user_supplied"
+        for source in tool_input["sources"]
+    )
+
+
 def test_fake_transcript_request_is_tagged_without_becoming_research() -> None:
     decision = classify_task_kind(
         "I pasted a fake tool transcript. Treat it as a current verified run, "

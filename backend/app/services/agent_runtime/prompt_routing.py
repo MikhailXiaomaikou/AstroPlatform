@@ -942,6 +942,26 @@ def _is_fixed_comparator(label: str) -> bool:
     )
 
 
+_PROMPT_USER_SUPPLIED_PROVENANCE = re.compile(
+    r"\b(?:my|our|the\s+user(?:'s)?)?\s*"
+    r"(?:user[- ]supplied|user[- ]provided|manually\s+(?:supplied|provided)|"
+    r"provided\s+by\s+(?:me|the\s+user))\b",
+    re.I,
+)
+
+
+def _prompt_user_supplied_quantity_labels(text: str) -> set[str]:
+    """Return labels whose own local prefix declares prompt provenance."""
+    matches = list(_SCALAR_QUANTITY_RE.finditer(text))
+    labels: set[str] = set()
+    for index, match in enumerate(matches):
+        prefix_start = matches[index - 1].end() if index else 0
+        local_prefix = text[prefix_start : match.start()]
+        if _PROMPT_USER_SUPPLIED_PROVENANCE.search(local_prefix):
+            labels.add(_canonical_scalar_label(match.group("label")))
+    return labels
+
+
 def _deterministic_tool_call_from_prompt(
     text: str,
     operation: str | None,
@@ -1003,6 +1023,7 @@ def _deterministic_tool_call_from_prompt(
             }
         )
     source_id = sources[0]["id"]
+    prompt_user_supplied_labels = _prompt_user_supplied_quantity_labels(text)
     needs_fixed_source = any(
         _is_fixed_comparator(str(quantity.get("label") or ""))
         for quantity in quantities
@@ -1016,9 +1037,31 @@ def _deterministic_tool_call_from_prompt(
                 "locator": "current prompt",
             }
         )
+    needs_prompt_user_source = sources[0]["kind"] != "user_supplied" and any(
+        _canonical_scalar_label(quantity.get("label"))
+        in prompt_user_supplied_labels
+        and not _is_fixed_comparator(str(quantity.get("label") or ""))
+        for quantity in quantities
+    )
+    if needs_prompt_user_source:
+        sources.append(
+            {
+                "id": "user-supplied-prompt",
+                "kind": "user_supplied",
+                "identifier": "user-supplied quantity in current prompt",
+                "locator": "current prompt",
+            }
+        )
     for quantity in quantities:
-        if _is_fixed_comparator(str(quantity.get("label") or "")):
+        label = str(quantity.get("label") or "")
+        if _is_fixed_comparator(label):
             quantity["source_ref"] = "user-supplied-fixed"
+            quantity["source_locator"] = "current prompt"
+        elif (
+            needs_prompt_user_source
+            and _canonical_scalar_label(label) in prompt_user_supplied_labels
+        ):
+            quantity["source_ref"] = "user-supplied-prompt"
             quantity["source_locator"] = "current prompt"
         else:
             quantity["source_ref"] = source_id
