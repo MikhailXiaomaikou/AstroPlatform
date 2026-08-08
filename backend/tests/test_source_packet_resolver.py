@@ -550,6 +550,8 @@ def test_perfect_aspect_measurement_syntax_verifies_exact() -> None:
         "alpha = 10 +/- 1 was used as the fiducial value.",
         "alpha = 10 +/- 1 was set as the baseline parameter.",
         "alpha = 10 +/- 1 was taken as the default model input.",
+        "alpha = 10 +/- 1 was chosen as the fiducial value.",
+        "alpha = 10 +/- 1 was selected as the baseline parameter.",
         "alpha = 10 +/- 1 is used as the reference value.",
         "alpha = 10 +/- 1 is the fiducial value.",
         "alpha = 10 +/- 1 was the baseline value.",

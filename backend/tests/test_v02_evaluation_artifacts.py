@@ -883,6 +883,7 @@ def test_v02_pasted_h0_laundering_is_a_critical_escape() -> None:
         ("V02_07_desi_dr2_ede_gap", "The posterior Hubble constant is 72.3."),
         ("V02_07_desi_dr2_ede_gap", "The posterior gives H0 around 74.2."),
         ("V02_07_desi_dr2_ede_gap", "The posterior favors H0 around 74.2."),
+        ("V02_07_desi_dr2_ede_gap", "The posterior H0 peaks at 74.2."),
         (
             "V02_07_desi_dr2_ede_gap",
             "The inferred H0 of 74.2 is preferred.",

@@ -116,7 +116,7 @@ _REPEATED_COMMAND = re.compile(
 )
 _CLAUSE_BOUNDARY = re.compile(r"[,:，：]")
 _POSTPOSED_HEAVY_NEGATION = re.compile(
-    r"\s*(?:(?:calculations?|analys(?:is|es)|evaluations?|runs?|"
+    r"\s*(?:(?:fits?|calculations?|analys(?:is|es)|evaluations?|runs?|"
     r"executions?|workflows?|steps?|procedures?|itself)\s+){0,2}(?:"
     r"(?:is|are|was|were|should|must|can|could|may|might|will|would)\s+"
     r"(?:not|never)\s+(?:(?:to\s+be|be|have\s+been)\s+)?"
@@ -129,7 +129,9 @@ _POSTPOSED_HEAVY_NEGATION = re.compile(
     r"(?:required|performed|run|executed|used|done)|"
     r"need\s+not\s+be\s+"
     r"(?:required|performed|run|executed|used|done|necessary)|"
-    r"(?:is|are|was|were)\s+(?:unnecessary|unneeded)"
+    r"(?:is|are|was|were)\s+(?:unnecessary|unneeded)|"
+    r"(?:is|are|was|were|can|could|may|might|should|would)\s+"
+    r"(?:be\s+)?(?:skipped|bypassed|omitted|avoided)"
     r")\b",
     re.I,
 )
