@@ -1224,8 +1224,9 @@ _POSTPOSED_CONFIGURATION_ASSIGNMENT = re.compile(
     r"(?:assumed|adopted)(?:\s+(?:as|to\s+be)\s+"
     r"(?:(?:an?|the)\s+)?(?:model\s+)?"
     r"(?:input|configuration|setup|parameter))?|"
-    r"fixed\s+as\s+(?:(?:an?|the)\s+)?(?:model\s+)?"
-    r"(?:input|configuration|setup|parameter)"
+    r"(?:fixed|used|set|taken)\s+as\s+(?:(?:an?|the)\s+)?"
+    r"(?:(?:fiducial|baseline|default|reference|benchmark|nominal)\s+)?"
+    r"(?:model\s+)?(?:value|input|configuration|setup|parameter)"
     r")\b",
     re.I,
 )
