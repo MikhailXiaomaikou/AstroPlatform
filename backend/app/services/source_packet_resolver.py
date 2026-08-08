@@ -1224,6 +1224,7 @@ _POSTPOSED_CONFIGURATION_ASSIGNMENT = re.compile(
     r"(?:assumed|adopted)(?:\s+(?:as|to\s+be)\s+"
     r"(?:(?:an?|the)\s+)?(?:model\s+)?"
     r"(?:input|configuration|setup|parameter))?|"
+    r"(?:held|kept)\s+fixed|"
     r"(?:fixed|used|set|taken)\s+as\s+(?:(?:an?|the)\s+)?"
     r"(?:(?:fiducial|baseline|default|reference|benchmark|nominal)\s+)?"
     r"(?:model\s+)?(?:value|input|configuration|setup|parameter)"
@@ -1290,16 +1291,16 @@ _PRELABEL_HYPOTHETICAL_SCOPE = re.compile(
 _PRELABEL_TRANSITIVE_CONFIGURATION_ASSIGNMENT = re.compile(
     r"(?:"
     r"(?:^|[,，]\s*)"
-    r"(?:set|fix|adopt|use|take|assume|choose|select|impose)\s+|"
+    r"(?:set|fix|adopt|use|take|assume|choose|select|impose|hold|keep)\s+|"
     r"\b(?:"
     r"(?:we|i|they)|"
     r"(?:(?:the|this|our)\s+)?"
     r"(?:analysis|study|work|model|pipeline|authors?)"
     r")\s+"
-    r"(?:(?:has|have|had)\s+(?:chosen|selected|imposed)|"
+    r"(?:(?:has|have|had)\s+(?:chosen|selected|imposed|held|kept)|"
     r"set|sets|fix(?:ed|es)?|adopt(?:ed|s)?|use(?:d|s)?|"
     r"take(?:n|s)?|took|assum(?:e|ed|es)|choos(?:e|es)|chose|"
-    r"select(?:ed|s)?|impos(?:e|ed|es))\s+"
+    r"select(?:ed|s)?|impos(?:e|ed|es)|hold|holds|held|keep|keeps|kept)\s+"
     r")(?:(?:the|an?|our)\s+)?$",
     re.I,
 )
