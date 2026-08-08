@@ -497,6 +497,18 @@ def test_clause_leading_no_heavy_noun_stays_on_deterministic_route() -> None:
     assert "negated_heavy_intent:fit" in decision["negated_signals"]
 
 
+def test_existential_no_need_for_heavy_noun_stays_on_deterministic_route() -> None:
+    decision = classify_task_kind(
+        "Compute the difference A=10 +/- 1 and B=8 +/- 2; independent errors. "
+        "There is no need for a fit."
+    )
+
+    assert decision["task_kind"] == "deterministic_source_check"
+    assert decision["heavy_route_allowed"] is False
+    assert decision["direct_tool_call"] is not None
+    assert "negated_heavy_intent:fit" in decision["negated_signals"]
+
+
 def test_chain_rule_homework_is_not_heavy_intent() -> None:
     decision = classify_task_kind(
         "Explain how to run through the chain rule in my calculus homework"

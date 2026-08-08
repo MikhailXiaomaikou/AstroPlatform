@@ -1288,6 +1288,10 @@ _PRELABEL_HYPOTHETICAL_SCOPE = re.compile(
     r"hypothetically|counterfactually|were|had|should)\b[^.;!?]*$",
     re.I,
 )
+_PRELABEL_PRIOR_ASSIGNMENT = re.compile(
+    r"\bprior(?:\s+distribution)?\s+(?:for|on)\s*$",
+    re.I,
+)
 _PRELABEL_TRANSITIVE_CONFIGURATION_ASSIGNMENT = re.compile(
     r"(?:"
     r"(?:^|[,，]\s*)"
@@ -1380,6 +1384,7 @@ def _measurement_assignment_is_non_exact(
     if (
         _PRELABEL_PROPOSITION_REJECTION.search(field_prefix)
         or _PRELABEL_HYPOTHETICAL_SCOPE.search(field_prefix)
+        or _PRELABEL_PRIOR_ASSIGNMENT.search(field_prefix)
         or _PRELABEL_TRANSITIVE_CONFIGURATION_ASSIGNMENT.search(field_prefix)
     ):
         return True

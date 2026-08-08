@@ -36,7 +36,7 @@ need entries unless they change user-visible behavior or research validity.
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Fifty-six adversarial review rounds tightened heavy-chain routing, number and
+- Fifty-seven adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
   scale-relative covariance validation, negation-aware independence parsing,
@@ -157,6 +157,10 @@ need entries unless they change user-visible behavior or research validity.
   V02_05 and V02_07 source credit now requires exact attribution in the
   user-visible reply; hidden tool payloads, prompt echoes, and capability-gap
   receipts may validate that citation but cannot substitute for it.
+  Existential disclaimers such as `There is no need for a fit` now keep a
+  complete scalar request on the lightweight route, prior-distribution
+  assignments cannot certify configured parameters as measurements, and
+  value-before-label H0 result prose is covered by the V02 release escape gate.
 
 ### P0 production and local-automation hardening (2026-07-13)
 

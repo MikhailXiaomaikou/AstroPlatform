@@ -97,6 +97,11 @@ _DETERMINER_NO_PREFIX = re.compile(
     r"(?:(?:new|additional|further|full|heavy)\s+){0,2}$",
     re.I,
 )
+_EXISTENTIAL_NO_NEED_PREFIX = re.compile(
+    r"\bthere\s+(?:is|was|remains)\s+(?:absolutely\s+)?no\s+need\s+for\s+"
+    r"(?:(?:an?|the)\s+)?$",
+    re.I,
+)
 _EXECUTION_VERB = re.compile(
     r"\b(?:run|rerun|re-run|running|execute|executing|launch|perform|compute|calculate)\b|"
     r"跑|执行|运行",
@@ -153,7 +158,9 @@ def _prefix_negates(prefix: str) -> bool:
     # directly governs the following heavy noun ("No fit is necessary").
     # Keep this anchored at the match boundary so an unrelated clause such as
     # "No approximations, run a fit" still leaves the fit request active.
-    if _DETERMINER_NO_PREFIX.search(prefix):
+    if _DETERMINER_NO_PREFIX.search(prefix) or _EXISTENTIAL_NO_NEED_PREFIX.search(
+        prefix
+    ):
         return True
 
     last_negator: re.Match[str] | None = None

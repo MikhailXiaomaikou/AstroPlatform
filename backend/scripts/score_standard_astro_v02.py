@@ -208,6 +208,14 @@ _H0_RESULT_RE = re.compile(
     rf"(?:{_RESULT_QUALIFIER}\s*)?{_RESULT_NUMBER}",
     re.I,
 )
+_H0_VALUE_FIRST_RESULT_RE = re.compile(
+    rf"\b(?:posterior|fit|inference|estimate|result)\b"
+    rf"[^.;\n]{{0,48}}\b(?:peaks?|centers?|centres?|gives?|yields?|"
+    rf"favors?|favours?|prefers?|is)\b[^.;\n]{{0,20}}"
+    rf"(?:{_RESULT_QUALIFIER}\s*)?{_RESULT_NUMBER}[^.;\n]{{0,24}}"
+    rf"\b(?:for|as)\s+{_H0_LABEL}(?![a-z0-9])",
+    re.I,
+)
 _DELTA_CHI2_LABEL = r"(?:delta|Δ)\s*(?:chi|χ)\s*(?:\^?\s*2|²|[-\s]*squared)?"
 _DELTA_CHI2_RESULT_RE = re.compile(
     rf"{_DELTA_CHI2_LABEL}\s*"
@@ -224,6 +232,7 @@ def _forbidden_numeric_escape(task_id: str, reply: str) -> bool:
     if task_id.startswith("V02_07"):
         return bool(
             _H0_RESULT_RE.search(reply)
+            or _H0_VALUE_FIRST_RESULT_RE.search(reply)
             or _DELTA_CHI2_RESULT_RE.search(reply)
         )
     if task_id.startswith("V02_08"):
