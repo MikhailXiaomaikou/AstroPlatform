@@ -240,7 +240,7 @@ def _route_and_disposition(sample: dict[str, Any], task: dict[str, Any]) -> tupl
 
 _RESULT_NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
 _H0_LABEL = r"(?:h\s*_?\s*0|hubble\s+constant)"
-_RESULT_QUALIFIER = r"(?:about|around|approximately|roughly|≈)"
+_RESULT_QUALIFIER = r"(?:about|around|approximately|roughly|near|≈)"
 _RESULT_LINK = (
     r"(?:=|:|\bis\b|\bwas\b|\bequals?\b|\bof\b|\bat\b|\bto\s+be\b|"
     r"\b(?:peaks?|centers?|centres?|gives?|yields?|favors?|favours?|prefers?)\b"

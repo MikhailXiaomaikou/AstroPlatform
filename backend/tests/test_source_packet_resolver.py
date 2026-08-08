@@ -559,6 +559,8 @@ def test_perfect_aspect_measurement_syntax_verifies_exact() -> None:
         "alpha = 10 +/- 1 was our reference model value.",
         "alpha = 10 +/- 1 is held fixed throughout the analysis.",
         "alpha = 10 +/- 1 was kept fixed in the analysis.",
+        "alpha = 10 +/- 1 was kept constant throughout the analysis.",
+        "alpha = 10 +/- 1 remained constant throughout the analysis.",
         "We set alpha = 10 +/- 1.",
         "We fix alpha = 10 +/- 1 for the analysis.",
         "We adopt alpha = 10 +/- 1.",

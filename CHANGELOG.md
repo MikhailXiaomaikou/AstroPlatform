@@ -36,7 +36,7 @@ need entries unless they change user-visible behavior or research validity.
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Sixty-five adversarial review rounds tightened heavy-chain routing, number and
+- Sixty-six adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
   scale-relative covariance validation, negation-aware independence parsing,
@@ -194,6 +194,9 @@ need entries unless they change user-visible behavior or research validity.
   predicates such as `peaks at` are covered by the release escape gate; and
   postposed `fit can be skipped`/`may be bypassed` clauses preserve complete
   lightweight scalar routing.
+  Parameters held, kept, or remaining constant are configuration inputs rather
+  than exact measurements, and `near` now links H0 to a numeric posterior result
+  for release-escape detection.
 
 ### P0 production and local-automation hardening (2026-07-13)
 
