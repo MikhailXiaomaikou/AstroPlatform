@@ -1217,6 +1217,18 @@ _POSTPOSED_MEASUREMENT_DISCLAIMER = re.compile(
 _POSTPOSED_HYPOTHETICAL_CONDITION = re.compile(
     r"\b(?:if|unless|assuming|supposing|provided\s+that)\b", re.I
 )
+_POSTPOSED_CONFIGURATION_ASSIGNMENT = re.compile(
+    r"^\s*(?:[,，]\s*)?"
+    r"(?:(?:is|are|was|were)\s+|(?:has|have|had)\s+been\s+)?"
+    r"(?:"
+    r"(?:assumed|adopted)(?:\s+(?:as|to\s+be)\s+"
+    r"(?:(?:an?|the)\s+)?(?:model\s+)?"
+    r"(?:input|configuration|setup|parameter))?|"
+    r"fixed\s+as\s+(?:(?:an?|the)\s+)?(?:model\s+)?"
+    r"(?:input|configuration|setup|parameter)"
+    r")\b",
+    re.I,
+)
 _POSTPOSED_IF_ANYTHING_QUALIFIER = re.compile(
     r"\bif\s+anything(?:\s*,)?\s+(?:an?\s+)?(?:(?:more|less)\s+)?"
     r"(?:conservative|cautious|generous|stringent|strict|robust)\s+"
@@ -1379,6 +1391,7 @@ def _measurement_suffix_is_non_exact(field_suffix: str) -> bool:
     return (
         _POSTPOSED_MEASUREMENT_DISCLAIMER.search(field_suffix) is not None
         or _POSTPOSED_HYPOTHETICAL_CONDITION.search(conditional_scope) is not None
+        or _POSTPOSED_CONFIGURATION_ASSIGNMENT.search(field_suffix) is not None
     )
 
 

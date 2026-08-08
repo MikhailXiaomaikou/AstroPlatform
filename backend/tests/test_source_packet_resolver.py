@@ -544,6 +544,9 @@ def test_perfect_aspect_measurement_syntax_verifies_exact() -> None:
         "With the fiducial cosmology, alpha = 10 +/- 1.",
         "Given the reference model, alpha = 10 +/- 1.",
         "In the input model, alpha is given as 10 +/- 1.",
+        "alpha = 10 +/- 1 was assumed as an input.",
+        "alpha = 10 +/- 1 was adopted as the model input.",
+        "alpha = 10 +/- 1 was fixed as an input.",
         "For illustration, alpha = 10 +/- 1.",
     ],
 )

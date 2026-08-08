@@ -971,20 +971,52 @@ def _is_fixed_comparator(label: str) -> bool:
 _PROMPT_USER_SUPPLIED_PROVENANCE = re.compile(
     r"\b(?:my|our|the\s+user(?:'s)?)?\s*"
     r"(?:user[- ]supplied|user[- ]provided|manually\s+(?:supplied|provided)|"
-    r"provided\s+by\s+(?:me|the\s+user))\b",
+    r"(?:supplied|provided)\s+by\s+(?:me|the\s+user))\b",
+    re.I,
+)
+_POSTPOSED_PROMPT_USER_SUPPLIED_PROVENANCE = re.compile(
+    r"^\s*(?:[,，]\s*)?"
+    r"(?:(?:which|that)\s+(?:is|was|are|were)\s+|"
+    r"(?:is|was|are|were)\s+)?"
+    r"(?:user[- ]supplied|user[- ]provided|manually\s+(?:supplied|provided)|"
+    r"(?:supplied|provided)\s+by\s+(?:me|the\s+user))\b",
+    re.I,
+)
+_POSTPOSED_COLLECTIVE_USER_SUPPLIED_PROVENANCE = re.compile(
+    r"^\s*[;；,.，]?\s*"
+    r"(?:(?:both|all)\s+|(?:these|those|the)(?:\s+two)?\s+)"
+    r"(?:values|quantities|measurements|parameters)\s+(?:are|were)\s+"
+    r"(?:user[- ]supplied|user[- ]provided|manually\s+(?:supplied|provided)|"
+    r"(?:supplied|provided)\s+by\s+(?:me|the\s+user))\b",
     re.I,
 )
 
 
 def _prompt_user_supplied_quantity_labels(text: str) -> set[str]:
-    """Return labels whose own local prefix declares prompt provenance."""
+    """Return labels whose local clause declares prompt provenance."""
     matches = list(_SCALAR_QUANTITY_RE.finditer(text))
     labels: set[str] = set()
     for index, match in enumerate(matches):
         prefix_start = matches[index - 1].end() if index else 0
         local_prefix = text[prefix_start : match.start()]
-        if _PROMPT_USER_SUPPLIED_PROVENANCE.search(local_prefix):
+        # A declaration postposed to the previous quantity must not become the
+        # next quantity's prefix. Inspect only the nearest comma/conjunction
+        # segment before this assignment.
+        bounded_prefix = re.split(
+            r"[,，;；.!?]|\b(?:and|or)\b", local_prefix, flags=re.I
+        )[-1]
+        if _PROMPT_USER_SUPPLIED_PROVENANCE.search(bounded_prefix):
             labels.add(_canonical_scalar_label(match.group("label")))
+        suffix_end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        local_suffix = text[match.end() : suffix_end]
+        if _POSTPOSED_PROMPT_USER_SUPPLIED_PROVENANCE.match(local_suffix):
+            labels.add(_canonical_scalar_label(match.group("label")))
+    if matches and _POSTPOSED_COLLECTIVE_USER_SUPPLIED_PROVENANCE.match(
+        text[matches[-1].end() :]
+    ):
+        labels.update(
+            _canonical_scalar_label(match.group("label")) for match in matches
+        )
     return labels
 
 
