@@ -1199,6 +1199,30 @@ _POSTPOSED_MEASUREMENT_DISCLAIMER = re.compile(
     r"\b(?:should|must)\s+be\s+(?:ignored|discarded|excluded|rejected)\b",
     re.I,
 )
+_PRELABEL_PROPOSITION_REJECTION = re.compile(
+    r"\b(?:"
+    r"(?:it|this|that)\s+(?:is|was)\s+(?:not|never)\s+"
+    r"(?:true|established|supported|shown|demonstrated)\s+that|"
+    r"(?:we|the\s+(?:data|analysis|study|source|paper|results?))\s+"
+    r"(?:cannot|can['’]t|do\s+not|don['’]t|does\s+not|doesn['’]t|"
+    r"did\s+not|didn['’]t)\s+"
+    r"(?:conclude|infer|claim|show|support|establish|confirm|demonstrate|find)\s+that|"
+    r"(?:cannot|can['’]t)\s+be\s+"
+    r"(?:concluded|inferred|claimed|shown|supported|established|confirmed)\s+that"
+    r")\s*$",
+    re.I,
+)
+_EXPLICIT_MEASUREMENT_ASSIGNMENT_PREFIX = re.compile(
+    r"\s*(?:"
+    r"(?:=|:|：)|"
+    r"(?:is|are|was|were)\s*"
+    r"(?:(?:measured|reported|estimated|given|found)\s+)?"
+    r"(?:(?:as|at|to\s+be)\s*)?|"
+    r"(?:equals?|equaled|measures?|measured|reports?|reported|"
+    r"estimates?|estimated|gives?|gave|yields?|yielded)\s*"
+    r")\s*",
+    re.I,
+)
 _SOURCE_H0_UNIT = re.compile(
     r"(?<![a-z0-9])km\s*"
     r"(?:(?:/\s*s)|s\s*(?:\^?\s*\{?\s*[-−]\s*1\s*\}?|⁻¹))\s*"
@@ -1219,6 +1243,13 @@ def _measurement_assignment_is_non_exact(
     window: str, label_position: int, value_position: int
 ) -> bool:
     """Reject negated or relational label-to-value assignments."""
+    field_start = 0
+    for terminator in _FIELD_TERMINATOR.finditer(window, 0, label_position):
+        field_start = terminator.end()
+    if _PRELABEL_PROPOSITION_REJECTION.search(
+        window[field_start:label_position]
+    ):
+        return True
     governing_text = window[label_position:value_position]
     # Appositive clauses may themselves contain unrelated negation, but the
     # governing predicate can straddle them ("alpha is not, contrary to ...,"
@@ -1307,14 +1338,16 @@ def _values_follow_label_order(
     mention must not hide an earlier exact assignment, while a later numeric
     field for the same label must repeat the expected measurement exactly.
     """
-    labeled_claims: list[tuple[dict[str, Any], list[int]]] = []
+    labeled_claims: list[
+        tuple[dict[str, Any], list[tuple[int, int]]]
+    ] = []
     for claim in expected_claims:
         labels = _label_tokens(claim.get("label") or claim.get("id"))
         if not labels:
             continue
-        label_positions = sorted(
+        label_occurrences = sorted(
             {
-                match.start()
+                (match.start(), match.end())
                 for label in labels
                 for match in re.finditer(
                     rf"(?<![a-z0-9ρ_]){re.escape(label)}(?![a-z0-9ρ_])",
@@ -1322,9 +1355,9 @@ def _values_follow_label_order(
                 )
             }
         )
-        if not label_positions:
+        if not label_occurrences:
             continue
-        labeled_claims.append((claim, label_positions))
+        labeled_claims.append((claim, label_occurrences))
     if not labeled_claims:
         return True
 
@@ -1408,7 +1441,7 @@ def _values_follow_label_order(
     def matching_measurement_end(
         claim: dict[str, Any],
         label_position: int,
-        label_positions: list[int],
+        label_occurrences: list[tuple[int, int]],
         cursor: int,
         next_label_position: int | None,
     ) -> int | None:
@@ -1424,11 +1457,34 @@ def _values_follow_label_order(
         )
         if measurement_end is None:
             return None
+
+        def has_measurement_assignment_syntax(
+            label_end: int, field_limit: int
+        ) -> bool:
+            numeric = _GENERIC_NUMBER_TOKEN.search(window, label_end, field_limit)
+            if numeric is None:
+                return False
+            prefix = window[label_end:numeric.start()]
+            if _EXPLICIT_MEASUREMENT_ASSIGNMENT_PREFIX.fullmatch(prefix):
+                return True
+            # Structured table renderings can be the bare "label 20 +/- 2"
+            # form. Treat that as a measurement only when the number is
+            # immediately uncertainty-bound; "Section 2" / "Equation 42"
+            # and citation numbers remain ordinary cross-references.
+            if prefix.strip():
+                return False
+            following = _GENERIC_NUMBER_TOKEN.search(
+                window, numeric.end(), field_limit
+            )
+            return following is not None and _UNCERTAINTY_BINDING.fullmatch(
+                window[numeric.end():following.start()]
+            ) is not None
+
         # Occurrence-aware matching must not turn into first-match wins. A
         # neutral later mention is harmless, but a later numeric field for the
         # same label must repeat the expected measurement exactly; otherwise
         # the source is internally conflicting and cannot earn verified_exact.
-        for later_position in label_positions:
+        for later_position, later_end in label_occurrences:
             if later_position <= label_position:
                 continue
             later_terminator = _FIELD_TERMINATOR.search(
@@ -1437,10 +1493,7 @@ def _values_follow_label_order(
             later_limit = (
                 later_terminator.start() if later_terminator else len(window)
             )
-            if (
-                _GENERIC_NUMBER_TOKEN.search(window, later_position, later_limit)
-                is None
-            ):
+            if not has_measurement_assignment_syntax(later_end, later_limit):
                 continue
             if (
                 measurement_end_in_field(
@@ -1466,16 +1519,16 @@ def _values_follow_label_order(
         if key in memo:
             return memo[key]
         for claim_index in remaining:
-            claim, label_positions = labeled_claims[claim_index]
+            claim, label_occurrences = labeled_claims[claim_index]
             other_indices = tuple(
                 index for index in remaining if index != claim_index
             )
             other_label_positions = sorted(
-                position
+                occurrence[0]
                 for index in other_indices
-                for position in labeled_claims[index][1]
+                for occurrence in labeled_claims[index][1]
             )
-            for label_position in label_positions:
+            for label_position, _label_end in label_occurrences:
                 if label_position <= cursor:
                     continue
                 next_label_position = next(
@@ -1489,7 +1542,7 @@ def _values_follow_label_order(
                 measurement_end = matching_measurement_end(
                     claim,
                     label_position,
-                    label_positions,
+                    label_occurrences,
                     cursor,
                     next_label_position,
                 )

@@ -36,7 +36,7 @@ need entries unless they change user-visible behavior or research validity.
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Twenty-eight adversarial review rounds tightened heavy-chain routing, number and
+- Twenty-nine adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
   scale-relative covariance validation, negation-aware independence parsing,
@@ -70,6 +70,9 @@ need entries unless they change user-visible behavior or research validity.
   external and user-supplied inputs can no longer expose a blanket exact
   measurement scope, and source matching now tries every bounded label
   occurrence without ignoring a later conflicting numeric assignment.
+  Proposition-level rejection before a measurement label is now part of the
+  assignment scope, while later section/equation/citation numbers count as
+  conflicts only when the surrounding syntax actually assigns a measurement.
 
 ### P0 production and local-automation hardening (2026-07-13)
 

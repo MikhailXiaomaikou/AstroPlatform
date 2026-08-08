@@ -357,7 +357,7 @@ def test_repeated_label_after_valid_measurement_still_verifies_exact() -> None:
                 "label": "Table 4",
                 "caption": "parameters",
                 "columns": [],
-                "rows": [["LRG2 alpha = 10 +/- 1. This alpha is used below."]],
+                "rows": [["LRG2 alpha = 10 +/- 1. This alpha is used in Section 2."]],
             }
         ],
         "text": "",
@@ -378,6 +378,81 @@ def test_repeated_label_after_valid_measurement_still_verifies_exact() -> None:
 
     assert status == "verified_exact"
     assert detail["reason"] == "labels_and_values_same_window"
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "It is not true that alpha = 10 +/- 1.",
+        "We cannot conclude that alpha = 10 +/- 1.",
+    ],
+)
+def test_prelabel_proposition_rejection_must_not_verify_exact(field: str) -> None:
+    # Codex review P1 (PR #46, round 29): negation can govern the complete
+    # proposition from before the label, outside the label-to-value slice.
+    document = {
+        "final_url": "https://example.org/paper",
+        "mime": "text/html",
+        "sha256": "a" * 64,
+        "extraction_method": "html",
+        "tables": [
+            {
+                "label": "Table 4",
+                "caption": "parameters",
+                "columns": [],
+                "rows": [[f"LRG2 {field}"]],
+            }
+        ],
+        "text": "",
+    }
+    claims = [
+        {
+            "id": "alpha",
+            "label": "alpha",
+            "value": 10.0,
+            "standard_uncertainty": 1.0,
+            "unit": "dimensionless",
+        }
+    ]
+
+    status, _detail = match_expected_claims(
+        document, claims, locator="Table 4, LRG2"
+    )
+
+    assert status != "verified_exact"
+
+
+def test_affirmed_prelabel_proposition_still_verifies_exact() -> None:
+    document = {
+        "final_url": "https://example.org/paper",
+        "mime": "text/html",
+        "sha256": "a" * 64,
+        "extraction_method": "html",
+        "tables": [
+            {
+                "label": "Table 4",
+                "caption": "parameters",
+                "columns": [],
+                "rows": [["LRG2 It is true that alpha = 10 +/- 1."]],
+            }
+        ],
+        "text": "",
+    }
+    claims = [
+        {
+            "id": "alpha",
+            "label": "alpha",
+            "value": 10.0,
+            "standard_uncertainty": 1.0,
+            "unit": "dimensionless",
+        }
+    ]
+
+    status, _detail = match_expected_claims(
+        document, claims, locator="Table 4, LRG2"
+    )
+
+    assert status == "verified_exact"
 
 
 def test_repeated_label_with_later_conflicting_measurement_stays_closed() -> None:
