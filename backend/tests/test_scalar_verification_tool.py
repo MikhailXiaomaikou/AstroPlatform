@@ -271,6 +271,36 @@ async def test_invalid_covariance_returns_actionable_abstention(monkeypatch) -> 
 
 
 @pytest.mark.asyncio
+async def test_arithmetic_overflow_returns_actionable_abstention(monkeypatch) -> None:
+    monkeypatch.setattr(
+        scalar_verification.settings, "lightweight_verification_enabled", True
+    )
+    overflow = _input(
+        operation="product",
+        quantities=[
+            {
+                "id": label,
+                "label": label,
+                "value": 1e308,
+                "standard_uncertainty": 1.0,
+                "unit": "Mpc",
+                "source_ref": "desi",
+                "source_locator": "Table 4, LRG2",
+            }
+            for label in ("a", "b")
+        ],
+        uncertainty_model={"kind": "independent"},
+    )
+
+    result = await execute_scalar_verification(overflow)
+
+    assert result["success"] is False
+    assert result["response_disposition"] == "abstention"
+    assert result["earliest_limiting_stage"] == "calculation_input"
+    assert result["missing_dependencies"] == ["non_finite_result"]
+
+
+@pytest.mark.asyncio
 async def test_boundary_statement_is_backend_controlled(monkeypatch) -> None:
     # Codex review P1 (PR #46, round 21): a model-authored tool call must not
     # stamp arbitrary prose into a digest-backed deterministic receipt.

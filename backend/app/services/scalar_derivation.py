@@ -81,6 +81,19 @@ def _finite_float(value: Any, *, field: str) -> float:
     return number
 
 
+def _require_finite_derived(value: Any, *, field: str) -> None:
+    """Fail closed before any non-finite derived value reaches a receipt."""
+    try:
+        finite = bool(np.all(np.isfinite(np.asarray(value, dtype=float))))
+    except (TypeError, ValueError, OverflowError):
+        finite = False
+    if not finite:
+        raise ScalarDerivationError(
+            f"The derived {field} is not finite for the supplied inputs.",
+            code="non_finite_result",
+        )
+
+
 def normalize_unit(unit: Any) -> str:
     """Normalize conservative aliases without pretending to be a unit parser."""
     text = str(unit or "").strip()
@@ -254,6 +267,7 @@ def build_covariance(
             "uncertainty_model.kind must be independent, correlation_matrix, or covariance_matrix.",
             code="invalid_uncertainty_model",
         )
+    _require_finite_derived(covariance, field="covariance matrix")
     _validate_positive_semidefinite(covariance)
     return covariance, normalized
 
@@ -346,15 +360,19 @@ def derive_scalar(
             raise ScalarDerivationError(
                 "The denominator of a ratio cannot be zero.", code="zero_denominator"
             )
-        result_value = float(values[0] / values[1])
-        jacobian = np.asarray([1.0 / values[1], -values[0] / values[1] ** 2])
+        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+            result_value = float(values[0] / values[1])
+            jacobian = np.asarray(
+                [1.0 / values[1], -values[0] / values[1] ** 2]
+            )
         formula = "q0 / q1; uncertainty = first-order delta method"
     elif operation == "difference":
         result_value = float(values[0] - values[1])
         jacobian = np.asarray([1.0, -1.0])
         formula = "q0 - q1"
     elif operation == "product":
-        result_value = float(values[0] * values[1])
+        with np.errstate(over="ignore", invalid="ignore"):
+            result_value = float(values[0] * values[1])
         jacobian = np.asarray([values[1], values[0]])
         formula = (
             "q0 × q1; Var = q1² Var(q0) + q0² Var(q1) + "
@@ -409,11 +427,16 @@ def derive_scalar(
         result_value = float(jacobian @ values)
         formula = "(1ᵀ C⁻¹ q) / (1ᵀ C⁻¹ 1)"
 
-    propagated_variance = float(jacobian @ covariance @ jacobian.T)
+    _require_finite_derived(result_value, field="result value")
+    _require_finite_derived(jacobian, field="Jacobian")
+    with np.errstate(over="ignore", invalid="ignore"):
+        propagated_variance = float(jacobian @ covariance @ jacobian.T)
     if operation == "product":
         # For independent X and Y this is exact and distribution-free:
         # Var(XY)=mu_y² Var(X)+mu_x² Var(Y)+Var(X)Var(Y).
-        propagated_variance += float(covariance[0, 0] * covariance[1, 1])
+        with np.errstate(over="ignore", invalid="ignore"):
+            propagated_variance += float(covariance[0, 0] * covariance[1, 1])
+    _require_finite_derived(propagated_variance, field="propagated variance")
     tolerance = max(1.0, abs(result_value)) * 1e-12
     if propagated_variance < -tolerance:
         raise ScalarDerivationError(
@@ -421,6 +444,9 @@ def derive_scalar(
             code="negative_propagated_variance",
         )
     result_uncertainty = math.sqrt(max(0.0, propagated_variance))
+    _require_finite_derived(
+        result_uncertainty, field="standard uncertainty"
+    )
     result_payload: dict[str, Any] = {
         "value": result_value,
         "standard_uncertainty": result_uncertainty,
@@ -438,27 +464,47 @@ def derive_scalar(
         )
     if operation == "difference" and result_uncertainty > 0:
         standardized = abs(result_value) / result_uncertainty
+        _require_finite_derived(
+            standardized, field="standardized difference"
+        )
         result_payload["standardized_difference_abs"] = standardized
         result_payload["standardized_difference_display"] = f"{standardized:.8g} sigma"
     if uncertainty_model.get("kind") != "independent":
         independent_covariance = np.diag(
             np.square([quantity.standard_uncertainty for quantity in parsed])
         )
-        independent_variance = float(
-            jacobian @ independent_covariance @ jacobian.T
+        with np.errstate(over="ignore", invalid="ignore"):
+            independent_variance = float(
+                jacobian @ independent_covariance @ jacobian.T
+            )
+        _require_finite_derived(
+            independent_variance, field="independent propagated variance"
         )
         independent_uncertainty = math.sqrt(max(0.0, independent_variance))
+        _require_finite_derived(
+            independent_uncertainty,
+            field="independent standard uncertainty",
+        )
         result_payload["independent_standard_uncertainty"] = independent_uncertainty
         if independent_uncertainty > 0:
             relative_change = (
                 result_uncertainty / independent_uncertainty - 1.0
             )
+            _require_finite_derived(
+                relative_change,
+                field="relative uncertainty change",
+            )
             result_payload["relative_uncertainty_change_vs_independent"] = (
                 relative_change
             )
+            relative_change_percent = 100.0 * relative_change
+            _require_finite_derived(
+                relative_change_percent,
+                field="relative uncertainty change percent",
+            )
             result_payload[
                 "relative_uncertainty_change_percent_vs_independent"
-            ] = 100.0 * relative_change
+            ] = relative_change_percent
     calculation_status = (
         "linearized_approximation"
         if operation == "ratio"

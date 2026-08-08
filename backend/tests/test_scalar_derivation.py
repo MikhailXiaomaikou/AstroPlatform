@@ -147,6 +147,20 @@ def test_correlated_product_abstains_without_higher_moments() -> None:
     assert exc_info.value.code == "nonlinear_uncertainty_requires_independence"
 
 
+def test_non_finite_arithmetic_result_fails_closed() -> None:
+    with pytest.raises(ScalarDerivationError) as exc_info:
+        derive_scalar(
+            operation="product",
+            quantities=[
+                _quantity("a", 1e308, 1.0),
+                _quantity("b", 1e308, 1.0),
+            ],
+            uncertainty_model={"kind": "independent"},
+        )
+
+    assert exc_info.value.code == "non_finite_result"
+
+
 def test_weighted_mean_uses_generalized_inverse_covariance() -> None:
     result = derive_scalar(
         operation="weighted_mean",
