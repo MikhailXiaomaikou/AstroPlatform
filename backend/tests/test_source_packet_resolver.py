@@ -344,6 +344,77 @@ def test_source_value_conflict_is_not_promoted_to_verified() -> None:
     assert "values" in detail["reason"]
 
 
+def test_repeated_label_after_valid_measurement_still_verifies_exact() -> None:
+    # Codex review P2 (PR #46, round 28): binding only the final label mention
+    # makes a later narrative reference hide an earlier exact assignment.
+    document = {
+        "final_url": "https://example.org/paper",
+        "mime": "text/html",
+        "sha256": "a" * 64,
+        "extraction_method": "html",
+        "tables": [
+            {
+                "label": "Table 4",
+                "caption": "parameters",
+                "columns": [],
+                "rows": [["LRG2 alpha = 10 +/- 1. This alpha is used below."]],
+            }
+        ],
+        "text": "",
+    }
+    claims = [
+        {
+            "id": "alpha",
+            "label": "alpha",
+            "value": 10.0,
+            "standard_uncertainty": 1.0,
+            "unit": "dimensionless",
+        }
+    ]
+
+    status, detail = match_expected_claims(
+        document, claims, locator="Table 4, LRG2"
+    )
+
+    assert status == "verified_exact"
+    assert detail["reason"] == "labels_and_values_same_window"
+
+
+def test_repeated_label_with_later_conflicting_measurement_stays_closed() -> None:
+    # Reverse guard for occurrence-aware matching: a neutral later mention is
+    # harmless, but a later numeric field for the same label cannot be ignored.
+    document = {
+        "final_url": "https://example.org/paper",
+        "mime": "text/html",
+        "sha256": "a" * 64,
+        "extraction_method": "html",
+        "tables": [
+            {
+                "label": "Table 4",
+                "caption": "parameters",
+                "columns": [],
+                "rows": [["LRG2 alpha = 10 +/- 1. Later alpha = 20 +/- 2."]],
+            }
+        ],
+        "text": "",
+    }
+    claims = [
+        {
+            "id": "alpha",
+            "label": "alpha",
+            "value": 10.0,
+            "standard_uncertainty": 1.0,
+            "unit": "dimensionless",
+        }
+    ]
+
+    status, _detail = match_expected_claims(
+        document, claims, locator="Table 4, LRG2"
+    )
+
+    assert status != "verified_exact"
+
+
 def test_arxiv_source_expansion_is_bounded_and_rejects_corrupt_gzip(
     monkeypatch,
 ) -> None:

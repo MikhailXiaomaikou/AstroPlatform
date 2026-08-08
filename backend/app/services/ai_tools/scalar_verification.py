@@ -339,7 +339,17 @@ async def execute_scalar_verification(tool_input: dict[str, Any]) -> dict[str, A
         # has a shape we cannot match against the paper — the attribution as a
         # whole is not exact.
         source_status = "resolved_unmatched"
-    source_measurement = source_status == "verified_exact"
+    has_user_supplied_quantity = any(
+        str(quantity.get("source_ref") or "") in user_source_ids
+        for quantity in quantities
+    )
+    # Codex review P1 (PR #46, round 28): source_status describes the external
+    # evidence records only.  It cannot safely enable a blanket measurement
+    # scope when the same receipt also exposes a user-supplied comparator that
+    # was deliberately excluded from source matching.
+    source_measurement = (
+        source_status == "verified_exact" and not has_user_supplied_quantity
+    )
     nonzero_uncertainty_count = sum(
         1
         for quantity in quantities
@@ -385,6 +395,8 @@ async def execute_scalar_verification(tool_input: dict[str, Any]) -> dict[str, A
     elif source_status != "verified_exact":
         missing_dependencies.append(f"source_status:{source_status}")
     missing_dependencies.extend(quantity_source_ref_issues)
+    if has_user_supplied_quantity:
+        missing_dependencies.append("user_supplied_quantity_not_externally_matched")
     if correlation_missing:
         missing_dependencies.append("cross_covariance_not_provided")
 

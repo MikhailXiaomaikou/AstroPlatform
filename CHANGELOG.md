@@ -36,7 +36,7 @@ need entries unless they change user-visible behavior or research validity.
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Twenty-seven adversarial review rounds tightened heavy-chain routing, number and
+- Twenty-eight adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
   scale-relative covariance validation, negation-aware independence parsing,
@@ -66,7 +66,10 @@ need entries unless they change user-visible behavior or research validity.
   modifiers while preserving affirmative heavy-route requests. Correlation
   values and scalar-operation alternatives that the user explicitly rejects
   after naming them are now excluded from deterministic routing and fallback
-  echo validation instead of overriding the user's active request.
+  echo validation instead of overriding the user's active request. Mixed
+  external and user-supplied inputs can no longer expose a blanket exact
+  measurement scope, and source matching now tries every bounded label
+  occurrence without ignoring a later conflicting numeric assignment.
 
 ### P0 production and local-automation hardening (2026-07-13)
 

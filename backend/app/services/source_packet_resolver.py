@@ -1299,54 +1299,50 @@ def _values_follow_label_order(
 
     Codex review P1 (PR #46, round 5): labels and numbers were checked as two
     independent window-wide sets, so permuting values between labels still
-    verified. Sorting the labeled claims by their first label occurrence and
-    greedily assigning each claim's value to a strictly later position
-    accepts both prose ("Planck ... 67.36 ... SH0ES ... 73.04") and
-    column-major table rows, while rejecting swapped assignments. A prose
-    order reversed relative to the label order fails toward
-    resolved_unmatched, which is the safe direction.
+    verified. An occurrence-aware monotone assignment accepts both prose
+    ("Planck ... 67.36 ... SH0ES ... 73.04") and structured table rows while
+    rejecting swapped assignments. A prose order reversed relative to the
+    label order fails toward resolved_unmatched, which is the safe direction.
+    Every boundary-valid label occurrence is considered: a later narrative
+    mention must not hide an earlier exact assignment, while a later numeric
+    field for the same label must repeat the expected measurement exactly.
     """
-    ordered: list[tuple[int, dict[str, Any]]] = []
+    labeled_claims: list[tuple[dict[str, Any], list[int]]] = []
     for claim in expected_claims:
         labels = _label_tokens(claim.get("label") or claim.get("id"))
         if not labels:
             continue
-        label_positions = [
-            match.start()
-            for match in (
-                _label_token_present(label, window, last=True)
+        label_positions = sorted(
+            {
+                match.start()
                 for label in labels
-            )
-            if match is not None
-        ]
+                for match in re.finditer(
+                    rf"(?<![a-z0-9ρ_]){re.escape(label)}(?![a-z0-9ρ_])",
+                    window,
+                )
+            }
+        )
         if not label_positions:
             continue
-        ordered.append((min(label_positions), claim))
-    if not ordered:
+        labeled_claims.append((claim, label_positions))
+    if not labeled_claims:
         return True
-    ordered.sort(key=lambda item: item[0])
-    cursor = -1
-    for index, (label_position, claim) in enumerate(ordered):
-        next_label_position = (
-            ordered[index + 1][0] if index + 1 < len(ordered) else None
-        )
-        field_terminator = _FIELD_TERMINATOR.search(window, label_position + 1)
-        field_end = field_terminator.start() if field_terminator else None
-        upper_bound = next_label_position
-        if field_end is not None:
-            upper_bound = (
-                field_end if upper_bound is None else min(upper_bound, field_end)
-            )
+
+    def measurement_end_in_field(
+        claim: dict[str, Any],
+        label_position: int,
+        cursor: int,
+        field_limit: int,
+    ) -> int | None:
         try:
             value = float(claim["value"])
         except (KeyError, TypeError, ValueError):
-            continue
+            return None
         uncertainty: float | None
         try:
             uncertainty = float(claim["standard_uncertainty"])
         except (KeyError, TypeError, ValueError):
             uncertainty = None
-        chosen: int | None = None
         for position in _value_positions(value, window):
             # Codex review P1 (PR #46, round 10): a measurement cannot be
             # assigned to a label introduced only later in the row/prose.
@@ -1356,7 +1352,7 @@ def _values_follow_label_order(
             # first matching number after the next claim's label. Structured
             # tables are rendered above as local header/cell pairs, so the
             # same field boundary works for prose and tables.
-            if upper_bound is not None and position >= upper_bound:
+            if position >= field_limit:
                 continue
             # Codex review P1 (PR #46, round 19): token co-occurrence cannot
             # prove a measurement that the source explicitly negates, such as
@@ -1391,7 +1387,6 @@ def _values_follow_label_order(
                 ):
                     continue
                 measurement_end = following.end()
-            field_limit = upper_bound if upper_bound is not None else len(window)
             # Codex review P1 (PR #46, round 23): a suffix in the same field
             # can disclaim a syntactically complete pair ("was never
             # measured", "is not supported"). Prefix-only inspection is not
@@ -1407,12 +1402,106 @@ def _values_follow_label_order(
                 claim.get("unit"), window[label_position:field_limit]
             ):
                 continue
-            chosen = position
-            break
-        if chosen is None:
-            return False
-        cursor = chosen
-    return True
+            return measurement_end
+        return None
+
+    def matching_measurement_end(
+        claim: dict[str, Any],
+        label_position: int,
+        label_positions: list[int],
+        cursor: int,
+        next_label_position: int | None,
+    ) -> int | None:
+        field_terminator = _FIELD_TERMINATOR.search(window, label_position + 1)
+        field_end = field_terminator.start() if field_terminator else len(window)
+        field_limit = (
+            field_end
+            if next_label_position is None
+            else min(next_label_position, field_end)
+        )
+        measurement_end = measurement_end_in_field(
+            claim, label_position, cursor, field_limit
+        )
+        if measurement_end is None:
+            return None
+        # Occurrence-aware matching must not turn into first-match wins. A
+        # neutral later mention is harmless, but a later numeric field for the
+        # same label must repeat the expected measurement exactly; otherwise
+        # the source is internally conflicting and cannot earn verified_exact.
+        for later_position in label_positions:
+            if later_position <= label_position:
+                continue
+            later_terminator = _FIELD_TERMINATOR.search(
+                window, later_position + 1
+            )
+            later_limit = (
+                later_terminator.start() if later_terminator else len(window)
+            )
+            if (
+                _GENERIC_NUMBER_TOKEN.search(window, later_position, later_limit)
+                is None
+            ):
+                continue
+            if (
+                measurement_end_in_field(
+                    claim, later_position, -1, later_limit
+                )
+                is None
+            ):
+                return None
+        return measurement_end
+
+    # Codex review P2 (PR #46, round 28): selecting only the final label
+    # occurrence makes "alpha = 10 +/- 1. This alpha is used below" fail.
+    # Search for a monotone, non-overlapping assignment across every label
+    # occurrence.  Remaining-claim labels bound the current field, preserving
+    # the anti-permutation and cross-field guards while avoiding a Cartesian
+    # product over all occurrences.
+    memo: dict[tuple[tuple[int, ...], int], bool] = {}
+
+    def assign(remaining: tuple[int, ...], cursor: int) -> bool:
+        if not remaining:
+            return True
+        key = (remaining, cursor)
+        if key in memo:
+            return memo[key]
+        for claim_index in remaining:
+            claim, label_positions = labeled_claims[claim_index]
+            other_indices = tuple(
+                index for index in remaining if index != claim_index
+            )
+            other_label_positions = sorted(
+                position
+                for index in other_indices
+                for position in labeled_claims[index][1]
+            )
+            for label_position in label_positions:
+                if label_position <= cursor:
+                    continue
+                next_label_position = next(
+                    (
+                        position
+                        for position in other_label_positions
+                        if position > label_position
+                    ),
+                    None,
+                )
+                measurement_end = matching_measurement_end(
+                    claim,
+                    label_position,
+                    label_positions,
+                    cursor,
+                    next_label_position,
+                )
+                if measurement_end is not None and assign(
+                    other_indices, measurement_end
+                ):
+                    memo[key] = True
+                    return True
+        memo[key] = False
+        return False
+
+    return assign(tuple(range(len(labeled_claims))), -1)
 
 
 def match_expected_claims(

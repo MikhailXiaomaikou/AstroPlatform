@@ -128,6 +128,47 @@ async def test_missing_quantity_source_ref_cannot_grant_exact_attribution(
 
 
 @pytest.mark.asyncio
+async def test_user_supplied_comparator_disables_blanket_measurement_scope(
+    monkeypatch,
+) -> None:
+    # Codex review P1 (PR #46, round 28): exact evidence for the external
+    # input must not turn a mixed external + user-supplied calculation into a
+    # blanket source-measurement claim covering the comparator as well.
+    monkeypatch.setattr(
+        scalar_verification.settings, "lightweight_verification_enabled", True
+    )
+
+    async def verified(_sources, _claims):
+        return [{"id": "desi", "status": "verified_exact", "cache_hit": False}]
+
+    monkeypatch.setattr(scalar_verification, "resolve_sources", verified)
+    tool_input = _input(
+        operation="difference",
+        uncertainty_model={"kind": "independent"},
+        sources=[
+            _input()["sources"][0],
+            {
+                "id": "fixed-reference",
+                "kind": "user_supplied",
+                "identifier": "fixed comparator in current prompt",
+                "locator": "current prompt",
+            },
+        ],
+    )
+    tool_input["quantities"][1]["source_ref"] = "fixed-reference"
+    tool_input["quantities"][1]["standard_uncertainty"] = 0.0
+
+    result = await execute_scalar_verification(tool_input)
+
+    assert result["source_status"] == "verified_exact"
+    assert result["response_disposition"] == "limited"
+    assert result["claim_scopes"]["source_measurement"] is False
+    assert result["supports_measurement_claims"] is False
+    assert result["__do_not_claim_source_measurement__"] is True
+    assert "user_supplied_quantity_not_externally_matched" in result["missing_dependencies"]
+
+
+@pytest.mark.asyncio
 async def test_exact_values_without_cross_covariance_are_limited(monkeypatch) -> None:
     monkeypatch.setattr(
         scalar_verification.settings, "lightweight_verification_enabled", True
