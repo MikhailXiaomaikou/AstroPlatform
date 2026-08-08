@@ -532,6 +532,7 @@ def test_v02_pantheon_source_score_reads_registry_receipt_not_citation_gate() ->
 
     scores, _ = scorer._audit_task(sample, task)
     assert scores["source_traceability"] == 2
+    assert scores["end_to_end_success"] == 2
 
 
 def test_v02_pantheon_requires_visible_dataset_and_coverage() -> None:
@@ -561,6 +562,7 @@ def test_v02_pantheon_requires_visible_dataset_and_coverage() -> None:
 
     assert scores["source_traceability"] == 0
     assert scores["numeric_evidence_constraint"] == 1
+    assert scores["end_to_end_success"] == 1
 
 
 def test_v02_ede_source_score_reads_current_turn_capability_receipt() -> None:

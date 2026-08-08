@@ -514,6 +514,8 @@ def test_existential_no_need_for_heavy_noun_stays_on_deterministic_route() -> No
     [
         "There is no need to run a fit.",
         "There is no need to perform a fit.",
+        "There is no need to perform any fit.",
+        "There is no need to run another fit.",
     ],
 )
 def test_existential_no_need_to_run_heavy_noun_stays_lightweight(

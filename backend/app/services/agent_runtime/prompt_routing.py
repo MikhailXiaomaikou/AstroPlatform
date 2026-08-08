@@ -100,7 +100,7 @@ _DETERMINER_NO_PREFIX = re.compile(
 _EXISTENTIAL_NO_NEED_PREFIX = re.compile(
     r"\bthere\s+(?:is|was|remains)\s+(?:absolutely\s+)?no\s+need\s+"
     r"(?:for|to(?:\s+(?:run|perform|execute|launch))?)\s+"
-    r"(?:(?:an?|the)\s+)?$",
+    r"(?:(?:an?|the|any|another)\s+)?$",
     re.I,
 )
 _EXECUTION_VERB = re.compile(

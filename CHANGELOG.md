@@ -36,7 +36,7 @@ need entries unless they change user-visible behavior or research validity.
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Sixty adversarial review rounds tightened heavy-chain routing, number and
+- Sixty-one adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
   scale-relative covariance validation, negation-aware independence parsing,
@@ -172,6 +172,10 @@ need entries unless they change user-visible behavior or research validity.
   requires every scored result in the user-visible reply; hidden scalar
   receipts and registered-anchor facts may ground those values but cannot
   supply omitted answers.
+  Copular fiducial/baseline/default/reference-value declarations are now
+  classified as configuration rather than exact measurements; existential
+  no-need fit disclaimers accept `any` and `another`; and V02_06 full
+  end-to-end credit requires visible `Pantheon+` identity and 2.26 coverage.
 
 ### P0 production and local-automation hardening (2026-07-13)
 

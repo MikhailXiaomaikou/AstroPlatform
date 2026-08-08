@@ -534,7 +534,7 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
             nonmeasurement_ok,
         )
         end_to_end = _score_level(
-            route_ok and disposition_ok and nonmeasurement_ok,
+            route_ok and disposition_ok and nonmeasurement_ok and source_full,
             nonmeasurement_ok,
         )
         risk = 2 if nonmeasurement_ok else 0 if "measurement at z=12" in lower else 1
