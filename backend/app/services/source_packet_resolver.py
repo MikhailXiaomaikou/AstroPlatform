@@ -1287,6 +1287,20 @@ _PRELABEL_HYPOTHETICAL_SCOPE = re.compile(
     r"hypothetically|counterfactually|were|had|should)\b[^.;!?]*$",
     re.I,
 )
+_PRELABEL_TRANSITIVE_CONFIGURATION_ASSIGNMENT = re.compile(
+    r"(?:"
+    r"(?:^|[,，]\s*)"
+    r"(?:set|fix|adopt|use|take|assume)\s+|"
+    r"\b(?:"
+    r"(?:we|i|they)|"
+    r"(?:(?:the|this|our)\s+)?"
+    r"(?:analysis|study|work|model|pipeline|authors?)"
+    r")\s+"
+    r"(?:set|sets|fix(?:ed|es)?|adopt(?:ed|s)?|use(?:d|s)?|"
+    r"take(?:n|s)?|took|assum(?:e|ed|es))\s+"
+    r")(?:(?:the|an?|our)\s+)?$",
+    re.I,
+)
 _EXPLICIT_MEASUREMENT_ASSIGNMENT_PREFIX = re.compile(
     r"\s*(?:"
     r"(?:=|:|：)|"
@@ -1360,9 +1374,11 @@ def _measurement_assignment_is_non_exact(
     for terminator in _FIELD_TERMINATOR.finditer(window, 0, label_position):
         field_start = terminator.end()
     field_prefix = window[field_start:label_position]
-    if _PRELABEL_PROPOSITION_REJECTION.search(
-        field_prefix
-    ) or _PRELABEL_HYPOTHETICAL_SCOPE.search(field_prefix):
+    if (
+        _PRELABEL_PROPOSITION_REJECTION.search(field_prefix)
+        or _PRELABEL_HYPOTHETICAL_SCOPE.search(field_prefix)
+        or _PRELABEL_TRANSITIVE_CONFIGURATION_ASSIGNMENT.search(field_prefix)
+    ):
         return True
     governing_text = window[label_end:value_position]
     # Codex review P2 (PR #46, round 47): a model-scoped result can still be an

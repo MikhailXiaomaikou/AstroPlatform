@@ -184,6 +184,76 @@ def test_ede_gap_receipt_distinguishes_platform_check_from_paper_validation() ->
     assert validate_evidence_receipt(receipt)
 
 
+def test_publication_ready_result_suppresses_earlier_capability_gap() -> None:
+    tool_results = [{
+        "tool": "run_research_matrix",
+        "result": {
+            "success": True,
+            "analysis_status": "COMPLETED",
+            "publication_ready": False,
+        },
+    }, {
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {
+            "success": True,
+            "analysis_status": "COMPLETED",
+            "publication_ready": True,
+        },
+    }]
+    receipts = build_evidence_receipts(
+        task_kind="full_research",
+        response_disposition="full",
+        user_prompt="Run the requested publication-ready posterior.",
+        tool_results=tool_results,
+        interventions=[{"gate": "nonpublication_posterior"}],
+        matched_signals=["full_research_intent"],
+        missing_dependencies=[],
+    )
+
+    assert receipts == []
+
+    summary = _derive_validation_summary(
+        claim_gate_ran=True,
+        gate_skip_reason=None,
+        fabrication_stats={
+            "pass": 1,
+            "blocked": False,
+            "limited": False,
+            "regenerations": 0,
+        },
+        interventions=[],
+        tool_results=tool_results,
+        routing_decision={"task_kind": "full_research"},
+        user_prompt="Run the requested publication-ready posterior.",
+        evidence_receipts_enabled=True,
+    )
+    assert summary["response_disposition"] == "full"
+    assert "evidence_receipts" not in summary
+
+
+def test_capability_gap_fallback_dependencies_follow_actual_request() -> None:
+    receipt = build_evidence_receipts(
+        task_kind="full_research",
+        response_disposition="limited",
+        user_prompt="Run an ACT-only curvature posterior.",
+        tool_results=[{
+            "tool": "run_cosmology_likelihood_chain",
+            "result": {
+                "success": True,
+                "analysis_status": "COMPLETED",
+                "publication_ready": False,
+            },
+        }],
+        interventions=[],
+        matched_signals=["full_research_intent"],
+        missing_dependencies=[],
+    )[0]
+
+    assert receipt["missing_dependencies"] == [
+        "production sampler with convergence diagnostics"
+    ]
+
+
 def test_untrusted_prompt_fields_cannot_create_verified_receipt() -> None:
     receipt = build_evidence_receipts(
         task_kind="general",

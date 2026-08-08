@@ -551,6 +551,13 @@ def test_perfect_aspect_measurement_syntax_verifies_exact() -> None:
         "alpha = 10 +/- 1 was set as the baseline parameter.",
         "alpha = 10 +/- 1 was taken as the default model input.",
         "alpha = 10 +/- 1 is used as the reference value.",
+        "We set alpha = 10 +/- 1.",
+        "We fix alpha = 10 +/- 1 for the analysis.",
+        "We adopt alpha = 10 +/- 1.",
+        "We use alpha = 10 +/- 1 as an input.",
+        "The analysis fixes alpha = 10 +/- 1.",
+        "For this analysis we set alpha = 10 +/- 1.",
+        "Within this study the authors adopt alpha = 10 +/- 1.",
         "For illustration, alpha = 10 +/- 1.",
     ],
 )

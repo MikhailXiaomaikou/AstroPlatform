@@ -37,15 +37,6 @@ _ARXIV_RE = re.compile(
     r"(?P<identifier>\d{4}\.\d{4,5}(?:v\d+)?)",
     re.IGNORECASE,
 )
-_DEFAULT_CAPABILITY_GAP_DEPENDENCIES = (
-    "native early-dark-energy (EDE) model implementation",
-    "exact Planck high-l and low-l TT/EE likelihoods",
-    "DESI DR2 BAO data and covariance in the same run",
-    "the requested supernova likelihood",
-    "production sampler with convergence diagnostics",
-)
-
-
 def _canonical_json(payload: dict[str, Any]) -> str:
     return json.dumps(
         payload,
@@ -125,6 +116,26 @@ def _requested_arxiv_sources(user_prompt: str) -> list[dict[str, str]]:
         }
         for identifier in identifiers
     ]
+
+
+def _full_research_missing_dependencies(user_prompt: str) -> list[str]:
+    """Describe only the full-research components named by the request."""
+
+    lower = str(user_prompt or "").lower()
+    normalized = re.sub(r"[-_‐‑‒–—]+", " ", lower)
+    dependencies: list[str] = []
+    if "early dark energy" in normalized or re.search(r"\bede\b", normalized):
+        dependencies.append("native early-dark-energy (EDE) model implementation")
+    elif any(term in lower for term in ("model", "模型")):
+        dependencies.append("requested model implementation")
+    if "planck" in lower:
+        dependencies.append("exact Planck high-l and low-l TT/EE likelihoods")
+    if "desi" in lower and "dr2" in lower:
+        dependencies.append("DESI DR2 BAO data and covariance in the same run")
+    if any(term in lower for term in ("supernova", "pantheon", "超新星")):
+        dependencies.append("the requested supernova likelihood")
+    dependencies.append("production sampler with convergence diagnostics")
+    return list(dict.fromkeys(dependencies))
 
 
 def _dataset_coverage_receipt(
@@ -320,17 +331,26 @@ def build_evidence_receipts(
     )
     if coverage is not None:
         receipts.append(coverage)
-    has_nonpublication_research_tool = any(
-        tool in {
+    research_tool_items = [
+        (tool, result)
+        for tool, result in _tool_result_items(tool_results)
+        if tool in {
             "run_dark_energy_evidence_matrix",
             "run_research_matrix",
             "run_cosmology_likelihood_chain",
             "run_cosmology_robustness_matrix",
         }
-        and result.get("publication_ready") is not True
-        for tool, result in _tool_result_items(tool_results)
+    ]
+    has_nonpublication_research_tool = any(
+        result.get("publication_ready") is not True
+        for _tool, result in research_tool_items
     )
-    if task_kind == "full_research" and (
+    has_publication_ready_research_tool = any(
+        result.get("success") is True
+        and result.get("publication_ready") is True
+        for _tool, result in research_tool_items
+    )
+    if task_kind == "full_research" and not has_publication_ready_research_tool and (
         "nonpublication_posterior" in gates
         or has_nonpublication_research_tool
     ):
@@ -341,7 +361,7 @@ def build_evidence_receipts(
             tool_results=tool_results,
             missing_dependencies=(
                 missing_dependencies
-                or list(_DEFAULT_CAPABILITY_GAP_DEPENDENCIES)
+                or _full_research_missing_dependencies(user_prompt)
             ),
         ))
     if (

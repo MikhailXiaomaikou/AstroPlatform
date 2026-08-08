@@ -54,7 +54,10 @@ from app.services.agent_runtime.honesty import (
     untrusted_evidence_echo_values,
     untrusted_evidence_refusal,
 )
-from app.services.agent_runtime.evidence_receipts import build_evidence_receipts
+from app.services.agent_runtime.evidence_receipts import (
+    _full_research_missing_dependencies,
+    build_evidence_receipts,
+)
 from app.services.agent_runtime.prompt_routing import (
     _compact_tool_results_for_evidence,
     classify_task_kind,
@@ -159,32 +162,6 @@ _CITATION_GATE_FAMILY = frozenset({
 _BLOCKING_GATE_ACTIONS = frozenset({"blocked"})
 _LIMITING_GATE_ACTIONS = frozenset({"annotated_limited"})
 _VALIDATION_SUMMARY_MAX_INTERVENTIONS = 10
-
-
-def _full_research_missing_dependencies(user_prompt: str) -> list[str]:
-    """Describe capability gaps from the requested full-research shape.
-
-    This does not claim that any dependency was executed or inspected.  It
-    turns the user's explicit requested components into a compact checklist so
-    a capability gap remains actionable instead of collapsing to a generic
-    posterior-withheld banner.
-    """
-
-    lower = str(user_prompt or "").lower()
-    normalized = re.sub(r"[-_‐‑‒–—]+", " ", lower)
-    dependencies: list[str] = []
-    if "early dark energy" in normalized or re.search(r"\bede\b", normalized):
-        dependencies.append("native early-dark-energy (EDE) model implementation")
-    elif any(term in lower for term in ("model", "模型")):
-        dependencies.append("requested model implementation")
-    if "planck" in lower:
-        dependencies.append("exact Planck high-l and low-l TT/EE likelihoods")
-    if "desi" in lower and "dr2" in lower:
-        dependencies.append("DESI DR2 BAO data and covariance in the same run")
-    if any(term in lower for term in ("supernova", "pantheon", "超新星")):
-        dependencies.append("the requested supernova likelihood")
-    dependencies.append("production sampler with convergence diagnostics")
-    return list(dict.fromkeys(dependencies))
 
 
 def _full_research_capability_gap_reply(user_prompt: str) -> str:

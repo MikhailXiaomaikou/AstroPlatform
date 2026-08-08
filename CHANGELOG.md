@@ -36,7 +36,7 @@ need entries unless they change user-visible behavior or research validity.
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Fifty-one adversarial review rounds tightened heavy-chain routing, number and
+- Fifty-two adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
   scale-relative covariance validation, negation-aware independence parsing,
@@ -136,6 +136,13 @@ need entries unless they change user-visible behavior or research validity.
   uses `around` or `of` instead of an equals sign. Scalar-source receipts still
   establish backend verification, but their hidden locators no longer stand in
   for a citation in the user-visible V02_01--04 reply.
+  Transitive configuration predicates such as `we set/fix/adopt/use alpha`
+  cannot certify paper measurements, and the V02 release gate now recognizes
+  parameter-labelled H0 and delta-chi-squared numbers structurally instead of
+  relying on a finite result-verb list. A qualifying publication-ready result
+  suppresses earlier exploratory capability-gap receipts, whose fallback
+  dependencies are now derived only from the actual request through the same
+  helper used by the agent loop.
   Clause-leading determiners such as `No fit is necessary` now suppress that
   explicitly rejected heavy route while preserving a complete scalar call.
 
