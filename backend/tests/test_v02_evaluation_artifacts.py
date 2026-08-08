@@ -153,7 +153,7 @@ def test_v02_scorer_does_not_count_hidden_receipt_as_user_visible_citation() -> 
         (
             "V02_03_act_dr6_ee_h0",
             "full",
-            "The difference is -5.4 and its significance is 4.5 sigma.",
+            "ACT DR6 gives a difference of -5.4 with significance 4.5 sigma.",
             "2503.14452",
             "ACT DR6 Equation 42",
         ),

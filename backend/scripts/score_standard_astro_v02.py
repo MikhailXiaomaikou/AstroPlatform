@@ -357,7 +357,7 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
         source = _verified_source_score(
             sample,
             receipt,
-            source_cited or "act dr6" in lower,
+            source_cited,
         )
         difference_ok = _has_number(evidence, -5.4, 0.05) or _has_number(
             evidence, 5.4, 0.05
