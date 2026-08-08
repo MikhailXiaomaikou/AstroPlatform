@@ -93,6 +93,18 @@ def _scalar_receipt(sample: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _scalar_result_has_number(
+    receipt: dict[str, Any] | None, target: float, tolerance: float
+) -> bool:
+    if not receipt or not isinstance(receipt.get("result"), dict):
+        return False
+    return _has_number(
+        json.dumps(receipt["result"], ensure_ascii=False, sort_keys=True),
+        target,
+        tolerance,
+    )
+
+
 def _valid_evidence_receipt(
     sample: dict[str, Any],
     *,
@@ -309,8 +321,16 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
             reply, (("2503.14738",), ("table 4",), ("lrg2",))
         )
         source = _verified_source_score(sample, receipt, source_cited)
-        value_ok = _has_number(evidence, 0.891852994, 0.00005)
-        sigma_ok = _has_number(evidence, 0.020562805, 0.00005)
+        value_visible = _has_number(reply, 0.891852994, 0.00005)
+        sigma_visible = _has_number(reply, 0.020562805, 0.00005)
+        value_grounded = sample.get("condition") != "standard_astro" or (
+            _scalar_result_has_number(receipt, 0.891852994, 0.00005)
+        )
+        sigma_grounded = sample.get("condition") != "standard_astro" or (
+            _scalar_result_has_number(receipt, 0.020562805, 0.00005)
+        )
+        value_ok = value_visible and value_grounded
+        sigma_ok = sigma_visible and sigma_grounded
         numeric = _score_level(value_ok and sigma_ok, value_ok or sigma_ok)
         rho_ok = _has_number(evidence, -0.404, 0.0001)
         boundary_ok = _has_all(
@@ -463,10 +483,11 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
         )
         risk = 2 if anchors_ok and derived_ok and boundary_ok else 1 if numeric else 0
     elif task_id == "V02_06_pantheon_z12":
-        source_full = "pantheon+" in lower and _has_number(evidence, 2.26, 0.02)
+        coverage_visible = _has_number(reply, 2.26, 0.02)
+        source_full = "pantheon+" in lower and coverage_visible
         source = _validated_registered_source_score(
             sample,
-            source_full or "pantheon" in lower,
+            source_full,
             receipt_kind="dataset_coverage",
             source_statuses=("verified_registry",),
         )
@@ -478,7 +499,7 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
             ),
         )
         numeric = _score_level(
-            nonmeasurement_ok and _has_number(evidence, 2.26, 0.02),
+            nonmeasurement_ok and coverage_visible,
             nonmeasurement_ok,
         )
         uncertainty = _score_level(nonmeasurement_ok, "outside" in lower or "超出" in reply)

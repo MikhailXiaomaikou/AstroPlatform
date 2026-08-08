@@ -78,6 +78,10 @@ def test_v02_scorer_recognizes_verified_desi_ratio() -> None:
                     "receipt": {
                         "receipt_sha256": "a" * 64,
                         "source_status": "verified_exact",
+                        "result": {
+                            "value": 0.891852994,
+                            "standard_uncertainty": 0.020562805,
+                        },
                         "source_evidence": [
                         {
                             "identifier": "2503.14738",
@@ -121,6 +125,10 @@ def test_v02_scorer_does_not_count_hidden_receipt_as_user_visible_citation() -> 
                 "receipt": {
                     "receipt_sha256": "a" * 64,
                     "source_status": "verified_exact",
+                    "result": {
+                        "value": 0.891852994,
+                        "standard_uncertainty": 0.020562805,
+                    },
                     "source_evidence": [
                         {
                             "identifier": "2503.14738",
@@ -138,6 +146,56 @@ def test_v02_scorer_does_not_count_hidden_receipt_as_user_visible_citation() -> 
     assert flags == []
     assert scores["source_traceability"] == 0
     assert scores["end_to_end_success"] == 1
+
+
+def test_v02_ratio_requires_values_in_the_user_visible_reply() -> None:
+    task = {
+        "id": "V02_01_desi_dr2_ratio",
+        "expected_task_kind": "deterministic_source_check",
+        "expected_disposition": "full",
+    }
+    sample = {
+        "condition": "standard_astro",
+        "status": "completed",
+        "reply": (
+            "From arXiv:2503.14738 Table 4 LRG2, this is a table consistency "
+            "calculation, not a likelihood fit."
+        ),
+        "validation_summary": {
+            "task_kind": "deterministic_source_check",
+            "response_disposition": "full",
+        },
+        "tools": [
+            {
+                "tool": "verify_scalar_derivation",
+                "receipt": {
+                    "receipt_sha256": "a" * 64,
+                    "source_status": "verified_exact",
+                    "result": {
+                        "value": 0.891852994,
+                        "standard_uncertainty": 0.020562805,
+                    },
+                    "uncertainty_model": {
+                        "matrix": [[1.0, -0.404], [-0.404, 1.0]],
+                    },
+                    "source_evidence": [
+                        {
+                            "identifier": "2503.14738",
+                            "locator": "Table 4 LRG2",
+                            "status": "verified_exact",
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+
+    scores, flags = scorer._audit_task(sample, task)
+
+    assert flags == []
+    assert scores["source_traceability"] == 2
+    assert scores["numeric_evidence_constraint"] == 0
+    assert scores["end_to_end_success"] == 0
 
 
 @pytest.mark.parametrize(
@@ -331,6 +389,35 @@ def test_v02_pantheon_source_score_reads_registry_receipt_not_citation_gate() ->
 
     scores, _ = scorer._audit_task(sample, task)
     assert scores["source_traceability"] == 2
+
+
+def test_v02_pantheon_requires_visible_dataset_and_coverage() -> None:
+    task = {
+        "id": "V02_06_pantheon_z12",
+        "expected_task_kind": "general",
+        "expected_disposition": "limited",
+    }
+    receipt = _evidence_receipt("dataset_coverage", "verified_registry")
+    receipt["facts"] = {"registered_max_redshift": 2.26}
+    receipt = finalize_evidence_receipt(receipt)
+    sample = {
+        "condition": "standard_astro",
+        "status": "completed",
+        "reply": (
+            "Pantheon is not a measurement at z=12; this is a model extrapolation."
+        ),
+        "validation_summary": {
+            "task_kind": "general",
+            "response_disposition": "limited",
+            "evidence_receipts": [receipt],
+        },
+        "tools": [],
+    }
+
+    scores, _ = scorer._audit_task(sample, task)
+
+    assert scores["source_traceability"] == 0
+    assert scores["numeric_evidence_constraint"] == 1
 
 
 def test_v02_ede_source_score_reads_current_turn_capability_receipt() -> None:
