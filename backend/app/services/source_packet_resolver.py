@@ -1252,7 +1252,7 @@ _PRELABEL_PROPOSITION_REJECTION = re.compile(
 )
 _PRELABEL_NON_MEASUREMENT_CONTEXT = re.compile(
     r"\b(?:"
-    r"(?:for|in|using|from)\s+(?:(?:the|an?|our)\s+)?"
+    r"(?:for|in|using|from|under|within)\s+(?:(?:the|an?|our)\s+)?"
     r"(?:"
     r"(?:[a-z][\w-]*\s+){0,3}"
     r"(?:cosmolog(?:y|ies)|configuration|setup|scenario|model)|"
@@ -1287,6 +1287,15 @@ _EXPLICIT_MEASUREMENT_ASSIGNMENT_PREFIX = re.compile(
     r")\s*",
     re.I,
 )
+_EXPLICIT_MEASUREMENT_PREDICATE = re.compile(
+    r"\b(?:"
+    r"(?:(?:has|have|had)\s+been|(?:is|are|was|were))\s+"
+    r"(?:measured|reported|estimated|found)|"
+    r"(?:measures?|measured|reports?|reported|estimates?|estimated|"
+    r"finds?|found|yields?|yielded)"
+    r")\b",
+    re.I,
+)
 _SOURCE_H0_UNIT = re.compile(
     r"(?<![a-z0-9])km\s*"
     r"(?:(?:/\s*s)|s\s*(?:\^?\s*\{?\s*[-−]\s*1\s*\}?|⁻¹))\s*"
@@ -1318,10 +1327,10 @@ _SOURCE_PHYSICAL_UNIT_PREFIX = re.compile(
 
 
 def _measurement_assignment_is_non_exact(
-    window: str, label_position: int, value_position: int
+    window: str, label_position: int, label_end: int, value_position: int
 ) -> bool:
     """Reject negated or relational label-to-value assignments."""
-    # Codex review P1 (PR #46, rounds 42-46): a bare equality can describe a
+    # Codex review P1 (PR #46, rounds 42-47): a bare equality can describe a
     # configuration rather than an observation. Inspect the full pre-label
     # clause because the comma that introduces the label is itself a field
     # boundary. Configuration nouns (cosmology/model/setup/etc.) are generic
@@ -1330,8 +1339,9 @@ def _measurement_assignment_is_non_exact(
     # qualifier. The anchored grammar deliberately does not reject an unrelated
     # comparison such as "Unlike the mock catalogue, the observed alpha has
     # been measured as ...".
-    if _PRELABEL_NON_MEASUREMENT_CONTEXT.search(window[:label_position]):
-        return True
+    prelabel_non_measurement = _PRELABEL_NON_MEASUREMENT_CONTEXT.search(
+        window[:label_position]
+    )
     field_start = 0
     for terminator in _FIELD_TERMINATOR.finditer(window, 0, label_position):
         field_start = terminator.end()
@@ -1340,7 +1350,17 @@ def _measurement_assignment_is_non_exact(
         field_prefix
     ) or _PRELABEL_HYPOTHETICAL_SCOPE.search(field_prefix):
         return True
-    governing_text = window[label_position:value_position]
+    governing_text = window[label_end:value_position]
+    # Codex review P2 (PR #46, round 47): a model-scoped result can still be an
+    # explicit measurement ("In the best-fitting model, alpha has been measured
+    # as ..."). Let only an affirmative measurement/reporting predicate override
+    # the pre-label configuration context; bare equality, copula, or "given"
+    # assignments remain fail-closed. Negated and hypothetical predicates are
+    # still rejected below by the governing-assignment guard.
+    if prelabel_non_measurement and not _EXPLICIT_MEASUREMENT_PREDICATE.search(
+        governing_text
+    ):
+        return True
     # Appositive clauses may themselves contain unrelated negation, but the
     # governing predicate can straddle them ("alpha is not, contrary to ...,"
     # 10). Collapse paired comma-delimited appositives instead of discarding
@@ -1459,6 +1479,7 @@ def _values_follow_label_order(
     def measurement_end_in_field(
         claim: dict[str, Any],
         label_position: int,
+        label_end: int,
         cursor: int,
         field_limit: int,
     ) -> int | None:
@@ -1486,7 +1507,7 @@ def _values_follow_label_order(
             # prove a measurement that the source explicitly negates, such as
             # "alpha is not 10 +/- 1".
             if _measurement_assignment_is_non_exact(
-                window, label_position, position
+                window, label_position, label_end, position
             ):
                 continue
             value_token = _GENERIC_NUMBER_TOKEN.match(window, position)
@@ -1580,7 +1601,7 @@ def _values_follow_label_order(
         if not has_measurement_assignment_syntax(label_end, field_limit):
             return None
         measurement_end = measurement_end_in_field(
-            claim, label_position, cursor, field_limit
+            claim, label_position, label_end, cursor, field_limit
         )
         if measurement_end is None:
             return None
@@ -1602,7 +1623,7 @@ def _values_follow_label_order(
                 continue
             if (
                 measurement_end_in_field(
-                    claim, later_position, -1, later_limit
+                    claim, later_position, later_end, -1, later_limit
                 )
                 is None
             ):

@@ -539,6 +539,9 @@ def test_perfect_aspect_measurement_syntax_verifies_exact() -> None:
         "For the nominal model, alpha = 10 +/- 1.",
         "Using the fixed configuration, alpha = 10 +/- 1.",
         "For the input cosmology, alpha = 10 +/- 1.",
+        "Under the fiducial cosmology, alpha = 10 +/- 1.",
+        "Within the baseline model, alpha = 10 +/- 1.",
+        "In the input model, alpha is given as 10 +/- 1.",
         "For illustration, alpha = 10 +/- 1.",
     ],
 )
@@ -558,6 +561,32 @@ def test_configuration_assignments_must_not_verify_exact(text: str) -> None:
     )
 
     assert status != "verified_exact", text
+
+
+def test_configuration_context_preserves_explicit_measurement() -> None:
+    claims = [
+        {
+            "id": "alpha",
+            "label": "alpha",
+            "value": 10.0,
+            "standard_uncertainty": 1.0,
+            "unit": "dimensionless",
+        }
+    ]
+
+    status, _detail = match_expected_claims(
+        {
+            "tables": [],
+            "text": (
+                "In the best-fitting model, alpha has been measured as "
+                "10 +/- 1."
+            ),
+        },
+        claims,
+        locator="",
+    )
+
+    assert status == "verified_exact"
 
 
 def test_mock_comparison_does_not_hide_a_real_measurement() -> None:
