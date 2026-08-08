@@ -533,6 +533,8 @@ def test_perfect_aspect_measurement_syntax_verifies_exact() -> None:
         "For our baseline cosmology, alpha = 10 +/- 1.",
         "For our reference model, alpha = 10 +/- 1.",
         "In the benchmark configuration, alpha = 10 +/- 1.",
+        "For our assumed cosmology, alpha = 10 +/- 1.",
+        "For the adopted model, alpha = 10 +/- 1.",
         "For illustration, alpha = 10 +/- 1.",
     ],
 )
