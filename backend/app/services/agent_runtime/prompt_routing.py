@@ -283,7 +283,9 @@ def _requested_scalar_operation(text: str) -> str | None:
             )
             if contrasts:
                 prefix = prefix[contrasts[-1].end() :]
-            if not _prefix_negates(prefix):
+            if not _prefix_negates(prefix) and not _heavy_match_is_postposed_negated(
+                text, match
+            ):
                 active.add(operation)
     return next(iter(active)) if len(active) == 1 else None
 
@@ -465,6 +467,19 @@ _CORRELATION_CONTRAST_BOUNDARY = re.compile(
     r"compared\s+(?:with|to))\b|而是|相比|对比",
     re.I,
 )
+_POSTPOSED_CORRELATION_REJECTION = re.compile(
+    r"^\s*(?:,\s*)?(?:(?:which|that)\s+)?(?:"
+    r"(?:is|are|was|were|should|must|can|could|may|might|will|would)\s+"
+    r"(?:not|never)\s+(?:(?:be|have\s+been)\s+)?"
+    r"(?:used|included|adopted|accepted|trusted|supported|applicable|valid)|"
+    r"(?:(?:is|are|was|were|should|must|can|could|may|might|will|would)"
+    r"n['’]t|cannot)\s+(?:(?:be|have\s+been)\s+)?"
+    r"(?:used|included|adopted|accepted|trusted|supported|applicable|valid)|"
+    r"(?:is|are|was|were)\s+(?:inapplicable|invalid|disclaimed|rejected)|"
+    r"(?:should|must)\s+be\s+(?:ignored|discarded|excluded|rejected)"
+    r")\b",
+    re.I,
+)
 
 
 def _correlation_match_is_inactive(
@@ -504,6 +519,7 @@ def _correlation_match_is_inactive(
     return _prefix_negates(prefix) or bool(
         _COUNTERFACTUAL_CORRELATION_CONTEXT.search(prefix)
         or _COUNTERFACTUAL_CORRELATION_CONTEXT.search(suffix)
+        or _POSTPOSED_CORRELATION_REJECTION.match(suffix)
     )
 
 

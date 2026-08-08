@@ -342,6 +342,35 @@ def test_counterfactual_correlation_does_not_replace_the_primary_model(
     assert scalar_call_echo_violation(counterfactual_only, prompt) is not None
 
 
+@pytest.mark.parametrize(
+    "rejection",
+    [
+        "should not be used",
+        "is not applicable",
+    ],
+)
+def test_postposed_rejected_correlation_does_not_override_independence(
+    rejection: str,
+) -> None:
+    # Codex review P1 (PR #46, round 27): a correlation can be rejected only
+    # after its numeric assignment.  The rejected value must not outrank the
+    # explicitly requested independent-error model in either direct routing
+    # or fallback echo validation.
+    from app.services.agent_runtime.prompt_routing import scalar_call_echo_violation
+
+    prompt = (
+        f"rho=0.9 {rejection}; assume independent errors. "
+        "Compute the difference A=10 +/- 1 and B=8 +/- 2."
+    )
+    decision = classify_task_kind(prompt)
+
+    assert decision["missing_inputs"] == []
+    call = decision["direct_tool_call"]["input"]
+    assert call["uncertainty_model"]["kind"] == "independent"
+    assert "matrix" not in call["uncertainty_model"]
+    assert scalar_call_echo_violation(call, prompt) is None
+
+
 def test_natural_pasted_log_phrasing_is_tagged_untrusted() -> None:
     # Regression (natural matrix 2026-08-06, V02_08): the detector noun set
     # lacked "log", so this phrasing never raised untrusted_evidence_request
@@ -470,6 +499,19 @@ def test_prompt_leading_operation_word_is_recognized() -> None:
 
     assert decision["task_kind"] == "deterministic_source_check"
     assert decision["requested_operation"] == "product"
+    assert decision["direct_tool_call"] is not None
+
+
+def test_postposed_negated_operation_alternative_is_inactive() -> None:
+    # Codex review P2 (PR #46, round 27): prefix-only operation negation made
+    # an explicitly rejected alternative create false operation ambiguity.
+    decision = classify_task_kind(
+        "Compute the difference A=10 +/- 1 and B=8 +/- 2; "
+        "independent errors. A ratio is not required."
+    )
+
+    assert decision["task_kind"] == "deterministic_source_check"
+    assert decision["requested_operation"] == "difference"
     assert decision["direct_tool_call"] is not None
 
 
