@@ -165,6 +165,8 @@ def test_explicitly_disclaimed_prompt_quantity_blocks_direct_call() -> None:
     for disclaimed_prompt in (
         "Compute the difference A=10 +/- 1, which should not be used, "
         "and B=8 +/- 2; independent errors.",
+        "Compute the difference A=10 +/- 1, which is not to be used, "
+        "and B=8 +/- 2; independent errors.",
         "Compute the difference; do not use A=10 +/- 1, and "
         "B=8 +/- 2; independent errors.",
         "Compute the difference A=10 +/- 1 and B=8 +/- 2; "
@@ -346,6 +348,7 @@ def test_counterfactual_correlation_does_not_replace_the_primary_model(
     "rejection",
     [
         "should not be used",
+        "is not to be used",
         "is not applicable",
     ],
 )
@@ -416,6 +419,7 @@ def test_postposed_heavy_negation_stays_on_deterministic_route() -> None:
     for disclaimer in (
         "A fit is not required.",
         "Fitting should not be performed.",
+        "A fit is not to be performed.",
         "A likelihood calculation is not required.",
     ):
         decision = classify_task_kind(

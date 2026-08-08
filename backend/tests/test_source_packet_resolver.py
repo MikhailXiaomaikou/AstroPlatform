@@ -1248,6 +1248,7 @@ def test_postposed_measurement_disclaimer_must_not_verify_exact() -> None:
         "alpha = 10 +/- 1 is not supported by the data.",
         "alpha = 10 +/- 1 isn't supported by the data.",
         "alpha = 10 +/- 1 cannot be used as a measurement.",
+        "alpha = 10 +/- 1 is not to be used as a measurement.",
     ):
         status, _detail = match_expected_claims(
             {"tables": [], "text": text}, claims, locator=""
@@ -1294,6 +1295,13 @@ def test_source_unit_must_match_for_exact_verification() -> None:
         locator="",
     )
     assert dimensionless_conflict != "verified_exact"
+
+    unknown_dimensionless_conflict, _detail = match_expected_claims(
+        {"tables": [], "text": "alpha = 10 +/- 1 eV."},
+        [dimensionless],
+        locator="",
+    )
+    assert unknown_dimensionless_conflict != "verified_exact"
 
     h0_claim = dict(
         claim,

@@ -36,7 +36,7 @@ need entries unless they change user-visible behavior or research validity.
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Twenty-nine adversarial review rounds tightened heavy-chain routing, number and
+- Thirty adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
   scale-relative covariance validation, negation-aware independence parsing,
@@ -73,6 +73,10 @@ need entries unless they change user-visible behavior or research validity.
   Proposition-level rejection before a measurement label is now part of the
   assignment scope, while later section/equation/citation numbers count as
   conflicts only when the surrounding syntax actually assigns a measurement.
+  Dimensionless exact claims now reject a trailing physical-unit token even
+  outside the original distance-unit vocabulary, and infinitival disclaimers
+  such as `is not to be used` now fail closed across scalar quantities,
+  source measurements, correlations, and postposed heavy-intent phrases.
 
 ### P0 production and local-automation hardening (2026-07-13)
 

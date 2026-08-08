@@ -1185,12 +1185,12 @@ _POSTPOSED_MEASUREMENT_DISCLAIMER = re.compile(
     r"\b(?:is|are|was|were|has|have|had|should|must|can|could|may|might|"
     r"will|would)\s+"
     r"(?:(?:explicitly|directly|clearly|statistically|currently)\s+){0,2}"
-    r"(?:not(?!\s+only)|never)\s+(?:(?:be|have\s+been)\s+)?"
+    r"(?:not(?!\s+only)|never)\s+(?:(?:to\s+be|be|have\s+been)\s+)?"
     r"(?:measured|reported|supported|used|included|adopted|accepted|"
     r"validated|trusted|established|confirmed)\b|"
     r"\b(?:(?:is|are|was|were|has|have|had|should|must|can|could|may|"
     r"might|will|would)n['’]t|cannot)\s+"
-    r"(?:(?:be|have\s+been)\s+)?"
+    r"(?:(?:to\s+be|be|have\s+been)\s+)?"
     r"(?:measured|reported|supported|used|included|adopted|accepted|"
     r"validated|trusted|established|confirmed)\b|"
     r"\b(?:is|are|was|were)\s+"
@@ -1235,6 +1235,20 @@ _SOURCE_DISTANCE_UNIT = re.compile(
     r"(?<![a-z0-9])(?P<base>gpc|mpc|kpc|pc)"
     r"(?P<inverse>\s*(?:\^?\s*\{?\s*[-−]\s*1\s*\}?|⁻¹))?"
     r"(?![a-z0-9])",
+    re.I,
+)
+_SOURCE_PHYSICAL_UNIT_PREFIX = re.compile(
+    r"^\s*(?:%|°|(?:"
+    r"mas|arcmin|arcsec|deg|"
+    r"gpc|mpc|kpc|pc|au|"
+    r"tev|gev|mev|kev|ev|"
+    r"thz|ghz|mhz|khz|hz|"
+    r"gyr|myr|yr|days?|"
+    r"m_sun|l_sun|"
+    r"erg(?:/s)?(?:/cm\^?2)?|"
+    r"μjy|ujy|mjy|jy|"
+    r"å|μm|um|nm|mm|cm|km|kg|mag|dex|k|m|g|s"
+    r")(?![a-z0-9_]))",
     re.I,
 )
 
@@ -1289,14 +1303,18 @@ def _source_units(field: str) -> set[str]:
     return units
 
 
-def _measurement_unit_matches(claim_unit: Any, field: str) -> bool:
+def _measurement_unit_matches(
+    claim_unit: Any, field: str, measurement_suffix: str
+) -> bool:
     """Require a claim's unit to agree with its bounded source field."""
     from app.services.scalar_derivation import normalize_unit
 
     expected = normalize_unit(claim_unit)
     detected = _source_units(field)
     if expected == "dimensionless":
-        return not detected
+        return not detected and _SOURCE_PHYSICAL_UNIT_PREFIX.match(
+            measurement_suffix
+        ) is None
     if detected:
         return detected == {expected}
     # Unknown units are accepted only as their own complete literal token;
@@ -1432,7 +1450,9 @@ def _values_follow_label_order(
             # normalized source unit inside this exact label/value field; an
             # implicit dimensionless claim fails if a physical unit is shown.
             if not _measurement_unit_matches(
-                claim.get("unit"), window[label_position:field_limit]
+                claim.get("unit"),
+                window[label_position:field_limit],
+                window[measurement_end:field_limit],
             ):
                 continue
             return measurement_end
