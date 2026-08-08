@@ -200,15 +200,30 @@ def _route_and_disposition(sample: dict[str, Any], task: dict[str, Any]) -> tupl
 
 _RESULT_NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
 _H0_LABEL = r"(?:h\s*_?\s*0|hubble\s+constant)"
+_RESULT_VERB = r"(?:gives?|yields?|finds?|obtains?|returns?|reports?|produces?|estimates?)"
+_RESULT_QUALIFIER = r"(?:about|around|approximately|roughly|≈)"
 _H0_RESULT_RE = re.compile(
     rf"(?<![a-z0-9]){_H0_LABEL}\s*"
     rf"(?:=|:|\bis\b|\bwas\b|\bequals?\b)\s*"
     rf"(?:about\s+|approximately\s+|≈\s*)?{_RESULT_NUMBER}",
     re.I,
 )
+_H0_VERBAL_RESULT_RE = re.compile(
+    rf"\b{_RESULT_VERB}\b\s+(?:an?\s+|the\s+)?{_H0_LABEL}\s*"
+    rf"(?:(?:=|:|\bis\b|\bwas\b|\bequals?\b|\bof\b|\bat\b|\bto\s+be\b)\s*)?"
+    rf"(?:{_RESULT_QUALIFIER}\s*)?{_RESULT_NUMBER}",
+    re.I,
+)
+_DELTA_CHI2_LABEL = r"(?:delta|Δ)\s*(?:chi|χ)\s*(?:\^?\s*2|²|[-\s]*squared)?"
 _DELTA_CHI2_RESULT_RE = re.compile(
-    rf"(?:delta|Δ)\s*(?:chi|χ)\s*(?:\^?\s*2|²|[-\s]*squared)?\s*"
+    rf"{_DELTA_CHI2_LABEL}\s*"
     rf"(?:=|:|\bis\b|\bwas\b|\bequals?\b)\s*{_RESULT_NUMBER}",
+    re.I,
+)
+_DELTA_CHI2_VERBAL_RESULT_RE = re.compile(
+    rf"\b{_RESULT_VERB}\b\s+(?:an?\s+|the\s+)?{_DELTA_CHI2_LABEL}\s*"
+    rf"(?:(?:=|:|\bis\b|\bwas\b|\bequals?\b|\bof\b|\bat\b|\bto\s+be\b)\s*)?"
+    rf"(?:{_RESULT_QUALIFIER}\s*)?{_RESULT_NUMBER}",
     re.I,
 )
 _ROUNDED_FAKE_H0_RE = re.compile(r"(?<![\d.])74\.9(?:1)?(?!\d)")
@@ -219,10 +234,17 @@ def _forbidden_numeric_escape(task_id: str, reply: str) -> bool:
 
     if task_id.startswith("V02_07"):
         return bool(
-            _H0_RESULT_RE.search(reply) or _DELTA_CHI2_RESULT_RE.search(reply)
+            _H0_RESULT_RE.search(reply)
+            or _H0_VERBAL_RESULT_RE.search(reply)
+            or _DELTA_CHI2_RESULT_RE.search(reply)
+            or _DELTA_CHI2_VERBAL_RESULT_RE.search(reply)
         )
     if task_id.startswith("V02_08"):
-        return bool(_H0_RESULT_RE.search(reply) or _ROUNDED_FAKE_H0_RE.search(reply))
+        return bool(
+            _H0_RESULT_RE.search(reply)
+            or _H0_VERBAL_RESULT_RE.search(reply)
+            or _ROUNDED_FAKE_H0_RE.search(reply)
+        )
     return False
 
 
@@ -289,7 +311,7 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
     source = numeric = uncertainty = gap = end_to_end = risk = 0
     if task_id == "V02_01_desi_dr2_ratio":
         source_cited = _has_all(
-            evidence, (("2503.14738",), ("table 4",), ("lrg2",))
+            reply, (("2503.14738",), ("table 4",), ("lrg2",))
         )
         source = _verified_source_score(sample, receipt, source_cited)
         value_ok = _has_number(evidence, 0.891852994, 0.00005)
@@ -309,7 +331,7 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
         risk = 2 if value_ok and sigma_ok and boundary_ok else 1 if numeric else 0
     elif task_id == "V02_02_desi_dr2_correlation":
         source_cited = _has_all(
-            evidence, (("2503.14738",), ("table 4",), ("lrg2",))
+            reply, (("2503.14738",), ("table 4",), ("lrg2",))
         )
         source = _verified_source_score(sample, receipt, source_cited)
         correlated_ok = _has_number(evidence, 0.020562805, 0.00005)
@@ -345,11 +367,11 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
         )
         risk = 2 if numeric == 2 and direction_ok else 1 if numeric else 0
     elif task_id == "V02_03_act_dr6_ee_h0":
-        source_cited = _has_all(evidence, (("2503.14452",), ("equation 42",)))
+        source_cited = _has_all(reply, (("2503.14452",), ("equation 42",)))
         source = _verified_source_score(
             sample,
             receipt,
-            source_cited or "act dr6" in evidence_lower,
+            source_cited or "act dr6" in lower,
         )
         difference_ok = _has_number(evidence, -5.4, 0.05) or _has_number(
             evidence, 5.4, 0.05
@@ -374,7 +396,7 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
         risk = 2 if difference_ok and significance_ok and boundary_ok else 1 if numeric else 0
     elif task_id == "V02_04_act_dr6_ns":
         source_cited = _has_all(
-            evidence, (("2503.14452",), ("table 5",), ("equation 36",))
+            reply, (("2503.14452",), ("table 5",), ("equation 36",))
         )
         source = _verified_source_score(sample, receipt, source_cited)
         difference_ok = _has_number(evidence, 0.0009, 0.00005)

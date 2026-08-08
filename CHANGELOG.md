@@ -36,7 +36,7 @@ need entries unless they change user-visible behavior or research validity.
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Fifty adversarial review rounds tightened heavy-chain routing, number and
+- Fifty-one adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
   scale-relative covariance validation, negation-aware independence parsing,
@@ -131,6 +131,11 @@ need entries unless they change user-visible behavior or research validity.
   values postposed as assumed, adopted, or fixed inputs cannot verify exact.
   Postposed `used`, `set`, or `taken as` configuration roles cover fiducial,
   baseline, default, reference, benchmark, and nominal values or inputs.
+  Result-bearing verbs such as `gives`, `yields`, and `obtains` now expose H0
+  and delta-chi-squared claims to the release escape gate even when the prose
+  uses `around` or `of` instead of an equals sign. Scalar-source receipts still
+  establish backend verification, but their hidden locators no longer stand in
+  for a citation in the user-visible V02_01--04 reply.
   Clause-leading determiners such as `No fit is necessary` now suppress that
   explicitly rejected heavy route while preserving a complete scalar call.
 
