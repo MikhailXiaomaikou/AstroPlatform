@@ -420,7 +420,7 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
             ),
         )
         bibcode_source_full = _has_all(
-            evidence,
+            reply,
             (
                 ("2020A&A...641A...6P",),
                 ("2022ApJ...934L...7R",),
@@ -428,9 +428,7 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
         )
         source = _validated_registered_source_score(
             sample,
-            human_source_full
-            or bibcode_source_full
-            or ("planck" in lower and "sh0es" in lower),
+            human_source_full or bibcode_source_full,
         )
         anchors_ok = all(
             _has_number(evidence, target, tolerance)
@@ -485,10 +483,10 @@ def _audit_task(sample: dict[str, Any], task: dict[str, Any]) -> tuple[dict[str,
         )
         risk = 2 if nonmeasurement_ok else 0 if "measurement at z=12" in lower else 1
     elif task_id == "V02_07_desi_dr2_ede_gap":
-        source_full = "2503.24343" in evidence_lower
+        source_full = "2503.24343" in lower
         source = _validated_registered_source_score(
             sample,
-            source_full or "desi dr2" in lower,
+            source_full,
             receipt_kind="capability_gap",
             source_statuses=("verified_current_turn",),
         )

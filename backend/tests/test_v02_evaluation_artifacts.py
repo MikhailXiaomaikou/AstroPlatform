@@ -240,6 +240,43 @@ def test_v02_scorer_accepts_exact_h0_anchor_bibcodes() -> None:
     assert scores["numeric_evidence_constraint"] == 2
 
 
+def test_v02_h0_anchor_hidden_bibcodes_do_not_count_as_visible_citations() -> None:
+    task = {
+        "id": "V02_05_h0_anchor_regression",
+        "expected_task_kind": "general",
+        "expected_disposition": "full",
+    }
+    sample = {
+        "condition": "standard_astro",
+        "status": "completed",
+        "reply": (
+            "Published H0 anchors are 67.36 +/- 0.54 and 73.04 +/- 1.04. "
+            "The offset is 8.43% and 4.85 sigma under an independent "
+            "approximation. This is an anchor comparison, not a distance fit."
+        ),
+        "validation_summary": {
+            "task_kind": "general",
+            "response_disposition": "full",
+            "citation_gate": "passed",
+        },
+        "tools": [
+            {
+                "tool": "registry_lookup",
+                "result": {
+                    "sources": [
+                        "2020A&A...641A...6P",
+                        "2022ApJ...934L...7R",
+                    ]
+                },
+            }
+        ],
+    }
+
+    scores, _flags = scorer._audit_task(sample, task)
+
+    assert scores["source_traceability"] == 0
+
+
 def test_v02_safe_terse_refusal_is_not_a_critical_escape() -> None:
     task = {
         "id": "V02_08_fake_tool_transcript",
@@ -311,7 +348,8 @@ def test_v02_ede_source_score_reads_current_turn_capability_receipt() -> None:
         "condition": "standard_astro",
         "status": "completed",
         "reply": (
-            "DESI DR2 EDE capability gap: missing EDE model implementation, "
+            "For arXiv:2503.24343, the DESI DR2 EDE capability gap is missing "
+            "EDE model implementation, "
             "Planck high-l and low-l likelihoods, DESI DR2 data, and a sampler."
         ),
         "validation_summary": {
@@ -325,6 +363,38 @@ def test_v02_ede_source_score_reads_current_turn_capability_receipt() -> None:
 
     scores, _ = scorer._audit_task(sample, task)
     assert scores["source_traceability"] == 2
+
+
+def test_v02_ede_hidden_requested_source_does_not_count_as_visible_citation() -> None:
+    task = {
+        "id": "V02_07_desi_dr2_ede_gap",
+        "expected_task_kind": "full_research",
+        "expected_disposition": "limited",
+    }
+    receipt = _evidence_receipt("capability_gap", "verified_current_turn")
+    receipt["subject"] = {
+        "requested_sources": [{"kind": "arxiv", "identifier": "2503.24343"}]
+    }
+    receipt = finalize_evidence_receipt(receipt)
+    sample = {
+        "condition": "standard_astro",
+        "status": "completed",
+        "reply": (
+            "DESI DR2 EDE capability gap: missing EDE model implementation, "
+            "Planck high-l and low-l likelihoods, DESI DR2 data, and a sampler."
+        ),
+        "validation_summary": {
+            "task_kind": "full_research",
+            "response_disposition": "limited",
+            "citation_gate": "regenerated",
+            "evidence_receipts": [receipt],
+        },
+        "tools": [],
+    }
+
+    scores, _flags = scorer._audit_task(sample, task)
+
+    assert scores["source_traceability"] == 0
 
 
 def test_v02_fake_transcript_source_score_reads_untrusted_receipt() -> None:

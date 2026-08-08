@@ -36,7 +36,7 @@ need entries unless they change user-visible behavior or research validity.
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Fifty-five adversarial review rounds tightened heavy-chain routing, number and
+- Fifty-six adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
   scale-relative covariance validation, negation-aware independence parsing,
@@ -154,6 +154,9 @@ need entries unless they change user-visible behavior or research validity.
   Transitive `hold`/`keep` forms and postposed `held`/`kept fixed` predicates now
   likewise classify locked fit parameters as configuration rather than exact
   source measurements.
+  V02_05 and V02_07 source credit now requires exact attribution in the
+  user-visible reply; hidden tool payloads, prompt echoes, and capability-gap
+  receipts may validate that citation but cannot substitute for it.
 
 ### P0 production and local-automation hardening (2026-07-13)
 
