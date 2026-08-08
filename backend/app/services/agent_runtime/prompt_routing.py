@@ -116,6 +116,8 @@ _POSTPOSED_HEAVY_NEGATION = re.compile(
     r"(?:(?:does|do|did)\s+(?:not|never)|(?:does|do|did)n['’]t)\s+"
     r"need\s+to\s+be\s+"
     r"(?:required|performed|run|executed|used|done)|"
+    r"need\s+not\s+be\s+"
+    r"(?:required|performed|run|executed|used|done|necessary)|"
     r"(?:is|are|was|were)\s+(?:unnecessary|unneeded)"
     r")\b",
     re.I,

@@ -36,7 +36,7 @@ need entries unless they change user-visible behavior or research validity.
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Thirty-nine adversarial review rounds tightened heavy-chain routing, number and
+- Forty adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
   scale-relative covariance validation, negation-aware independence parsing,
@@ -102,6 +102,9 @@ need entries unless they change user-visible behavior or research validity.
   Insufficient or inadequate evidence/support language now fails closed in the
   same proposition scope, and non-finite derived arithmetic is rejected with an
   actionable `non_finite_result` abstention before receipt construction.
+  Modal disclaimers such as `a fit need not be performed` now keep complete
+  scalar requests on the lightweight route, and `not enough evidence` source
+  propositions cannot earn exact attribution.
 
 ### P0 production and local-automation hardening (2026-07-13)
 
