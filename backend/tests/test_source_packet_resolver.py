@@ -529,6 +529,7 @@ def test_perfect_aspect_measurement_syntax_verifies_exact() -> None:
         "For the mock catalogue, alpha = 10 +/- 1.",
         "In the simulated data, alpha = 10 +/- 1.",
         "Our fiducial value is alpha = 10 +/- 1.",
+        "For the fiducial cosmology, alpha = 10 +/- 1.",
         "For illustration, alpha = 10 +/- 1.",
     ],
 )

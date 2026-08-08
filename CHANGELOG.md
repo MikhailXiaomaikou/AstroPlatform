@@ -36,7 +36,7 @@ need entries unless they change user-visible behavior or research validity.
   is reported as a pipeline self-check, not model behavior; the post-fix
   natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
   independent expert review.
-- Forty-two adversarial review rounds tightened heavy-chain routing, number and
+- Forty-three adversarial review rounds tightened heavy-chain routing, number and
   uncertainty binding, compound table/row locators, multi-paper ambiguity,
   cache identity, operation/source/unit echo guards, singular weighted means,
   scale-relative covariance validation, negation-aware independence parsing,
@@ -110,7 +110,8 @@ need entries unless they change user-visible behavior or research validity.
   valid positive measurement form. Mock, simulated, synthetic, fiducial, and
   illustrative assignments are now excluded from exact observational
   attribution without hiding a real observed measurement mentioned in a
-  comparison against those configurations.
+  comparison against those configurations. Common configuration nouns such as
+  fiducial cosmology, configuration, and setup are covered by the same guard.
 
 ### P0 production and local-automation hardening (2026-07-13)
 
