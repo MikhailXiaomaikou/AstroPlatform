@@ -68,6 +68,18 @@ storage. See the [detailed quick start](./docs/QUICKSTART.md).
 - **Claim Audit with signed Evidence Packs** — a real local run produces a
   verifiable evidence bundle (see the demo above).
 
+Measured evidence, model-in-loop (2026-08-06 campaign; five models, natural
+researcher phrasings, n=60 post-fix): in-platform score 90.4% versus 46.6%
+for the same models bare; a pasted fake "tool result" number was repeated
+0/15 times in-platform (rule-of-three upper bound < 20%) versus 15/15 bare;
+false blocks of clean answers 1/60. An earlier 1440/1440 headline was
+retracted because that pipeline self-check never had the model in the loop —
+the honest framing above is the one this project reports. These are
+pre-merge snapshot numbers; the standing gate is a fresh rerun on the
+current revision before any Alpha v0.2 claim. Full record:
+[campaign report](./docs/research/STANDARD_ASTRO_V02_CAMPAIGN_REPORT_2026-08-06.zh-CN.md)
+(Chinese).
+
 ## What it does not do yet
 
 - The strict DESI w0waCDM v1 reproduction remains `WITHHELD`: its chains and
