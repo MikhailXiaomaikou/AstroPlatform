@@ -1411,6 +1411,14 @@ def _measurement_assignment_is_non_exact(
     comma_segments = re.split(r"[,，]", governing_text)
     if len(comma_segments) >= 3:
         governing_text = " ".join(comma_segments[::2])
+    # Codex review P1 (PR #46, closing round) claimed passive configuration
+    # predicates in governing_text ("alpha was fixed/set/assumed to 10 +/- 1")
+    # could reach verified_exact because this check only handles negation,
+    # hypotheticals, and inequalities. Refuted empirically: the surrounding
+    # bridge/uncertainty pairing already resolves every such phrasing as
+    # non-exact (observed status "conflict"), pinned by the passive cases in
+    # test_configuration_assignments_must_not_verify_exact and the
+    # measurement-side counterpart test_passive_measurement_predicates_stay_exact.
     return _NON_EXACT_MEASUREMENT_ASSIGNMENT.search(governing_text) is not None
 
 

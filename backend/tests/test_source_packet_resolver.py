@@ -561,6 +561,16 @@ def test_perfect_aspect_measurement_syntax_verifies_exact() -> None:
         "alpha = 10 +/- 1 was kept fixed in the analysis.",
         "alpha = 10 +/- 1 was kept constant throughout the analysis.",
         "alpha = 10 +/- 1 remained constant throughout the analysis.",
+        "alpha was fixed to 10 +/- 1.",
+        "alpha was set to 10 +/- 1.",
+        "alpha was assumed to be 10 +/- 1.",
+        "alpha is fixed at 10 +/- 1.",
+        "alpha has been set to 10 +/- 1.",
+        "alpha was held fixed at 10 +/- 1.",
+        "alpha was kept constant at 10 +/- 1.",
+        "alpha was taken to be 10 +/- 1.",
+        "alpha was chosen to be 10 +/- 1.",
+        "alpha is adopted as 10 +/- 1.",
         "We set alpha = 10 +/- 1.",
         "We fix alpha = 10 +/- 1 for the analysis.",
         "We adopt alpha = 10 +/- 1.",
@@ -657,6 +667,32 @@ def test_physical_unit_measurement_without_configuration_stays_exact() -> None:
     )
 
     assert status == "verified_exact"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "alpha was measured to be 10 +/- 1.",
+        "alpha was found to be 10 +/- 1.",
+        "alpha was estimated at 10 +/- 1.",
+    ],
+)
+def test_passive_measurement_predicates_stay_exact(text: str) -> None:
+    claims = [
+        {
+            "id": "alpha",
+            "label": "alpha",
+            "value": 10.0,
+            "standard_uncertainty": 1.0,
+            "unit": "dimensionless",
+        }
+    ]
+
+    status, _detail = match_expected_claims(
+        {"tables": [], "text": text}, claims, locator=""
+    )
+
+    assert status == "verified_exact", text
 
 
 def test_configuration_context_preserves_explicit_measurement() -> None:
