@@ -1225,6 +1225,11 @@ _POSTPOSED_CONFIGURATION_ASSIGNMENT = re.compile(
     r"(?:(?:an?|the)\s+)?(?:model\s+)?"
     r"(?:input|configuration|setup|parameter))?|"
     r"(?:held|kept|remained)\s+(?:fixed|constant)|"
+    # Codex review P1 (PR #46, round 67): direct copular fixed/constant
+    # ("alpha = 10 +/- 1 is fixed during the analysis") is configuration,
+    # not measurement — bare `fixed`/`constant` must close verification
+    # without requiring `as` or a held/kept/remained prefix.
+    r"(?:fixed|constant)\b|"
     r"(?:fixed|used|set|taken|chosen|selected|imposed)\s+as\s+"
     r"(?:(?:an?|the)\s+)?"
     r"(?:(?:fiducial|baseline|default|reference|benchmark|nominal)\s+)?"

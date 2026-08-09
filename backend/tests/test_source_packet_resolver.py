@@ -561,6 +561,10 @@ def test_perfect_aspect_measurement_syntax_verifies_exact() -> None:
         "alpha = 10 +/- 1 was kept fixed in the analysis.",
         "alpha = 10 +/- 1 was kept constant throughout the analysis.",
         "alpha = 10 +/- 1 remained constant throughout the analysis.",
+        "alpha = 10 +/- 1 is fixed during the analysis.",
+        "alpha = 10 +/- 1 was fixed in the fit.",
+        "alpha = 10 +/- 1 is constant in all runs.",
+        "alpha = 10 +/- 1 has been fixed throughout.",
         "alpha was fixed to 10 +/- 1.",
         "alpha was set to 10 +/- 1.",
         "alpha was assumed to be 10 +/- 1.",
@@ -624,6 +628,7 @@ def test_configuration_assignments_must_not_verify_exact(text: str) -> None:
         "H0 = 70 +/- 2 km/s/Mpc was assumed as an input.",
         "H0 = 70 +/- 2 km/s/Mpc is held fixed in the analysis.",
         "H0 = 70 +/- 2 km/s/Mpc is the fiducial value.",
+        "H0 = 70 +/- 2 km/s/Mpc is fixed in the analysis.",
     ],
 )
 def test_postposed_configuration_after_physical_unit_is_not_exact(
@@ -675,6 +680,7 @@ def test_physical_unit_measurement_without_configuration_stays_exact() -> None:
         "alpha was measured to be 10 +/- 1.",
         "alpha was found to be 10 +/- 1.",
         "alpha was estimated at 10 +/- 1.",
+        "alpha = 10 +/- 1 was measured in our survey.",
     ],
 )
 def test_passive_measurement_predicates_stay_exact(text: str) -> None:
