@@ -2403,6 +2403,19 @@ async def _run_orchestrated_chat(
         ),
         None,
     )
+    # Codex review P2 (PR #46, round 67): a merged reply whose every
+    # specialist refused or abstained is not a "limited" answer — there is
+    # no partial answer to limit, and the carried evidence receipts still
+    # say refusal. Propagate the strongest declined disposition so the
+    # badge matches the receipts; mixed merges (some member answered)
+    # stay "limited" — understate rather than overstate.
+    _member_dispositions = [
+        str(s.get("response_disposition") or "full")
+        for s in _member_summaries
+    ]
+    _all_members_declined = bool(_member_dispositions) and all(
+        d in ("refusal", "abstention") for d in _member_dispositions
+    )
     merged_validation_summary: dict = {
         "schema_version": 2,
         "numeric_gate": _merged_numeric_state,
@@ -2415,7 +2428,13 @@ async def _run_orchestrated_chat(
         "response_disposition": (
             "hard_block"
             if _merged_blocked
-            else "limited" if merged_limited else "full"
+            else "refusal"
+            if _all_members_declined and "refusal" in _member_dispositions
+            else "abstention"
+            if _all_members_declined
+            else "limited"
+            if merged_limited
+            else "full"
         ),
         "task_kind": _merged_task_kind,
         "earliest_limiting_stage": (
