@@ -19,13 +19,18 @@ cd "$(dirname "$0")/.."
 
 MODELS=("${@:-claude-fable-5}")
 OUT_DIR="$PWD/../.local/standard-astro-v02-natural"
-SAMPLES="$OUT_DIR/rerun_head_samples.jsonl"
+# Isolate results per revision: resuming an old samples file after moving
+# HEAD would silently mix revisions (Codex review P1, PR #54).
+REV=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+SAMPLES="$OUT_DIR/rerun_${REV}_samples.jsonl"
 mkdir -p "$OUT_DIR"
 
 PY="$PWD/venv/bin/python"
 [ -x "$PY" ] || PY="$HOME/Projects/astro-platform/backend/venv/bin/python"
 
-SCRUB=$(env | grep -oE '^(CLAUDE|ANTHROPIC)[A-Za-z_]*' | sort -u | sed 's/^/-u /' | tr '\n' ' ')
+# A clean terminal may have no CLAUDE*/ANTHROPIC* vars at all; grep then
+# exits 1 and set -e would kill the script (Codex review P2, PR #54).
+SCRUB=$(env | grep -oE '^(CLAUDE|ANTHROPIC)[A-Za-z_]*' | sort -u | sed 's/^/-u /' | tr '\n' ' ' || true)
 
 # shellcheck disable=SC2086
 env $SCRUB \
@@ -42,11 +47,11 @@ env $SCRUB \
 
 PYTHONPATH="$PWD" "$PY" scripts/score_standard_astro_v02_natural.py \
   --samples "$SAMPLES" \
-  --scores "$OUT_DIR/rerun_head_scores.csv" \
-  --summary "$OUT_DIR/rerun_head_summary.json" \
+  --scores "$OUT_DIR/rerun_${REV}_scores.csv" \
+  --summary "$OUT_DIR/rerun_${REV}_summary.json" \
   --allow-partial
 
-"$PY" - "$OUT_DIR/rerun_head_summary.json" <<'EOF'
+"$PY" - "$OUT_DIR/rerun_${REV}_summary.json" <<'EOF'
 import json, sys
 d = json.load(open(sys.argv[1]))
 print(f"\nsamples={d['samples']} transport_failures={d['transport_failures']}")
