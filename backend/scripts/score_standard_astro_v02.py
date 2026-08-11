@@ -54,15 +54,26 @@ def _read_tasks(path: Path) -> dict[str, dict[str, Any]]:
 
 
 def _read_samples(path: Path) -> list[dict[str, Any]]:
-    samples = [
+    raw = [
         json.loads(line)
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    keys = [str(sample.get("sample_key") or "") for sample in samples]
-    if not all(keys) or len(keys) != len(set(keys)):
-        raise ValueError("Sample keys must be unique and non-empty.")
-    return samples
+    # Codex review P2 (PR #54): resume retries samples whose earlier rows
+    # were recorded status="failed", so a key may appear once per failed
+    # attempt plus at most one non-failed row. Score the last row per key
+    # (the retry supersedes its failures); any other duplication is still
+    # an invariant violation.
+    by_key: dict[str, dict[str, Any]] = {}
+    for sample in raw:
+        key = str(sample.get("sample_key") or "")
+        if not key:
+            raise ValueError("Sample keys must be unique and non-empty.")
+        previous = by_key.get(key)
+        if previous is not None and str(previous.get("status") or "") != "failed":
+            raise ValueError("Sample keys must be unique and non-empty.")
+        by_key[key] = sample
+    return list(by_key.values())
 
 
 def _numbers(text: str) -> list[float]:

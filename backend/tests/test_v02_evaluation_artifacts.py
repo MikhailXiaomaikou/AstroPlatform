@@ -1037,3 +1037,44 @@ def test_shard_merger_rejects_duplicate_sample_keys(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="Duplicate sample key"):
         merger._read([first, second])
+
+
+def test_completed_keys_retries_failed_rows(tmp_path: Path) -> None:
+    # Codex review P2 (PR #54): rows recorded status="failed" must not mark
+    # a sample complete — resume retries them, and the scorer takes the
+    # superseding retry row instead of raising on the duplicate key.
+    samples = tmp_path / "samples.jsonl"
+    rows = [
+        {"sample_key": "a", "status": "failed"},
+        {"sample_key": "a", "status": "completed"},
+        {"sample_key": "b", "status": "failed"},
+        {"sample_key": "c", "status": "completed"},
+    ]
+    samples.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    assert evaluator._completed_keys(samples) == {"a", "c"}
+
+    read = scorer._read_samples(samples)
+    assert sorted(r["sample_key"] for r in read) == ["a", "b", "c"]
+    by_key = {r["sample_key"]: r["status"] for r in read}
+    assert by_key["a"] == "completed"
+
+
+def test_completed_keys_duplicate_after_success_still_raises(
+    tmp_path: Path,
+) -> None:
+    samples = tmp_path / "samples.jsonl"
+    rows = [
+        {"sample_key": "a", "status": "completed"},
+        {"sample_key": "a", "status": "completed"},
+    ]
+    samples.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError):
+        evaluator._completed_keys(samples)
+    with pytest.raises(ValueError):
+        scorer._read_samples(samples)

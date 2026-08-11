@@ -152,6 +152,12 @@ def _completed_keys(path: Path) -> set[str]:
         key = str(sample.get("sample_key") or "")
         if not key or key in keys:
             raise ValueError(f"Missing or duplicate sample key at line {line_number}.")
+        # Codex review P2 (PR #54): rows recorded status="failed" (bridge
+        # exceptions) must not mark a sample complete — resume retries
+        # them. A key may recur only while every earlier row for it
+        # failed; a duplicate after a completed row still raises above.
+        if str(sample.get("status") or "") == "failed":
+            continue
         keys.add(key)
     return keys
 
