@@ -716,22 +716,29 @@ app.include_router(team_router)
 app.include_router(viz_router)
 app.include_router(ws_router)
 
-# 2026-08-09 surface audit: these routers have no frontend page, no
-# chat-tool HTTP path, and no worker HTTP caller (chat tools and celery
-# beat dispatch in-process). Unmounted by default to shrink the audited
+# Live callers verified 2026-08-11 (Codex review P1, PR #54): chat result
+# cards fetch /api/provenance lineage/exports (ProvenanceLink.tsx),
+# authenticated chat sessions load /api/user-tools (useUserTools.ts), and
+# the served admin dashboard reads /api/admin/inference/stats
+# (static/astro_admin.html) — these stay unconditionally mounted.
+app.include_router(provenance_router)
+app.include_router(user_tools_router)
+app.include_router(inference_router)
+
+# 2026-08-11 re-verified surface audit (frontend/src + backend static +
+# desktop swept): these seven routers have no frontend page, no chat-tool
+# HTTP path, and no worker HTTP caller (chat tools and celery beat
+# dispatch in-process). Unmounted by default to shrink the audited
 # surface; implementations and tests remain in the tree and remount via
 # ZERO_CALLER_ROUTERS_ENABLED=1.
 if settings.zero_caller_routers_enabled:
     app.include_router(citation_graph_router)
     app.include_router(crossmatch_router)
-    app.include_router(inference_router)
     app.include_router(integration_router)
     app.include_router(isochrones_router)
     app.include_router(pipeline_router)
     app.include_router(scheduler_router)
-    app.include_router(user_tools_router)
     app.include_router(workspace_router)
-    app.include_router(provenance_router)
 
 
 @app.get("/health")

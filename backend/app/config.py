@@ -227,10 +227,12 @@ class Settings(BaseSettings):
     # disabled the historical routing and tool surface remain byte-for-byte
     # compatible for callers that do not opt in.
     lightweight_verification_enabled: bool = False
-    # 2026-08-09 surface audit: ten HTTP routers have no frontend page, no
-    # chat-tool HTTP path, and no worker HTTP caller (chat tools and celery
-    # beat dispatch in-process). They stay unmounted by default to shrink
-    # the audited surface; implementations and tests remain in the tree.
+    # 2026-08-11 re-verified surface audit: seven HTTP routers have no
+    # frontend page, no chat-tool HTTP path, and no worker HTTP caller
+    # (chat tools and celery beat dispatch in-process). They stay
+    # unmounted by default to shrink the audited surface; implementations
+    # and tests remain in the tree. provenance, user-tools, and
+    # admin-inference have live callers and stay mounted (PR #54 review).
     zero_caller_routers_enabled: bool = False
     local_science_worker_enabled: bool = False
     workflow_registry_v2_enabled: bool = False

@@ -25,6 +25,11 @@ GATED_PREFIXES = (
     "/api/literature/citation-graph",
     "/api/integration",
     "/api/workspace",
+)
+
+# Live callers verified 2026-08-11 (Codex review P1, PR #54): these must
+# stay mounted regardless of the flag.
+ALWAYS_MOUNTED_PREFIXES = (
     "/api/provenance",
     "/api/user-tools",
     "/api/admin/inference",
@@ -71,6 +76,10 @@ def test_default_app_does_not_mount_zero_caller_routers():
     assert probe["flag"] is False
     mounted = [p for p in probe["routes"] if p.startswith(GATED_PREFIXES)]
     assert mounted == []
+    for prefix in ALWAYS_MOUNTED_PREFIXES:
+        assert any(
+            p.startswith(prefix) for p in probe["routes"]
+        ), f"{prefix} has live callers and must stay mounted by default"
 
 
 def test_flag_remounts_zero_caller_routers():
