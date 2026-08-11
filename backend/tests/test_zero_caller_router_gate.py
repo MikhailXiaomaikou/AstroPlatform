@@ -38,13 +38,17 @@ def _probe(flag_value: str | None) -> dict:
         set_line = (
             f"os.environ['ZERO_CALLER_ROUTERS_ENABLED'] = {flag_value!r}\n"
         )
+    # Enumerate via app.openapi(): FastAPI >= 0.139 stores included routers
+    # as lazy _IncludedRouter wrappers without a .path, so walking
+    # app.routes undercounts on newer versions while the OpenAPI paths map
+    # is version-agnostic.
     prelude = (
         "import os, json\n"
         + set_line
         + "from app.config import settings\n"
         "from app.main import app\n"
         "print(json.dumps({'flag': bool(settings.zero_caller_routers_enabled),"
-        " 'routes': sorted({getattr(r, 'path', '') for r in app.routes})}))\n"
+        " 'routes': sorted(app.openapi()['paths'].keys())}))\n"
     )
     env = {
         k: v
