@@ -4,6 +4,11 @@
 chat-tool HTTP path, and no worker HTTP caller. Production defaults keep
 them unmounted; the test process remounts them via conftest so their
 implementations stay exercised.
+
+The probe sets the flag inside the subprocess itself (not via inherited
+environment) so the test is independent of how the CI runner propagates
+env vars, and it echoes the parsed settings value so a failure names the
+broken stage (env parsing vs mounting).
 """
 
 import json
@@ -25,38 +30,49 @@ GATED_PREFIXES = (
     "/api/admin/inference",
 )
 
-_DUMP_ROUTES = (
-    "import json; from app.main import app; "
-    "print(json.dumps(sorted({getattr(r, 'path', '') for r in app.routes})))"
-)
 
-
-def _routes_with_env(value: str | None) -> list[str]:
+def _probe(flag_value: str | None) -> dict:
+    if flag_value is None:
+        set_line = "os.environ.pop('ZERO_CALLER_ROUTERS_ENABLED', None)\n"
+    else:
+        set_line = (
+            f"os.environ['ZERO_CALLER_ROUTERS_ENABLED'] = {flag_value!r}\n"
+        )
+    prelude = (
+        "import os, json\n"
+        + set_line
+        + "from app.config import settings\n"
+        "from app.main import app\n"
+        "print(json.dumps({'flag': bool(settings.zero_caller_routers_enabled),"
+        " 'routes': sorted({getattr(r, 'path', '') for r in app.routes})}))\n"
+    )
     env = {
         k: v
         for k, v in os.environ.items()
         if k != "ZERO_CALLER_ROUTERS_ENABLED"
     }
-    if value is not None:
-        env["ZERO_CALLER_ROUTERS_ENABLED"] = value
-    out = subprocess.run(
-        [sys.executable, "-c", _DUMP_ROUTES],
+    result = subprocess.run(
+        [sys.executable, "-c", prelude],
         capture_output=True,
         text=True,
-        check=True,
         cwd=str(Path(__file__).resolve().parent.parent),
         env=env,
-    ).stdout
-    return json.loads(out.strip().splitlines()[-1])
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    return json.loads(result.stdout.strip().splitlines()[-1])
 
 
 def test_default_app_does_not_mount_zero_caller_routers():
-    routes = _routes_with_env(None)
-    mounted = [p for p in routes if p.startswith(GATED_PREFIXES)]
+    probe = _probe(None)
+    assert probe["flag"] is False
+    mounted = [p for p in probe["routes"] if p.startswith(GATED_PREFIXES)]
     assert mounted == []
 
 
 def test_flag_remounts_zero_caller_routers():
-    routes = _routes_with_env("1")
+    probe = _probe("1")
+    assert probe["flag"] is True, "flag did not parse to True in subprocess"
     for prefix in GATED_PREFIXES:
-        assert any(p.startswith(prefix) for p in routes), prefix
+        assert any(
+            p.startswith(prefix) for p in probe["routes"]
+        ), f"{prefix} missing although flag parsed True"
