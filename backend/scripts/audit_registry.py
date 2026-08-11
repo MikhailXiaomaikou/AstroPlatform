@@ -80,6 +80,28 @@ def _audit_entry(entry: Any) -> list[str]:
     if not entry.execution_mode:
         issues.append("missing execution_mode")
 
+    coverage_provenance = getattr(entry, "coverage_provenance", None)
+    if coverage_provenance is not None:
+        if entry.z_coverage is None:
+            issues.append("coverage_provenance requires z_coverage")
+        if not str(coverage_provenance.source_locator or "").strip():
+            issues.append("coverage_provenance missing source_locator")
+        if not str(coverage_provenance.upstream_version or "").strip():
+            issues.append("coverage_provenance missing upstream_version")
+        digest = str(coverage_provenance.data_product_sha256 or "")
+        if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+            issues.append("coverage_provenance has invalid data_product_sha256")
+        matching_products = [
+            product
+            for product in entry.data_products
+            if product.role == coverage_provenance.data_product_role
+            and product.sha256 == digest
+        ]
+        if not matching_products:
+            issues.append(
+                "coverage_provenance is not bound to a matching hashed data product"
+            )
+
     # We deliberately DO NOT require an entry.units key per observable —
     # most observables (xi_plus / xi_minus / TT,TE,EE / mu_covariance /
     # redshifts) are dimensionless by convention and listing them as

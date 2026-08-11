@@ -12,6 +12,8 @@ from app.ai.agents.data_agent import DATA_AGENT
 from app.ai.agents.literature_agent import LITERATURE_AGENT
 from app.ai.agents.observation_agent import OBSERVATION_AGENT
 from app.ai.agents.visualization_agent import VISUALIZATION_AGENT
+from app.config import settings
+from app.services.agent_runtime.prompt_routing import classify_task_kind
 from app.services.event_collector import event_collector
 from app.services.memory_service import memory_service
 
@@ -59,6 +61,29 @@ class Orchestrator:
         }
 
     def _collapse_fast_path(self, agents: list[str], user_message: str) -> tuple[list[str], str | None]:
+        # Deterministic paper-table checks are owned by the v0.2 lightweight
+        # route inside the plain orchestrator loop. Fanning them out re-runs
+        # literature tools per specialist and lets the merged-reply gate
+        # withhold an already-verified receipt (live-path walkthrough,
+        # 2026-08-06). Returning ["orchestrator"] collapses cleanly: it is not
+        # a registered specialist, so build_runtime_context selects no
+        # specialist prompts and the chat route keeps its single-orchestrator
+        # default, while the truthy note preserves the classified agents'
+        # tool union. Codex review P2 (PR #46, round 2): gate on the feature
+        # flag — with v0.2 disabled the lightweight route does not exist, and
+        # collapsing would leave neither the historical fan-out nor the
+        # deterministic path.
+        if (
+            settings.lightweight_verification_enabled
+            and classify_task_kind(user_message)["task_kind"]
+            == "deterministic_source_check"
+        ):
+            return ["orchestrator"], (
+                "Deterministic source-check fast path: the unified "
+                "RoutingDecision owns this task shape; run the single "
+                "orchestrator loop with the controlled verification tool "
+                "instead of specialist fan-out and reply merging."
+            )
         if self._is_line_relation_workflow(user_message):
             return ["analysis_agent"], (
                 "Line-relation workflow enabled: the analysis agent owns the "

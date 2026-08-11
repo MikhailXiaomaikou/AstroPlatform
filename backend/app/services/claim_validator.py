@@ -1328,6 +1328,14 @@ _NON_EVIDENCE_KEYS: frozenset[str] = frozenset({
     # Their hand-entered posterior/proposal means must not ground a fresh
     # constraint merely because a full registry entry appears in datasets_used.
     "compressed_likelihood",
+    # Chain download references (2026-07-24): storage keys, uuids, sha256
+    # digests, and byte sizes of the persisted getdist chain files are
+    # reproducibility metadata, not measurements — their digits must never
+    # enter the claimable numeric universe. Named `chain_downloads` (not
+    # `chain_artifacts`) to avoid colliding with the research-alpha
+    # manifest's attested chain_artifacts records, whose diagnostics must
+    # stay in the universe if they ever surface in a chat result.
+    "chain_downloads",
 })
 
 
@@ -1628,6 +1636,8 @@ _COSMO_STAT_SUFFIXES: frozenset[str] = frozenset({
     "", "median", "mean", "best", "low", "high", "value", "val",
     "bestfit", "map", "mle", "mode", "estimate", "centralvalue",
     "1sigmalow", "1sigmahigh", "q16", "q84", "hdilow94", "hdihigh94", "std",
+    "sigma", "error", "err", "uncertainty", "stderr", "standarderror",
+    "standarddeviation",
 })
 
 # A statement such as ``H0 = 68.8`` is a central-estimate claim.  It cannot be
@@ -2347,6 +2357,57 @@ def _build_publication_typed_universe(
     return out
 
 
+_VERIFIED_SCALAR_DERIVED_NUMERIC_KEYS = frozenset(
+    {
+        "value",
+        "standard_uncertainty",
+        "standardized_difference_abs",
+        "independent_standard_uncertainty",
+        "relative_uncertainty_change_vs_independent",
+        "relative_uncertainty_change_percent_vs_independent",
+    }
+)
+
+
+def _verified_scalar_derived_numbers(tool_results: Any) -> set[float]:
+    """Return only controlled derived fields from successful scalar receipts.
+
+    The global anti-echo pass removes every model-authored input number.  A
+    legitimate propagated uncertainty can numerically equal an input
+    uncertainty (for example a difference against a fixed zero-error
+    comparator).  Re-admit only named outputs produced by the deterministic
+    backend, never echoed quantities, matrices, source text, or arbitrary tool
+    dictionaries.
+    """
+    numbers: set[float] = set()
+    entries = tool_results if isinstance(tool_results, list) else [tool_results]
+    for entry in entries or []:
+        tool_name, result = _entry_tool_and_result(entry)
+        if tool_name != "verify_scalar_derivation" or not isinstance(result, dict):
+            continue
+        if not _payload_is_claimable_success(tool_name, result):
+            continue
+        if str(result.get("calculation_status") or "").lower() not in {
+            "verified",
+            "verified_deterministic",
+            "linearized_approximation",
+        }:
+            continue
+        scopes = result.get("claim_scopes")
+        if not isinstance(scopes, dict) or scopes.get("derived_numeric") is not True:
+            continue
+        derived = result.get("result")
+        if not isinstance(derived, dict):
+            continue
+        for key in _VERIFIED_SCALAR_DERIVED_NUMERIC_KEYS:
+            value = derived.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                numeric = float(value)
+                if math.isfinite(numeric):
+                    numbers.add(numeric)
+    return numbers
+
+
 def _publication_typed_claim_label(claim: Claim) -> str | None:
     base = claim.label.split(".g", 1)[0]
     if base in _PUBLICATION_TYPED_RESULT_KEYS:
@@ -2426,6 +2487,7 @@ def validate_claims(
     # the per-key _NON_EVIDENCE_KEYS list can only chase one name at a time.
     input_numbers = _model_input_numbers(tool_results) if tool_results is not None else set()
     universe -= input_numbers
+    universe |= _verified_scalar_derived_numbers(tool_results)
     universe_size = len(universe)
     universe_sample = sorted(universe)[:50]
 
@@ -2485,6 +2547,11 @@ def validate_claims(
                 label: values - input_numbers
                 for label, values in typed_universe.items()
             }
+        # A scalar verifier receipt provides central values, standard
+        # uncertainties, and covariance, but no distributional model.
+        # Its standardized_difference_abs remains claimable through the
+        # controlled derived-number pool; it must not mint a Gaussian-equivalent
+        # significance_sigma claim without publication-provided significance.
 
     uncited: list[Claim] = []
     for c in claims:
@@ -2599,6 +2666,18 @@ def _build_valid_arxiv_pool(tool_results: Any) -> set[str]:
             if not value:
                 continue
             pool.update(_arxiv_ids_from_text(str(value)))
+        # Lightweight receipts expose normalized source records rather than
+        # the older literature-tool keys above.  Only an independently
+        # matched record may seed citation support: model/user identifiers,
+        # resolved-but-unmatched pages, and conflicts remain diagnostic only.
+        if (
+            str(node.get("kind") or "").lower() == "arxiv"
+            and str(node.get("status") or "").lower() == "verified_exact"
+        ):
+            for key in ("identifier", "final_url"):
+                value = node.get(key)
+                if value:
+                    pool.update(_arxiv_ids_from_text(str(value)))
     return pool
 
 
@@ -2631,6 +2710,14 @@ def _build_valid_doi_pool(tool_results: Any) -> set[str]:
             if not value:
                 continue
             pool.update(_dois_from_text(str(value)))
+        if (
+            str(node.get("kind") or "").lower() == "doi"
+            and str(node.get("status") or "").lower() == "verified_exact"
+        ):
+            for key in ("identifier", "final_url"):
+                value = node.get(key)
+                if value:
+                    pool.update(_dois_from_text(str(value)))
     return pool
 
 
@@ -4119,6 +4206,20 @@ def blocked_citation_reply_text(violations: list[CitationViolation]) -> str:
     )
 
 
+def limited_citation_reply_text(violations: list[CitationViolation]) -> str:
+    """Citation detail for an answer that remains visible with a caveat.
+
+    The underlying violations and recovery instructions are identical to the
+    hard-block banner. Only the user-facing disposition changes: the original
+    answer is still shown, so saying the whole reply was withheld is false.
+    """
+    return blocked_citation_reply_text(violations).replace(
+        "⚠ Reply withheld:",
+        "⚠ Unsupported citation note:",
+        1,
+    )
+
+
 def _cosmology_manifest_block_note(violations: list[CitationViolation]) -> str:
     """Helpful strict-mode hint for built-in cosmology preset bibcodes.
 
@@ -4209,6 +4310,15 @@ def blocked_methodology_reply_text(violations: list[CitationViolation]) -> str:
     return "\n\n".join(parts)
 
 
+def limited_methodology_reply_text(violations: list[CitationViolation]) -> str:
+    """Methodology detail for an answer that remains visible with a caveat."""
+    return blocked_methodology_reply_text(violations).replace(
+        "⚠ Reply withheld:",
+        "⚠ Unsupported methodology note:",
+        1,
+    )
+
+
 def _iter_dict_nodes(payload: Any) -> Iterable[dict[str, Any]]:
     if isinstance(payload, dict):
         yield payload
@@ -4274,6 +4384,16 @@ def _citation_pool_nodes(tool_results: Any) -> Iterable[dict[str, Any]]:
             result = {k: v for k, v in entry.items() if k != "input"}
         if not _result_may_support_citation(result):
             continue
+        if result.get("__do_not_claim_source_measurement__") is True:
+            # A scalar receipt may retain a valid derived result when the
+            # source fetch timed out or conflicted.  In that state its source
+            # identifiers are diagnostic only and must not seed the valid
+            # citation pool or turn user-supplied provenance into evidence.
+            result = {
+                key: value
+                for key, value in result.items()
+                if key != "source_evidence"
+            }
         yield from _iter_dict_nodes(result)
 
 
@@ -4388,6 +4508,7 @@ _CITABLE_ANALYSIS_TOOLS: frozenset[str] = frozenset({
     "run_cobaya_cosmology",
     "run_python",
     "search_line_measurements",
+    "verify_scalar_derivation",
 })
 
 
@@ -5054,7 +5175,7 @@ def dump_tool_universe(tool_results: Any, limit: int = 50) -> str:
     return json.dumps(vals[:limit])
 
 
-_DECLARED_COSMOLOGY_KEYS = frozenset({"cosmology_manifest", "source_cosmology"})
+_DECLARED_COSMOLOGY_KEYS = _COSMOLOGY_MANIFEST_KEYS
 
 
 def _iter_declared_cosmology_subtrees(node: Any) -> Iterable[dict]:
@@ -5080,13 +5201,15 @@ def value_supported_by_cosmology_manifest(
     tolerance: float = DEFAULT_TOLERANCE,
 ) -> bool:
     """True when ``value`` matches a number inside a cosmology a tool DECLARED
-    this turn (cosmology_manifest / source_cosmology subtrees only; signed
+    this turn (curated cosmology-manifest subtrees only; signed
     ±tolerance band, same matching as validate_claims).
 
     Used by chat.py's cosmology-anchor comparison gate: fit_line_lfr's
     cosmology_manifest carries the Planck18 preset (H0=67.36, Om0=0.3153,
-    sigma8=0.8111) the fit assumed, and citing those values in prose is
-    provenance-correct. Deliberately NOT matched against the full tool
+    sigma8=0.8111) the fit assumed, while compare_luminosity_distances returns
+    current_cosmology / target_cosmology manifests. Citing values from those
+    curated, bibcode-bearing subtrees is provenance-correct. Deliberately NOT
+    matched against the full tool
     universe — with ~10^3 numeric leaves (FWHM errors, S/N, fluxes) a ±1%
     band around any O(10-100) fabricated anchor would almost always hit a
     coincidental match and launder it.

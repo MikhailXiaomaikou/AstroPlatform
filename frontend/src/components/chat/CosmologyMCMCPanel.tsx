@@ -1,3 +1,74 @@
+import { useState } from "react";
+import { fetchResearchArtifact } from "../../api/client";
+
+type ChainArtifactFile = {
+  name?: string;
+  output_path?: string;
+  sha256?: string;
+  size_bytes?: number;
+};
+
+function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function ChainDownloads({ artifacts }: {
+  artifacts: { status?: string; run_id?: string; files?: ChainArtifactFile[] };
+}) {
+  const [error, setError] = useState<string | null>(null);
+  if (artifacts.status !== "persisted" || !artifacts.files?.length) return null;
+  const download = async (file: ChainArtifactFile) => {
+    if (!file.output_path || !file.name) return;
+    setError(null);
+    try {
+      const blob = await fetchResearchArtifact(file.output_path);
+      downloadBlob(blob, file.name);
+    } catch {
+      setError(`Download failed for ${file.name} — the file may have been cleaned up or you may need to sign in again.`);
+    }
+  };
+  return (
+    <div style={{ marginTop: 8, fontSize: "0.72rem" }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{ color: "var(--color-text-tertiary)" }}>
+          Chains (getdist) · run {String(artifacts.run_id || "").slice(0, 8)}:
+        </span>
+        {artifacts.files.map((file) => (
+          <button
+            key={file.output_path}
+            type="button"
+            onClick={() => { void download(file); }}
+            style={{
+              border: "1px solid var(--color-border)",
+              borderRadius: 4,
+              padding: "1px 8px",
+              background: "transparent",
+              color: "var(--color-text-secondary)",
+              cursor: "pointer",
+              fontSize: "0.72rem",
+            }}
+            title={file.sha256 ? `sha256: ${file.sha256}` : undefined}
+          >
+            {file.name}
+          </button>
+        ))}
+      </div>
+      {error && (
+        <div role="alert" style={{ marginTop: 4, color: "var(--color-red, #ef4444)" }}>
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
 type ParameterSummary = {
   median?: number;
   mean?: number;
@@ -260,6 +331,12 @@ export default function CosmologyMCMCPanel({ result }: { result: Record<string, 
           ).join("; ")}. {String(notComparableTensions[0]?.reason || "Missing covariance information.")}
         </div>
       )}
+
+      {result.chain_downloads && typeof result.chain_downloads === "object" ? (
+        <ChainDownloads
+          artifacts={result.chain_downloads as { status?: string; run_id?: string; files?: ChainArtifactFile[] }}
+        />
+      ) : null}
 
       <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap", color: "var(--color-text-tertiary)", fontSize: "0.72rem" }}>
         <span>seed={String(result.random_seed ?? "—")}</span>

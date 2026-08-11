@@ -38,6 +38,7 @@ describe("overallValidationState", () => {
     expect(overallValidationState(base)).toBe("passed");
     expect(overallValidationState({ ...base, regen_count: 2 })).toBe("regenerated");
     expect(overallValidationState({ ...base, numeric_gate: "regenerated" })).toBe("regenerated");
+    expect(overallValidationState({ ...base, citation_gate: "limited", limited: true })).toBe("limited");
     expect(overallValidationState({ ...base, numeric_gate: "blocked", blocked: true })).toBe("blocked");
     expect(overallValidationState({ ...base, citation_gate: "blocked" })).toBe("blocked");
   });
@@ -46,6 +47,13 @@ describe("overallValidationState", () => {
     expect(overallValidationState({ ...base, numeric_gate: "skipped_no_data" })).toBe("not_validated");
     expect(overallValidationState({ ...base, numeric_gate: "skipped" })).toBe("not_validated");
     expect(overallValidationState({ ...base, numeric_gate: "not_run", citation_gate: "not_run" })).toBe("not_validated");
+  });
+
+  it("uses schema v2 disposition without conflating limited, abstention, refusal, and hard block", () => {
+    expect(overallValidationState({ ...base, schema_version: 2, response_disposition: "limited" })).toBe("limited");
+    expect(overallValidationState({ ...base, schema_version: 2, response_disposition: "abstention" })).toBe("abstention");
+    expect(overallValidationState({ ...base, schema_version: 2, response_disposition: "refusal" })).toBe("refusal");
+    expect(overallValidationState({ ...base, schema_version: 2, response_disposition: "hard_block" })).toBe("blocked");
   });
 });
 
@@ -99,6 +107,23 @@ describe("ValidationBadge rendering", () => {
     expect(screen.getByText(/zero_data→blocked/)).toBeTruthy();
   });
 
+  it("renders a limited answer distinctly from a hard block", () => {
+    render(
+      <ValidationBadge
+        summary={{
+          ...base,
+          citation_gate: "limited",
+          limited: true,
+          interventions: [{ gate: "citation_methodology", action: "annotated_limited", reason: "" }],
+        }}
+      />,
+    );
+    const chip = screen.getByText(/chat\.validation\.badge_limited/);
+    expect(chip.getAttribute("data-validation-state")).toBe("limited");
+    expect(screen.queryByText(/chat\.validation\.badge_blocked/)).toBeNull();
+    expect(screen.getByText(/citation_methodology→annotated_limited/)).toBeTruthy();
+  });
+
   it("renders not-validated (with reason) distinctly from passed", () => {
     render(
       <ValidationBadge
@@ -120,5 +145,26 @@ describe("ValidationBadge rendering", () => {
     render(<ValidationBadge truncated />);
     expect(screen.getByText(/chat\.validation\.truncated/)).toBeTruthy();
     expect(screen.queryByText(/chat\.validation\.badge_/)).toBeNull();
+  });
+
+  it("renders schema v2 diagnostics while old schema v1 remains unchanged", () => {
+    render(
+      <ValidationBadge
+        summary={{
+          ...base,
+          schema_version: 2,
+          response_disposition: "abstention",
+          task_kind: "deterministic_source_check",
+          earliest_limiting_stage: "routing_input",
+          missing_dependencies: ["uncertainty_model"],
+          safe_fallback: "Supply a correlation matrix.",
+        }}
+      />,
+    );
+    const chip = screen.getByText(/chat\.validation\.badge_abstention/);
+    expect(chip.getAttribute("data-validation-state")).toBe("abstention");
+    expect(screen.getByText(/deterministic_source_check/)).toBeTruthy();
+    expect(screen.getByText(/uncertainty_model/)).toBeTruthy();
+    expect(screen.getByText(/Supply a correlation matrix/)).toBeTruthy();
   });
 });

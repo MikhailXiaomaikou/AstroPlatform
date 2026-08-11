@@ -85,6 +85,59 @@ def test_compare_luminosity_distances_returns_per_source_deltas():
     assert "ΔDL" in out["__message_to_model__"]
 
 
+def test_sample_comparison_uses_explicit_baseline_for_distances():
+    # Codex review P1 (PR #46, round 18): the result manifest honored an
+    # explicit baseline while the numerical distances still used the configured
+    # default cosmology, misattributing every reported shift.
+    class FakeDistance:
+        def __init__(self, value):
+            self.value = value
+
+        def to(self, _unit):
+            return self
+
+    class FakeCosmology:
+        def __init__(self, scale):
+            self.scale = scale
+
+        def luminosity_distance(self, redshift):
+            return FakeDistance(self.scale * redshift)
+
+    resolved_names = []
+
+    def resolve_cosmology(name=None):
+        resolved_names.append(name)
+        return {
+            None: FakeCosmology(100.0),
+            "planck18_bao": FakeCosmology(200.0),
+            "planck18": FakeCosmology(300.0),
+        }[name]
+
+    with (
+        patch(
+            "app.services.ai_tools._resolve_literature_measurement_cache",
+            return_value=(_sample_rows()[:1], "lit_test"),
+        ),
+        patch(
+            "app.services.cosmology.get_cosmology",
+            side_effect=resolve_cosmology,
+        ),
+    ):
+        out = _exec_compare_luminosity_distances({
+            "cache_key": "lit_test",
+            "baseline_cosmology": "planck18_bao",
+            "target_cosmology": "planck18",
+            "comparison_mode": "sample",
+        })
+
+    assert out["success"] is True
+    assert resolved_names == ["planck18_bao", "planck18"]
+    assert out["current_cosmology"]["name"] == "planck18_bao"
+    assert out["per_source"][0]["DL_current_Mpc"] == 100.0
+    assert out["per_source"][0]["DL_target_Mpc"] == 150.0
+    assert out["per_source"][0]["delta_pct"] == 50.0
+
+
 def test_compare_requires_target_cosmology():
     out = _exec_compare_luminosity_distances({"cache_key": "x"})
     assert out["success"] is False
@@ -101,6 +154,116 @@ def test_compare_handles_empty_cache():
         })
     assert out["success"] is False
     assert out["__tool_status__"] == "EMPTY"
+
+
+def test_compare_h0_anchors_does_not_require_literature_cache():
+    with patch(
+        "app.services.ai_tools._resolve_literature_measurement_cache",
+        side_effect=AssertionError("anchor-only mode must not read the sample cache"),
+    ):
+        out = _exec_compare_luminosity_distances({
+            "target_cosmology": "riess22_shoes",
+            "comparison_mode": "h0_anchors",
+        }, python_session_id="fresh-session")
+
+    assert out["success"] is True
+    assert out["__tool_status__"] == "PARTIAL"
+    assert out["analysis_status"] == "partial"
+    assert out["data_origin"] == "cached_real"
+    assert out["sample_comparison_performed"] is False
+    assert out["current_cosmology"]["H0_km_s_Mpc"] == 67.36
+    assert out["target_cosmology"]["H0_km_s_Mpc"] == 73.04
+    anchor = out["anchor_comparison"]
+    assert 8.0 < anchor["target_minus_baseline_pct"] < 9.0
+    assert 4.0 < anchor["naive_independent_gaussian_tension_sigma"] < 6.0
+    assert "per-source luminosity distance" in out["limitations"][0]
+
+
+def test_h0_anchor_comparison_honors_explicit_planck_baseline():
+    from app.services.cosmology import cosmology_manifest
+
+    freedman = {
+        "name": "freedman21_trgb",
+        "H0_km_s_Mpc": 69.8,
+        "H0_err": 0.8,
+        "bibcode": "2021ApJ...919...16F",
+    }
+
+    def configured_manifest(name=None):
+        return cosmology_manifest(name) if name else freedman
+
+    with patch(
+        "app.services.cosmology.cosmology_manifest",
+        side_effect=configured_manifest,
+    ):
+        out = _exec_compare_luminosity_distances({
+            "baseline_cosmology": "planck18",
+            "target_cosmology": "riess22_shoes",
+            "comparison_mode": "h0_anchors",
+        })
+
+    assert out["success"] is True
+    assert out["current_cosmology"]["name"] == "planck18"
+    assert out["current_cosmology"]["H0_km_s_Mpc"] == 67.36
+
+
+def test_compare_h0_anchors_rejects_uncited_legacy_target():
+    out = _exec_compare_luminosity_distances({
+        "target_cosmology": "WMAP9",
+        "comparison_mode": "h0_anchors",
+    })
+
+    assert out["success"] is False
+    assert out["error_class"] == "uncited_cosmology_anchor"
+    assert out["__tool_status__"] == "FAILED"
+
+
+def test_h0_anchor_result_has_tool_grounded_fallback_summary():
+    from app.services.agent_runtime.summaries import _cosmology_tool_grounded_summary
+
+    out = _exec_compare_luminosity_distances({
+        "target_cosmology": "riess22_shoes",
+        "comparison_mode": "h0_anchors",
+    })
+    summary = _cosmology_tool_grounded_summary([{
+        "tool": "compare_luminosity_distances",
+        "result": out,
+    }])
+
+    assert summary is not None
+    assert "67.36" in summary
+    assert "73.04" in summary
+    assert "2020A&A...641A...6P" in summary
+    assert "2022ApJ...934L...7R" in summary
+    assert "published H0 anchors only" in summary
+    assert "per-source luminosity distance" in summary
+
+
+def test_h0_anchor_uncertainties_and_rounded_sigma_are_claimable():
+    from app.services.claim_validator import validate_claims
+
+    out = _exec_compare_luminosity_distances({
+        "target_cosmology": "riess22_shoes",
+        "comparison_mode": "h0_anchors",
+    })
+    tool_results = [{
+        "tool": "compare_luminosity_distances",
+        "input": {
+            "target_cosmology": "riess22_shoes",
+            "comparison_mode": "h0_anchors",
+        },
+        "result": out,
+    }]
+    reply = (
+        "Planck H0 = 67.36 ± 0.54 km s⁻¹ Mpc⁻¹ and SH0ES H0 = "
+        "73.04 ± 1.04 km s⁻¹ Mpc⁻¹. The offset is 8.43%, with a "
+        "naive independent-Gaussian separation of 4.8σ."
+    )
+
+    validation = validate_claims(reply, tool_results)
+    assert validation.ok, [
+        (claim.label, claim.value, claim.raw) for claim in validation.uncited
+    ]
 
 
 def test_compare_skips_rows_with_no_redshift():

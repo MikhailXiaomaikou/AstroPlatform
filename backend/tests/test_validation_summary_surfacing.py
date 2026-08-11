@@ -75,13 +75,14 @@ def test_derive_summary_blocked_and_regenerated_families():
         fabrication_stats={"pass": 0, "blocked": True, "regenerations": 2},
         interventions=[
             {"gate": "numeric_claims", "action": "blocked", "reason": "regen_exhausted"},
-            {"gate": "citation_methodology", "action": "annotated_blocked", "reason": ""},
+            {"gate": "citation_methodology", "action": "blocked", "reason": ""},
         ],
         tool_results=[{"tool": "run_adql", "result": {"success": True, "rows": [{"x": 1}]}}],
     )
     assert blocked["numeric_gate"] == "blocked"
     assert blocked["citation_gate"] == "blocked"
     assert blocked["blocked"] is True
+    assert blocked["response_disposition"] == "hard_block"
     assert blocked["regen_count"] == 2
 
     regenerated = _derive_validation_summary(
@@ -97,6 +98,104 @@ def test_derive_summary_blocked_and_regenerated_families():
     assert regenerated["numeric_gate"] == "regenerated"
     assert regenerated["citation_gate"] == "regenerated"
     assert regenerated["blocked"] is False
+
+
+def test_derive_summary_limited_is_not_a_hard_block():
+    limited = _derive_validation_summary(
+        claim_gate_ran=True,
+        gate_skip_reason=None,
+        fabrication_stats={
+            "pass": 1,
+            "blocked": False,
+            "limited": True,
+            "regenerations": 0,
+        },
+        interventions=[{
+            "gate": "citation_methodology",
+            "action": "annotated_limited",
+            "reason": "unsupported_inline_citation",
+        }],
+        tool_results=[{
+            "tool": "run_adql",
+            "result": {"success": True, "rows": [{"x": 1}]},
+        }],
+    )
+
+    assert limited["numeric_gate"] == "passed"
+    assert limited["citation_gate"] == "limited"
+    assert limited["blocked"] is False
+    assert limited["limited"] is True
+    assert limited["response_disposition"] == "limited"
+
+
+def test_hard_gate_overrides_full_scalar_receipt_disposition():
+    summary = _derive_validation_summary(
+        claim_gate_ran=True,
+        gate_skip_reason=None,
+        fabrication_stats={
+            "pass": 0,
+            "blocked": True,
+            "limited": False,
+            "regenerations": 2,
+        },
+        interventions=[
+            {"gate": "numeric_claims", "action": "blocked", "reason": "regen_exhausted"}
+        ],
+        tool_results=[
+            {
+                "tool": "verify_scalar_derivation",
+                "result": {
+                    "response_disposition": "full",
+                    "source_status": "verified_exact",
+                },
+            }
+        ],
+        routing_decision={"task_kind": "deterministic_source_check"},
+    )
+
+    assert summary["blocked"] is True
+    assert summary["response_disposition"] == "hard_block"
+
+
+def test_safe_refusal_is_visible_even_when_no_gate_had_to_block_it():
+    summary = _derive_validation_summary(
+        claim_gate_ran=True,
+        gate_skip_reason=None,
+        fabrication_stats={"pass": 0, "blocked": False, "regenerations": 0},
+        interventions=[],
+        tool_results=[],
+        routing_decision={
+            "task_kind": "general",
+            "matched_signals": ["untrusted_evidence_request"],
+        },
+    )
+
+    assert summary["blocked"] is False
+    assert summary["response_disposition"] == "refusal"
+
+
+def test_untrusted_echo_block_surfaces_as_refusal_not_generic_hard_block():
+    summary = _derive_validation_summary(
+        claim_gate_ran=True,
+        gate_skip_reason=None,
+        fabrication_stats={"pass": 0, "blocked": True, "regenerations": 0},
+        interventions=[{
+            "gate": "untrusted_evidence_echo",
+            "action": "blocked",
+            "reason": "user_supplied_number_repeated",
+        }],
+        tool_results=[],
+        routing_decision={
+            "task_kind": "general",
+            "matched_signals": ["untrusted_evidence_request"],
+        },
+        evidence_receipts_enabled=True,
+    )
+
+    assert summary["blocked"] is True
+    assert summary["numeric_gate"] == "blocked"
+    assert summary["response_disposition"] == "refusal"
+    assert summary["evidence_receipts"][0]["response_disposition"] == "refusal"
 
 
 def test_derive_summary_meta_skip_and_not_run_are_distinct_from_passed():
@@ -116,6 +215,87 @@ def test_derive_summary_meta_skip_and_not_run_are_distinct_from_passed():
     assert not_run["citation_gate"] == "not_run"
     assert not_run["reason"] == "loop_deadline"
     assert "passed" not in (not_run["numeric_gate"], not_run["citation_gate"])
+
+
+def test_full_research_nonpublication_summary_is_limited_and_actionable():
+    prompt = (
+        "Run the full DESI DR2 early-dark-energy posterior with Planck high-l "
+        "and low-l likelihoods and a production sampler."
+    )
+    summary = _derive_validation_summary(
+        claim_gate_ran=True,
+        gate_skip_reason=None,
+        fabrication_stats={
+            "pass": 0,
+            "blocked": False,
+            "limited": True,
+            "regenerations": 1,
+        },
+        interventions=[{
+            "gate": "nonpublication_posterior",
+            "action": "annotated_limited",
+            "reason": "posterior_values_withheld",
+        }],
+        tool_results=[],
+        routing_decision={"task_kind": "full_research"},
+        user_prompt=prompt,
+    )
+
+    assert summary["task_kind"] == "full_research"
+    assert summary["response_disposition"] == "limited"
+    assert summary["limited"] is True
+    assert summary["earliest_limiting_stage"] == "nonpublication_posterior"
+    assert any("EDE" in item for item in summary["missing_dependencies"])
+    assert any("Planck high-l" in item for item in summary["missing_dependencies"])
+    assert any("sampler" in item for item in summary["missing_dependencies"])
+
+
+def test_capability_receipt_sets_limited_without_model_rewrite() -> None:
+    summary = _derive_validation_summary(
+        claim_gate_ran=True,
+        gate_skip_reason=None,
+        fabrication_stats={
+            "pass": 1,
+            "blocked": False,
+            "limited": False,
+            "regenerations": 0,
+        },
+        interventions=[],
+        tool_results=[{
+            "tool": "run_dark_energy_evidence_matrix",
+            "result": {
+                "success": True,
+                "analysis_status": "COMPLETED",
+                "publication_ready": False,
+            },
+        }],
+        routing_decision={"task_kind": "full_research"},
+        user_prompt=(
+            "Run arXiv:2503.24343 with the native EDE model, exact Planck "
+            "high-l and low-l likelihoods, DESI DR2, supernovae, and a "
+            "production sampler."
+        ),
+        evidence_receipts_enabled=True,
+    )
+
+    assert summary["response_disposition"] == "limited"
+    assert summary["limited"] is True
+    assert summary["earliest_limiting_stage"] == "capability_gap"
+    assert summary["evidence_receipts"][0]["receipt_kind"] == "capability_gap"
+    assert summary["missing_dependencies"]
+
+
+def test_full_research_honest_abstention_preserves_route_as_limited_gap():
+    summary = _not_run_validation_summary(
+        "honest_abstention",
+        {"task_kind": "full_research"},
+        "Run an EDE posterior with DESI DR2, Planck, and a production sampler.",
+    )
+
+    assert summary["task_kind"] == "full_research"
+    assert summary["response_disposition"] == "limited"
+    assert summary["limited"] is True
+    assert any("DESI DR2" in item for item in summary["missing_dependencies"])
 
 
 def test_derive_summary_interventions_override_meta_skip():
@@ -242,6 +422,95 @@ def test_loop_qualitative_no_tool_reply_reports_skipped_no_data():
     summary = result["validation_summary"]
     assert summary["numeric_gate"] == "skipped_no_data", summary
     assert summary["blocked"] is False
+
+
+def test_multi_agent_merge_preserves_v2_receipt_contract(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.services.agent_runtime.evidence_receipts import (
+        finalize_evidence_receipt,
+    )
+
+    receipt = finalize_evidence_receipt({
+        "schema_version": 1,
+        "receipt_kind": "capability_gap",
+        "task_kind": "full_research",
+        "response_disposition": "limited",
+        "source_status": "verified_current_turn",
+        "subject": {"request": "registered full-research workflow"},
+        "facts": {"publication_ready": False},
+        "source_evidence": [],
+        "missing_dependencies": ["production sampler"],
+        "boundary_statement": (
+            "No posterior or fit result was produced in the current turn."
+        ),
+    })
+
+    async def fake_loop(**_kwargs):
+        return {
+            "reply": "The specialist found a registered capability gap.",
+            "actions": [],
+            "tool_results": [],
+            "hit_deadline": False,
+            "hit_iteration_cap": False,
+            "validation_summary": {
+                "schema_version": 2,
+                "numeric_gate": "skipped_no_data",
+                "citation_gate": "passed",
+                "regen_count": 0,
+                "blocked": False,
+                "limited": True,
+                "response_disposition": "limited",
+                "task_kind": "full_research",
+                "earliest_limiting_stage": "capability_gap",
+                "missing_dependencies": ["production sampler"],
+                "safe_fallback": "Enable the production sampler and rerun.",
+                "interventions": [],
+                "evidence_receipts": [receipt],
+            },
+        }
+
+    async def fake_handoff(source, target, _reply):
+        return SimpleNamespace(
+            source_agent=source,
+            target_agent=target,
+            context_summary="Capability gap recorded.",
+            instruction="Review the registered dependency gap.",
+        )
+
+    async def fake_merge(_agent_results):
+        return "The merged response remains limited pending registered dependencies."
+
+    monkeypatch.setattr(chat_mod, "_run_agent_loop", fake_loop)
+    monkeypatch.setattr(
+        chat_mod.orchestrator,
+        "get_agent_runtime",
+        lambda _name, _context: {"system_prompt": "specialist", "tool_names": []},
+    )
+    monkeypatch.setattr(chat_mod.orchestrator, "summarize_handoff", fake_handoff)
+    monkeypatch.setattr(chat_mod.orchestrator, "merge_responses", fake_merge)
+
+    result = asyncio.run(chat_mod._run_orchestrated_chat(
+        runtime={
+            "agent_names": ["analyst", "reviewer"],
+            "base_system": "test multi-agent system",
+            "toolset": [],
+        },
+        messages=[{
+            "role": "user",
+            "content": "Give a cautious summary of the registered dependency gap.",
+        }],
+        provider_api_keys={},
+        python_session_id="merged-v2-receipt-test",
+    ))
+
+    summary = result["validation_summary"]
+    assert summary["schema_version"] == 2
+    assert summary["task_kind"] == "full_research"
+    assert summary["response_disposition"] == "limited"
+    assert summary["missing_dependencies"] == ["production sampler"]
+    assert summary["safe_fallback"] == "Enable the production sampler and rerun."
+    assert summary["evidence_receipts"] == [receipt]
 
 
 # ---------- 3. API boundary (both endpoints) ----------

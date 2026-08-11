@@ -105,3 +105,51 @@ class TestClassifierGoldenSet:
         for pathological in ["", "   ", "!@#$%", "hello world", "foo bar baz"]:
             agents = await orch.classify_intent(pathological)
             assert len(agents) >= 1, f"Empty classification for {pathological!r}"
+
+
+class TestDeterministicSourceCheckCollapse:
+    """Live-path walkthrough 2026-08-06: the intent fan-out layer sits above
+    the v0.2 RoutingDecision, so a deterministic paper-table check was
+    dispatched to multiple specialists — one demo prompt took 170s re-running
+    literature tools and another had its correct receipt withheld by the
+    merged-reply gate. Deterministic source checks must collapse to the plain
+    orchestrator loop, which owns the v0.2 lightweight route."""
+
+    NATURAL_RATIO_PROMPT = (
+        "I'm reading the DESI DR2 BAO paper (arXiv:2503.14738). In Table 4 "
+        "the LRG2 row lists D_M/r_d = 17.351 +/- 0.177 and D_H/r_d = 19.455 "
+        "+/- 0.330 with a correlation of -0.404 between them. What is "
+        "D_M/D_H for that row, with a proper 1-sigma error bar?"
+    )
+
+    def test_deterministic_source_check_collapses_to_orchestrator(self, orch, monkeypatch):
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "lightweight_verification_enabled", True)
+        agents, note = orch._collapse_fast_path(
+            ["literature_agent", "observation_agent"], self.NATURAL_RATIO_PROMPT
+        )
+        assert agents == ["orchestrator"]
+        assert note and "deterministic" in note.lower()
+
+    def test_collapse_honors_disabled_feature_flag(self, orch, monkeypatch):
+        # Codex review P2 (PR #46, round 2): with the v0.2 flag off, the
+        # lightweight route does not exist in the loop, so collapsing away the
+        # specialists would leave users with neither the historical fan-out
+        # nor the deterministic path. The collapse must honor the flag.
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "lightweight_verification_enabled", False)
+        agents, note = orch._collapse_fast_path(
+            ["literature_agent", "observation_agent"], self.NATURAL_RATIO_PROMPT
+        )
+        assert agents == ["literature_agent", "observation_agent"]
+        assert note is None
+
+    def test_general_literature_question_does_not_collapse(self, orch):
+        agents, note = orch._collapse_fast_path(
+            ["literature_agent"],
+            "Summarize recent papers on early dark energy and the Hubble tension.",
+        )
+        assert agents == ["literature_agent"]
+        assert note is None

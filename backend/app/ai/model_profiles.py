@@ -166,6 +166,22 @@ def _profiles() -> dict[str, ModelProfile]:
                 "the same backend-executed JSON bridge as the OpenAI CLI."
             ),
         ),
+        "local:kimi-cli": ModelProfile(
+            id="local:kimi-cli",
+            provider="local",
+            model_id="kimi-cli",
+            display_name="Kimi CLI (local subscription)",
+            api_ready=True,
+            resolved_model_id=os.getenv("KIMI_CLI_MODEL", "kimi-code/k3"),
+            supports_tools=True,
+            supports_reasoning=True,
+            endpoint="chat_completions",
+            note=(
+                "Local-only backend. Uses the installed Kimi Code CLI OAuth "
+                "login and requests Standard Astro tools through the same "
+                "backend-executed JSON bridge as the other subscription CLIs."
+            ),
+        ),
     }
 
 
@@ -196,6 +212,9 @@ def normalize_model_profile_id(raw: str | None) -> str | None:
         "local:codex": "local:openai-cli",
         "claude-cli": "local:claude-cli",
         "local:claude": "local:claude-cli",
+        "kimi-cli": "local:kimi-cli",
+        "kimi-k3": "local:kimi-cli",
+        "local:kimi": "local:kimi-cli",
     }
     return aliases.get(value, value)
 

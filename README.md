@@ -54,6 +54,11 @@ storage. See the [detailed quick start](./docs/QUICKSTART.md).
 
 ## What works today
 
+- **Lightweight, source-checked scalar verification** for bounded paper-table
+  calculations: ratio, difference, product, and generalized
+  inverse-covariance weighted mean. The backend validates units and covariance,
+  resolves the cited source separately from the arithmetic, and returns a
+  hashed receipt with `full`, `limited`, `abstention`, or `refusal` semantics.
 - **Executable cosmology likelihoods** over registered, checksum-pinned
   datasets (BAO, SNe Ia, CMB, H0 priors, chronometers, and more), with
   claim validation, provenance banners, and dataset-overlap guards.
@@ -62,6 +67,18 @@ storage. See the [detailed quick start](./docs/QUICKSTART.md).
   every day, and clean runs must not be falsely blocked either.
 - **Claim Audit with signed Evidence Packs** — a real local run produces a
   verifiable evidence bundle (see the demo above).
+
+Measured evidence, model-in-loop (2026-08-06 campaign; five models, natural
+researcher phrasings, n=60 post-fix): in-platform score 90.4% versus 46.6%
+for the same models bare; a pasted fake "tool result" number was repeated
+0/15 times in-platform (rule-of-three upper bound < 20%) versus 15/15 bare;
+false blocks of clean answers 1/60. An earlier 1440/1440 headline was
+retracted because that pipeline self-check never had the model in the loop —
+the honest framing above is the one this project reports. These are
+pre-merge snapshot numbers; the standing gate is a fresh rerun on the
+current revision before any Alpha v0.2 claim. Full record:
+[campaign report](./docs/research/STANDARD_ASTRO_V02_CAMPAIGN_REPORT_2026-08-06.zh-CN.md)
+(Chinese).
 
 ## What it does not do yet
 
@@ -72,6 +89,11 @@ storage. See the [detailed quick start](./docs/QUICKSTART.md).
   flags default to off, candidates can never output `SUPPORTED` without
   human review plus a signed registry release, and none of it is a
   production feature yet.
+- Lightweight scalar verification is also dark-launched
+  (`LIGHTWEIGHT_VERIFICATION_ENABLED=0` by default). Its automated matrices
+  and adversarial regression suite are green, but the current code still
+  requires a fresh end-to-end demo rerun plus independent expert review before
+  an Alpha v0.2 claim.
 - Rubin / Euclid / Roman entries are schema fixtures only — not executable
   and not evidence for any measurement claim.
 - Product validation is pending: the platform has not yet completed its
@@ -102,6 +124,7 @@ npm run build
 - [Honesty evidence and known limits](./docs/HONESTY_EVIDENCE.md)
 - [Architecture](./ARCHITECTURE.md) · [Source mapping](./docs/SOURCE_MAPPING.md)
 - [Detailed quick start](./docs/QUICKSTART.md)
+- [v0.2 evaluation](./docs/research/STANDARD_ASTRO_V02_EVALUATION_2026-08-04.zh-CN.md) · [campaign and post-review record](./docs/research/STANDARD_ASTRO_V02_CAMPAIGN_REPORT_2026-08-06.zh-CN.md) (Chinese)
 - [Deployment](./DEPLOYMENT.md) · [Production cutover checklist](./docs/PRODUCTION_CUTOVER_CHECKLIST.md)
 - [Privacy](./PRIVACY.md) · [Security](./SECURITY.md) · [Data licences](./docs/DATA_LICENSES.md)
 - [Complete P0 + P1 roadmap](./docs/roadmaps/P0_P1_COMPLETE_PLAN.zh-CN.md) (Chinese)

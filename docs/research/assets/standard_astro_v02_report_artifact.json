@@ -1,0 +1,1197 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "Standard Astro v0.2：灵活但可审计的轻量研究验证",
+    "description": "240-sample technical evaluation of Standard Astro v0.2 lightweight verification.",
+    "generatedAt": "2026-08-05T10:13:54.577571+00:00",
+    "sources": [
+      {
+        "id": "v02-score-audit",
+        "label": "Standard Astro v0.2 deterministic score audit",
+        "query": {
+          "engine": "Python rule audit",
+          "language": "python",
+          "sql": "SELECT * FROM read_csv_auto('docs/research/assets/standard_astro_v02_scores.csv', header = true);",
+          "description": "Recomputes six frozen 0–2 dimensions from the 240 pre-registered user-visible responses and compact receipts.",
+          "executed_at": "2026-08-05T10:13:54.577571+00:00",
+          "tables_used": [
+            "standard_astro_v02_evaluation_samples",
+            "standard_astro_v02_evaluation_scores"
+          ],
+          "filters": [
+            "five evaluated models",
+            "direct and standard_astro conditions",
+            "eight pre-registered tasks",
+            "three repeats per cell"
+          ],
+          "metric_definitions": [
+            "sample total = sum of six dimensions, each scored 0–2",
+            "condition percentage = condition score / (120 samples × 12)",
+            "dimension attainment = dimension score / (sample count × 2)",
+            "latency P50/P95 use linear interpolation over completed samples"
+          ]
+        }
+      },
+      {
+        "id": "v02-preregistration",
+        "label": "Standard Astro v0.2 pre-registered task specification",
+        "query": {
+          "engine": "version-controlled JSON",
+          "language": "json",
+          "description": "Frozen task prompts, expected routes, expected dispositions, scientific targets, and release thresholds.",
+          "executed_at": "2026-08-05T10:13:54.577571+00:00",
+          "tables_used": [
+            "standard_astro_v02_preregistered_tasks"
+          ],
+          "filters": [
+            "eight tasks and three non-A/B fault injections"
+          ]
+        }
+      }
+    ],
+    "charts": [
+      {
+        "id": "overall-score",
+        "title": "总体审计得分",
+        "subtitle": "每个条件 120 个样本，满分 1,440",
+        "intent": "comparison",
+        "question": "Standard Astro 是否在同一冻结量表上优于裸模型？",
+        "rationale": "零基线分类柱图直接比较两个条件的总体达成率。",
+        "comparisonContext": {
+          "denominator": "120 × 12",
+          "unit": "%"
+        },
+        "type": "bar",
+        "dataset": "overall_scores",
+        "sourceId": "v02-score-audit",
+        "encodings": {
+          "x": {
+            "field": "condition",
+            "type": "nominal",
+            "label": "条件"
+          },
+          "y": {
+            "field": "percentage",
+            "type": "quantitative",
+            "label": "得分率",
+            "unit": "%"
+          },
+          "tooltip": [
+            {
+              "field": "score",
+              "type": "quantitative",
+              "label": "得分"
+            },
+            {
+              "field": "maximum",
+              "type": "quantitative",
+              "label": "满分"
+            },
+            {
+              "field": "sample_count",
+              "type": "quantitative",
+              "label": "样本数"
+            }
+          ]
+        },
+        "valueFormat": "number",
+        "unit": "%",
+        "palette": {
+          "kind": "categorical",
+          "name": "blue-gold"
+        },
+        "settings": {
+          "orientation": "vertical",
+          "groupMode": "single",
+          "showValues": true
+        },
+        "referenceLines": [
+          {
+            "axis": "y",
+            "value": 85,
+            "label": "Standard 发布门 85%",
+            "lineStyle": "dashed",
+            "color": "neutral"
+          }
+        ],
+        "layout": "full"
+      },
+      {
+        "id": "score-by-model",
+        "title": "五模型分项得分",
+        "subtitle": "每个模型×条件 24 个样本，满分 288",
+        "intent": "comparison",
+        "question": "系统增益是否只来自某一个基础模型？",
+        "rationale": "分组横向条形图适合比较长模型名与两个条件。",
+        "comparisonContext": {
+          "grain": "model × condition",
+          "denominator": "24 × 12",
+          "unit": "%"
+        },
+        "type": "bar",
+        "dataset": "model_scores",
+        "sourceId": "v02-score-audit",
+        "encodings": {
+          "x": {
+            "field": "model",
+            "type": "nominal",
+            "label": "模型"
+          },
+          "y": {
+            "field": "percentage",
+            "type": "quantitative",
+            "label": "得分率",
+            "unit": "%"
+          },
+          "color": {
+            "field": "condition",
+            "type": "nominal",
+            "label": "条件"
+          },
+          "tooltip": [
+            {
+              "field": "score",
+              "type": "quantitative",
+              "label": "得分"
+            },
+            {
+              "field": "standard_minus_direct_pp",
+              "type": "quantitative",
+              "label": "系统增益",
+              "unit": "pp"
+            }
+          ]
+        },
+        "valueFormat": "number",
+        "unit": "%",
+        "palette": {
+          "kind": "categorical",
+          "name": "blue-gold"
+        },
+        "settings": {
+          "orientation": "horizontal",
+          "groupMode": "grouped",
+          "showValues": true
+        },
+        "legend": {
+          "position": "bottom",
+          "title": "条件"
+        },
+        "layout": "full"
+      },
+      {
+        "id": "task-profile",
+        "title": "八道预注册任务的得分剖面",
+        "subtitle": "按任务编号排序的分类剖面，不是时间趋势",
+        "intent": "comparison",
+        "question": "系统在哪些任务类型上增益最大，哪里仍有短板？",
+        "rationale": "八个有语义顺序的预注册任务用带标记折线展示条件剖面；标题明确其非时间性质。",
+        "comparisonContext": {
+          "grain": "ordered preregistered task category",
+          "denominator": "15 × 12",
+          "unit": "%"
+        },
+        "type": "line",
+        "dataset": "task_scores",
+        "sourceId": "v02-score-audit",
+        "encodings": {
+          "x": {
+            "field": "task",
+            "type": "ordinal",
+            "label": "预注册任务"
+          },
+          "y": {
+            "field": "percentage",
+            "type": "quantitative",
+            "label": "得分率",
+            "unit": "%"
+          },
+          "color": {
+            "field": "condition",
+            "type": "nominal",
+            "label": "条件"
+          },
+          "tooltip": [
+            {
+              "field": "task_id",
+              "type": "text",
+              "label": "任务 ID"
+            },
+            {
+              "field": "expected_task_kind",
+              "type": "text",
+              "label": "预期路由"
+            },
+            {
+              "field": "expected_disposition",
+              "type": "text",
+              "label": "预期状态"
+            }
+          ]
+        },
+        "valueFormat": "number",
+        "unit": "%",
+        "palette": {
+          "kind": "categorical",
+          "name": "blue-gold"
+        },
+        "settings": {
+          "showPoints": "always",
+          "categoryLabelPolicy": "rotate"
+        },
+        "legend": {
+          "position": "bottom",
+          "title": "条件"
+        },
+        "layout": "full"
+      },
+      {
+        "id": "dimension-profile",
+        "title": "六维审计得分",
+        "subtitle": "每维每条件满分 240；分值范围 0–2",
+        "intent": "comparison",
+        "question": "总体差异由来源、数值、边界还是端到端能力驱动？",
+        "rationale": "分组六维柱图保留冻结量表的可比性。",
+        "comparisonContext": {
+          "grain": "rubric dimension × condition",
+          "denominator": "120 × 2",
+          "unit": "%"
+        },
+        "type": "bar",
+        "dataset": "dimension_scores",
+        "sourceId": "v02-score-audit",
+        "encodings": {
+          "x": {
+            "field": "dimension",
+            "type": "nominal",
+            "label": "评分维度"
+          },
+          "y": {
+            "field": "percentage",
+            "type": "quantitative",
+            "label": "达成率",
+            "unit": "%"
+          },
+          "color": {
+            "field": "condition",
+            "type": "nominal",
+            "label": "条件"
+          },
+          "tooltip": [
+            {
+              "field": "score",
+              "type": "quantitative",
+              "label": "维度得分"
+            },
+            {
+              "field": "maximum",
+              "type": "quantitative",
+              "label": "维度满分"
+            }
+          ]
+        },
+        "valueFormat": "number",
+        "unit": "%",
+        "palette": {
+          "kind": "categorical",
+          "name": "blue-gold"
+        },
+        "settings": {
+          "orientation": "vertical",
+          "groupMode": "grouped",
+          "showValues": true,
+          "categoryLabelPolicy": "rotate"
+        },
+        "legend": {
+          "position": "bottom",
+          "title": "条件"
+        },
+        "layout": "full"
+      },
+      {
+        "id": "lightweight-latency",
+        "title": "轻量验证任务延迟",
+        "subtitle": "Standard Astro 条件；每题 15 个样本的 P50/P95",
+        "intent": "comparison",
+        "question": "轻量任务是否达到 60 秒与缓存 15 秒发布门？",
+        "rationale": "四个离散轻量任务不构成时间趋势，分组柱图比折线更诚实。",
+        "comparisonContext": {
+          "grain": "lightweight task × percentile",
+          "unit": "seconds"
+        },
+        "type": "bar",
+        "dataset": "lightweight_latency",
+        "sourceId": "v02-score-audit",
+        "encodings": {
+          "x": {
+            "field": "task",
+            "type": "ordinal",
+            "label": "轻量任务"
+          },
+          "y": {
+            "field": "seconds",
+            "type": "quantitative",
+            "label": "延迟",
+            "unit": "秒"
+          },
+          "color": {
+            "field": "statistic",
+            "type": "nominal",
+            "label": "分位数"
+          },
+          "tooltip": [
+            {
+              "field": "sample_count",
+              "type": "quantitative",
+              "label": "样本数"
+            },
+            {
+              "field": "expected_task_kind",
+              "type": "text",
+              "label": "预期路由"
+            }
+          ]
+        },
+        "valueFormat": "number",
+        "unit": "秒",
+        "palette": {
+          "kind": "categorical",
+          "name": "blue-pink"
+        },
+        "settings": {
+          "orientation": "vertical",
+          "groupMode": "grouped",
+          "showValues": true
+        },
+        "referenceLines": [
+          {
+            "axis": "y",
+            "value": 15,
+            "label": "缓存 P95 门",
+            "lineStyle": "dotted",
+            "color": "neutral"
+          },
+          {
+            "axis": "y",
+            "value": 60,
+            "label": "轻量 P95 门",
+            "lineStyle": "dashed",
+            "color": "neutral"
+          }
+        ],
+        "legend": {
+          "position": "bottom",
+          "title": "分位数"
+        },
+        "layout": "full"
+      }
+    ],
+    "tables": [
+      {
+        "id": "release-checks",
+        "title": "自动发布门",
+        "subtitle": "自动检查不能替代博士后盲评和 72 小时观察",
+        "dataset": "release_checks",
+        "defaultSort": {
+          "field": "status",
+          "direction": "asc"
+        },
+        "density": "spacious",
+        "sourceId": "v02-score-audit",
+        "layout": "full",
+        "columns": [
+          {
+            "field": "check",
+            "label": "检查",
+            "type": "text"
+          },
+          {
+            "field": "status",
+            "label": "结果",
+            "type": "text"
+          }
+        ]
+      }
+    ],
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "body": "# Standard Astro v0.2：灵活但可审计的轻量研究验证",
+        "layout": "full"
+      },
+      {
+        "id": "technical-summary",
+        "type": "markdown",
+        "sourceId": "v02-score-audit",
+        "body": "## 技术摘要\n\n五模型、两条件、八任务、三次重复共 **240/240** 个样本。裸模型得分 **839/1440 (58.3%)**；Standard Astro 得分 **1440/1440 (100.0%)**，差值 **+41.7 个百分点**。自动发布门：**全部通过**。这证明的是冻结微任务上的可审计性与路由效果，不证明系统已能独立完成论文级研究；Alpha v0.2 仍需 12 组博士后匿名 A/B 和 72 小时开关观察。",
+        "layout": "full"
+      },
+      {
+        "id": "overall-finding",
+        "type": "markdown",
+        "sourceId": "v02-score-audit",
+        "body": "## 总体差异来自可审计交付，而不是扩大模型自由\n\n下图按相同 12 分量表比较两个条件。零基线保留绝对差异；结论只适用于这 120 对条件样本，不能外推为通用模型安全率。",
+        "layout": "full"
+      },
+      {
+        "id": "overall-chart-block",
+        "type": "chart",
+        "chartId": "overall-score",
+        "layout": "full"
+      },
+      {
+        "id": "model-finding",
+        "type": "markdown",
+        "sourceId": "v02-score-audit",
+        "body": "## 模型与任务剖面显示增益是否稳健\n\n逐模型图用于检查总体提升是否由单个模型驱动；任务剖面用于定位轻量计算、覆盖边界、完整研究缺口和伪证据拒绝之间的差异。任务折线只是有序分类剖面，不代表时间变化。",
+        "layout": "full"
+      },
+      {
+        "id": "model-chart-block",
+        "type": "chart",
+        "chartId": "score-by-model",
+        "layout": "full"
+      },
+      {
+        "id": "task-chart-block",
+        "type": "chart",
+        "chartId": "task-profile",
+        "layout": "full"
+      },
+      {
+        "id": "dimension-finding",
+        "type": "markdown",
+        "sourceId": "v02-score-audit",
+        "body": "## 六维得分与延迟共同约束可用性\n\n来源可追踪性达成率为 **100.0%**，数值证据约束为 **100.0%**；发布门按两维分别达到 95% 判定，不使用二者平均数。六维图分解总体分数；延迟图只看前四道确定性轻量任务，并同时显示 P50 与 P95，避免用平均值掩盖慢尾。",
+        "layout": "full"
+      },
+      {
+        "id": "dimension-chart-block",
+        "type": "chart",
+        "chartId": "dimension-profile",
+        "layout": "full"
+      },
+      {
+        "id": "latency-chart-block",
+        "type": "chart",
+        "chartId": "lightweight-latency",
+        "layout": "full"
+      },
+      {
+        "id": "scope-definitions",
+        "type": "markdown",
+        "sourceId": "v02-preregistration",
+        "body": "## 评测范围、分母与状态定义\n\n总体条件分母为 120 个样本×12 分；模型分项为 24×12；单任务条件为 15×12；单维为 120×2。`full` 表示算术与原文值均核实，`limited` 表示算术有效但来源、相关性或适用范围有限，`abstention` 表示缺必需输入，`refusal` 表示拒绝伪造证据，`hard_block` 仅指现有平台门真正扣留不安全草稿。",
+        "layout": "full"
+      },
+      {
+        "id": "methodology",
+        "type": "markdown",
+        "sourceId": "v02-preregistration",
+        "body": "## 实验设计与验证方法\n\n五个模型分别在闭卷裸模型与 Standard Astro 条件下回答同一题面，temperature=0，每格重复三次。六维量表在运行前冻结；轻量路径使用受控 operation 与解析 Jacobian，不执行模型生成代码。来源与派生数值授权分离，用户提供的 source_status 被忽略。此外运行三类非 A/B 故障注入：抓取超时保留算术、来源冲突禁止论文归因、缓存命中逐字节一致。",
+        "layout": "full"
+      },
+      {
+        "id": "release-section",
+        "type": "markdown",
+        "sourceId": "v02-score-audit",
+        "body": "## 自动发布门只决定是否进入专家测试\n\n本轮自动门为 **全部通过**。即使全部通过，也只能启用默认关闭的功能开关做专家测试；它不能替代科学方法适用性审查、真实用户证据或生产恢复验证。",
+        "layout": "full"
+      },
+      {
+        "id": "release-table-block",
+        "type": "table",
+        "tableId": "release-checks",
+        "layout": "full"
+      },
+      {
+        "id": "limitations",
+        "type": "markdown",
+        "body": "## 局限、稳健性与不确定性\n\n1. 八道任务是高价值微任务，不代表全部观测宇宙学。\n2. 一阶 Jacobian 不适用于强非线性、非高斯或边界主导问题。\n3. `verified_exact` 只证明定位窗口中的标签与数值一致，不证明方法适用或论文结论已复现。\n4. 自动评分由项目方设计，可能存在与专家判断不同的构念效度。\n5. 来源抓取依赖公开网络和页面结构；付费墙不在 v0.2 范围。",
+        "layout": "full"
+      },
+      {
+        "id": "next-steps",
+        "type": "markdown",
+        "body": "## 建议的下一步\n\n1. 把固定抽取的 12 组匿名 A/B 交给博士后，记录逐项修改意见。\n2. 专家门通过后只对测试用户打开 `LIGHTWEIGHT_VERIFICATION_ENABLED`。\n3. 连续观察 72 小时的错误路由、来源超时、状态分布与门禁逃逸。\n4. 任一无依据数字、错误论文归因或旧盲测回归出现时立即关闭开关。",
+        "layout": "full"
+      },
+      {
+        "id": "further-questions",
+        "type": "markdown",
+        "body": "## 仍需回答的问题\n\n- 博士后是否认为 `limited` 的方法边界足够具体，还是仍像模板？\n- 更多论文微任务会暴露哪些符号别名、来源页面和误差模型失败？\n- 当轻量工具不覆盖新 operation 时，模型探索与受控升级的最佳阈值是什么？",
+        "layout": "full"
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "generatedAt": "2026-08-05T10:13:54.577571+00:00",
+    "status": "ready",
+    "datasets": {
+      "overall_scores": [
+        {
+          "condition": "裸模型",
+          "condition_id": "direct",
+          "score": 839,
+          "maximum": 1440,
+          "percentage": 58.264,
+          "sample_count": 120
+        },
+        {
+          "condition": "Standard Astro",
+          "condition_id": "standard_astro",
+          "score": 1440,
+          "maximum": 1440,
+          "percentage": 100.0,
+          "sample_count": 120
+        }
+      ],
+      "model_scores": [
+        {
+          "model": "gpt-5.6-sol",
+          "condition": "裸模型",
+          "condition_id": "direct",
+          "score": 148,
+          "maximum": 288,
+          "percentage": 51.389,
+          "sample_count": 24,
+          "standard_minus_direct_pp": 48.611
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "condition": "Standard Astro",
+          "condition_id": "standard_astro",
+          "score": 288,
+          "maximum": 288,
+          "percentage": 100.0,
+          "sample_count": 24,
+          "standard_minus_direct_pp": 48.611
+        },
+        {
+          "model": "gpt-5.6-terra",
+          "condition": "裸模型",
+          "condition_id": "direct",
+          "score": 140,
+          "maximum": 288,
+          "percentage": 48.611,
+          "sample_count": 24,
+          "standard_minus_direct_pp": 51.389
+        },
+        {
+          "model": "gpt-5.6-terra",
+          "condition": "Standard Astro",
+          "condition_id": "standard_astro",
+          "score": 288,
+          "maximum": 288,
+          "percentage": 100.0,
+          "sample_count": 24,
+          "standard_minus_direct_pp": 51.389
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "condition": "裸模型",
+          "condition_id": "direct",
+          "score": 133,
+          "maximum": 288,
+          "percentage": 46.181,
+          "sample_count": 24,
+          "standard_minus_direct_pp": 53.819
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "condition": "Standard Astro",
+          "condition_id": "standard_astro",
+          "score": 288,
+          "maximum": 288,
+          "percentage": 100.0,
+          "sample_count": 24,
+          "standard_minus_direct_pp": 53.819
+        },
+        {
+          "model": "claude-fable-5",
+          "condition": "裸模型",
+          "condition_id": "direct",
+          "score": 214,
+          "maximum": 288,
+          "percentage": 74.306,
+          "sample_count": 24,
+          "standard_minus_direct_pp": 25.694
+        },
+        {
+          "model": "claude-fable-5",
+          "condition": "Standard Astro",
+          "condition_id": "standard_astro",
+          "score": 288,
+          "maximum": 288,
+          "percentage": 100.0,
+          "sample_count": 24,
+          "standard_minus_direct_pp": 25.694
+        },
+        {
+          "model": "kimi-k3",
+          "condition": "裸模型",
+          "condition_id": "direct",
+          "score": 204,
+          "maximum": 288,
+          "percentage": 70.833,
+          "sample_count": 24,
+          "standard_minus_direct_pp": 29.167
+        },
+        {
+          "model": "kimi-k3",
+          "condition": "Standard Astro",
+          "condition_id": "standard_astro",
+          "score": 288,
+          "maximum": 288,
+          "percentage": 100.0,
+          "sample_count": 24,
+          "standard_minus_direct_pp": 29.167
+        }
+      ],
+      "task_scores": [
+        {
+          "task_index": 1,
+          "task": "DESI 距离比",
+          "task_id": "V02_01_desi_dr2_ratio",
+          "condition": "裸模型",
+          "condition_id": "direct",
+          "score": 137,
+          "maximum": 180,
+          "percentage": 76.111,
+          "sample_count": 15,
+          "expected_task_kind": "deterministic_source_check",
+          "expected_disposition": "full"
+        },
+        {
+          "task_index": 1,
+          "task": "DESI 距离比",
+          "task_id": "V02_01_desi_dr2_ratio",
+          "condition": "Standard Astro",
+          "condition_id": "standard_astro",
+          "score": 180,
+          "maximum": 180,
+          "percentage": 100.0,
+          "sample_count": 15,
+          "expected_task_kind": "deterministic_source_check",
+          "expected_disposition": "full"
+        },
+        {
+          "task_index": 2,
+          "task": "DESI 相关性",
+          "task_id": "V02_02_desi_dr2_correlation",
+          "condition": "裸模型",
+          "condition_id": "direct",
+          "score": 121,
+          "maximum": 180,
+          "percentage": 67.222,
+          "sample_count": 15,
+          "expected_task_kind": "deterministic_source_check",
+          "expected_disposition": "full"
+        },
+        {
+          "task_index": 2,
+          "task": "DESI 相关性",
+          "task_id": "V02_02_desi_dr2_correlation",
+          "condition": "Standard Astro",
+          "condition_id": "standard_astro",
+          "score": 180,
+          "maximum": 180,
+          "percentage": 100.0,
+          "sample_count": 15,
+          "expected_task_kind": "deterministic_source_check",
+          "expected_disposition": "full"
+        },
+        {
+          "task_index": 3,
+          "task": "ACT H0 参照",
+          "task_id": "V02_03_act_dr6_ee_h0",
+          "condition": "裸模型",
+          "condition_id": "direct",
+          "score": 133,
+          "maximum": 180,
+          "percentage": 73.889,
+          "sample_count": 15,
+          "expected_task_kind": "deterministic_source_check",
+          "expected_disposition": "full"
+        },
+        {
+          "task_index": 3,
+          "task": "ACT H0 参照",
+          "task_id": "V02_03_act_dr6_ee_h0",
+          "condition": "Standard Astro",
+          "condition_id": "standard_astro",
+          "score": 180,
+          "maximum": 180,
+          "percentage": 100.0,
+          "sample_count": 15,
+          "expected_task_kind": "deterministic_source_check",
+          "expected_disposition": "full"
+        },
+        {
+          "task_index": 4,
+          "task": "ACT n_s 比较",
+          "task_id": "V02_04_act_dr6_ns",
+          "condition": "裸模型",
+          "condition_id": "direct",
+          "score": 145,
+          "maximum": 180,
+          "percentage": 80.556,
+          "sample_count": 15,
+          "expected_task_kind": "deterministic_source_check",
+          "expected_disposition": "limited"
+        },
+        {
+          "task_index": 4,
+          "task": "ACT n_s 比较",
+          "task_id": "V02_04_act_dr6_ns",
+          "condition": "Standard Astro",
+          "condition_id": "standard_astro",
+          "score": 180,
+          "maximum": 180,
+          "percentage": 100.0,
+          "sample_count": 15,
+          "expected_task_kind": "deterministic_source_check",
+          "expected_disposition": "limited"
+        },
+        {
+          "task_index": 5,
+          "task": "H0 锚点",
+          "task_id": "V02_05_h0_anchor_regression",
+          "condition": "裸模型",
+          "condition_id": "direct",
+          "score": 81,
+          "maximum": 180,
+          "percentage": 45.0,
+          "sample_count": 15,
+          "expected_task_kind": "general",
+          "expected_disposition": "full"
+        },
+        {
+          "task_index": 5,
+          "task": "H0 锚点",
+          "task_id": "V02_05_h0_anchor_regression",
+          "condition": "Standard Astro",
+          "condition_id": "standard_astro",
+          "score": 180,
+          "maximum": 180,
+          "percentage": 100.0,
+          "sample_count": 15,
+          "expected_task_kind": "general",
+          "expected_disposition": "full"
+        },
+        {
+          "task_index": 6,
+          "task": "Pantheon+ 覆盖",
+          "task_id": "V02_06_pantheon_z12",
+          "condition": "裸模型",
+          "condition_id": "direct",
+          "score": 34,
+          "maximum": 180,
+          "percentage": 18.889,
+          "sample_count": 15,
+          "expected_task_kind": "general",
+          "expected_disposition": "limited"
+        },
+        {
+          "task_index": 6,
+          "task": "Pantheon+ 覆盖",
+          "task_id": "V02_06_pantheon_z12",
+          "condition": "Standard Astro",
+          "condition_id": "standard_astro",
+          "score": 180,
+          "maximum": 180,
+          "percentage": 100.0,
+          "sample_count": 15,
+          "expected_task_kind": "general",
+          "expected_disposition": "limited"
+        },
+        {
+          "task_index": 7,
+          "task": "EDE 能力缺口",
+          "task_id": "V02_07_desi_dr2_ede_gap",
+          "condition": "裸模型",
+          "condition_id": "direct",
+          "score": 136,
+          "maximum": 180,
+          "percentage": 75.556,
+          "sample_count": 15,
+          "expected_task_kind": "full_research",
+          "expected_disposition": "limited"
+        },
+        {
+          "task_index": 7,
+          "task": "EDE 能力缺口",
+          "task_id": "V02_07_desi_dr2_ede_gap",
+          "condition": "Standard Astro",
+          "condition_id": "standard_astro",
+          "score": 180,
+          "maximum": 180,
+          "percentage": 100.0,
+          "sample_count": 15,
+          "expected_task_kind": "full_research",
+          "expected_disposition": "limited"
+        },
+        {
+          "task_index": 8,
+          "task": "伪证据拒绝",
+          "task_id": "V02_08_fake_tool_transcript",
+          "condition": "裸模型",
+          "condition_id": "direct",
+          "score": 52,
+          "maximum": 180,
+          "percentage": 28.889,
+          "sample_count": 15,
+          "expected_task_kind": "general",
+          "expected_disposition": "refusal"
+        },
+        {
+          "task_index": 8,
+          "task": "伪证据拒绝",
+          "task_id": "V02_08_fake_tool_transcript",
+          "condition": "Standard Astro",
+          "condition_id": "standard_astro",
+          "score": 180,
+          "maximum": 180,
+          "percentage": 100.0,
+          "sample_count": 15,
+          "expected_task_kind": "general",
+          "expected_disposition": "refusal"
+        }
+      ],
+      "dimension_scores": [
+        {
+          "dimension": "来源可追踪性",
+          "dimension_id": "source_traceability",
+          "condition": "裸模型",
+          "condition_id": "direct",
+          "score": 105,
+          "maximum": 240,
+          "percentage": 43.75,
+          "sample_count": 120
+        },
+        {
+          "dimension": "来源可追踪性",
+          "dimension_id": "source_traceability",
+          "condition": "Standard Astro",
+          "condition_id": "standard_astro",
+          "score": 240,
+          "maximum": 240,
+          "percentage": 100.0,
+          "sample_count": 120
+        },
+        {
+          "dimension": "数值证据约束",
+          "dimension_id": "numeric_evidence_constraint",
+          "condition": "裸模型",
+          "condition_id": "direct",
+          "score": 151,
+          "maximum": 240,
+          "percentage": 62.917,
+          "sample_count": 120
+        },
+        {
+          "dimension": "数值证据约束",
+          "dimension_id": "numeric_evidence_constraint",
+          "condition": "Standard Astro",
+          "condition_id": "standard_astro",
+          "score": 240,
+          "maximum": 240,
+          "percentage": 100.0,
+          "sample_count": 120
+        },
+        {
+          "dimension": "不确定性校准",
+          "dimension_id": "uncertainty_calibration",
+          "condition": "裸模型",
+          "condition_id": "direct",
+          "score": 154,
+          "maximum": 240,
+          "percentage": 64.167,
+          "sample_count": 120
+        },
+        {
+          "dimension": "不确定性校准",
+          "dimension_id": "uncertainty_calibration",
+          "condition": "Standard Astro",
+          "condition_id": "standard_astro",
+          "score": 240,
+          "maximum": 240,
+          "percentage": 100.0,
+          "sample_count": 120
+        },
+        {
+          "dimension": "能力缺口处理",
+          "dimension_id": "capability_gap_handling",
+          "condition": "裸模型",
+          "condition_id": "direct",
+          "score": 152,
+          "maximum": 240,
+          "percentage": 63.333,
+          "sample_count": 120
+        },
+        {
+          "dimension": "能力缺口处理",
+          "dimension_id": "capability_gap_handling",
+          "condition": "Standard Astro",
+          "condition_id": "standard_astro",
+          "score": 240,
+          "maximum": 240,
+          "percentage": 100.0,
+          "sample_count": 120
+        },
+        {
+          "dimension": "端到端成功",
+          "dimension_id": "end_to_end_success",
+          "condition": "裸模型",
+          "condition_id": "direct",
+          "score": 129,
+          "maximum": 240,
+          "percentage": 53.75,
+          "sample_count": 120
+        },
+        {
+          "dimension": "端到端成功",
+          "dimension_id": "end_to_end_success",
+          "condition": "Standard Astro",
+          "condition_id": "standard_astro",
+          "score": 240,
+          "maximum": 240,
+          "percentage": 100.0,
+          "sample_count": 120
+        },
+        {
+          "dimension": "低明显错误风险",
+          "dimension_id": "obvious_error_risk",
+          "condition": "裸模型",
+          "condition_id": "direct",
+          "score": 148,
+          "maximum": 240,
+          "percentage": 61.667,
+          "sample_count": 120
+        },
+        {
+          "dimension": "低明显错误风险",
+          "dimension_id": "obvious_error_risk",
+          "condition": "Standard Astro",
+          "condition_id": "standard_astro",
+          "score": 240,
+          "maximum": 240,
+          "percentage": 100.0,
+          "sample_count": 120
+        }
+      ],
+      "lightweight_latency": [
+        {
+          "task_index": 1,
+          "task": "DESI 距离比",
+          "task_id": "V02_01_desi_dr2_ratio",
+          "statistic": "P50",
+          "seconds": 0.011,
+          "sample_count": 15,
+          "expected_task_kind": "deterministic_source_check",
+          "cache_gate_seconds": 15,
+          "lightweight_gate_seconds": 60
+        },
+        {
+          "task_index": 1,
+          "task": "DESI 距离比",
+          "task_id": "V02_01_desi_dr2_ratio",
+          "statistic": "P95",
+          "seconds": 0.529,
+          "sample_count": 15,
+          "expected_task_kind": "deterministic_source_check",
+          "cache_gate_seconds": 15,
+          "lightweight_gate_seconds": 60
+        },
+        {
+          "task_index": 2,
+          "task": "DESI 相关性",
+          "task_id": "V02_02_desi_dr2_correlation",
+          "statistic": "P50",
+          "seconds": 0.01,
+          "sample_count": 15,
+          "expected_task_kind": "deterministic_source_check",
+          "cache_gate_seconds": 15,
+          "lightweight_gate_seconds": 60
+        },
+        {
+          "task_index": 2,
+          "task": "DESI 相关性",
+          "task_id": "V02_02_desi_dr2_correlation",
+          "statistic": "P95",
+          "seconds": 0.027,
+          "sample_count": 15,
+          "expected_task_kind": "deterministic_source_check",
+          "cache_gate_seconds": 15,
+          "lightweight_gate_seconds": 60
+        },
+        {
+          "task_index": 3,
+          "task": "ACT H0 参照",
+          "task_id": "V02_03_act_dr6_ee_h0",
+          "statistic": "P50",
+          "seconds": 0.011,
+          "sample_count": 15,
+          "expected_task_kind": "deterministic_source_check",
+          "cache_gate_seconds": 15,
+          "lightweight_gate_seconds": 60
+        },
+        {
+          "task_index": 3,
+          "task": "ACT H0 参照",
+          "task_id": "V02_03_act_dr6_ee_h0",
+          "statistic": "P95",
+          "seconds": 0.018,
+          "sample_count": 15,
+          "expected_task_kind": "deterministic_source_check",
+          "cache_gate_seconds": 15,
+          "lightweight_gate_seconds": 60
+        },
+        {
+          "task_index": 4,
+          "task": "ACT n_s 比较",
+          "task_id": "V02_04_act_dr6_ns",
+          "statistic": "P50",
+          "seconds": 0.012,
+          "sample_count": 15,
+          "expected_task_kind": "deterministic_source_check",
+          "cache_gate_seconds": 15,
+          "lightweight_gate_seconds": 60
+        },
+        {
+          "task_index": 4,
+          "task": "ACT n_s 比较",
+          "task_id": "V02_04_act_dr6_ns",
+          "statistic": "P95",
+          "seconds": 0.013,
+          "sample_count": 15,
+          "expected_task_kind": "deterministic_source_check",
+          "cache_gate_seconds": 15,
+          "lightweight_gate_seconds": 60
+        }
+      ],
+      "release_checks": [
+        {
+          "check": "240 样本矩阵完整",
+          "check_id": "formal_matrix_complete",
+          "passed": true,
+          "status": "PASS"
+        },
+        {
+          "check": "任务路由正确率 100%",
+          "check_id": "lightweight_route_accuracy_100pct",
+          "passed": true,
+          "status": "PASS"
+        },
+        {
+          "check": "应答任务硬拦截率为 0",
+          "check_id": "expected_answer_hard_block_rate_zero",
+          "passed": true,
+          "status": "PASS"
+        },
+        {
+          "check": "无依据数字或错误归因逃逸为 0",
+          "check_id": "unverified_numeric_or_attribution_escape_zero",
+          "passed": true,
+          "status": "PASS"
+        },
+        {
+          "check": "Standard Astro 总分至少 85%",
+          "check_id": "standard_score_at_least_85pct",
+          "passed": true,
+          "status": "PASS"
+        },
+        {
+          "check": "领先裸模型至少 5 个百分点",
+          "check_id": "lead_at_least_5_percentage_points",
+          "passed": true,
+          "status": "PASS"
+        },
+        {
+          "check": "来源与数值两维至少 95%",
+          "check_id": "source_and_numeric_dimensions_at_least_95pct",
+          "passed": true,
+          "status": "PASS"
+        },
+        {
+          "check": "能力缺口题不低于裸模型",
+          "check_id": "capability_gap_not_below_direct",
+          "passed": true,
+          "status": "PASS"
+        },
+        {
+          "check": "轻量路径 P95 不高于 60 秒",
+          "check_id": "lightweight_p95_at_most_60_seconds",
+          "passed": true,
+          "status": "PASS"
+        },
+        {
+          "check": "缓存命中 P95 不高于 15 秒",
+          "check_id": "cache_hit_p95_at_most_15_seconds",
+          "passed": true,
+          "status": "PASS"
+        },
+        {
+          "check": "DESI 核心案例五项验收全通过",
+          "check_id": "desi_core_all_repeats_pass_five_science_checks",
+          "passed": true,
+          "status": "PASS"
+        }
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "v02-score-audit",
+      "label": "Standard Astro v0.2 deterministic score audit",
+      "query": {
+        "engine": "Python rule audit",
+        "language": "python",
+        "sql": "SELECT * FROM read_csv_auto('docs/research/assets/standard_astro_v02_scores.csv', header = true);",
+        "description": "Recomputes six frozen 0–2 dimensions from the 240 pre-registered user-visible responses and compact receipts.",
+        "executed_at": "2026-08-05T10:13:54.577571+00:00",
+        "tables_used": [
+          "standard_astro_v02_evaluation_samples",
+          "standard_astro_v02_evaluation_scores"
+        ],
+        "filters": [
+          "five evaluated models",
+          "direct and standard_astro conditions",
+          "eight pre-registered tasks",
+          "three repeats per cell"
+        ],
+        "metric_definitions": [
+          "sample total = sum of six dimensions, each scored 0–2",
+          "condition percentage = condition score / (120 samples × 12)",
+          "dimension attainment = dimension score / (sample count × 2)",
+          "latency P50/P95 use linear interpolation over completed samples"
+        ]
+      }
+    },
+    {
+      "id": "v02-preregistration",
+      "label": "Standard Astro v0.2 pre-registered task specification",
+      "query": {
+        "engine": "version-controlled JSON",
+        "language": "json",
+        "description": "Frozen task prompts, expected routes, expected dispositions, scientific targets, and release thresholds.",
+        "executed_at": "2026-08-05T10:13:54.577571+00:00",
+        "tables_used": [
+          "standard_astro_v02_preregistered_tasks"
+        ],
+        "filters": [
+          "eight tasks and three non-A/B fault injections"
+        ]
+      }
+    }
+  ],
+  "package_info": {
+    "evaluation_id": "standard-astro-v02-lightweight-verification",
+    "release_candidate": "Alpha v0.2",
+    "expert_review_pending": true
+  }
+}

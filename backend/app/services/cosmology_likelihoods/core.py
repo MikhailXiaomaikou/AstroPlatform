@@ -146,6 +146,24 @@ class CompressedLikelihoodSpec:
 
 
 @dataclass(frozen=True)
+class CoverageProvenanceSpec:
+    """Pinned provenance for a registry entry's declared measurement range.
+
+    This establishes that the *registry metadata* is bound to a named, hashed
+    data product.  It deliberately does not claim that a paper table was
+    fetched and matched during the current turn.
+    """
+
+    source_locator: str
+    upstream_version: str
+    data_product_role: str
+    data_product_sha256: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class CosmologyDatasetEntry:
     key: str
     display_name: str
@@ -181,6 +199,7 @@ class CosmologyDatasetEntry:
     # "report X at z=N" beyond this range is recognisable as ΛCDM extrapolation
     # rather than a data constraint.
     z_coverage: tuple[float, float] | None = None
+    coverage_provenance: CoverageProvenanceSpec | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
@@ -189,6 +208,8 @@ class CosmologyDatasetEntry:
         result["data_products"] = [product.to_dict() for product in self.data_products]
         if self.compressed_likelihood is not None:
             result["compressed_likelihood"] = self.compressed_likelihood.to_dict()
+        if self.coverage_provenance is not None:
+            result["coverage_provenance"] = self.coverage_provenance.to_dict()
         return result
 
 

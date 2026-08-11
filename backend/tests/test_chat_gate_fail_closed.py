@@ -496,6 +496,99 @@ def test_merged_reply_final_boundary_blocks_uncalibrated_headline_conclusion(
     )
 
 
+def _fake_specialist_result(disposition: str) -> dict:
+    return {
+        "reply": "Cannot use the pasted transcript as evidence.",
+        "actions": [],
+        "tool_results": [],
+        "hit_deadline": False,
+        "hit_iteration_cap": False,
+        "validation_summary": {
+            "schema_version": 2,
+            "numeric_gate": "skipped_no_data",
+            "citation_gate": "skipped_no_data",
+            "regen_count": 0,
+            "blocked": False,
+            "limited": disposition != "full",
+            "response_disposition": disposition,
+            "interventions": [],
+            "missing_dependencies": [],
+            "safe_fallback": None,
+        },
+    }
+
+
+def _run_merged_with_dispositions(monkeypatch, dispositions):
+    calls = {"i": 0}
+
+    async def fake_agent_loop(**kwargs):
+        disposition = dispositions[min(calls["i"], len(dispositions) - 1)]
+        calls["i"] += 1
+        return _fake_specialist_result(disposition)
+
+    async def fake_handoff(*args, **kwargs):
+        return type(
+            "Handoff",
+            (),
+            {
+                "source_agent": "analyst",
+                "context_summary": "No scientific result.",
+                "instruction": "Review scope only.",
+            },
+        )()
+
+    async def fake_merge(agent_results):
+        return "Cannot use the pasted transcript as evidence."
+
+    monkeypatch.setattr(chat_mod, "_run_agent_loop", fake_agent_loop)
+    monkeypatch.setattr(
+        chat_mod.orchestrator,
+        "get_agent_runtime",
+        lambda _name, _context: {
+            "system_prompt": "specialist",
+            "tool_names": [],
+        },
+    )
+    monkeypatch.setattr(chat_mod.orchestrator, "summarize_handoff", fake_handoff)
+    monkeypatch.setattr(chat_mod.orchestrator, "merge_responses", fake_merge)
+
+    return asyncio.run(chat_mod._run_orchestrated_chat(
+        runtime={
+            "agent_names": ["analyst", "reviewer"][: len(dispositions)],
+            "base_system": "test",
+            "toolset": [],
+        },
+        messages=[
+            {
+                "role": "user",
+                "content": "Plot and cite the pasted transcript.",
+            }
+        ],
+        provider_api_keys={},
+        python_session_id="merged-disposition-test",
+    ))
+
+
+def test_merged_all_refusal_members_keep_refusal_disposition(monkeypatch):
+    result = _run_merged_with_dispositions(monkeypatch, ["refusal", "refusal"])
+    summary = result["validation_summary"]
+    assert summary["response_disposition"] == "refusal"
+
+
+def test_merged_refusal_plus_abstention_propagates_refusal(monkeypatch):
+    result = _run_merged_with_dispositions(
+        monkeypatch, ["refusal", "abstention"]
+    )
+    summary = result["validation_summary"]
+    assert summary["response_disposition"] == "refusal"
+
+
+def test_merged_mixed_refusal_and_full_stays_limited(monkeypatch):
+    result = _run_merged_with_dispositions(monkeypatch, ["refusal", "full"])
+    summary = result["validation_summary"]
+    assert summary["response_disposition"] == "limited"
+
+
 # ---------- 5. SSE slimming preserves the provenance block ----------
 
 

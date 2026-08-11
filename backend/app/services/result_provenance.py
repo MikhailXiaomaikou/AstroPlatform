@@ -569,6 +569,7 @@ _COMPUTE_TOOLS = {
     # across cosmologies, gravitational-lensing demagnification of a sample.
     "prepare_spectral_measurements", "fit_line_lfr",
     "astro_statistics_toolbox",
+    "verify_scalar_derivation",
     "compare_luminosity_distances", "demagnify_sample",
 }
 _REFERENCE_TOOLS = {

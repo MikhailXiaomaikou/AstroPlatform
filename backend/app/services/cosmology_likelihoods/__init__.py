@@ -37,6 +37,7 @@ from app.services.cosmology_likelihoods.core import (
     CovarianceSpec,  # noqa: F401
     DataProductSpec,  # noqa: F401
     CompressedLikelihoodSpec,  # noqa: F401
+    CoverageProvenanceSpec,  # noqa: F401
     CosmologyDatasetEntry,  # noqa: F401
     EXECUTABLE_COMPRESSED_STATISTICAL_ROLES,  # noqa: F401
     compressed_rows_are_executable,  # noqa: F401
@@ -61,6 +62,7 @@ from app.services.cosmology_likelihoods.registry import (
     _PANTHEON_PLUS_COMPRESSED_MEAN,  # noqa: F401
     _PANTHEON_PLUS_COMPRESSED_COV,  # noqa: F401
     _PANTHEON_PLUS_COMPRESSED_NAMES,  # noqa: F401
+    COSMOLOGY_DATASET_REGISTRY_VERSION,  # noqa: F401
     _REGISTRY,  # noqa: F401
     list_cosmology_datasets,  # noqa: F401
     get_cosmology_dataset,  # noqa: F401

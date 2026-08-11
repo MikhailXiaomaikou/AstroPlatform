@@ -6,6 +6,7 @@ import CosmologyMCMCPanel from "../../components/chat/CosmologyMCMCPanel";
 import CosmologyLikelihoodPanel from "../../components/chat/CosmologyLikelihoodPanel";
 import ResearchProgramPanel from "../../components/chat/ResearchProgramPanel";
 import DefaultToolResultPanel from "../../components/chat/DefaultToolResultPanel";
+import ScalarVerificationReceiptCard from "../../components/chat/ScalarVerificationReceiptCard";
 
 /* Fullscreen image/plot modal */
 function FullscreenModal({ src, onClose }: { src: string; onClose: () => void }) {
@@ -188,6 +189,10 @@ export function AutoToolResult({ toolName, result }: { toolName: string; result:
         )}
       </div>
     );
+  }
+
+  if (toolName === "verify_scalar_derivation") {
+    return <ScalarVerificationReceiptCard result={result} />;
   }
 
   if (result.error) {

@@ -9,6 +9,7 @@ import importlib.util
 import inspect
 import json
 import math
+import os
 import subprocess
 import sys
 import threading
@@ -37,6 +38,12 @@ EXACT_CONFIG = _SCRIPT_DIR / "w0wa_desi_cmb_pantheonplus_exact.yaml"
 DEPENDENCY_LOCK = _SCRIPT_DIR / "w0wa_exact_requirements.txt"
 REFERENCE_CASES = _SCRIPT_DIR / "w0wa_exact_reference_cases.json"
 WHEEL_MANIFEST = _SCRIPT_DIR / "w0wa_exact_wheel_manifest.json"
+PACKAGES_PATH = Path(
+    os.environ.get(
+        "COBAYA_PACKAGES_PATH",
+        str(_REPO_ROOT / "backend" / "packages"),
+    )
+).resolve()
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -1061,7 +1068,7 @@ def test_exact_theta_mc_parameterization_is_accepted_by_camb():
     info = yaml.safe_load(EXACT_CONFIG.read_text(encoding="utf-8"))
     info["likelihood"] = {"h0_probe": {"external": "lambda H0: 0.0"}}
     info.pop("sampler", None)
-    info["packages_path"] = str(_REPO_ROOT / "backend" / "packages")
+    info["packages_path"] = str(PACKAGES_PATH)
     model = get_model(info)
     result = model.logposterior(
         {
@@ -1083,11 +1090,20 @@ def test_exact_theta_mc_parameterization_is_accepted_by_camb():
 def test_adequacy_plan_freezes_predictive_rule_and_real_pantheon_variant(tmp_path):
     from app.services import research_alpha_manifest as research_alpha_consumer
 
+    pantheon_source = (
+        PACKAGES_PATH / "data" / "sn_data" / "PantheonPlus" / "Pantheon+SH0ES.dat"
+    )
+    if not pantheon_source.is_file():
+        pytest.skip(
+            "external Pantheon+SH0ES source table is not installed under "
+            f"COBAYA_PACKAGES_PATH: {pantheon_source}"
+        )
+
     config = yaml.safe_load(EXACT_CONFIG.read_text(encoding="utf-8"))
     record = pipeline.write_model_adequacy_plan(
         config,
         tmp_path / "adequacy",
-        _REPO_ROOT / "backend" / "packages",
+        PACKAGES_PATH,
     )
     plan = json.loads(Path(record["path"]).read_text(encoding="utf-8"))
     ppc = json.loads(
@@ -1353,10 +1369,8 @@ def test_preflight_binds_config_data_environment_and_reference_values(
 
 
 def test_trusted_data_manifest_binds_official_archives_and_installed_bytes():
-    inventory = pipeline.build_data_inventory(_REPO_ROOT / "backend" / "packages")
-    adequacy_inventory = pipeline.build_adequacy_data_inventory(
-        _REPO_ROOT / "backend" / "packages"
-    )
+    inventory = pipeline.build_data_inventory(PACKAGES_PATH)
+    adequacy_inventory = pipeline.build_adequacy_data_inventory(PACKAGES_PATH)
     verified = pipeline.verify_trusted_data_manifest(
         pipeline.TRUSTED_DATA_MANIFEST_PATH,
         inventory=inventory,

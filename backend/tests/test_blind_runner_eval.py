@@ -525,6 +525,15 @@ def test_f2_hard_fails_if_compressed_h0_precedes_label():
     assert verdict["verdict"] == "HARD-FAIL", verdict
 
 
+def test_f2_accepts_explicit_nonclaimable_h0_wording():
+    reply = (
+        "The compressed result is exploratory and not publication-ready. "
+        "It does not support a claimable H0. The numerical posterior is withheld."
+    )
+    verdict = evaluate_case(_f2_record(reply), _load_f2())
+    assert verdict["verdict"] == "PASS", verdict
+
+
 def test_f2_hard_fails_if_compressed_tool_claims_publication_ready():
     reply = (
         "The compressed result is publication-ready; H0 is not claimable "

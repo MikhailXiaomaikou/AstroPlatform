@@ -22,6 +22,7 @@ from app.models.schemas import InferenceLog
 logger = logging.getLogger(__name__)
 
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+_KIMI_CLI_MAX_PROMPT_BYTES = 120 * 1024
 
 INFERENCE_ERROR_CLASSES = frozenset(
     {
@@ -89,6 +90,7 @@ _CLI_CHILD_ENV_ALLOWLIST = {
     # user-owned directories; provider API-key variables are not inherited.
     "CODEX_HOME",
     "CLAUDE_CONFIG_DIR",
+    "KIMI_CODE_HOME",
     "XDG_CONFIG_HOME",
     "XDG_CACHE_HOME",
     "XDG_DATA_HOME",
@@ -127,6 +129,18 @@ def _cli_child_env() -> dict[str, str]:
         for key, value in os.environ.items()
         if key in _CLI_CHILD_ENV_ALLOWLIST
     }
+
+
+def _initialize_empty_git_sandbox(path: str) -> None:
+    """Create the minimal Git metadata Claude Code needs in an empty sandbox."""
+    git_dir = Path(path) / ".git"
+    (git_dir / "objects").mkdir(parents=True)
+    (git_dir / "refs" / "heads").mkdir(parents=True)
+    (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (git_dir / "config").write_text(
+        "[core]\n\trepositoryformatversion = 0\n\tbare = false\n",
+        encoding="utf-8",
+    )
 
 
 class InferenceError(RuntimeError):
@@ -738,6 +752,19 @@ class LocalBackend(OpenAICompatibleBackend):
                 request_timeout=request_timeout,
                 model_profile=profile,
             )
+        if (
+            profile
+            and profile.id == "local:kimi-cli"
+            and _local_cli_enabled("KIMI_CLI_ENABLED")
+        ):
+            return await self._complete_kimi_cli(
+                messages,
+                system=system,
+                tools=tools,
+                max_tokens=max_tokens,
+                request_timeout=request_timeout,
+                model_profile=profile,
+            )
         if not _env_flag("LOCAL_MODEL_ENABLED"):
             raise InferenceError("Local model backend is not enabled. Set LOCAL_MODEL_ENABLED=1 and provide an OpenAI-compatible server.")
         return await super().complete(messages, system=system, tools=tools, max_tokens=max_tokens, temperature=temperature, api_key=api_key, provider_api_keys=provider_api_keys, request_timeout=request_timeout, model_profile=model_profile)
@@ -956,7 +983,7 @@ class LocalBackend(OpenAICompatibleBackend):
         the CLI is a pure completion endpoint — its own tools are disabled
         (`--tools ""`, platform tools go through the JSON bridge), no user or
         project settings are loaded (`--setting-sources ""`), no session is
-        persisted, and it runs from an empty temp directory. Anthropic
+        persisted, and it runs from an empty temporary Git sandbox. Anthropic
         API-key variables are stripped from the child environment so the CLI
         authenticates with its subscription login — that is the point of
         this backend.
@@ -971,6 +998,7 @@ class LocalBackend(OpenAICompatibleBackend):
 
         for attempt in range(attempts):
             with tempfile.TemporaryDirectory(prefix="standard-astro-claude-cli-") as tmp:
+                _initialize_empty_git_sandbox(tmp)
                 prompt = self._openai_cli_prompt(
                     messages,
                     system=system,
@@ -981,7 +1009,7 @@ class LocalBackend(OpenAICompatibleBackend):
                     cli_path,
                     "--print",
                     "--output-format",
-                    "text",
+                    "json",
                     "--tools",
                     "",
                     "--setting-sources",
@@ -1014,7 +1042,19 @@ class LocalBackend(OpenAICompatibleBackend):
                 if proc.returncode != 0:
                     err = stderr.decode("utf-8", errors="replace").strip()
                     raise InferenceError(f"Claude CLI exited with {proc.returncode}: {err[:500]}")
-                last_text = stdout.decode("utf-8", errors="replace")
+                raw_text = stdout.decode("utf-8", errors="replace")
+                try:
+                    envelope = json.loads(raw_text)
+                except json.JSONDecodeError:
+                    last_text = raw_text
+                else:
+                    if not isinstance(envelope, dict):
+                        last_text = raw_text
+                    elif envelope.get("is_error"):
+                        message = str(envelope.get("result") or "Claude CLI returned an error")
+                        raise InferenceError(message[:500])
+                    else:
+                        last_text = str(envelope.get("result") or "")
                 if (
                     attempt == 0
                     and tools
@@ -1029,6 +1069,154 @@ class LocalBackend(OpenAICompatibleBackend):
                 self._validate_cli_tool_calls(tool_calls, tools)
                 if not content and not tool_calls:
                     raise InferenceError("Claude CLI returned an empty completion")
+                return {
+                    "content": content,
+                    "tool_calls": tool_calls,
+                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                    "stop_reason": "tool_calls" if tool_calls else "stop",
+                    "backend_name": self.backend_label,
+                    "model_name": model_profile.resolved_model_id,
+                    "model_profile": model_profile.id,
+                }
+
+        content, tool_calls = self._parse_openai_cli_result(last_text)
+        self._validate_cli_tool_calls(tool_calls, tools)
+        return {
+            "content": content,
+            "tool_calls": tool_calls,
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+            "stop_reason": "tool_calls" if tool_calls else "stop",
+            "backend_name": self.backend_label,
+            "model_name": model_profile.resolved_model_id,
+            "model_profile": model_profile.id,
+        }
+
+    @staticmethod
+    def _parse_kimi_cli_stream(text: str) -> str:
+        """Extract assistant text from Kimi Code's stream-json output."""
+        assistant_parts: list[str] = []
+        errors: list[str] = []
+        for raw_line in str(text or "").splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            role = str(event.get("role") or "")
+            event_type = str(event.get("type") or "")
+            content = event.get("content")
+            if role == "assistant" and isinstance(content, str):
+                assistant_parts.append(content)
+            elif role == "error" or event_type == "error":
+                errors.append(str(content or event.get("message") or "Kimi CLI error"))
+        if assistant_parts:
+            return "\n".join(assistant_parts).strip()
+        if errors:
+            raise InferenceError(errors[-1][:500])
+        return ""
+
+    async def _complete_kimi_cli(
+        self,
+        messages,
+        *,
+        system=None,
+        tools=None,
+        max_tokens=4096,
+        request_timeout=None,
+        model_profile: ModelProfile,
+    ):
+        """Complete through Kimi Code OAuth in an empty, non-approved workspace.
+
+        Kimi Code 0.26 exposes prompt mode as an argument rather than stdin.
+        The process therefore receives only a size-bounded JSON bridge prompt,
+        runs in a fresh empty directory, loads no project skills, and is never
+        given auto/yolo permission. Platform secrets remain outside the child
+        env.
+        """
+        command = os.getenv("KIMI_CLI_COMMAND", "kimi")
+        cli_path = shutil.which(command) or command
+        timeout = request_timeout or 120.0
+        attempts = 2
+        last_text = ""
+        retry_note: str | None = None
+        child_env = _cli_child_env()
+        child_env["KIMI_CODE_NO_AUTO_UPDATE"] = "1"
+
+        for attempt in range(attempts):
+            with tempfile.TemporaryDirectory(prefix="standard-astro-kimi-cli-") as tmp:
+                skills_dir = Path(tmp) / "empty-skills"
+                skills_dir.mkdir()
+                bridge_prompt = self._openai_cli_prompt(
+                    messages,
+                    system=system,
+                    tools=tools,
+                    retry_note=retry_note,
+                )
+                prompt = (
+                    "Do not invoke Kimi Code built-in tools. Respond only to the "
+                    "Standard Astro JSON bridge protocol below.\n\n"
+                    + bridge_prompt
+                )
+                prompt_bytes = len(prompt.encode("utf-8"))
+                if prompt_bytes > _KIMI_CLI_MAX_PROMPT_BYTES:
+                    raise InferenceError(
+                        "Kimi CLI bridge prompt exceeds the 120 KiB argv safety "
+                        f"limit ({prompt_bytes} bytes); shorten this request"
+                    )
+                cmd = [
+                    cli_path,
+                    "--model",
+                    model_profile.resolved_model_id or "kimi-code/k3",
+                    "--prompt",
+                    prompt,
+                    "--output-format",
+                    "stream-json",
+                    "--skills-dir",
+                    str(skills_dir),
+                ]
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdin=asyncio.subprocess.DEVNULL,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        cwd=tmp,
+                        env=child_env,
+                    )
+                    stdout, stderr = await asyncio.wait_for(
+                        proc.communicate(),
+                        timeout=timeout,
+                    )
+                except asyncio.TimeoutError as exc:
+                    proc.kill()
+                    await proc.wait()
+                    raise InferenceError(
+                        f"Kimi CLI request timed out after {timeout}s"
+                    ) from exc
+                except OSError as exc:
+                    raise InferenceError(f"Kimi CLI could not be started: {exc}")
+                if proc.returncode != 0:
+                    err = stderr.decode("utf-8", errors="replace").strip()
+                    raise InferenceError(
+                        f"Kimi CLI exited with {proc.returncode}: {err[:500]}"
+                    )
+                last_text = self._parse_kimi_cli_stream(
+                    stdout.decode("utf-8", errors="replace")
+                )
+                if attempt == 0 and tools and _cli_bridge_self_blocked(last_text):
+                    retry_note = (
+                        "Your previous response refused tool use. In this bridge, "
+                        "you request tools by returning JSON tool_calls; the backend executes them."
+                    )
+                    continue
+                content, tool_calls = self._parse_openai_cli_result(last_text)
+                self._validate_cli_tool_calls(tool_calls, tools)
+                if not content and not tool_calls:
+                    raise InferenceError("Kimi CLI returned an empty completion")
                 return {
                     "content": content,
                     "tool_calls": tool_calls,
@@ -1108,6 +1296,7 @@ class InferenceRouter:
                 _env_flag("LOCAL_MODEL_ENABLED")
                 or _local_cli_enabled("OPENAI_CLI_ENABLED")
                 or _local_cli_enabled("CLAUDE_CLI_ENABLED")
+                or _local_cli_enabled("KIMI_CLI_ENABLED")
             )
         return backend_name in self.backends
 
@@ -1197,7 +1386,7 @@ class InferenceRouter:
         if attempted_configured == 0:
             raise InferenceError(
                 "No configured AI backends are available. Add an Anthropic, OpenAI, or DeepSeek API key in Settings, "
-                "or enable LOCAL_MODEL_ENABLED for a local model backend."
+                "or enable LOCAL_MODEL_ENABLED / an approved local CLI backend."
             )
         if attempted_errors:
             details = "; ".join(f"{backend}: {exc}" for backend, exc in attempted_errors[:3])

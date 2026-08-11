@@ -1,22 +1,22 @@
 # Standard Astro Architecture
 
-**Current as of the cosmology-only refactor (2026-06-03): solar-system + exoplanet + the dormant verticals extracted to the sibling `standard-astro-verticals` repo; Provenance v2; the literature-table / cosmology research-mode hardening; and the modular focus-gate locked to a single active module.** Reflects the actual checked-in code, not an aspirational roadmap. Update when modules, flows, or deployment assumptions materially change.
+**Current as of 2026-08-07: cosmology-only scope; Provenance v2; research-mode and claim-gate hardening; dark-launched lightweight scalar verification; evidence receipts; and durable posterior-chain exports.** Reflects the actual checked-in code, not an aspirational roadmap. Update when modules, flows, or deployment assumptions materially change.
 
-> **Scope.** This repository is **cosmology-only**. The sole active prompt module is `cosmology`; `ASTRO_RESEARCH_FOCUS` defaults to `cosmology` and any value other than `all` fails closed to it. The solar-system / exoplanet prompt modules and the 12 dormant prompt modules were extracted to `standard-astro-verticals` on 2026-06-03, so `backend/app/prompts/modules/` now contains only `cosmology/`. Their **tool implementations** still live in `backend/app/services/` but are invisible to the LLM because they are outside the cosmology manifest allowlist (77-tool catalog − 57 visible = ~20 gated). Counts below come from `scripts/stats.sh` — run it after any structural change.
+> **Scope.** This repository is **cosmology-only**. The sole active prompt module is `cosmology`; `ASTRO_RESEARCH_FOCUS` defaults to `cosmology` and any value other than `all` fails closed to it. The solar-system / exoplanet prompt modules and the 12 dormant prompt modules were extracted to `standard-astro-verticals` on 2026-06-03, so `backend/app/prompts/modules/` now contains only `cosmology/`. Their **tool implementations** still live in `backend/app/services/` but are invisible to the LLM because they are outside the cosmology manifest allowlist (81-tool catalog − 61 visible = 20 gated, live-imported 2026-08-07). Counts below come from `scripts/stats.sh` or the equivalent backend-venv live import — run it after any structural change.
 
 ## 1. System Shape
 
 Standard Astro is a full-stack astronomy research platform with four runtime layers:
 
-1. **Frontend SPA** — React 19 + TypeScript (strict) served by Vite. 14 pages: AI Chat (assistant), Papers, Observations, Team, Account, Settings, Research History, Alert Dashboard, Anomaly Explorer, User Tools, Landing, Help, Auth, Shared Session. (The Data Browser, Pipeline Studio, ADQL, and Workspace pages were removed in the M3 frontend trim — the cosmology copilot drives everything through chat; the pipeline DAG engine still exists backend-side via the `pipeline` API.)
+1. **Frontend SPA** — React 19 + TypeScript (strict) served by Vite. The current route table has 15 directly rendered screen families, including AI Chat, Claim Audit, Workflow Foundry, Research Workspace, Bot Console, Papers, Observations, Team, Account, and shared sessions; legacy Settings, Alert, and Anomaly URLs redirect to their surviving parents. The visual Data Browser, Pipeline Studio, and ADQL pages remain removed; the pipeline DAG engine still exists backend-side.
 
-2. **FastAPI backend** — Single process, 33 domain routers (`scripts/stats.sh` for live count). SSE streaming on the chat path, long-poll + WebSocket for collaboration, background workers for pipeline execution.
+2. **FastAPI backend** — Single process, 44 domain-router modules (measured 2026-08-07; use `scripts/stats.sh` for the live count). SSE streaming on the chat path, long-poll + WebSocket for collaboration, background workers for pipeline execution.
 
 3. **Execution + storage** — PostgreSQL (prod) / SQLite (dev) for metadata; local filesystem for FITS; Redis for content-addressed connector cache + Celery queue; Celery worker + beat for heavy pipelines. Arbitrary `run_python` execution is disabled by default and prohibited in hosted production until it runs in a separate OS-isolated environment with no application secrets or tenant mounts.
 
 4. **External services** — 23 astronomy connector keys, with 6 provenance-v2 active sources (`vizier`, `gaia`, `simbad`, `ned`, `2mass`, `alma`) and 17 maintenance-gated sources; NASA ADS / arXiv, astrometry.net, IRSA dust maps, PARSEC isochrones, and routed LLM backends (Claude / OpenAI / DeepSeek / local). ALMA is active for Science Archive observation metadata, not derived line luminosity/FWHM measurements.
 
-Users move between chat → analysis → export → paper without losing context. The chat assistant bridges the module through its **77-tool catalog** (§3; live count via `scripts/stats.sh`). The effective per-turn tool surface is narrower: the focus gate filters tools to the active module's manifest, so cosmology focus exposes **57 tools** (18 shared core + 25 cosmology-specific + 14 overlap) and the remaining ~20 catalog entries — dormant-vertical implementations retained in code — are physically invisible to the LLM.
+Users move between chat → analysis → export → paper without losing context. The chat assistant bridges the module through its **81-tool catalog** (§3; live-imported 2026-08-07). The cosmology manifest allowlists **61 tools** and the remaining 20 catalog entries — dormant-vertical implementations retained in code — are physically invisible to the LLM. With the dark-launched v0.2 flag off, `api/chat.py` also removes `verify_scalar_derivation`, leaving **60 tools wire-visible by default**.
 
 ### Runtime topology
 
@@ -30,7 +30,7 @@ FastAPI web process
   ├─ Router layer: auth/data/chat/pipeline/export/paper/admin/...
   ├─ AI layer: orchestrator → inference_router → selected model backend
   ├─ Tool layer: ai_tools dispatcher → connectors / analysis services / sandbox
-  ├─ Guardrail layer: provenance normalizer → claim validator → citation gate
+  ├─ Guardrail layer: task router → source/receipt verifier → claim/citation gates
   └─ Persistence layer: SQLAlchemy metadata + filesystem artifacts + cache
 
 Background / external services
@@ -67,7 +67,33 @@ numeric validation, citation validation, rate limits, and UI status chips.
 7. The final prose passes the zero-fabrication validator, citation validator,
    unsupported-narrative gate, and methodology consistency checks.
 8. The frontend renders the reply, tool cards, Data Sources panel, warnings,
-   figures, and acknowledgement controls.
+   figures, evidence receipts, and acknowledgement controls.
+
+**Lightweight scalar source check (dark-launched v0.2)**
+
+1. With `LIGHTWEIGHT_VERIFICATION_ENABLED=1`, `prompt_routing.py` classifies a
+   bounded paper-table calculation as `deterministic_source_check`. Explicit
+   requests to run a chain, likelihood, fit, sampler, posterior, or arbitrary
+   expression stay on the heavy/general path; negated mentions do not force an
+   upgrade.
+2. A high-confidence parse can inject the single controlled
+   `verify_scalar_derivation` call. If the model fills a partially specified
+   call, the echo guard requires the operation, each quantity/value/error/unit,
+   source identity, locator, and covariance statement to remain bound to the
+   user's text before execution.
+3. `scalar_derivation.py` validates arity, finite inputs, unit compatibility,
+   covariance symmetry/diagonal/positive-semidefiniteness, and supported
+   operation semantics. It uses analytic Jacobian propagation; it never runs
+   generated code.
+4. `source_packet_resolver.py` normalizes and retrieves bounded arXiv, DOI,
+   Zenodo, or public-HTTPS material. Locator-scoped matching binds complete
+   labels, values, uncertainties, correlations, table/row regions, and source
+   identities. Missing, ambiguous, reordered, rounded/lossy, or conflicting
+   evidence cannot become `verified_exact`.
+5. The result separately records `calculation_status` and `source_status`, then
+   chooses `full` or a useful `limited` response. Input errors abstain; pasted
+   fake transcripts can produce a refusal receipt. Every scalar receipt gets a
+   canonical SHA-256 hash and remains explicitly non-publication-ready.
 
 **Archive/data query**
 
@@ -172,29 +198,31 @@ keys, and no debug endpoints unless explicitly enabled.
 
 ## 2. Frontend Architecture
 
-Entrypoint: [`src/App.tsx`](./frontend/src/App.tsx). Routes are declared here; the two-row **journal-masthead** holds the primary nav (Home / AI Assistant / Papers / Account, with Observations / Team in the footer) plus a chip-style 4-language switcher (EN / 中文 / FR / ES), theme toggle, and user menu. The M3 trim (2026-05-18) removed the Data Browser / Pipeline / ADQL / Workspace pages and their nav tabs; `/research`, `/settings`, `/alerts`, `/anomalies` now redirect to their surviving parents.
+Entrypoint: [`src/App.tsx`](./frontend/src/App.tsx). Routes are declared here; the two-row **journal-masthead** holds the primary nav plus a chip-style 4-language switcher (EN / 中文 / FR / ES), theme toggle, and user menu. The M3 trim (2026-05-18) removed the Data Browser / Pipeline / ADQL pages and their nav tabs. `/settings`, `/alerts`, and `/anomalies` now redirect to surviving parents; `/research` is active again as the Research Workspace surface.
 
-### Pages (14)
+### Pages and route families
 
 | Page | Purpose |
 |---|---|
 | `Landing` | Journal-style hero + stat strip + TOC grid + editorial rail |
 | `Chat` | AI assistant with persistent sidebar (claude.ai style); thinking timeline, action cards, honest-abstention bubble — the primary surface |
+| `ClaimAudit` | Dark-launched claim/evidence audit workflow |
+| `Foundry` | Dark-launched candidate-workflow review and activation surface |
+| `Research`, `ResearchWorkspace` | Research programs and account-scoped workspaces |
+| `Bot` | Loopback-only local automation console; unavailable in hosted production |
 | `Papers` | Account-scoped LaTeX manuscript drafts; drafts are private by default and can be explicitly published as read-only links |
 | `Observations` | Transient feed, alerts, anomalies, follow-up recommendations |
 | `Team` | Friends, shared datasets, activity feed, comments |
-| `Account` / `Settings` / `ResearchHistory` | Profile, keys (Fernet-encrypted), opt-in memory |
-| `UserTools` | User-defined / mined tool registry view |
-| `AlertDashboard`, `AnomalyExplorer` | Dedicated alerts + anomaly triage views |
+| `Account` | Profile, keys (Fernet-encrypted), opt-in memory; legacy `/settings` redirects here |
 | `SharedSession` | Tokenized read / comment / fork view of any saved chat session |
-| `Auth`, `Help` | Login / register; onboarding docs |
+| `Auth`, `Help`, `Privacy` | Login / register, onboarding docs, and privacy controls |
 
 ### Shared infrastructure
 
 - [`src/api/client.ts`](./frontend/src/api/client.ts) — Axios + typed SSE streaming. `ThinkingEvent` union covers `agent_text` / `tool_call` / `tool_result` / `status` / **`honest_abstention`** / `error`. `getAIBackendStatus()` feeds the F4 pre-send gate.
 - [`src/context/AuthContext.tsx`](./frontend/src/context/AuthContext.tsx) — JWT lifecycle; logout only on 401/403, not transient errors.
 - [`src/components/viz/*`](./frontend/src/components/viz) — PlotBuilder (Plotly publication-grade; Fit checkbox now shows ✓ / "(not supported)" per chart type) and AladinViewer. (SpectrumViewer / LightCurveViewer / ImageCutoutViewer / MCMCDiagnostics were removed 2026-06-11 — dead code orphaned from every route by the M3 page trim.)
-- [`src/components/chat/*`](./frontend/src/components/chat) — MarkdownText, chat sidebar, figure-expand modal, DataSourcesPanel, AckButton, CosmologyMCMCPanel, and CosmologyLikelihoodPanel.
+- [`src/components/chat/*`](./frontend/src/components/chat) — MarkdownText, chat sidebar, figure-expand modal, DataSourcesPanel, AckButton, CosmologyMCMCPanel, CosmologyLikelihoodPanel, `ScalarVerificationReceiptCard`, and the general `EvidenceReceiptCard`.
 - [`src/i18n/index.tsx`](./frontend/src/i18n/index.tsx) — 4-language flat dictionary; ~200+ keys.
 - [`src/styles/journal.css`](./frontend/src/styles/journal.css) — 2 k-line Journal-Edition stylesheet overriding chat / pipeline / browse / ADQL / sessions / account to the newspaper palette; loaded **after** `App.css` so same-specificity rules win the cascade.
 
@@ -203,6 +231,8 @@ Entrypoint: [`src/App.tsx`](./frontend/src/App.tsx). Routes are declared here; t
 - **`HonestAbstentionCard`** (`ChatPage.tsx`) renders the pale-blue ✓ bubble when the SSE `honest_abstention` event arrives. Shows failed/empty tool list, model's rationale, suggested next step, and a "Try it" button that prefills the chat input.
 - **`AutoToolResult` status chips** — action card switches left border and badge based on `__tool_status__` / `analysis_status` / `success` / `error` from the provenance envelope. FAILED remains red, EMPTY remains amber, UNAVAILABLE renders as a separate Maintenance state, and SYNTHETIC keeps the loud synthetic warning.
 - **`DataSourcesPanel` + `AckButton`** — tool results with nested provenance expose service name, `archive_version`, ivoid, bibcode/article, authority cues, field-bibcode counts, and a copyable acknowledgement template.
+- **`ScalarVerificationReceiptCard`** — renders the controlled result, propagated uncertainty, formula, source status, response disposition, boundary statement, and receipt hash without merging source verification into arithmetic success.
+- **`EvidenceReceiptCard`** — renders dataset-coverage, capability-gap, untrusted-transcript, and other validation receipts as first-class evidence instead of burying them in reply prose.
 - **`.chat-reply-failure-preamble`** — collapsible ⚠ strip above a prose reply when any tool that turn failed/empty, preserving the validation signal for happy-path replies.
 - **`ActionCard`** is memoized (`React.memo`) keyed on `reproducibility.run_id`, so streaming SSE events don't remount earlier cards and invalidate refs.
 - **Pending marker** — an assistant bubble with `_pending: { started_at }` renders a spinner; after 60 s it offers Retry; reconciled against `getChatSession` on page reload.
@@ -223,9 +253,9 @@ Standard Astro ships as a focus-gated prompt + tool catalog. After the 2026-06-0
 - **`backend/app/prompts/`** has a three-layer structure: `base.md` (always loaded) + `core/*.md` (cross-cutting rules — provenance, citation hierarchy, ZERO-FABRICATION CONTRACT, STRUCTURED ABSTENTION, ADQL semantics) + `modules/<name>/{manifest.yaml, prompt.md, appendix.md}`. Manifests declare `status: active|dormant` and the per-module tool allowlist.
 - **`backend/app/services/prompt_loader.py`** assembles the runtime `SYSTEM_PROMPT` and the tool allowlist per the `ASTRO_RESEARCH_FOCUS` env var (default `cosmology`). `build_system_prompt(focus)` returns base + core + the active module's prompt; `build_allowed_tools(focus)` returns the manifest tool set. The loader still recognizes the `_dormant_<name>` directory convention, but none are checked in now.
 - **Active modules** (1): `cosmology` — full BAO/SN/CMB/lensing workflow, blind-tested across 50+ paper-derived cases. The `solar_system` and `exoplanet` active modules and the 12 dormant prompt modules (`agn`, `galaxy_morphology`, `high_z_galaxy`, `image_reduction`, `paper_export`, `paper_tool_mining`, `pipeline_dag`, `pulsar_timing`, `radio`, `stellar`, `team_workspace`, `xray_spectroscopy`) were extracted to `standard-astro-verticals` on 2026-06-03; `modules/` now contains only `cosmology/`. Their tool *implementations* remain under `backend/app/services/` and are hidden by the focus gate.
-- **L1 hard tool gating** lives in `api/chat.py` `_filter_tools_by_research_focus`: foci in `_FOCUS_GATED_VALUES = {"cosmology"}` filter the tool list before it reaches the LLM, and any focus other than `all` fails closed to cosmology. The cosmology manifest allowlists 57 of the 77 catalog tools; the other ~20 are dormant-vertical implementations the agent loop can never call under this build.
+- **L1 hard tool gating** lives in `api/chat.py` `_filter_tools_by_research_focus`: foci in `_FOCUS_GATED_VALUES = {"cosmology"}` filter the tool list before it reaches the LLM, and any focus other than `all` fails closed to cosmology. The cosmology manifest allowlists 61 of the 81 catalog tools (live import, 2026-08-07); the other 20 are dormant-vertical implementations the agent loop can never call under this build. When v0.2 is disabled, the same filter removes `verify_scalar_derivation` before the schema reaches the model, restoring a 60-tool wire surface.
 
-### API domains (33 routers — live count via `scripts/stats.sh`)
+### API domains (44 router modules — measured 2026-08-07)
 
 | Router | Role |
 |---|---|
@@ -259,13 +289,17 @@ Standard Astro ships as a focus-gated prompt + tool catalog. After the 2026-06-0
 - [`app/ai/model_profiles.py`](./backend/app/ai/model_profiles.py) — Manual provider/model registry. Current profiles: Claude default, OpenAI GPT-5.5 alias (falls back to `gpt-5.4` unless `OPENAI_GPT55_MODEL` is set), OpenAI GPT-5.4, DeepSeek V4 Pro, DeepSeek V4 Flash, local OpenAI-compatible HTTP, and local OpenAI/Codex CLI.
 - [`app/ai/inference_router.py`](./backend/app/ai/inference_router.py) — Calls the user-selected model profile, logs cost/latency/model/fallback metadata, and falls back across backends only after the selected backend fails. Backends are `claude` / `openai` / `deepseek` / `local`; `_backend_is_available` checks the matching API key (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY`) or strict local enablement. The `local` backend supports OpenAI-compatible HTTP (`LOCAL_MODEL_ENABLED=1`), an ephemeral Codex JSON bridge (`OPENAI_CLI_ENABLED=1`, `local:openai-cli`), and an ephemeral Claude Code JSON bridge (`CLAUDE_CLI_ENABLED=1`, `local:claude-cli`). Both CLI children receive a secret-minimized environment and are unavailable in production; Claude disables built-in tools/settings/session, while Codex ignores config/rules and uses its read-only sandbox. Standard Astro validates requested tool names before executing platform tools. Raises `InferenceError("No configured AI backends are available…")` when no backend is configured (surfaced pre-send by F4.2).
 - `app/ai/agents/*` — Specialist prompt fragments (data, analysis, literature, observation, visualization, spectrum).
-- [`app/services/ai_tools/`](./backend/app/services/ai_tools) — **77-tool catalog + executor dispatcher**, organised as a package (`__init__.py` re-exports the public `TOOLS` list, `execute_tool`, and helper imports so call sites are unchanged). Each tool has a literature-cited description and JSON-schema input. Per-turn the focus gate (`_filter_tools_by_research_focus` in `api/chat.py`) narrows this to the active module's manifest allowlist: **57 tools under cosmology focus**; the other ~20 entries are dormant-vertical implementations retained in code but never exposed under this build.
+- [`app/services/ai_tools/`](./backend/app/services/ai_tools) — **81-tool catalog + executor dispatcher** (live import, 2026-08-07), organised as a package (`__init__.py` re-exports the public `TOOLS` list, `execute_tool`, and helper imports so call sites are unchanged). Each tool has a literature-cited description and JSON-schema input. The cosmology manifest contains **61 tools**; the default dark-launch filter exposes 60 until v0.2 is enabled. The other 20 entries are dormant-vertical implementations retained in code but never exposed under this build.
 - [`app/services/prompt_loader.py`](./backend/app/services/prompt_loader.py) — Three-layer SYSTEM_PROMPT assembler (`base.md` + `core/*.md` + `modules/<focus>/prompt.md`) plus per-focus tool allowlist builder; cached via `lru_cache`.
 - [`app/api/chat.py`](./backend/app/api/chat.py) — Agent loop (max 12 iterations), focus-aware `SYSTEM_PROMPT` built via `prompt_loader.build_system_prompt(_ASTRO_RESEARCH_FOCUS)` (cosmology focus: ~100 KB / ~26 k tokens as of 2026-07-03 — run `scripts/stats.sh` for the live numbers), SSE stream with heartbeats, empty-reply fallback synthesis, zero-fabrication gate, structured-abstention parser, and deterministic literature-table / `fit_line_lfr` follow-up for line-relation prompts when the model has found papers or fit-ready measurement caches but skipped the required tool.
+- [`app/services/scalar_derivation.py`](./backend/app/services/scalar_derivation.py) — deterministic operation, unit, covariance, Jacobian, and canonical-receipt-hash kernel.
+- [`app/services/source_packet_resolver.py`](./backend/app/services/source_packet_resolver.py) — bounded source adapters, locator-scoped exact matching, cache identity, SSRF/DNS-rebinding defenses, and explicit degraded source states.
+- [`app/services/chain_export.py`](./backend/app/services/chain_export.py) — atomic getdist-format chain rendering and persistence with honest in-process/external-Cobaya metadata.
 
-#### Tool catalogue (77 — live count via `scripts/stats.sh`; 57 visible under cosmology focus)
+#### Tool catalogue (81 — live import 2026-08-07; 61 cosmology-allowlisted, 60 wire-visible by default)
 
 Domain-specific additions include:
+- **`verify_scalar_derivation`** — Controlled ratio, difference, product, or inverse-covariance weighted-mean derivation with explicit uncertainty and source verification. Singular covariance matrices are rejected. The tool never substitutes for a likelihood, fit, sampler, or posterior.
 - **`query_gaia_cluster`** — Composes Gaia DR3 member-selection ADQL from structured params (center name → Sesame/SIMBAD resolve → parallax + PM + RUWE + G-mag cuts). Keeps SQL out of the LLM's hot path so F2.1 EMPTY banners fire cleanly on 0-row returns.
 - **`get_extinction`** — A_V / E(B-V) at a sky position. Primary path SFD98 via `dustmaps.sfd`; exp-disk analytic fallback when `dustmaps` unavailable. Band-specific A_band via Cardelli+ 1989 ratios.
 
@@ -397,7 +431,7 @@ This is the load-bearing trust layer. Three layers of defence + one positive inc
 - [`app/services/provenance_v2/*`](./backend/app/services/provenance_v2) — Fallback registry, freshness checks, field-level schema/extractor, and DataOrigin/PARAM/INFO resolver helpers. Startup blocks on stale registry entries.
 - [`app/api/arxiv.py`](./backend/app/api/arxiv.py) + `extract_literature_tables` — arXiv/ar5iv/LaTeX table extraction path. Raw tables carry table/caption/row provenance, and normalized line-measurement rows carry citation metadata so downstream `fit_line_lfr` can support relation statistics without relying on model memory.
 - [`app/services/spectral_measurement_workbench.py`](./backend/app/services/spectral_measurement_workbench.py) — generic spectral-line measurement validator/inventory for `[CII]`, CO, Halpha, Lyalpha, [OIII], and future line tables. The `prepare_spectral_measurements` tool reports fit-ready rows, missing fields, line inventory, citation counts, and value ranges before relation fitting.
-- [`app/services/cosmology_likelihoods.py`](./backend/app/services/cosmology_likelihoods.py) — Observational-cosmology dataset registry (34 entries as of 2026-06-13; live count via `scripts/audit_registry.py`) plus controlled Cobaya/CosmoSIS-style config builder and the in-process likelihood runners. Far past the original phase-1 compressed description: released, sha256-pinned data products now execute in-process for DESI DR1/DR2 BAO, 6dFGS+MGS (non-Gaussian table), BOSS DR12 consensus, eBOSS DR16 LRG/QSO FSBAO + ELG/Lya non-Gaussian grids, cosmic chronometers (incl. Moresco-2020 full covariance), eBOSS fsigma8, Union3's full 22-bin vector, and the env-gated full SN vectors (Pantheon+ 1701, DES-SN5YR 1829, Pantheon 2018 1048 — offset-marginalized); the clik-free Planck 2018 CMB suite (plik_lite/lowl TT/lowl EE/lensing) dispatches to external Cobaya behind `EXTERNAL_COBAYA_ENABLED`, where mnu/omegak are genuinely sampled (the in-process path hard-refuses ok_*/*_mnu names). Config outputs remain non-citeable; chain numbers are citeable only with `publication_ready=true` and the matching `claim_scope` (compressed participation → compressed-likelihood preliminary; exclusively full-fidelity products → `executable_full_fidelity_likelihoods`). Overlapping samples carry reciprocal `do_not_combine_with` pairs and violating combinations block.
+- [`app/services/cosmology_likelihoods/`](./backend/app/services/cosmology_likelihoods) — Observational-cosmology dataset registry (34 clean entries, audited 2026-08-07) plus controlled Cobaya/CosmoSIS-style config builders and in-process likelihood runners. Far past the original phase-1 compressed description: released, sha256-pinned data products now execute in-process for DESI DR1/DR2 BAO, 6dFGS+MGS (non-Gaussian table), BOSS DR12 consensus, eBOSS DR16 LRG/QSO FSBAO + ELG/Lya non-Gaussian grids, cosmic chronometers (incl. Moresco-2020 full covariance), eBOSS fsigma8, Union3's full 22-bin vector, and the env-gated full SN vectors (Pantheon+ 1701, DES-SN5YR 1829, Pantheon 2018 1048 — offset-marginalized); the clik-free Planck 2018 CMB suite (plik_lite/lowl TT/lowl EE/lensing) dispatches to external Cobaya behind `EXTERNAL_COBAYA_ENABLED`, where mnu/omegak are genuinely sampled (the in-process path hard-refuses ok_*/*_mnu names). Config outputs remain non-citeable; chain numbers are citeable only with `publication_ready=true` and the matching `claim_scope` (compressed participation → compressed-likelihood preliminary; exclusively full-fidelity products → `executable_full_fidelity_likelihoods`). Overlapping samples carry reciprocal `do_not_combine_with` pairs and violating combinations block.
 - [`app/connectors/retry.py`](./backend/app/connectors/retry.py) — Transient-only retry set (`httpx.TimeoutException`, `httpx.ConnectError`, `ConnectionError`, `TimeoutError`) + circuit breaker with closed/half-open/open states; `circuit_breaker_open_total` + `connector_error_total` counters.
 - [`app/services/connector_cache.py`](./backend/app/services/connector_cache.py) — Connector-payload cache under caller-supplied keys (wired on the arXiv table-extraction path). Backends: `RedisBackend` → `SQLiteBackend` → `NullBackend` (auto-select). Tiered TTLs: 24 h metadata, 1 h cones, 15 min ADQL. Singleflight dedup via a module-level `set[asyncio.Task]` with `task.add_done_callback(_tasks.discard)` so GC can't drop the shared future.
 
@@ -488,16 +522,17 @@ SQLite (dev) portability via custom `UUIDType` + `JSONType`. Alembic-managed mig
 ### AI chat
 
 1. SSE POST `/api/chat/message/stream` with messages + context (`python_session_id`, `current_session_id`, last search / ADQL result set / uploaded FITS, etc.).
-2. Runtime = focus-aware `SYSTEM_PROMPT` (size and section count: see §6) + specialist-agent fragments + filtered tool list (focus gate narrows the 77-tool catalog to the cosmology manifest's 57 visible tools).
-3. `inference_router.route(...)` receives the validated manual `model_profile` from chat context, then enters the tool loop (max 12 iterations). Per-tool deadlines: `fit_isochrone` 180 s, `fit_transit_model`/`transit_search_bls` 120 s, `estimate_photo_z_pro` 90 s, rest 45 s. Agent-loop outer 360 s; connection heartbeats every 12 s to defeat proxy idle-kill.
-4. Tool returns flow through `normalize_tool_result` → `__tool_status__` banner + reproducibility envelope + nested provenance + sanity warnings.
-5. Final reply goes through:
+2. Runtime = focus-aware `SYSTEM_PROMPT` (size and section count: see §6) + specialist-agent fragments + filtered tool list (81 catalog tools → 61 in the cosmology manifest → 60 wire-visible with v0.2 off, measured 2026-08-07).
+3. When v0.2 is enabled, `prompt_routing` assigns `deterministic_source_check`, `research_exploration`, `full_research`, or `general`. The orchestrator collapses deterministic checks to one agent loop so the outer specialist merge cannot duplicate work or discard a valid receipt.
+4. `inference_router.route(...)` receives the validated manual `model_profile` from chat context, then enters the tool loop (max 12 iterations). Per-tool deadlines: `fit_isochrone` 180 s, `fit_transit_model`/`transit_search_bls` 120 s, `estimate_photo_z_pro` 90 s, rest 45 s. Agent-loop outer 360 s; connection heartbeats every 12 s to defeat proxy idle-kill.
+5. Tool returns flow through `normalize_tool_result` → `__tool_status__` banner + reproducibility envelope + nested provenance + sanity warnings. Scalar and general evidence receipts stay attached to the validation summary.
+6. Final reply goes through:
    1. `_parse_abstention_tag` → if `<tools_returned_nothing/>` → render card, emit SSE, return.
    2. `zero_data_but_quantitative(reply, tool_results)` → if empty turn + numeric claim → hard block.
    3. `validate_claims(...)` with `strict_when_empty`, plus provenance citation validation → up to 2 regeneration attempts for numeric failures; citation violations hard-block by default and become warn-only only when `PROVENANCE_VALIDATOR_HARDBLOCK=false` is set explicitly.
    4. Fallback synthesis (empty LLM reply) — also validated.
-6. SSE events: `text` (final reply), `agent_text` (live thinking), `tool_call`, `tool_result` (`live: true` during loop + final consolidated), `status` (heartbeats), `honest_abstention`, `error`, `done`.
-7. Auto-save after each turn; auto-title from first user message; F4 pre-send gate blocks `Send` when no AI backend is configured.
+7. SSE events: `text` (final reply), `agent_text` (live thinking), `tool_call`, `tool_result` (`live: true` during loop + final consolidated), `status` (heartbeats), `honest_abstention`, `error`, `done`.
+8. Auto-save after each turn; auto-title from first user message; F4 pre-send gate blocks `Send` when no AI backend is configured.
 
 ### Pipeline (backend / API only)
 
@@ -593,7 +628,8 @@ transient 502/503s.
 - Opt-in research memory uses hashed embeddings, not a vector DB.
 - ADQL cache stores full result sets; the AI sees 100 rows; Python gets the rest via the cache key.
 - System prompt is ~26 k tokens under cosmology focus (`scripts/stats.sh` for the live number). Further per-module growth will require a jump-to section index.
-- Exactly 1 prompt module (`cosmology`) is active and it is the only module directory in the repo. Re-introducing a vertical means adding its module directory back (from `standard-astro-verticals`), populating its manifest tools list, and adding the focus literal to `_FOCUS_GATED_VALUES` in `api/chat.py`. The ~20 retained dormant-tool implementations under `services/` stay hidden until a manifest allowlists them.
+- Exactly 1 prompt module (`cosmology`) is active and it is the only module directory in the repo. Re-introducing a vertical means adding its module directory back (from `standard-astro-verticals`), populating its manifest tools list, and adding the focus literal to `_FOCUS_GATED_VALUES` in `api/chat.py`. The 20 retained dormant-tool implementations under `services/` stay hidden until a manifest allowlists them.
+- Lightweight scalar verification is dark-launched and disabled by default. Its `verified_exact` state proves a locator-scoped label/value match, not scientific-method validity, and every receipt remains non-publication-ready. The 2026-08-06 evaluation artifacts predate the thirteen review-hardening rounds now on the branch, so the exact live demo prompts must be rerun on the current code before an expert demonstration or Alpha claim.
 - `backend/app/services/source_mapping.py` is hand-maintained alongside `connectors/availability.py`. Both are synchronized on the same 6 active / 17 gated keys; the consistency is enforced by `backend/tests/test_source_mapping.py`, which asserts `set(ACTIVE_ARCHIVE_MAPPINGS keys) == V2_AVAILABLE_CONNECTORS` and that the gated set equals `CONNECTORS_KEYS - V2_AVAILABLE_CONNECTORS`. When promoting a new connector to v2 you must edit both files in the same change.
 - API keys live in browser `localStorage` in beta mode; F4 gates the Send button but a full per-user session-storage migration is still backlog (PART C M9).
 - **Final replies are English-only.** The zero-fabrication numeric/citation regex gate ships English patterns only, so a non-English (CJK) final reply would bypass claim extraction. A non-English draft now triggers one English regeneration (numbers/citations preserved) before the hard block, but the working language is still English — non-English prompts get English answers, not localized prose.
@@ -601,7 +637,7 @@ transient 502/503s.
 
 ## 10. Testing
 
-- **Backend**: pytest suite under `backend/tests/`. Major modules include `test_api`, `test_claim_validator`, `test_citation_validation`, `test_b7_regression`, `test_cosmology_mcmc`, `test_abstention_parser`, `test_sandbox_crash_paths`, `test_sandbox_isolation`, `test_result_provenance`, `test_connector_availability_gate`, `test_provenance_registry_loader`, `test_provenance_v2_connectors`, `test_connector_cache`, `test_router_golden`, `test_workflow_checkpoint`, `test_environment_manifest`, `test_metrics`, and e2e smoke tests. Golden-path fixtures live under `backend/tests/golden/`.
+- **Backend**: pytest suite under `backend/tests/`. Major modules include `test_api`, `test_claim_validator`, `test_citation_validation`, `test_b7_regression`, `test_cosmology_mcmc`, `test_abstention_parser`, `test_sandbox_crash_paths`, `test_sandbox_isolation`, `test_result_provenance`, `test_connector_availability_gate`, `test_provenance_registry_loader`, `test_provenance_v2_connectors`, `test_connector_cache`, `test_router_golden`, `test_workflow_checkpoint`, `test_environment_manifest`, and `test_metrics`. The v0.2 contract is pinned by `test_scalar_derivation`, `test_scalar_verification_tool`, `test_source_packet_resolver`, `test_lightweight_task_routing`, `test_lightweight_agent_loop`, `test_evidence_receipts`, and `test_chain_export`. Golden-path fixtures live under `backend/tests/golden/`.
 - **Frontend**: Vitest suite (`npm run test` for the live count). Coverage includes ChatPage, DataSourcesPanel, CosmologyMCMCPanel, AckButton, ActionCard, PlotBuilder, and common utilities. TypeScript strict `tsc -b` is a required pre-push gate.
 - **CI**: GitHub Actions (`.github/workflows/ci.yml`) runs backend pytest + frontend `tsc` / `eslint` / `vitest` / `vite build` + backend ruff lint on every push and PR.
 - **Physical-regression targets** (manual): NGC 1647 (open cluster, Frasca+2026), M53 (globular + RR Lyrae), Tom 2 blue stragglers (Rain+2021), Vel OB1, white dwarf LF, Pleiades IMF, NGC 752 isochrone age ∈ [1.2, 2.0] Gyr.

@@ -4,6 +4,7 @@
 import type { Dispatch, MouseEvent, RefObject, SetStateAction } from "react";
 import type { ChatAction } from "../../api/client";
 import MarkdownText from "../../components/chat/MarkdownText";
+import { EvidenceReceiptCards } from "../../components/chat/EvidenceReceiptCard";
 import ResearchStepsCard, { isResearchTurn } from "../../components/chat/ResearchStepsCard";
 import type { ConversationProvenance } from "../../hooks/useConversationProvenance";
 import { useI18n } from "../../i18n";
@@ -215,7 +216,10 @@ export function ChatMessageList({
                 {/* 2026-07-03 honesty surfacing: per-reply validation badge.
                     Old messages without _validation render nothing here. */}
                 {msg.role === "assistant" && !msg._pending && (
-                  <ValidationBadge summary={msg._validation} truncated={msg._truncated} />
+                  <>
+                    <EvidenceReceiptCards receipts={msg._validation?.evidence_receipts} />
+                    <ValidationBadge summary={msg._validation} truncated={msg._truncated} />
+                  </>
                 )}
                 {/* eslint-disable-next-line react-hooks/purity -- pre-split behavior kept verbatim: ChatPage.tsx used Date.now() here; the old god component was too complex for this lint pass to analyze, so the call was never flagged. */}
                 {msg._pending && Date.now() - msg._pending.started_at > 60_000 && (

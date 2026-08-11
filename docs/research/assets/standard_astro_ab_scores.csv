@@ -1,0 +1,25 @@
+model,provider,condition,case_id,case_label,source_traceability,numeric_evidence,uncertainty_calibration,capability_gap,e2e_success,low_error_risk,total,max_score,run_status,sample_count
+gpt-5.6-sol,OpenAI,direct,A2_hubble_tension,Hubble tension anchors,1,1,2,2,2,1,9,12,completed,1
+gpt-5.6-sol,OpenAI,direct,B1_desi_dr1_ap,DESI DR1 AP test,0,2,2,2,1,2,9,12,completed,1
+gpt-5.6-sol,OpenAI,direct,C1_full_ede_gap,Full EDE capability gap,2,2,2,2,1,2,11,12,completed,1
+gpt-5.6-sol,OpenAI,standard_astro,A2_hubble_tension,Hubble tension anchors,2,2,2,2,2,2,12,12,completed,1
+gpt-5.6-sol,OpenAI,standard_astro,B1_desi_dr1_ap,DESI DR1 AP test,1,2,2,2,2,2,11,12,completed,1
+gpt-5.6-sol,OpenAI,standard_astro,C1_full_ede_gap,Full EDE capability gap,1,2,1,1,1,2,8,12,completed,1
+gpt-5.6-terra,OpenAI,direct,A2_hubble_tension,Hubble tension anchors,1,1,2,2,2,1,9,12,completed,1
+gpt-5.6-terra,OpenAI,direct,B1_desi_dr1_ap,DESI DR1 AP test,0,2,2,2,1,2,9,12,completed,1
+gpt-5.6-terra,OpenAI,direct,C1_full_ede_gap,Full EDE capability gap,2,2,2,2,1,2,11,12,completed,1
+gpt-5.6-terra,OpenAI,standard_astro,A2_hubble_tension,Hubble tension anchors,2,2,2,2,2,2,12,12,completed,1
+gpt-5.6-terra,OpenAI,standard_astro,B1_desi_dr1_ap,DESI DR1 AP test,1,2,2,2,2,2,11,12,completed,1
+gpt-5.6-terra,OpenAI,standard_astro,C1_full_ede_gap,Full EDE capability gap,1,2,1,1,1,2,8,12,completed,1
+gpt-5.6-luna,OpenAI,direct,A2_hubble_tension,Hubble tension anchors,1,0,1,2,2,0,6,12,completed,1
+gpt-5.6-luna,OpenAI,direct,B1_desi_dr1_ap,DESI DR1 AP test,0,2,2,2,1,2,9,12,completed,1
+gpt-5.6-luna,OpenAI,direct,C1_full_ede_gap,Full EDE capability gap,2,2,2,2,1,2,11,12,completed,1
+gpt-5.6-luna,OpenAI,standard_astro,A2_hubble_tension,Hubble tension anchors,2,2,2,2,2,2,12,12,completed,1
+gpt-5.6-luna,OpenAI,standard_astro,B1_desi_dr1_ap,DESI DR1 AP test,1,2,2,2,2,2,11,12,completed,1
+gpt-5.6-luna,OpenAI,standard_astro,C1_full_ede_gap,Full EDE capability gap,2,2,1,1,1,1,8,12,completed,1
+claude-fable-5,Anthropic,direct,A2_hubble_tension,Hubble tension anchors,2,1,2,2,2,1,10,12,completed,1
+claude-fable-5,Anthropic,direct,B1_desi_dr1_ap,DESI DR1 AP test,0,1,2,2,1,1,7,12,completed,1
+claude-fable-5,Anthropic,direct,C1_full_ede_gap,Full EDE capability gap,0,0,1,2,1,1,5,12,completed,1
+claude-fable-5,Anthropic,standard_astro,A2_hubble_tension,Hubble tension anchors,2,2,2,2,2,2,12,12,completed,1
+claude-fable-5,Anthropic,standard_astro,B1_desi_dr1_ap,DESI DR1 AP test,1,2,2,2,2,2,11,12,completed,1
+claude-fable-5,Anthropic,standard_astro,C1_full_ede_gap,Full EDE capability gap,1,2,1,1,1,2,8,12,completed,1

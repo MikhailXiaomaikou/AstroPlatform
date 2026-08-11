@@ -428,6 +428,17 @@ class TestInferenceRouting:
         assert profile.resolved_model_id == "claude-sonnet-5"
         assert profile.supports_tools is True
 
+    def test_local_kimi_cli_profile_uses_tool_bridge(self, monkeypatch):
+        from app.ai.model_profiles import resolve_model_profile
+
+        monkeypatch.setenv("KIMI_CLI_MODEL", "kimi-code/k3")
+        profile = resolve_model_profile("local", "kimi-k3")
+
+        assert profile.id == "local:kimi-cli"
+        assert profile.provider == "local"
+        assert profile.resolved_model_id == "kimi-code/k3"
+        assert profile.supports_tools is True
+
     def test_subscription_cli_is_disabled_for_prod_alias(self, monkeypatch):
         from app.ai.inference_router import _local_cli_enabled
 
@@ -453,13 +464,16 @@ class TestInferenceRouting:
             async def communicate(self, stdin):
                 captured["stdin"] = stdin.decode("utf-8")
                 return (
-                    b'{"tool_calls":[{"name":"search_objects","input":{"query":"M31"}}]}',
+                    b'{"is_error":false,"result":"{\\"tool_calls\\":[{\\"name\\":\\"search_objects\\",\\"input\\":{\\"query\\":\\"M31\\"}}]}"}',
                     b"",
                 )
 
         async def fake_create_subprocess_exec(*cmd, **kwargs):
             captured["cmd"] = list(cmd)
             captured["kwargs"] = kwargs
+            captured["git_head"] = (Path(kwargs["cwd"]) / ".git" / "HEAD").read_text(
+                encoding="utf-8"
+            )
             return FakeProc(list(cmd))
 
         monkeypatch.setenv("CLAUDE_CLI_ENABLED", "1")
@@ -482,13 +496,15 @@ class TestInferenceRouting:
         assert result["tool_calls"][0]["name"] == "search_objects"
         assert result["model_profile"] == "local:claude-cli"
         # Isolation contract: pure completion endpoint, no CLI tools, no
-        # settings, no persisted session, empty temp cwd.
+        # settings, no persisted session, empty temporary Git sandbox.
         cmd = captured["cmd"]
         assert "--print" in cmd
+        assert cmd[cmd.index("--output-format") + 1] == "json"
         assert cmd[cmd.index("--tools") + 1] == ""
         assert cmd[cmd.index("--setting-sources") + 1] == ""
         assert "--no-session-persistence" in cmd
         assert captured["kwargs"]["cwd"]
+        assert captured["git_head"] == "ref: refs/heads/main\n"
         # Subscription auth contract: API-key variables never reach the CLI.
         child_env = captured["kwargs"]["env"]
         assert "ANTHROPIC_API_KEY" not in child_env
@@ -496,6 +512,133 @@ class TestInferenceRouting:
         assert "S3_SECRET_ACCESS_KEY" not in child_env
         assert "JSON bridge" in captured["stdin"]
         assert "search_objects" in captured["stdin"]
+
+    @pytest.mark.asyncio
+    async def test_local_backend_rejects_claude_cli_error_envelope(self, monkeypatch):
+        from app.ai.inference_router import InferenceError, LocalBackend
+        from app.ai.model_profiles import resolve_model_profile
+
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self, stdin):
+                return b'{"is_error":true,"result":"model unavailable"}', b""
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            return FakeProc()
+
+        monkeypatch.setenv("CLAUDE_CLI_ENABLED", "1")
+        monkeypatch.setattr("app.ai.inference_router.shutil.which", lambda name: "/usr/bin/claude")
+        monkeypatch.setattr(
+            "app.ai.inference_router.asyncio.create_subprocess_exec",
+            fake_create_subprocess_exec,
+        )
+
+        with pytest.raises(InferenceError, match="model unavailable"):
+            await LocalBackend().complete(
+                [{"role": "user", "content": "hello"}],
+                model_profile=resolve_model_profile("local", "local:claude-cli"),
+            )
+
+    @pytest.mark.asyncio
+    async def test_local_backend_can_call_kimi_cli(self, monkeypatch):
+        from app.ai.inference_router import LocalBackend
+        from app.ai.model_profiles import resolve_model_profile
+
+        backend = LocalBackend()
+        profile = resolve_model_profile("local", "local:kimi-cli")
+        captured: dict = {}
+
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self):
+                return (
+                    b'{"role":"assistant","content":"{\\"tool_calls\\":[{\\"name\\":\\"search_objects\\",\\"input\\":{\\"query\\":\\"M31\\"}}]}"}\n'
+                    b'{"role":"meta","type":"session.resume_hint","content":"ignored"}\n',
+                    b"",
+                )
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            captured["kwargs"] = kwargs
+            return FakeProc()
+
+        monkeypatch.setenv("KIMI_CLI_ENABLED", "1")
+        monkeypatch.setenv("KIMI_CLI_COMMAND", "kimi")
+        monkeypatch.setenv("MOONSHOT_API_KEY", "must-not-leak")
+        monkeypatch.setenv("JWT_SECRET", "must-not-leak")
+        monkeypatch.setattr(
+            "app.ai.inference_router.shutil.which", lambda name: "/usr/bin/kimi"
+        )
+        monkeypatch.setattr(
+            "app.ai.inference_router.asyncio.create_subprocess_exec",
+            fake_create_subprocess_exec,
+        )
+
+        result = await backend.complete(
+            [{"role": "user", "content": "hello"}],
+            system="You are local.",
+            tools=[{"name": "search_objects", "input_schema": {"type": "object"}}],
+            model_profile=profile,
+        )
+
+        assert result["content"] == ""
+        assert result["tool_calls"][0]["name"] == "search_objects"
+        assert result["tool_calls"][0]["input"] == {"query": "M31"}
+        assert result["model_profile"] == "local:kimi-cli"
+        cmd = captured["cmd"]
+        assert cmd[cmd.index("--model") + 1] == "kimi-code/k3"
+        assert cmd[cmd.index("--output-format") + 1] == "stream-json"
+        assert "--auto" not in cmd
+        assert "--yolo" not in cmd
+        prompt = cmd[cmd.index("--prompt") + 1]
+        assert "Do not invoke Kimi Code built-in tools" in prompt
+        assert "JSON bridge" in prompt
+        assert "search_objects" in prompt
+        skills_dir = Path(cmd[cmd.index("--skills-dir") + 1])
+        assert skills_dir.parent == Path(captured["kwargs"]["cwd"])
+        child_env = captured["kwargs"]["env"]
+        assert child_env["KIMI_CODE_NO_AUTO_UPDATE"] == "1"
+        assert "MOONSHOT_API_KEY" not in child_env
+        assert "JWT_SECRET" not in child_env
+
+    @pytest.mark.asyncio
+    async def test_kimi_cli_rejects_oversized_prompt_before_spawn(self, monkeypatch):
+        from app.ai.inference_router import InferenceError, LocalBackend
+        from app.ai.model_profiles import resolve_model_profile
+
+        spawned = False
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            nonlocal spawned
+            spawned = True
+            raise AssertionError("oversized prompt reached process creation")
+
+        monkeypatch.setenv("KIMI_CLI_ENABLED", "1")
+        monkeypatch.setattr(
+            "app.ai.inference_router.shutil.which", lambda name: "/usr/bin/kimi"
+        )
+        monkeypatch.setattr(
+            "app.ai.inference_router.asyncio.create_subprocess_exec",
+            fake_create_subprocess_exec,
+        )
+
+        with pytest.raises(InferenceError, match="prompt exceeds.*argv safety limit"):
+            await LocalBackend().complete(
+                [{"role": "user", "content": "x" * 130_000}],
+                model_profile=resolve_model_profile("local", "local:kimi-cli"),
+            )
+
+        assert spawned is False
+
+    def test_kimi_cli_stream_surfaces_errors(self):
+        from app.ai.inference_router import InferenceError, LocalBackend
+
+        with pytest.raises(InferenceError, match="model unavailable"):
+            LocalBackend._parse_kimi_cli_stream(
+                '{"role":"error","content":"model unavailable"}'
+            )
 
     @pytest.mark.asyncio
     async def test_local_claude_cli_disabled_flag_falls_back_to_local_model_error(self, monkeypatch):
@@ -623,6 +766,7 @@ class TestInferenceRouting:
         monkeypatch.delenv("LOCAL_MODEL_ENABLED", raising=False)
         monkeypatch.delenv("OPENAI_CLI_ENABLED", raising=False)
         monkeypatch.delenv("CLAUDE_CLI_ENABLED", raising=False)
+        monkeypatch.delenv("KIMI_CLI_ENABLED", raising=False)
         monkeypatch.setattr(router.backends["openai"], "complete", fail_openai)
         monkeypatch.setattr(router.backends["claude"], "complete", fail_if_platform_called)
         monkeypatch.setattr(router.backends["deepseek"], "complete", fail_if_platform_called)
@@ -717,7 +861,10 @@ class TestInferenceRouting:
             returncode = 0
 
             async def communicate(self, stdin):
-                return b'{"tool_calls":[{"name":"run_python","input":{}}]}', b""
+                return (
+                    b'{"is_error":false,"result":"{\\"tool_calls\\":[{\\"name\\":\\"run_python\\",\\"input\\":{}}]}"}',
+                    b"",
+                )
 
         async def fake_create_subprocess_exec(*cmd, **kwargs):
             return FakeProc()
@@ -1388,6 +1535,16 @@ class TestCosmologyDirectRouting:
         assert calls
         assert calls[0]["name"] == "compare_luminosity_distances"
         assert calls[0]["input"]["target_cosmology"] == "riess22_shoes"
+        assert calls[0]["input"]["baseline_cosmology"] == "planck18"
+        assert calls[0]["input"]["comparison_mode"] == "h0_anchors"
+
+        registered_anchor_calls = _cosmology_direct_route_from_prompt(
+            "Quote and compare the registered Planck 2018 CMB-only and "
+            "Riess et al. 2022 SH0ES H0 anchors. Do not run a likelihood."
+        )
+        assert registered_anchor_calls
+        assert registered_anchor_calls[0]["name"] == "compare_luminosity_distances"
+        assert registered_anchor_calls[0]["input"]["comparison_mode"] == "h0_anchors"
 
     def test_extended_fisher_hubble_tension_request_does_not_force_dl_tool(self):
         from app.api.chat import _cosmology_direct_route_from_prompt

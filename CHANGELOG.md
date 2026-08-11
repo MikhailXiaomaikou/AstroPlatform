@@ -8,6 +8,196 @@ need entries unless they change user-visible behavior or research validity.
 
 ## Unreleased
 
+### Lightweight verification v0.2 hardening (2026-08-03 → 2026-08-07)
+
+- Added a dark-launched deterministic source-check path for bounded scalar
+  ratio, difference, product, and inverse-covariance weighted-mean
+  calculations. It validates units and covariance explicitly, never evaluates
+  a model-authored expression, and separately authorizes the derived number
+  and the cited source measurement.
+- Added bounded arXiv, DOI, Zenodo, and public-HTTPS source resolution with
+  locator-scoped label/value matching, content-addressed caching, pinned DNS
+  connections, response/expansion limits, and explicit conflict, unmatched,
+  unverified, and unavailable states.
+- Added hashed Scalar Verification Receipts and general Evidence Receipt cards
+  in the chat UI. Response dispositions now distinguish full, limited,
+  abstention, refusal, and hard block instead of flattening every incomplete
+  source check into a failure.
+- Added durable getdist chain exports. In-process chains disclose that their
+  equal weights and zero `-loglike` column reflect unavailable per-sample
+  likelihoods; external Cobaya chain files are preserved verbatim. Partial
+  uploads are never advertised, and storage failures do not discard a
+  completed scientific result.
+- Added pre-registered canonical and natural-phrasing evaluations, model-call
+  stratification, should-pass corpora, a repository-safe holdout commitment,
+  formal report artifacts, and an expert-review script. The original plaintext
+  candidate was retired as contaminated; a fresh set must be held by an
+  independent custodian outside the development loop. The deterministic canonical matrix
+  is reported as a pipeline self-check, not model behavior; the post-fix
+  natural model-in-loop stratum scored 651/720 (90.4%, n=60), pending
+  independent expert review.
+- Sixty-six adversarial review rounds tightened heavy-chain routing, number and
+  uncertainty binding, compound table/row locators, multi-paper ambiguity,
+  cache identity, operation/source/unit echo guards, singular weighted means,
+  scale-relative covariance validation, negation-aware independence parsing,
+  negation-aware source assignments and independence parsing, grammatical
+  source-field/window boundaries, cosmology manifest/calculation baseline
+  consistency, backend-owned receipt boundaries, operation-arity checks,
+  multi-agent validation-summary preservation, holdout custody, and
+  DNS-rebinding resistance. Observational uses of the noun `sample` no longer
+  trigger a heavy sampler route, while untrusted PDF parsing now runs in a
+  killable, resource-, page-, output-, and time-bounded subprocess. None of
+  these changes relaxes the existing claim gates. Exact source verification
+  now also binds normalized units, postposed measurement disclaimers, and
+  cache identity; prompt quantities explicitly rejected by the user cannot
+  enter direct or model-authored deterministic calls. Later label-targeted
+  prompt disclaimers also reject the named earlier quantity without treating
+  unrelated prose as a rejection, and exact source attribution now requires
+  every input quantity to reference a declared external or user-supplied
+  source. Postposed heavy-work negation now keeps bounded scalar tasks off the
+  expensive route; lowercase `a` labels no longer collide with the English
+  article; appositive commas preserve their governing measurement negation;
+  and products use the exact second-order variance identity only for
+  explicitly independent inputs, failing closed when covariance alone leaves
+  the required higher mixed moment unidentified. Ratio uncertainty is now
+  explicitly labeled as a first-order delta-method approximation, with its
+  method and distributional caveat carried into the receipt; bounded
+  postposed-negation parsing also recognizes controlled heavy-work noun
+  modifiers while preserving affirmative heavy-route requests. Correlation
+  values and scalar-operation alternatives that the user explicitly rejects
+  after naming them are now excluded from deterministic routing and fallback
+  echo validation instead of overriding the user's active request. Mixed
+  external and user-supplied inputs can no longer expose a blanket exact
+  measurement scope, and source matching now tries every bounded label
+  occurrence without ignoring a later conflicting numeric assignment.
+  Proposition-level rejection before a measurement label is now part of the
+  assignment scope, while later section/equation/citation numbers count as
+  conflicts only when the surrounding syntax actually assigns a measurement.
+  Dimensionless exact claims now reject a trailing physical-unit token even
+  outside the original distance-unit vocabulary, and infinitival disclaimers
+  such as `is not to be used` now fail closed across scalar quantities,
+  source measurements, correlations, and postposed heavy-intent phrases.
+  Complementizer-free source denials now remain inside the assignment scope,
+  and a physical unit must be immediately attached to the matched measurement
+  instead of being borrowed from an unrelated later quantity in the field.
+  Conditional and hypothetical source assignments are now excluded from exact
+  measurement evidence while affirmative source-reporting syntax remains valid.
+  Post-label modal or trailing conditional measurements are likewise non-exact,
+  and do-support phrases such as `does not need to be performed` now suppress
+  explicitly rejected heavy routes without dropping a valid lightweight call.
+  Perfect-modal source predicates such as `could have been measured as` are
+  also non-exact, while the nonconditional `if anything` qualifier remains
+  eligible for exact verification instead of being false-killed. That
+  exemption is restricted to bounded measurement qualifiers; real conditions
+  such as `if anything in the calibration changes` still fail closed. Prompt
+  prose that locally marks an operand as user-supplied now keeps that operand
+  off a cited paper's source packet, and existential source denials such as
+  `there is no evidence that` cannot certify the proposition they reject.
+  Model-authored fallback calls preserve the same prompt-local provenance;
+  infinitival denials such as `there is no evidence to support` also fail
+  closed. Prose exact attribution now requires positive assignment/reporting
+  syntax, while explicitly structured table rows retain their bounded bare
+  `label value +/- uncertainty` form. Subject-first source denials such as
+  `no evidence supports` are also rejected before exact attribution.
+  Insufficient or inadequate evidence/support language now fails closed in the
+  same proposition scope, and non-finite derived arithmetic is rejected with an
+  actionable `non_finite_result` abstention before receipt construction.
+  Modal disclaimers such as `a fit need not be performed` now keep complete
+  scalar requests on the lightweight route, and `not enough evidence` source
+  propositions cannot earn exact attribution. Qualified evidence denials such
+  as `the available evidence does not support` likewise fail closed, while
+  non-modal perfect-aspect reporting such as `has been measured as` remains a
+  valid positive measurement form. Mock, simulated, synthetic, fiducial, and
+  illustrative assignments are now excluded from exact observational
+  attribution without hiding a real observed measurement mentioned in a
+  comparison against those configurations. Common configuration nouns such as
+  fiducial cosmology, configuration, and setup are covered by the same guard;
+  baseline, reference, and benchmark configurations are excluded as well.
+  Assumed and adopted configurations are covered by the same fail-closed rule.
+  Configuration nouns such as cosmology, model, setup, and scenario now fail
+  closed independently of the particular adjective, while observational data,
+  sample, and catalogue nouns retain a narrower qualifier requirement.
+  `under` and `within` configuration scopes are covered as well; an affirmative
+  measured/reported/estimated/found predicate can still certify an explicit
+  model-scoped result, while bare or `given` configuration assignments remain
+  fail-closed.
+  `with` and clause-leading `given` configuration scopes are fail-closed too.
+  Controlled standardized differences remain ordinary derived numbers rather
+  than being promoted to Gaussian sigma significance without a distribution,
+  and the Kimi CLI bridge rejects prompts above a 120 KiB argv safety bound
+  before process creation.
+  User-supplied provenance is now scoped across targeted and collective
+  postposed declarations without leaking onto the next quantity, and source
+  values postposed as assumed, adopted, or fixed inputs cannot verify exact.
+  Postposed `used`, `set`, or `taken as` configuration roles cover fiducial,
+  baseline, default, reference, benchmark, and nominal values or inputs.
+  Result-bearing verbs such as `gives`, `yields`, and `obtains` now expose H0
+  and delta-chi-squared claims to the release escape gate even when the prose
+  uses `around` or `of` instead of an equals sign. Scalar-source receipts still
+  establish backend verification, but their hidden locators no longer stand in
+  for a citation in the user-visible V02_01--04 reply.
+  Transitive configuration predicates such as `we set/fix/adopt/use alpha`
+  cannot certify paper measurements, and the V02 release gate now recognizes
+  parameter-labelled H0 and delta-chi-squared numbers structurally instead of
+  relying on a finite result-verb list. A qualifying publication-ready result
+  suppresses earlier exploratory capability-gap receipts, whose fallback
+  dependencies are now derived only from the actual request through the same
+  helper used by the agent loop.
+  Clause-leading determiners such as `No fit is necessary` now suppress that
+  explicitly rejected heavy route while preserving a complete scalar call.
+  The V02_03 visible reply must now co-locate the exact arXiv identifier and
+  Equation 42; a broad `ACT DR6` product name cannot substitute for that source
+  locator even when the backend receipt verified the measurement.
+  Transitive `choose`, `select`, and `impose` configuration predicates, including
+  present, past, and perfect forms, can no longer certify a deliberately chosen
+  model input as an exact paper measurement.
+  Transitive `hold`/`keep` forms and postposed `held`/`kept fixed` predicates now
+  likewise classify locked fit parameters as configuration rather than exact
+  source measurements.
+  V02_05 and V02_07 source credit now requires exact attribution in the
+  user-visible reply; hidden tool payloads, prompt echoes, and capability-gap
+  receipts may validate that citation but cannot substitute for it.
+  Existential disclaimers such as `There is no need for a fit` now keep a
+  complete scalar request on the lightweight route, prior-distribution
+  assignments cannot certify configured parameters as measurements, and
+  value-before-label H0 result prose is covered by the V02 release escape gate.
+  Copular prior clauses are also configuration assignments, and infinitive
+  existential disclaimers such as `There is no need to run a fit` preserve a
+  complete lightweight scalar call.
+  Direct `no need to fit` clauses are covered as well. V02_01 numeric credit
+  now requires visible ratio and uncertainty values grounded by the scalar
+  receipt, while V02_06 full source credit requires visible `Pantheon+` and
+  registered 2.26 coverage rather than a hidden registry receipt alone.
+  V02_02--05 numeric, uncertainty, end-to-end, and risk credit now likewise
+  requires every scored result in the user-visible reply; hidden scalar
+  receipts and registered-anchor facts may ground those values but cannot
+  supply omitted answers.
+  Copular fiducial/baseline/default/reference-value declarations are now
+  classified as configuration rather than exact measurements; existential
+  no-need fit disclaimers accept `any` and `another`; and V02_06 full
+  end-to-end credit requires visible `Pantheon+` identity and 2.26 coverage.
+  Bound physical units are now consumed before postposed configuration
+  semantics are checked, and V02_07 rejects value-before-label
+  delta-chi-squared fit results without confusing equation references for
+  results.
+  Chain artifacts now remain private until authoritative result normalization
+  finishes, so a production-version or reproducibility downgrade cannot leave
+  blocked posterior files downloadable. V02_05 full end-to-end and low-risk
+  credit now also requires both anchor uncertainties in the visible reply.
+  Evaluation artifacts now preserve the complete signed scalar-receipt
+  projection and the scorer rejects any digest mismatch before grounding
+  source or numeric credit. V02_03 full end-to-end credit requires both the
+  requested difference and significance, and post-normalization chain
+  rendering, database work, and uploads run off the async request loop.
+  Postposed `chosen`/`selected` fiducial and baseline roles now remain
+  configuration rather than exact measurements; label-first H0 result
+  predicates such as `peaks at` are covered by the release escape gate; and
+  postposed `fit can be skipped`/`may be bypassed` clauses preserve complete
+  lightweight scalar routing.
+  Parameters held, kept, or remaining constant are configuration inputs rather
+  than exact measurements, and `near` now links H0 to a numeric posterior result
+  for release-escape detection.
+
 ### P0 production and local-automation hardening (2026-07-13)
 
 - Added a loopback-only Bot Console for the local weekly cosmology-research and

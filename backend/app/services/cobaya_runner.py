@@ -275,6 +275,7 @@ def dispatch_external_cobaya(
     sample_count: int,
     sampler: str = "evaluate",
     timeout_s: float | None = None,
+    include_chain_payload: bool = False,
 ) -> dict[str, Any]:
     """Run ``cobaya-run`` for the supplied entries and return the result envelope.
 
@@ -389,7 +390,7 @@ def dispatch_external_cobaya(
                 samples_per_chain=samples_per_chain,
                 parameter_order=parameter_order,
             )
-            return _runner_success(
+            result = _runner_success(
                 model_key=model_key,
                 entries=entries,
                 seed=seed,
@@ -400,6 +401,28 @@ def dispatch_external_cobaya(
                 stdout_tail=_tail(completed.stdout),
                 data_verification=cmb_verification,
             )
+            if include_chain_payload:
+                # Capture the sampler's own chain files (true weights and
+                # -logpost columns, getdist-native) BEFORE the tempdir is
+                # deleted. Same internal-only contract as the in-process
+                # payload: the chat exec wrapper pops this key and uploads;
+                # raw bytes never reach normalization or the SSE stream.
+                raw_files = {
+                    path.name: path.read_bytes()
+                    for path in sorted(tmp_path.glob(f"{output_prefix.name}.*.txt"))
+                }
+                if raw_files:
+                    input_yaml = tmp_path / f"{output_prefix.name}.input.yaml"
+                    if input_yaml.is_file():
+                        raw_files[input_yaml.name] = input_yaml.read_bytes()
+                    result["_chain_payload"] = {
+                        "raw_files": raw_files,
+                        "parameter_order": list(parameter_order),
+                        "prior_bounds": dict(prior_bounds),
+                        "sampler": f"cobaya_{sampler}",
+                        "seed": seed,
+                    }
+            return result
     except CobayaRunError as exc:
         return _runner_failure(
             model_key=model_key,

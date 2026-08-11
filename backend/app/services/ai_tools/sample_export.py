@@ -19,7 +19,9 @@ TOOL_SCHEMAS = [
         "name": "compare_luminosity_distances",
         "description": (
             "Compare luminosity distance + Δlog L for two cosmology choices "
-            "across the cached literature sample. Use BEFORE citing a non-"
+            "across the cached literature sample, or compare two curated "
+            "published H0 anchors without a sample when comparison_mode="
+            "'h0_anchors'. Use BEFORE citing a non-"
             "Planck H0/Om0 (e.g. Riess+11 H0=73.8, Suzuki+12 Om=0.295) on a "
             "sample whose source_cosmology is something else. Returns per-"
             "source ΔDL%% + Δlog L, plus median/max summary; use the result "
@@ -33,6 +35,14 @@ TOOL_SCHEMAS = [
                     "type": "string",
                     "description": "Source cache key. Default: latest_literature_tables.",
                 },
+                "baseline_cosmology": {
+                    "type": "string",
+                    "description": (
+                        "Optional explicit baseline cosmology. When omitted, the "
+                        "configured current cosmology is used. Direct Planck-SH0ES "
+                        "anchor comparisons set this to 'planck18'."
+                    ),
+                },
                 "target_cosmology": {
                     "type": "string",
                     "description": (
@@ -45,6 +55,17 @@ TOOL_SCHEMAS = [
                         "is the FlatLambdaCDM_H<H0>_Om<Om> spec for "
                         "older measurements (e.g. FlatLambdaCDM_H73p8_Om0p295 "
                         "for Riess+11 / Suzuki+12)."
+                    ),
+                },
+                "comparison_mode": {
+                    "type": "string",
+                    "enum": ["sample", "h0_anchors"],
+                    "description": (
+                        "Default 'sample' computes per-source luminosity-distance "
+                        "shifts and requires a cached literature sample. Use "
+                        "'h0_anchors' only for a direct comparison of two curated, "
+                        "citation-pinned published H0 values; it does not claim a "
+                        "per-source luminosity-distance result."
                     ),
                 },
             },
@@ -311,6 +332,8 @@ def _exec_compare_luminosity_distances(
     cache_key = str(
         inp.get("cache_key") or "latest_literature_tables"
     ).strip() or "latest_literature_tables"
+    comparison_mode = str(inp.get("comparison_mode") or "sample").strip().lower()
+    baseline_name = str(inp.get("baseline_cosmology") or "").strip()
     target_name = str(inp.get("target_cosmology") or "").strip()
     if not target_name:
         return {
@@ -319,6 +342,121 @@ def _exec_compare_luminosity_distances(
             "error_class": "missing_target_cosmology",
             "__tool_status__": "FAILED",
         }
+    if comparison_mode not in {"sample", "h0_anchors"}:
+        return {
+            "success": False,
+            "error": "comparison_mode must be 'sample' or 'h0_anchors'.",
+            "error_class": "invalid_comparison_mode",
+            "__tool_status__": "FAILED",
+        }
+
+    from app.services.cosmology import (
+        cosmology_manifest as _current_manifest,
+        get_cosmology as _get,
+    )
+
+    current_manifest = (
+        _cosmology_manifest_for(baseline_name)
+        if baseline_name
+        else _current_manifest()
+    )
+    target_manifest = _cosmology_manifest_for(target_name)
+
+    if comparison_mode == "h0_anchors":
+        current_h0 = _finite_float(current_manifest.get("H0_km_s_Mpc"))
+        target_h0 = _finite_float(target_manifest.get("H0_km_s_Mpc"))
+        current_err = _finite_float(current_manifest.get("H0_err"))
+        target_err = _finite_float(target_manifest.get("H0_err"))
+        manifests_are_citable = bool(
+            current_manifest.get("bibcode") and target_manifest.get("bibcode")
+        )
+        if (
+            current_h0 is None
+            or target_h0 is None
+            or current_h0 <= 0
+            or not manifests_are_citable
+        ):
+            return {
+                "success": False,
+                "error": (
+                    "h0_anchors mode requires two curated cosmology presets with "
+                    "citation-pinned H0 values."
+                ),
+                "error_class": "uncited_cosmology_anchor",
+                "__tool_status__": "FAILED",
+            }
+
+        delta_h0 = target_h0 - current_h0
+        delta_h0_pct = delta_h0 / current_h0 * 100.0
+        combined_error = None
+        gaussian_tension_sigma = None
+        if current_err is not None and target_err is not None:
+            combined_error = math.hypot(current_err, target_err)
+            if combined_error > 0:
+                gaussian_tension_sigma = abs(delta_h0) / combined_error
+
+        anchor_comparison = {
+            "baseline_H0_km_s_Mpc": round(current_h0, 6),
+            "baseline_H0_err": round(current_err, 6) if current_err is not None else None,
+            "target_H0_km_s_Mpc": round(target_h0, 6),
+            "target_H0_err": round(target_err, 6) if target_err is not None else None,
+            "target_minus_baseline_H0_km_s_Mpc": round(delta_h0, 6),
+            "target_minus_baseline_pct": round(delta_h0_pct, 6),
+            "combined_independent_error": (
+                round(combined_error, 6) if combined_error is not None else None
+            ),
+            "naive_independent_gaussian_tension_sigma": (
+                round(gaussian_tension_sigma, 6)
+                if gaussian_tension_sigma is not None
+                else None
+            ),
+        }
+        display_values = {
+            "target_minus_baseline_pct": round(delta_h0_pct, 2),
+            "naive_independent_gaussian_tension_sigma": (
+                round(gaussian_tension_sigma, 2)
+                if gaussian_tension_sigma is not None
+                else None
+            ),
+            "naive_independent_gaussian_tension_sigma_1dp": (
+                round(gaussian_tension_sigma, 1)
+                if gaussian_tension_sigma is not None
+                else None
+            ),
+        }
+        return {
+            "success": True,
+            "tool": "compare_luminosity_distances",
+            "comparison_mode": "h0_anchors",
+            "comparison_scope": "published_h0_anchors_only",
+            "sample_comparison_performed": False,
+            "sample_cache_status": "not_required",
+            "__tool_status__": "PARTIAL",
+            "data_origin": "cached_real",
+            "analysis_status": "partial",
+            "current_cosmology": current_manifest,
+            "target_cosmology": target_manifest,
+            "anchor_comparison": anchor_comparison,
+            # Explicit, tool-produced presentation rounding keeps the strict
+            # numeric gate from rejecting an honest "4.8σ" / "8.43%" rendering
+            # of the higher-precision values above. This is an evidence echo,
+            # not a wider matching tolerance.
+            "display_values": display_values,
+            "limitations": [
+                "No per-source luminosity distance or delta log-luminosity was computed.",
+                "The quoted sigma is the naive separation using independent Gaussian errors.",
+            ],
+            "__message_to_model__": (
+                "Curated H0-anchor comparison completed from the citation-pinned "
+                "cosmology manifests. You may report the two H0 values, their "
+                "difference, percent offset relative to the baseline, and the "
+                "explicitly labelled naive independent-Gaussian separation. "
+                "Do not claim that a per-source luminosity-distance sample was "
+                "evaluated; comparison_mode='h0_anchors' intentionally does not "
+                "read latest_literature_tables."
+            ),
+        }
+
     rows, resolved_cache_key = _resolve_literature_measurement_cache(
         cache_key, python_session_id,
     )
@@ -329,14 +467,10 @@ def _exec_compare_luminosity_distances(
             "error": f"No cached line_measurements found for cache_key={cache_key!r}.",
             "error_class": "missing_measurement_cache",
         }
-    from app.services.cosmology import (
-        cosmology_manifest as _current_manifest,
-        get_cosmology as _get,
-    )
-
-    current_manifest = _current_manifest()
-    target_manifest = _cosmology_manifest_for(target_name)
-    current_cosmo = _get(None)
+    # The manifest and the numerical sample comparison must resolve the same
+    # baseline.  An explicit baseline cannot be display-only while distances
+    # are silently computed from the configured default cosmology.
+    current_cosmo = _get(baseline_name or None)
     target_cosmo = _get(target_name)
 
     per_source: list[dict[str, Any]] = []

@@ -12,6 +12,7 @@ normally from sibling modules.
 
 import json
 import logging
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
@@ -19,6 +20,7 @@ from typing import Any
 
 from app.ai.inference_router import InferenceError, inference_router
 from app.ai.model_profiles import ModelProfile
+from app.config import settings
 
 from app.services.agent_runtime.abstention import (
     _abstention_attrs_without_numeric_claims,
@@ -52,8 +54,13 @@ from app.services.agent_runtime.honesty import (
     untrusted_evidence_echo_values,
     untrusted_evidence_refusal,
 )
+from app.services.agent_runtime.evidence_receipts import (
+    _full_research_missing_dependencies,
+    build_evidence_receipts,
+)
 from app.services.agent_runtime.prompt_routing import (
     _compact_tool_results_for_evidence,
+    classify_task_kind,
     _cosmology_dataset_keys_from_prompt,
     _cosmology_direct_route_from_prompt,
     _cosmology_forbidden_probe_families,
@@ -66,6 +73,7 @@ from app.services.agent_runtime.prompt_routing import (
     _research_evidence_graph_from_tool_results,
     _research_plan_from_tool_results,
     _unsupported_cosmology_anchor_numeric_comparison,
+    scalar_call_echo_violation,
 )
 from app.services.agent_runtime.runtime_config import (
     _is_tool_inventory_request,
@@ -151,8 +159,34 @@ _CITATION_GATE_FAMILY = frozenset({
     "unsupported_narrative", "cosmology_anchor", "fact_verification",
     "report_export",
 })
-_BLOCKING_GATE_ACTIONS = frozenset({"blocked", "annotated_blocked"})
+_BLOCKING_GATE_ACTIONS = frozenset({"blocked"})
+_LIMITING_GATE_ACTIONS = frozenset({"annotated_limited"})
 _VALIDATION_SUMMARY_MAX_INTERVENTIONS = 10
+
+
+def _full_research_capability_gap_reply(user_prompt: str) -> str:
+    dependencies = _full_research_missing_dependencies(user_prompt)
+    checklist = "\n".join(f"- {item}." for item in dependencies)
+    lower = str(user_prompt or "").lower()
+    normalized = re.sub(r"[-_‐‑‒–—]+", " ", lower)
+    scope_parts: list[str] = []
+    if "desi" in lower:
+        scope_parts.append("DESI DR2" if "dr2" in lower else "DESI")
+    if "planck" in lower:
+        scope_parts.append("Planck")
+    if "early dark energy" in normalized or re.search(r"\bede\b", normalized):
+        scope_parts.append("EDE")
+    scope = " / ".join(scope_parts) or "requested"
+    return (
+        "Capability gap: the requested full-research posterior is not "
+        "publication-ready, so no posterior numbers are reported.\n\n"
+        "Missing dependencies for a credible run:\n"
+        f"{checklist}\n\n"
+        f"This is a {scope} full-likelihood capability assessment, not a "
+        "posterior result. It cannot support H0 or other posterior "
+        "parameter claims. The safe next step is to enable those registered "
+        "components and rerun the full-research path."
+    )
 
 
 def _derive_validation_summary(
@@ -162,6 +196,9 @@ def _derive_validation_summary(
     fabrication_stats: dict,
     interventions: list[dict],
     tool_results: list[dict],
+    routing_decision: dict[str, Any] | None = None,
+    user_prompt: str = "",
+    evidence_receipts_enabled: bool = False,
 ) -> dict:
     """Compact, honest per-reply summary of what the gate stack did.
 
@@ -169,7 +206,8 @@ def _derive_validation_summary(
       passed           gate ran, no intervention
       regenerated      gate intervened; the shipped reply was rewritten or
                        downgraded to a tool-grounded form that then passed
-      blocked          gate blocked the reply / annotated it as unverified
+      limited          answer remains visible, with specific claims annotated
+      blocked          gate withheld or replaced the unsafe reply
       skipped_no_data  gate ran but the turn produced no claimable tool
                        data — "passed" would overstate what was checked
       skipped          gate stack intentionally skipped (see ``reason``)
@@ -183,6 +221,8 @@ def _derive_validation_summary(
         acts = [i for i in interventions if i.get("gate") in family]
         if any(i.get("action") in _BLOCKING_GATE_ACTIONS for i in acts):
             return "blocked"
+        if any(i.get("action") in _LIMITING_GATE_ACTIONS for i in acts):
+            return "limited"
         if acts:
             return "regenerated"
         if not claim_gate_ran:
@@ -199,12 +239,109 @@ def _derive_validation_summary(
                 numeric_state = "skipped_no_data"
         except Exception:
             pass
+    scalar_receipt = next(
+        (
+            item.get("result")
+            for item in reversed(tool_results)
+            if item.get("tool") == "verify_scalar_derivation"
+            and isinstance(item.get("result"), dict)
+        ),
+        None,
+    )
+    explicit_refusal = any(
+        item.get("gate") == "untrusted_evidence_echo"
+        and item.get("reason") == "user_supplied_number_repeated"
+        for item in interventions
+    ) or "untrusted_evidence_request" in set(
+        (routing_decision or {}).get("matched_signals") or []
+    )
+    routing_missing = list((routing_decision or {}).get("missing_inputs") or [])
+    incomplete_scalar_route = (
+        (routing_decision or {}).get("task_kind") == "deterministic_source_check"
+        and bool(routing_missing)
+        and not isinstance(scalar_receipt, dict)
+    )
+    task_kind = str((routing_decision or {}).get("task_kind") or "general")
+    full_research_limited = task_kind == "full_research" and any(
+        item.get("gate") == "nonpublication_posterior"
+        or item.get("action") == "annotated_limited"
+        for item in interventions
+    )
+    if explicit_refusal:
+        response_disposition = "refusal"
+    elif bool(fabrication_stats.get("blocked", False)):
+        response_disposition = "hard_block"
+    elif isinstance(scalar_receipt, dict) and bool(
+        fabrication_stats.get("limited", False)
+    ):
+        response_disposition = "limited"
+    elif isinstance(scalar_receipt, dict):
+        response_disposition = str(
+            scalar_receipt.get("response_disposition") or "limited"
+        )
+    elif incomplete_scalar_route:
+        response_disposition = "abstention"
+    elif bool(fabrication_stats.get("limited", False)) or full_research_limited:
+        response_disposition = "limited"
+    else:
+        response_disposition = "full"
+    limiting_intervention = next(
+        (
+            item
+            for item in interventions
+            if item.get("action") in _BLOCKING_GATE_ACTIONS | _LIMITING_GATE_ACTIONS
+        ),
+        None,
+    )
+    earliest_limiting_stage = (
+        scalar_receipt.get("earliest_limiting_stage")
+        if isinstance(scalar_receipt, dict)
+        else (
+            "routing_input"
+            if incomplete_scalar_route
+            else (limiting_intervention or {}).get("gate")
+        )
+    )
+    missing_dependencies = (
+        list(scalar_receipt.get("missing_dependencies") or [])
+        if isinstance(scalar_receipt, dict)
+        else (
+            routing_missing
+            if incomplete_scalar_route
+            else (
+                _full_research_missing_dependencies(user_prompt)
+                if full_research_limited
+                else []
+            )
+        )
+    )
+    safe_fallback = (
+        scalar_receipt.get("safe_fallback")
+        if isinstance(scalar_receipt, dict)
+        else (
+            "Supply the missing deterministic inputs; do not start a research matrix."
+            if incomplete_scalar_route
+            else (
+                "Enable the listed registered research dependencies and rerun "
+                "the full-research path."
+                if full_research_limited
+                else None
+            )
+        )
+    )
     summary: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "numeric_gate": numeric_state,
         "citation_gate": citation_state,
         "regen_count": int(fabrication_stats.get("regenerations", 0) or 0),
         "blocked": bool(fabrication_stats.get("blocked", False)),
+        "limited": bool(fabrication_stats.get("limited", False))
+        or full_research_limited,
+        "response_disposition": response_disposition,
+        "task_kind": task_kind,
+        "earliest_limiting_stage": earliest_limiting_stage,
+        "missing_dependencies": missing_dependencies,
+        "safe_fallback": safe_fallback,
         "interventions": [
             {
                 "gate": str(i.get("gate", "")),
@@ -216,21 +353,83 @@ def _derive_validation_summary(
     }
     if not claim_gate_ran and gate_skip_reason:
         summary["reason"] = str(gate_skip_reason)
+    if evidence_receipts_enabled:
+        receipts = build_evidence_receipts(
+            task_kind=task_kind,
+            response_disposition=response_disposition,
+            user_prompt=user_prompt,
+            tool_results=tool_results,
+            interventions=interventions,
+            matched_signals=list(
+                (routing_decision or {}).get("matched_signals") or []
+            ),
+            missing_dependencies=missing_dependencies,
+        )
+        if receipts:
+            summary["evidence_receipts"] = receipts
+            limiting_receipt = next(
+                (
+                    receipt
+                    for receipt in receipts
+                    if receipt.get("response_disposition") == "limited"
+                ),
+                None,
+            )
+            if limiting_receipt is not None and response_disposition != "hard_block":
+                summary["limited"] = True
+                summary["response_disposition"] = "limited"
+                summary["earliest_limiting_stage"] = (
+                    summary.get("earliest_limiting_stage")
+                    or str(
+                        limiting_receipt.get("receipt_kind")
+                        or "evidence_receipt"
+                    )
+                )
+                receipt_missing = list(
+                    limiting_receipt.get("missing_dependencies") or []
+                )
+                if receipt_missing:
+                    summary["missing_dependencies"] = receipt_missing
+                    summary["safe_fallback"] = (
+                        "Enable the listed registered dependencies and rerun "
+                        "the requested path."
+                    )
     return summary
 
 
-def _not_run_validation_summary(reason: str) -> dict:
+def _not_run_validation_summary(
+    reason: str,
+    routing_decision: dict[str, Any] | None = None,
+    user_prompt: str = "",
+) -> dict:
     """Summary for early-return paths where the gate stack never ran.
 
     Distinct from "passed" by construction — the UI must render these as
     "not validated (<reason>)", never as a pass.
     """
+    task_kind = str((routing_decision or {}).get("task_kind") or "general")
+    full_research_gap = task_kind == "full_research"
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "numeric_gate": "not_run",
         "citation_gate": "not_run",
         "regen_count": 0,
         "blocked": False,
+        "limited": full_research_gap,
+        "response_disposition": "limited" if full_research_gap else "abstention",
+        "task_kind": task_kind,
+        "earliest_limiting_stage": str(reason),
+        "missing_dependencies": (
+            _full_research_missing_dependencies(user_prompt)
+            if full_research_gap
+            else [str(reason)]
+        ),
+        "safe_fallback": (
+            "Enable the listed registered research dependencies and rerun the "
+            "full-research path."
+            if full_research_gap
+            else "Retry the task so the validation stack can complete."
+        ),
         "reason": str(reason),
         "interventions": [],
     }
@@ -297,9 +496,10 @@ async def _run_agent_loop(
     soft_reminder_s = float(budget.get("soft_reminder_seconds", 75.0))
     budget_mode = str(budget.get("mode") or "default")
     _loop_seconds = float(budget.get("agent_loop_seconds", 360.0))
+    _loop_started = _time.monotonic()
     # H1 / long-task bump: default remains 360s; paper-scale workflows can
     # explicitly opt into a 900s loop with larger summary reserve.
-    _loop_deadline = _time.monotonic() + _loop_seconds
+    _loop_deadline = _loop_started + _loop_seconds
     checkpoint_id = _checkpoint_session_id(chat_session_id, python_session_id)
     checkpoint_note = _format_checkpoint_resume_note(checkpoint_id)
 
@@ -358,6 +558,33 @@ async def _run_agent_loop(
     user_requested_synthetic_demo = _user_requested_synthetic_demo(messages)
     fit_ready_literature_cache_keys: list[str] = []
     inline_statistics_call = _inline_statistics_tool_call_from_prompt(latest_user_text)
+    routing_decision = (
+        classify_task_kind(latest_user_text)
+        if settings.lightweight_verification_enabled
+        else None
+    )
+    if routing_decision is not None:
+        try:
+            from app.observability.metrics import record_counter
+
+            record_counter(
+                "lightweight_task_routing_total",
+                task_kind=str(routing_decision.get("task_kind")),
+                heavy_route_allowed=str(
+                    bool(routing_decision.get("heavy_route_allowed"))
+                ).lower(),
+            )
+        except Exception:
+            pass
+    lightweight_task_kind = str((routing_decision or {}).get("task_kind") or "")
+    untrusted_evidence_request = "untrusted_evidence_request" in set(
+        (routing_decision or {}).get("matched_signals") or []
+    )
+    scalar_verification_call = (
+        deepcopy((routing_decision or {}).get("direct_tool_call"))
+        if lightweight_task_kind == "deterministic_source_check"
+        else None
+    )
     research_program_workflow = _is_research_program_workflow(latest_user_text)
     cosmology_likelihood_workflow = _is_cosmology_likelihood_workflow(latest_user_text)
     cosmology_likelihood_build_calls = _cosmology_likelihood_build_calls_from_prompt(latest_user_text)
@@ -366,6 +593,35 @@ async def _run_agent_loop(
     # "Alcock-Paczynski" prompts. Fires on iteration 0 only, bypasses the
     # first LLM call. None when no trigger phrase matches.
     cosmology_direct_route_calls = _cosmology_direct_route_from_prompt(latest_user_text)
+    coverage_dataset_keys = _cosmology_dataset_keys_from_prompt(latest_user_text)
+    coverage_requested_redshift = _cosmology_requested_redshift(latest_user_text)
+    coverage_query = (
+        coverage_requested_redshift is not None
+        and bool(coverage_dataset_keys)
+        and any(
+            token in latest_user_text.lower()
+            for token in ("coverage", "observed", "measurement", "extrapolat")
+        )
+    )
+    if cosmology_direct_route_calls is None and coverage_query:
+        cosmology_direct_route_calls = [{
+            "id": f"direct_registry_{uuid.uuid4().hex}",
+            "name": "list_cosmology_datasets",
+            "input": {
+                "dataset_keys": coverage_dataset_keys,
+                "requested_redshift": coverage_requested_redshift,
+            },
+        }]
+    if routing_decision is not None:
+        if not routing_decision.get("heavy_route_allowed"):
+            research_program_workflow = False
+            cosmology_likelihood_workflow = False
+            cosmology_likelihood_build_calls = []
+            cosmology_likelihood_run_calls = []
+        if lightweight_task_kind == "deterministic_source_check":
+            # A paper-table calculation must not be overwritten by the older
+            # AP keyword route or its full-matrix fallback.
+            cosmology_direct_route_calls = None
 
     hit_iteration_cap = False
     hit_deadline = False
@@ -390,7 +646,9 @@ async def _run_agent_loop(
             summary = grounded.strip() or (
                 "The agent loop timed out before any tool produced a citable result."
             )
-            deadline_validation = _not_run_validation_summary("loop_deadline")
+            deadline_validation = _not_run_validation_summary(
+                "loop_deadline", routing_decision
+            )
             try:
                 from app.services.claim_validator import (
                     enforce_scientific_conclusion_gate,
@@ -401,11 +659,11 @@ async def _run_agent_loop(
                 )
                 if conclusion_violations:
                     deadline_validation = {
-                        "schema_version": 1,
-                        "numeric_gate": "not_run",
+                        **deadline_validation,
                         "citation_gate": "blocked",
-                        "regen_count": 0,
                         "blocked": True,
+                        "response_disposition": "hard_block",
+                        "earliest_limiting_stage": "scientific_conclusion_scope",
                         "reason": "scientific_conclusion_scope",
                         "interventions": [{
                             "gate": "scientific_conclusion_scope",
@@ -420,11 +678,11 @@ async def _run_agent_loop(
                     "is cleared for display; review the tool cards and rerun."
                 )
                 deadline_validation = {
-                    "schema_version": 1,
-                    "numeric_gate": "not_run",
+                    **deadline_validation,
                     "citation_gate": "blocked",
-                    "regen_count": 0,
                     "blocked": True,
+                    "response_disposition": "hard_block",
+                    "earliest_limiting_stage": "scientific_conclusion_scope",
                     "reason": "scientific_conclusion_validation_error",
                     "interventions": [{
                         "gate": "scientific_conclusion_scope",
@@ -460,6 +718,27 @@ async def _run_agent_loop(
         # gate runs. No-op only when ASTRO_RESEARCH_FOCUS=all; the default is
         # "cosmology" (chat.py:58), so this filter IS active by default.
         visible_tools = _filter_tools_by_research_focus(visible_tools)
+        if routing_decision is not None and not routing_decision.get(
+            "heavy_route_allowed"
+        ):
+            heavy_route_tools = {
+                "plan_research_program",
+                "run_research_matrix",
+                "build_cosmology_likelihood",
+                "build_cosmology_robustness_matrix",
+                "run_cosmology_likelihood_chain",
+                "run_cosmology_robustness_matrix",
+                "run_dark_energy_evidence_matrix",
+                "run_cmb_rotation_likelihood",
+                "run_nested_sampler",
+                "fit_cosmology_mcmc",
+                "run_cobaya_cosmology",
+            }
+            visible_tools = [
+                tool
+                for tool in visible_tools
+                if tool.get("name") not in heavy_route_tools
+            ]
         line_relation_workflow = _is_line_relation_workflow(latest_user_text)
         literature_searches_done = sum(
             1 for tr in all_tool_results if tr.get("tool") == "search_literature"
@@ -487,6 +766,18 @@ async def _run_agent_loop(
             for tr in all_tool_results
         )
         inline_statistics_pending = inline_statistics_call is not None and not inline_statistics_done
+        scalar_verification_done = any(
+            tr.get("tool") == "verify_scalar_derivation"
+            for tr in all_tool_results
+        )
+        scalar_verification_pending = (
+            scalar_verification_call is not None
+            and not scalar_verification_done
+        )
+        scalar_verification_incomplete = (
+            lightweight_task_kind == "deterministic_source_check"
+            and scalar_verification_call is None
+        )
         research_plan_done = any(
             tr.get("tool") == "plan_research_program"
             for tr in all_tool_results
@@ -663,7 +954,36 @@ async def _run_agent_loop(
                     "export_sample_table",
                 }
             ]
-        if inline_statistics_pending:
+        if scalar_verification_pending:
+            visible_tools = [
+                tool
+                for tool in visible_tools
+                if tool.get("name") == "verify_scalar_derivation"
+            ]
+        elif scalar_verification_done:
+            # Once the receipt exists, synthesis is prose-only.
+            visible_tools = []
+        elif scalar_verification_incomplete:
+            # 2026-08-06 natural-matrix fix: when the parser already found the
+            # quantities and only the uncertainty statement failed to parse,
+            # let the model complete the parse through the controlled tool
+            # (inputs are echo-validated against the prompt before dispatch).
+            # In every other incomplete state, keep asking for the missing
+            # fields rather than allowing a planner/search detour to invent
+            # them.
+            _missing_now = set(
+                str(item)
+                for item in (routing_decision or {}).get("missing_inputs") or []
+            )
+            if _missing_now == {"uncertainty_model"}:
+                visible_tools = [
+                    tool
+                    for tool in visible_tools
+                    if tool.get("name") == "verify_scalar_derivation"
+                ]
+            else:
+                visible_tools = []
+        elif inline_statistics_pending:
             # The user supplied the numerical arrays directly. Use the
             # deterministic statistics tool as the citable path; do not let
             # the model detour through run_python and trigger synthetic output.
@@ -788,7 +1108,61 @@ async def _run_agent_loop(
                 + "relation statistics.]"
             )
 
-        if inline_statistics_pending:
+        if scalar_verification_pending:
+            system_this_call = (
+                system_this_call
+                + "\n\n[RUNTIME: routing classified this as "
+                + "deterministic_source_check. The only available tool is "
+                + "verify_scalar_derivation. Run the supplied controlled "
+                + "operation before writing prose. Do not start a research "
+                + "matrix, likelihood, sampler, arbitrary Python calculation, "
+                + "or dark-energy inference.]"
+            )
+        elif scalar_verification_done:
+            system_this_call = (
+                system_this_call
+                + "\n\n[RUNTIME: verify_scalar_derivation already returned a "
+                + "receipt. Stop calling tools. Preserve its distinction "
+                + "between derived_numeric and source_measurement. If source "
+                + "status is not verified_exact, report the calculation only "
+                + "as based on supplied inputs and do not say the paper "
+                + "reported those values.]"
+            )
+        elif scalar_verification_incomplete:
+            missing_items = [
+                str(item)
+                for item in (routing_decision or {}).get("missing_inputs") or []
+            ]
+            missing = ", ".join(missing_items)
+            if set(missing_items) == {"uncertainty_model"}:
+                system_this_call = (
+                    system_this_call
+                    + "\n\n[RUNTIME: routing classified this as a "
+                    + "deterministic_source_check. The parser found the "
+                    + "quantities but could not parse the correlation/"
+                    + "independence statement. verify_scalar_derivation is "
+                    + "available: re-read the user's own words and complete "
+                    + "the call yourself. Pass a correlation matrix only with "
+                    + "a coefficient the user actually stated, or "
+                    + "kind=independent only if the user explicitly said the "
+                    + "inputs are independent/uncorrelated. Every numeric "
+                    + "input must appear verbatim in the user prompt; "
+                    + "invented inputs are rejected before execution. If the "
+                    + "user stated neither correlation nor independence, ask "
+                    + "for exactly that instead. Do not hand-calculate and do "
+                    + "not start any research tool.]"
+                )
+            else:
+                system_this_call = (
+                    system_this_call
+                    + "\n\n[RUNTIME: routing classified this as an incomplete "
+                    + "deterministic_source_check. No research or calculation "
+                    + "tools are available because required inputs are missing: "
+                    + f"{missing or 'unspecified inputs'}. Ask for exactly these "
+                    + "items. Do not fall back to a research matrix, likelihood, "
+                    + "archive guess, or remembered numbers.]"
+                )
+        elif inline_statistics_pending:
             system_this_call = (
                 system_this_call
                 + "\n\n[RUNTIME: the user supplied explicit x/y arrays and "
@@ -994,16 +1368,180 @@ async def _run_agent_loop(
                 })
                 soft_deadline_reminded = True
 
-        try:
-            response = await _llm_messages_create(
-                system=system_this_call,
-                messages=working_messages,
-                tools=visible_tools,
-                provider_api_keys=provider_api_keys,
-                agent_name=agent_name,
-                preferred_backend=preferred_backend,
-                model_profile=model_profile,
+        cosmology_direct_route_pending = bool(
+            _iteration == 0
+            and not all_tool_results
+            and cosmology_direct_route_calls
+            and _active_research_focus() == "cosmology"
+        )
+        h0_anchor_direct_route_done = any(
+            item.get("tool") == "compare_luminosity_distances"
+            and isinstance(item.get("result"), dict)
+            and item["result"].get("comparison_mode") == "h0_anchors"
+            and item["result"].get("success") is True
+            for item in all_tool_results
+            if isinstance(item, dict)
+        )
+        outside_coverage_registry_done = (
+            _cosmology_outside_coverage_disclosure(
+                all_tool_results, latest_user_text
             )
+            is not None
+        )
+        full_research_capability_gap_done = (
+            lightweight_task_kind == "full_research"
+            and any(
+                item.get("tool") in {
+                    "run_dark_energy_evidence_matrix",
+                    "run_research_matrix",
+                }
+                and isinstance(item.get("result"), dict)
+                and item["result"].get("publication_ready") is not True
+                for item in all_tool_results
+                if isinstance(item, dict)
+            )
+        )
+
+        try:
+            if untrusted_evidence_request and _iteration == 0:
+                response = {
+                    "content": untrusted_evidence_refusal(),
+                    "stop_reason": "end_turn",
+                    "tool_calls": [],
+                }
+            elif scalar_verification_pending:
+                await _emit({
+                    "type": "status",
+                    "message": (
+                        "Running the controlled scalar derivation and source "
+                        "verification before summarizing the paper-table check."
+                    ),
+                })
+                response = {
+                    "content": "",
+                    "stop_reason": "tool_use",
+                    "tool_calls": [deepcopy(scalar_verification_call)],
+                }
+            elif cosmology_direct_route_pending:
+                await _emit({
+                    "type": "status",
+                    "message": (
+                        "Running the deterministic cosmology comparison before "
+                        "model synthesis."
+                    ),
+                })
+                response = {
+                    "content": "",
+                    "stop_reason": "tool_use",
+                    "tool_calls": deepcopy(cosmology_direct_route_calls),
+                }
+            elif cosmology_registry_pending:
+                registry_dataset_keys = _cosmology_dataset_keys_from_prompt(
+                    latest_user_text
+                )
+                requested_redshift = _cosmology_requested_redshift(latest_user_text)
+                registry_input: dict[str, Any] = {}
+                if registry_dataset_keys:
+                    registry_input["dataset_keys"] = registry_dataset_keys
+                if requested_redshift is not None:
+                    registry_input["requested_redshift"] = requested_redshift
+                response = {
+                    "content": "",
+                    "stop_reason": "tool_use",
+                    "tool_calls": [{
+                        "id": f"auto_cosmo_registry_{uuid.uuid4().hex}",
+                        "name": "list_cosmology_datasets",
+                        "input": registry_input,
+                    }],
+                }
+            elif research_plan_pending:
+                response = {
+                    "content": "",
+                    "stop_reason": "tool_use",
+                    "tool_calls": [{
+                        "id": f"auto_research_plan_{uuid.uuid4().hex}",
+                        "name": "plan_research_program",
+                        "input": {"question": latest_user_text},
+                    }],
+                }
+            elif research_matrix_pending:
+                response = {
+                    "content": "",
+                    "stop_reason": "tool_use",
+                    "tool_calls": [{
+                        "id": f"auto_research_matrix_{uuid.uuid4().hex}",
+                        "name": "run_research_matrix",
+                        "input": {
+                            "research_plan": _research_plan_from_tool_results(
+                                all_tool_results
+                            ),
+                            "question": latest_user_text,
+                        },
+                    }],
+                }
+            elif research_evidence_pending:
+                response = {
+                    "content": "",
+                    "stop_reason": "tool_use",
+                    "tool_calls": [{
+                        "id": f"auto_evidence_graph_{uuid.uuid4().hex}",
+                        "name": "build_evidence_graph",
+                        "input": {
+                            "tool_results": _compact_tool_results_for_evidence(
+                                all_tool_results
+                            ),
+                        },
+                    }],
+                }
+            elif scalar_verification_done:
+                # High-confidence deterministic checks do not need a second
+                # model pass. Rendering the signed receipt directly removes
+                # latency and prevents the synthesis model from adding an
+                # unsupported method or citation after verification.
+                response = {
+                    "content": _tool_grounded_summary(
+                        all_tool_results, latest_user_text
+                    )
+                    or "The deterministic receipt is available in the tool card.",
+                    "stop_reason": "end_turn",
+                    "tool_calls": [],
+                }
+            elif outside_coverage_registry_done:
+                response = {
+                    "content": _tool_grounded_summary(
+                        all_tool_results, latest_user_text
+                    )
+                    or "The requested redshift is outside the registered dataset coverage.",
+                    "stop_reason": "end_turn",
+                    "tool_calls": [],
+                }
+            elif full_research_capability_gap_done:
+                response = {
+                    "content": _full_research_capability_gap_reply(
+                        latest_user_text
+                    ),
+                    "stop_reason": "end_turn",
+                    "tool_calls": [],
+                }
+            elif h0_anchor_direct_route_done:
+                response = {
+                    "content": _tool_grounded_summary(
+                        all_tool_results, latest_user_text
+                    )
+                    or "The registered H0-anchor comparison is available in the tool card.",
+                    "stop_reason": "end_turn",
+                    "tool_calls": [],
+                }
+            else:
+                response = await _llm_messages_create(
+                    system=system_this_call,
+                    messages=working_messages,
+                    tools=visible_tools,
+                    provider_api_keys=provider_api_keys,
+                    agent_name=agent_name,
+                    preferred_backend=preferred_backend,
+                    model_profile=model_profile,
+                )
         except InferenceError as exc:
             # P0 (2026-05-26): tools may have completed successfully but the
             # final LLM synthesis call failed (all configured backends down).
@@ -1029,7 +1567,7 @@ async def _run_agent_loop(
 
         text = str(response.get("content", "") or "")
         tool_calls_in_turn: list[dict] = list(response.get("tool_calls") or [])
-        forced_tool_call_override = False
+        forced_tool_call_override = scalar_verification_pending
         if inline_statistics_pending and (
             not tool_calls_in_turn
             or any(tc.get("name") != "astro_statistics_toolbox" for tc in tool_calls_in_turn)
@@ -1360,6 +1898,37 @@ async def _run_agent_loop(
                     "name": tool_call["name"],
                     "input": tool_call["input"],
                     "result": _suppressed_line_measurement_python_result(fit_ready_literature_cache_keys),
+                }
+            elif (
+                scalar_verification_incomplete
+                and tool_name == "verify_scalar_derivation"
+                and (
+                    scalar_echo_violation := scalar_call_echo_violation(
+                        tool_call.get("input") or {}, latest_user_text
+                    )
+                )
+            ):
+                # Fabrication guard for the incomplete-packet fallback: the
+                # model may complete the parse, never invent inputs. Reject
+                # with a corrective result instead of executing.
+                suppressed_tool_results[tool_call["id"]] = {
+                    "id": tool_call["id"],
+                    "name": tool_call["name"],
+                    "input": tool_call["input"],
+                    "result": {
+                        "success": False,
+                        "__tool_status__": "REJECTED",
+                        "__internal_suppressed__": True,
+                        "__do_not_claim__": True,
+                        "error": f"echo validation failed: {scalar_echo_violation}",
+                        "__message_to_model__": (
+                            "The incomplete-packet fallback only accepts "
+                            "inputs the user actually wrote. Use only numbers "
+                            "present in the user prompt; if the correlation "
+                            "or independence statement is genuinely absent, "
+                            "ask the user for it instead of assuming."
+                        ),
+                    },
                 }
             else:
                 real_tool_calls.append(tool_call)
@@ -1794,7 +2363,9 @@ async def _run_agent_loop(
                 "honest_abstention_dataset_identity_disclosure"
                 if abstention_identity_enforced
                 else "honest_abstention"
-            )
+            ),
+            routing_decision,
+            latest_user_text,
         )
         if abstention_identity_enforced:
             abstention_validation_summary["interventions"] = [{
@@ -1816,6 +2387,34 @@ async def _run_agent_loop(
         }
     if "<tools_returned_nothing" in clean_reply or "<toolsreturnednothing" in clean_reply:
         clean_reply = _sanitize_tools_returned_nothing(clean_reply)
+
+    # The direct Hubble-tension route is intentionally a single, deterministic
+    # comparison of two citation-pinned H0 manifests. Preserve that determinism
+    # at the rendering boundary too: a model paraphrase can round 4.85σ to an
+    # unsupported "about 5σ" or add historical context that this turn did not
+    # fetch. When this is the sole tool result, render the existing tool-grounded
+    # summary and then run the normal numeric/citation gates over it. Broader
+    # turns with any additional tool keep their model synthesis unchanged.
+    scientific_tool_results = [
+        item for item in all_tool_results
+        if isinstance(item, dict) and item.get("tool")
+    ]
+    if (
+        len(scientific_tool_results) == 1
+        and scientific_tool_results[0].get("tool") == "compare_luminosity_distances"
+    ):
+        anchor_result = scientific_tool_results[0].get("result")
+        if (
+            isinstance(anchor_result, dict)
+            and anchor_result.get("comparison_mode") == "h0_anchors"
+            and anchor_result.get("success") is True
+        ):
+            deterministic_anchor_summary = _cosmology_tool_grounded_summary(
+                all_tool_results,
+                latest_user_text,
+            )
+            if deterministic_anchor_summary:
+                clean_reply = deterministic_anchor_summary
 
     # R2: zero-fabrication gate.  Validate every numeric claim in the reply
     # against the tool_results collected this turn; if any claim can't be
@@ -1933,6 +2532,7 @@ async def _run_agent_loop(
             provenance_citation_violations,
             citation_violations_should_block,
             blocked_citation_reply_text,
+            limited_citation_reply_text,
             unsupported_literature_narrative_violations,
             blocked_unsupported_narrative_reply_text,
             # Stage 6 P0c-C: second-pass hard barrier
@@ -2471,12 +3071,12 @@ async def _run_agent_loop(
                 if not recovered_with_summary:
                     annotations: list[str] = []
                     if citation_violations:
-                        annotations.append(blocked_citation_reply_text(citation_violations))
+                        annotations.append(limited_citation_reply_text(citation_violations))
                     if method_violations:
                         from app.services.claim_validator import (
-                            blocked_methodology_reply_text,
+                            limited_methodology_reply_text,
                         )
-                        annotations.append(blocked_methodology_reply_text(method_violations))
+                        annotations.append(limited_methodology_reply_text(method_violations))
 
                     # PART AG C1 — annotate-and-attach mode (replaces the
                     # earlier withhold-all behaviour).
@@ -2496,10 +3096,11 @@ async def _run_agent_loop(
                     if clean_reply.strip():
                         annotation_block = (
                             "\n\n---\n\n"
-                            "## ⚠ Citation / methodology provenance check failed\n\n"
-                            "The reply above was generated, but the platform's "
-                            "provenance gate flagged claims that the tool results "
-                            "this turn did not support. Treat the flagged items as "
+                            "## ⚠ Limited answer: provenance gaps\n\n"
+                            "The supported parts of the answer remain visible, but "
+                            "the platform's provenance gate flagged specific claims "
+                            "that this turn's tool results did not support. Treat "
+                            "only the flagged items as "
                             "**NOT verified** and re-run the relevant tools before "
                             "quoting any of them in a paper.\n\n"
                             + "\n\n---\n\n".join(annotations)
@@ -2511,9 +3112,9 @@ async def _run_agent_loop(
                         # previous withhold-only message so the user has
                         # something to read.
                         clean_reply = "\n\n---\n\n".join(annotations)
-                    fabrication_stats["blocked"] = True
+                    fabrication_stats["limited"] = True
                     await _gate_event(
-                        "citation_methodology", "annotated_blocked",
+                        "citation_methodology", "annotated_limited",
                         violations=all_violations,
                         draft=_cm_draft, final=clean_reply,
                     )
@@ -3171,14 +3772,18 @@ async def _run_agent_loop(
         all_tool_results,
     )
     if escaped_posterior_values:
-        clean_reply = (
-            _cosmology_tool_grounded_summary(all_tool_results, latest_user_text)
-            or nonpublication_posterior_refusal()
-        )
+        if (routing_decision or {}).get("task_kind") == "full_research":
+            clean_reply = _full_research_capability_gap_reply(latest_user_text)
+        else:
+            clean_reply = (
+                _cosmology_tool_grounded_summary(all_tool_results, latest_user_text)
+                or nonpublication_posterior_refusal()
+            )
+        fabrication_stats["limited"] = True
         fabrication_stats["regenerations"] += 1
         await _gate_event(
             "nonpublication_posterior",
-            "downgraded_summary",
+            "annotated_limited",
             reason="posterior_values_withheld",
             details={"value_count": len(escaped_posterior_values)},
             draft=_posterior_draft,
@@ -3195,10 +3800,11 @@ async def _run_agent_loop(
     if coverage_disclosure and coverage_disclosure not in clean_reply:
         _coverage_draft = clean_reply
         clean_reply = clean_reply.rstrip() + "\n\n" + coverage_disclosure
+        fabrication_stats["limited"] = True
         fabrication_stats["regenerations"] += 1
         await _gate_event(
             "dataset_coverage",
-            "disclosed",
+            "annotated_limited",
             reason="outside_registered_coverage",
             draft=_coverage_draft,
             final=clean_reply,
@@ -3251,6 +3857,71 @@ async def _run_agent_loop(
     # clause, which fires only when the loop exhausts its iteration budget
     # without breaking — a clean final-answer break is not flagged.
 
+    validation_summary = _derive_validation_summary(
+        claim_gate_ran=_claim_gate_ran,
+        gate_skip_reason=_gate_skip_reason,
+        fabrication_stats=fabrication_stats,
+        interventions=gate_interventions,
+        tool_results=all_tool_results,
+        routing_decision=routing_decision,
+        user_prompt=latest_user_text,
+        evidence_receipts_enabled=settings.lightweight_verification_enabled,
+    )
+    if routing_decision is not None:
+        try:
+            from app.observability.metrics import record_counter, record_histogram
+
+            record_counter(
+                "lightweight_response_disposition_total",
+                task_kind=str(validation_summary.get("task_kind") or "general"),
+                disposition=str(
+                    validation_summary.get("response_disposition") or "full"
+                ),
+                earliest_limiting_stage=str(
+                    validation_summary.get("earliest_limiting_stage") or "none"
+                ),
+            )
+            record_histogram(
+                "lightweight_task_duration_seconds",
+                _time.monotonic() - _loop_started,
+                task_kind=str(validation_summary.get("task_kind") or "general"),
+                disposition=str(
+                    validation_summary.get("response_disposition") or "full"
+                ),
+            )
+            evidence_receipts = validation_summary.get("evidence_receipts") or []
+            for receipt in evidence_receipts:
+                if not isinstance(receipt, dict):
+                    continue
+                record_counter(
+                    "evidence_receipt_total",
+                    kind=str(receipt.get("receipt_kind") or "unknown"),
+                    status=str(receipt.get("source_status") or "unknown"),
+                )
+            expected_receipt = (
+                any(
+                    item.get("gate")
+                    in {
+                        "dataset_coverage",
+                        "nonpublication_posterior",
+                        "untrusted_evidence_echo",
+                    }
+                    for item in gate_interventions
+                )
+                or "untrusted_evidence_request"
+                in set((routing_decision or {}).get("matched_signals") or [])
+            )
+            if settings.lightweight_verification_enabled and expected_receipt and not evidence_receipts:
+                record_counter(
+                    "evidence_receipt_missing_total",
+                    task_kind=str(validation_summary.get("task_kind") or "general"),
+                    limiting_stage=str(
+                        validation_summary.get("earliest_limiting_stage") or "none"
+                    ),
+                )
+        except Exception:
+            pass
+
     return {
         "reply": clean_reply,
         "actions": actions,
@@ -3260,11 +3931,5 @@ async def _run_agent_loop(
         # 2026-07-03 honesty surfacing: compact summary of what the gate
         # stack actually did this turn, derived from state the gates
         # already computed (fabrication_stats + gate_interventions).
-        "validation_summary": _derive_validation_summary(
-            claim_gate_ran=_claim_gate_ran,
-            gate_skip_reason=_gate_skip_reason,
-            fabrication_stats=fabrication_stats,
-            interventions=gate_interventions,
-            tool_results=all_tool_results,
-        ),
+        "validation_summary": validation_summary,
     }

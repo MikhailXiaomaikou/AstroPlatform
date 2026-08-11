@@ -6,7 +6,1227 @@ Moved verbatim from app/api/chat.py (2026-07-03 god-file split).
 
 import re
 import uuid
-from typing import Any
+from typing import Any, Literal, TypedDict
+
+
+TaskKind = Literal[
+    "deterministic_source_check",
+    "research_exploration",
+    "full_research",
+    "general",
+]
+
+
+class RoutingDecision(TypedDict):
+    task_kind: TaskKind
+    confidence: float
+    matched_signals: list[str]
+    negated_signals: list[str]
+    source_references: list[dict[str, str]]
+    requested_operation: str | None
+    missing_inputs: list[str]
+    heavy_route_allowed: bool
+    direct_tool_call: dict[str, Any] | None
+
+
+_HEAVY_INTENT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("likelihood", re.compile(r"\b(?:likelihood|似然)\b", re.I)),
+    ("fit", re.compile(r"\b(?:fit|fitting|拟合)\b", re.I)),
+    # ``sample`` is also a common observational noun ("measured from the
+    # sample").  Only treat the bare form as sampler intent when it is tied to
+    # a sampling target; the unambiguous vocabulary remains sufficient on its
+    # own.  This keeps complete scalar receipts on the deterministic path.
+    ("sampling", re.compile(
+        r"\b(?:sampling|sampler|mcmc)\b|"
+        r"\bnested\s+sampl(?:e|ing|er)\b|"
+        r"\bsample\b\s+(?:(?:the|these|those)\s+)?"
+        r"(?:posterior|likelihood|parameters?)\b|"
+        r"\bsample\b[^.;。；]{0,20}\bfrom\s+(?:the\s+)?"
+        r"(?:posterior|likelihood|parameter\s+space|distribution)\b|"
+        r"\b(?:draw|generate|run)\b[^.;。；]{0,24}"
+        r"\b(?:posterior\s+)?samples?\b|"
+        r"采样",
+        re.I,
+    )),
+    ("posterior", re.compile(r"\bposterior\b|后验", re.I)),
+    ("model_likelihood_comparison", re.compile(r"(?:compare|comparison|比较).{0,40}(?:model|模型).{0,40}(?:likelihood|似然)", re.I)),
+    # Codex review P1 (PR #46): an explicit chain-execution request phrased
+    # without likelihood/fit/sampler vocabulary ("Run the executable cosmology
+    # chain...") must count as heavy intent. Bare "chain" stays excluded on
+    # purpose (chain rule, chain of reasoning); the noun must be qualified or
+    # the sampler named explicitly.
+    ("chain_execution", re.compile(
+        r"\bcobaya\b|"
+        r"\b(?:run|rerun|re-run|execute|launch)\b[^.;。；]{0,60}"
+        r"\b(?:cosmology|likelihood|mcmc|posterior|parameter)\s+chains?\b|"
+        r"(?:跑|执行|运行)[^.;。；]{0,30}(?:宇宙学|似然|参数)链",
+        re.I,
+    )),
+)
+_NEGATION_TOKEN = re.compile(
+    r"(?:\b(?:do\s+not|don't|without|avoid|exclude|excluding|not|never)\b|"
+    r"不要|不需要|无需|别|避免|排除|不是|并非)",
+    re.I,
+)
+
+
+def _normalized_task_text(text: str) -> str:
+    normalized = str(text or "")
+    normalized = normalized.replace("−", "-").replace("–", "-").replace("—", "-")
+    normalized = normalized.replace("\u00a0", " ")
+    normalized = re.sub(r"\\(?:mathrm|text|operatorname)\s*\{([^{}]+)\}", r"\1", normalized)
+    normalized = normalized.replace("{", "").replace("}", "")
+    normalized = re.sub(r"D\s*[_\s]?M\s*/\s*D\s*[_\s]?H", "D_M/D_H", normalized, flags=re.I)
+    normalized = re.sub(r"(?<![A-Za-z])DM\s*/\s*DH(?![A-Za-z])", "D_M/D_H", normalized, flags=re.I)
+    normalized = re.sub(r"D\s*[_\s]?M\s*/\s*r\s*[_\s]?d", "D_M/r_d", normalized, flags=re.I)
+    normalized = re.sub(r"D\s*[_\s]?H\s*/\s*r\s*[_\s]?d", "D_H/r_d", normalized, flags=re.I)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+_VERB_NEGATOR = re.compile(
+    r"\b(?:do\s+not|don't|does\s+not|cannot|can't|must\s+not|never|not)\b|"
+    r"不要|不得|不能|别",
+    re.I,
+)
+_NOUN_NEGATOR = re.compile(
+    r"\b(?:without|avoid|exclude|excluding)\b|无需|不需要|避免|排除|不是|并非",
+    re.I,
+)
+_DETERMINER_NO_PREFIX = re.compile(
+    r"(?:^|[,:，：])\s*(?:(?:but|and)\s+)?no\s+"
+    r"(?:(?:new|additional|further|full|heavy)\s+){0,2}$",
+    re.I,
+)
+_EXISTENTIAL_NO_NEED_PREFIX = re.compile(
+    r"\bthere\s+(?:is|was|remains)\s+(?:absolutely\s+)?no\s+need\s+"
+    r"(?:for|to(?:\s+(?:run|perform|execute|launch))?)\s+"
+    r"(?:(?:an?|the|any|another)\s+)?$",
+    re.I,
+)
+_EXECUTION_VERB = re.compile(
+    r"\b(?:run|rerun|re-run|running|execute|executing|launch|perform|compute|calculate)\b|"
+    r"跑|执行|运行",
+    re.I,
+)
+_REPEATED_COMMAND = re.compile(
+    r"\s*(?:(?:but|instead|then|and)\s+)?(?:please\s+)?"
+    r"(?:run|rerun|re-run|execute|launch|perform|compute|calculate)\b|"
+    r"\s*(?:但|而是|然后)?\s*(?:请)?(?:跑|执行|运行|计算)",
+    re.I,
+)
+_CLAUSE_BOUNDARY = re.compile(r"[,:，：]")
+_POSTPOSED_HEAVY_NEGATION = re.compile(
+    r"\s*(?:(?:fits?|calculations?|analys(?:is|es)|evaluations?|runs?|"
+    r"executions?|workflows?|steps?|procedures?|itself)\s+){0,2}(?:"
+    r"(?:is|are|was|were|should|must|can|could|may|might|will|would)\s+"
+    r"(?:not|never)\s+(?:(?:to\s+be|be|have\s+been)\s+)?"
+    r"(?:required|needed|performed|run|executed|used|done|necessary)|"
+    r"(?:(?:is|are|was|were|should|must|can|could|may|might|will|would)"
+    r"n['’]t|cannot)\s+(?:(?:to\s+be|be|have\s+been)\s+)?"
+    r"(?:required|needed|performed|run|executed|used|done|necessary)|"
+    r"(?:(?:does|do|did)\s+(?:not|never)|(?:does|do|did)n['’]t)\s+"
+    r"need\s+to\s+be\s+"
+    r"(?:required|performed|run|executed|used|done)|"
+    r"need\s+not\s+be\s+"
+    r"(?:required|performed|run|executed|used|done|necessary)|"
+    r"(?:is|are|was|were)\s+(?:unnecessary|unneeded)|"
+    r"(?:is|are|was|were|can|could|may|might|should|would)\s+"
+    r"(?:be\s+)?(?:skipped|bypassed|omitted|avoided)"
+    r")\b",
+    re.I,
+)
+
+
+def _prefix_negates(prefix: str) -> bool:
+    """Whether the sentence prefix negates a heavy match right after it.
+
+    Codex review P1 (PR #46, round 3): a negation anywhere in the sentence
+    used to negate every later heavy signal, so "Don't explain it, execute
+    the cosmology chain" lost its tools. Scope rules:
+
+    - The LAST negator in the prefix governs.
+    - No clause boundary between negator and match: negated (covers
+      "Do not run a likelihood." and "without running a fit").
+    - Boundary present, verb negator: negated only when an execution verb
+      occurs before the first boundary — a negated imperative whose object
+      list runs across commas ("Do not run a likelihood, fit, sampler").
+    - Boundary present, noun negator: not negated — its scope ends with its
+      clause ("Without approximations, run a Planck likelihood fit").
+
+    Known limitation, deliberately accepted: a parenthetical between the
+    negator and its verb ("Do not, under any circumstances, run the chain")
+    reads as active; the paraphrase-variant suite probes this class.
+    """
+    # Codex review P1 (PR #46, round 44): clause-leading determiner ``no``
+    # directly governs the following heavy noun ("No fit is necessary").
+    # Keep this anchored at the match boundary so an unrelated clause such as
+    # "No approximations, run a fit" still leaves the fit request active.
+    if _DETERMINER_NO_PREFIX.search(prefix) or _EXISTENTIAL_NO_NEED_PREFIX.search(
+        prefix
+    ):
+        return True
+
+    last_negator: re.Match[str] | None = None
+    negator_is_verb = False
+    for candidate in _VERB_NEGATOR.finditer(prefix):
+        if last_negator is None or candidate.start() >= last_negator.start():
+            last_negator = candidate
+            negator_is_verb = True
+    for candidate in _NOUN_NEGATOR.finditer(prefix):
+        if last_negator is None or candidate.start() > last_negator.start():
+            last_negator = candidate
+            negator_is_verb = False
+    if last_negator is None:
+        return False
+    tail = prefix[last_negator.end() :]
+    boundary = _CLAUSE_BOUNDARY.search(tail)
+    if boundary is None:
+        return True
+    if not negator_is_verb:
+        return False
+    # Codex review P2 (PR #46, round 8): a repeated command starts a new
+    # corrective clause even without an explicit contrast word: "Don't
+    # compute a ratio, compute the difference". It must not inherit the
+    # first command's negation. Bare object lists ("don't run A, B, C") keep
+    # the existing negated-list behavior because they have no repeated verb.
+    if _REPEATED_COMMAND.match(tail[boundary.end() :]):
+        return False
+    return bool(_EXECUTION_VERB.search(tail[: boundary.start()]))
+
+
+def _heavy_match_is_postposed_negated(text: str, match: re.Match[str]) -> bool:
+    clause_ends = [
+        position
+        for separator in (".", ";", "。", "；", "\n")
+        if (position := text.find(separator, match.end())) >= 0
+    ]
+    clause_end = min(clause_ends, default=len(text))
+    return _POSTPOSED_HEAVY_NEGATION.match(text[match.end() : clause_end]) is not None
+
+
+def _active_and_negated_heavy_signals(text: str) -> tuple[list[str], list[str]]:
+    matched: list[str] = []
+    negated: list[str] = []
+    for name, pattern in _HEAVY_INTENT_PATTERNS:
+        active = False
+        was_negated = False
+        for match in pattern.finditer(text):
+            sentence_start = max(
+                text.rfind(separator, 0, match.start())
+                for separator in (".", ";", "。", "；", "\n")
+            )
+            prefix = text[sentence_start + 1 : match.start()]
+            if _prefix_negates(prefix) or _heavy_match_is_postposed_negated(
+                text, match
+            ):
+                was_negated = True
+            else:
+                active = True
+        if active:
+            matched.append(name)
+        elif was_negated:
+            negated.append(name)
+    return matched, negated
+
+
+def _source_references_from_prompt(text: str) -> list[dict[str, str]]:
+    references: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    # Codex review P2 (PR #46, round 15): a bare arXiv-shaped token can also
+    # be an ordinary scalar value (for example ``A=1234.5678 +/- 0.1``).
+    # Protect the exact value/uncertainty spans parsed from complete scalar
+    # assignments; an explicit arXiv prefix or URL remains authoritative.
+    scalar_number_spans = [
+        scalar_match.span(group)
+        for scalar_match in _SCALAR_QUANTITY_RE.finditer(text)
+        for group in ("value", "uncertainty")
+    ]
+    patterns = (
+        (
+            "arxiv",
+            re.compile(
+                r"(?:arxiv:\s*|arxiv\.org/(?:abs|pdf)/)?"
+                r"(\d{4}\.\d{4,5}(?:v\d+)?)",
+                re.I,
+            ),
+        ),
+        ("doi", re.compile(r"(?:doi:\s*|doi\.org/)(10\.\d{4,9}/[^\s,;]+)", re.I)),
+        ("zenodo", re.compile(r"(?:zenodo\.org/(?:records?|record)/|10\.5281/zenodo\.)(\d+)", re.I)),
+        ("url", re.compile(r"https://[^\s)\]>]+", re.I)),
+    )
+    for kind, pattern in patterns:
+        for match in pattern.finditer(text):
+            if kind == "arxiv" and "arxiv" not in match.group(0).lower():
+                identifier_span = match.span(1)
+                if any(
+                    identifier_span[0] < scalar_span[1]
+                    and scalar_span[0] < identifier_span[1]
+                    for scalar_span in scalar_number_spans
+                ):
+                    continue
+            identifier = match.group(1) if match.lastindex else match.group(0)
+            if kind == "url" and any(
+                host in identifier for host in ("arxiv.org/", "doi.org/", "zenodo.org/")
+            ):
+                continue
+            key = (kind, identifier.rstrip(".,;"))
+            if key in seen:
+                continue
+            seen.add(key)
+            references.append({"kind": kind, "identifier": key[1]})
+    return references
+
+
+def _requested_scalar_operation(text: str) -> str | None:
+    # Codex review P1 (PR #46, round 4): leading-space tokens missed
+    # operation words at the very start of a prompt ("Product of A and B"),
+    # dropping a complete verification request to general. Internal review
+    # after round 7 also found that fixed priority ignored negation ("Do not
+    # take a ratio; compute the difference") and guessed when multiple active
+    # operations were present. Keep only unnegated matches and abstain on
+    # ambiguity.
+    patterns = (
+        ("ratio", re.compile(r"d_m/d_h|\bratios?\b|比值|相除", re.I)),
+        (
+            "weighted_mean",
+            re.compile(r"\bweighted\s+(?:mean|average)\b|加权平均", re.I),
+        ),
+        ("difference", re.compile(r"\bdifferences?\b|差值|相减", re.I)),
+        (
+            "product",
+            re.compile(r"\bproducts?\b|\bmultipl(?:y|ied|ication)\b|乘积|相乘", re.I),
+        ),
+    )
+    active: set[str] = set()
+    for operation, pattern in patterns:
+        for match in pattern.finditer(text):
+            clause_start = max(
+                text.rfind(separator, 0, match.start())
+                for separator in (".", ";", "。", "；", "\n")
+            )
+            prefix = text[clause_start + 1 : match.start()]
+            contrasts = list(
+                re.finditer(r"(?:,|，)\s*(?:but\b|instead\b|但|而是)", prefix, re.I)
+            )
+            if contrasts:
+                prefix = prefix[contrasts[-1].end() :]
+            if not _prefix_negates(prefix) and not _heavy_match_is_postposed_negated(
+                text, match
+            ):
+                active.add(operation)
+    return next(iter(active)) if len(active) == 1 else None
+
+
+_SCALAR_LABEL = r"(?:D_M/r_d|D_H/r_d|D_M|D_H|H0|H_0|H₀|n_s|ns|S8|Ωm|omega_m|rho|ρ|[A-Za-z][A-Za-z0-9_]*)"
+_SCALAR_VALUE = r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?"
+_H0_UNIT = r"km\s*(?:(?:/\s*s)|s\s*\^?\s*-?1|s-1)\s*(?:/\s*)?Mpc(?:\s*\^?\s*-?1)?"
+_SCALAR_QUANTITY_RE = re.compile(
+    rf"(?P<label>{_SCALAR_LABEL})\s*=\s*(?P<value>{_SCALAR_VALUE})"
+    rf"\s*(?:±|\+/-|\+-)\s*(?P<uncertainty>{_SCALAR_VALUE})"
+    rf"\s*(?P<unit>{_H0_UNIT}|Mpc|Gpc|kpc|pc)?",
+    re.I,
+)
+_PROMPT_QUANTITY_DISCLAIMER = re.compile(
+    r"\b(?:is|are|was|were|has|have|had|should|must|can|could|may|might|"
+    r"will|would)\s+"
+    r"(?:(?:explicitly|directly|clearly|currently)\s+){0,2}"
+    r"(?:not(?!\s+only)|never)\s+(?:(?:to\s+be|be|have\s+been)\s+)?"
+    r"(?:used|included|adopted|accepted|trusted|reported|supported|"
+    r"measured|validated)\b|"
+    r"\b(?:(?:is|are|was|were|has|have|had|should|must|can|could|may|"
+    r"might|will|would)n['’]t|cannot)\s+"
+    r"(?:(?:to\s+be|be|have\s+been)\s+)?"
+    r"(?:used|included|adopted|accepted|trusted|reported|supported|"
+    r"measured|validated)\b|"
+    r"\b(?:is|are|was|were)\s+"
+    r"(?:invalid|disclaimed|retracted|withdrawn|excluded|discarded)\b|"
+    r"\b(?:should|must)\s+be\s+(?:ignored|discarded|excluded|rejected)\b",
+    re.I,
+)
+_PROMPT_QUANTITY_PREFIX_REJECTION = re.compile(
+    r"\b(?:(?:do\s+not|don't|never)\s+"
+    r"(?:use|include|adopt|accept|trust)|"
+    r"(?:ignore|discard|exclude|reject))\s*$",
+    re.I,
+)
+_PROMPT_TARGETED_QUANTITY_REJECTION = re.compile(
+    r"\b(?:(?:do\s+not|don['’]t|never)\s+"
+    r"(?:use|include|adopt|accept|trust)|"
+    r"(?:ignore|discard|exclude|reject))\b"
+    r"(?P<targets>[^.;。；\n]*)",
+    re.I,
+)
+
+
+def _canonical_scalar_label(label: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(label or "").lower())
+
+
+def _targeted_rejection_names_scalar_label(
+    targets: str, label_pattern: re.Pattern[str], label: str
+) -> bool:
+    """Disambiguate the scalar label A/a from the English article."""
+    for occurrence in label_pattern.finditer(targets):
+        if label.lower() != "a":
+            return True
+        before = targets[: occurrence.start()]
+        after = targets[occurrence.end() :]
+        if re.search(
+            r"\b(?:quantity|value|measurement|parameter|variable|label)\s*$",
+            before,
+            re.I,
+        ):
+            return True
+        if re.match(r"\s*(?:$|,|(?:and|or|only|alone)\b)", after, re.I):
+            return True
+    return False
+
+
+def _repeated_scalar_labels(text: str) -> list[str]:
+    seen: set[str] = set()
+    repeated: list[str] = []
+    for match in _SCALAR_QUANTITY_RE.finditer(text):
+        label = match.group("label")
+        key = _canonical_scalar_label(label)
+        if key in seen and key not in repeated:
+            repeated.append(key)
+        seen.add(key)
+    return repeated
+
+
+def _scalar_quantity_match_is_disclaimed(
+    text: str,
+    match: re.Match[str],
+    *,
+    next_match_start: int,
+) -> bool:
+    sentence_start = max(
+        text.rfind(separator, 0, match.start())
+        for separator in (".", ";", "。", "；", "\n")
+    )
+    prefix = text[sentence_start + 1 : match.start()]
+    if _PROMPT_QUANTITY_PREFIX_REJECTION.search(prefix):
+        return True
+    label = match.group("label")
+    label_pattern = re.compile(
+        rf"(?<![A-Za-z0-9_]){re.escape(label)}(?![A-Za-z0-9_])",
+        re.I,
+    )
+    # Codex review P1 (PR #46, round 24): a later clause can explicitly name
+    # an earlier quantity ("Do not use A"). This is safe to inspect beyond the
+    # local assignment window because the exact target label must co-occur in
+    # the rejection clause; unrelated later disclaimers remain non-retroactive.
+    for rejection in _PROMPT_TARGETED_QUANTITY_REJECTION.finditer(text, match.end()):
+        if _targeted_rejection_names_scalar_label(
+            rejection.group("targets"), label_pattern, label
+        ):
+            return True
+    trailing_text = text[match.end() :]
+    for repeated_label in label_pattern.finditer(trailing_text):
+        clause_end = min(
+            (
+                position
+                for separator in (".", ";", "。", "；", "\n")
+                if (position := trailing_text.find(separator, repeated_label.end()))
+                >= 0
+            ),
+            default=len(trailing_text),
+        )
+        label_suffix = trailing_text[repeated_label.end() : clause_end]
+        normalized_label_suffix = re.sub(
+            r"^\s*,?\s*(?:(?:which|that)\s+)?", "", label_suffix, flags=re.I
+        )
+        if _PROMPT_QUANTITY_DISCLAIMER.match(normalized_label_suffix):
+            return True
+    # A disclaimer in a later sentence may concern an unrelated calibration;
+    # it must not retroactively reject this assignment. Keep the suffix local
+    # to the current sentence and, for multiple quantities, the next scalar.
+    sentence_ends = [
+        position
+        for separator in (".", "。", "\n")
+        if (position := text.find(separator, match.end())) >= 0
+    ]
+    suffix_end = min(next_match_start, min(sentence_ends, default=len(text)))
+    suffix = text[match.end() : suffix_end]
+    return _PROMPT_QUANTITY_DISCLAIMER.search(suffix) is not None
+
+
+def _scalar_quantities_from_prompt(text: str) -> list[dict[str, Any]]:
+    quantities: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    matches = list(_SCALAR_QUANTITY_RE.finditer(text))
+    for index, match in enumerate(matches):
+        next_match_start = (
+            matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        )
+        # Codex review P1 (PR #46, round 23): a complete-looking assignment
+        # explicitly rejected by the user must not feed either the direct
+        # verifier or the model-call echo allowlist.
+        if _scalar_quantity_match_is_disclaimed(
+            text, match, next_match_start=next_match_start
+        ):
+            continue
+        label = match.group("label")
+        if label.lower() in {"rho", "ρ"}:
+            continue
+        canonical_id = re.sub(r"[^A-Za-z0-9]+", "_", label).strip("_")
+        if canonical_id.lower() in seen:
+            continue
+        seen.add(canonical_id.lower())
+        unit = (match.group("unit") or "dimensionless").strip()
+        quantities.append(
+            {
+                "id": canonical_id,
+                "label": label,
+                "value": float(match.group("value")),
+                "standard_uncertainty": float(match.group("uncertainty")),
+                "unit": unit,
+            }
+        )
+    return quantities
+
+
+_COUNTERFACTUAL_CORRELATION_CONTEXT = re.compile(
+    r"\b(?:counterfactual|hypothetical|what[- ]if)\b|反事实|假想", re.I
+)
+_CORRELATION_CONTRAST_BOUNDARY = re.compile(
+    r"\b(?:versus|vs\.?|but|rather\s+than|instead(?:\s+of)?|whereas|"
+    r"compared\s+(?:with|to))\b|而是|相比|对比",
+    re.I,
+)
+_POSTPOSED_CORRELATION_REJECTION = re.compile(
+    r"^\s*(?:,\s*)?(?:(?:which|that)\s+)?(?:"
+    r"(?:is|are|was|were|should|must|can|could|may|might|will|would)\s+"
+    r"(?:not|never)\s+(?:(?:to\s+be|be|have\s+been)\s+)?"
+    r"(?:used|included|adopted|accepted|trusted|supported|applicable|valid)|"
+    r"(?:(?:is|are|was|were|should|must|can|could|may|might|will|would)"
+    r"n['’]t|cannot)\s+(?:(?:to\s+be|be|have\s+been)\s+)?"
+    r"(?:used|included|adopted|accepted|trusted|supported|applicable|valid)|"
+    r"(?:is|are|was|were)\s+(?:inapplicable|invalid|disclaimed|rejected)|"
+    r"(?:should|must)\s+be\s+(?:ignored|discarded|excluded|rejected)"
+    r")\b",
+    re.I,
+)
+
+
+def _correlation_match_is_inactive(
+    text: str, match_start: int, match_end: int
+) -> bool:
+    clause_start = max(
+        text.rfind(separator, 0, match_start)
+        for separator in (".", ";", "。", "；", "\n")
+    )
+    clause_end_candidates = [
+        position
+        for separator in (".", ";", "。", "；", "\n")
+        if (position := text.find(separator, match_end)) >= 0
+    ]
+    clause_end = min(clause_end_candidates, default=len(text))
+
+    local_start = clause_start + 1
+    before = text[local_start:match_start]
+    boundaries_before = list(_CORRELATION_CONTRAST_BOUNDARY.finditer(before))
+    previous_correlations = list(_CORRELATION_VALUE_RE.finditer(before))
+    if boundaries_before:
+        local_start += boundaries_before[-1].end()
+    if previous_correlations:
+        local_start = max(local_start, clause_start + 1 + previous_correlations[-1].end())
+
+    local_end = clause_end
+    after = text[match_end:clause_end]
+    boundary_after = _CORRELATION_CONTRAST_BOUNDARY.search(after)
+    next_correlation = _CORRELATION_VALUE_RE.search(after)
+    if boundary_after:
+        local_end = min(local_end, match_end + boundary_after.start())
+    if next_correlation:
+        local_end = min(local_end, match_end + next_correlation.start())
+
+    prefix = text[local_start:match_start]
+    suffix = text[match_end:local_end]
+    return _prefix_negates(prefix) or bool(
+        _COUNTERFACTUAL_CORRELATION_CONTEXT.search(prefix)
+        or _COUNTERFACTUAL_CORRELATION_CONTEXT.search(suffix)
+        or _POSTPOSED_CORRELATION_REJECTION.match(suffix)
+    )
+
+
+_INDEPENDENCE_STATED_RE = re.compile(
+    r"\b(?:independent|independence|uncorrelated)\b|相互独立|假设独立|忽略相关",
+    re.I,
+)
+_POSTPOSED_INDEPENDENCE_NEGATION = re.compile(
+    r"^\s*(?:(?:errors?|uncertainties?|measurements?)\s+)?"
+    r"(?:"
+    r"(?:(?:is|are|was|were|should|must|can|may|will|would)\s+)?"
+    r"(?:explicitly\s+)?(?:not|never)|"
+    r"(?:(?:is|are|was|were|should|must|could|might|would|does|do|did|"
+    r"has|have|had)n['’]t|can['’]t|won['’]t|cannot)"
+    r")\s+(?:to\s+)?(?:be\s+)?"
+    r"(?:assum(?:e|ed)|used|adopted|available|provided|valid)\b",
+    re.I,
+)
+
+
+def _active_independence_stated(text: str) -> bool:
+    """Return whether independence is asserted rather than negated."""
+    normalized = _normalized_task_text(text)
+    for match in _INDEPENDENCE_STATED_RE.finditer(normalized):
+        clause_start = max(
+            normalized.rfind(separator, 0, match.start())
+            for separator in (".", ";", "。", "；", "\n")
+        )
+        prefix = normalized[clause_start + 1 : match.start()]
+        contrasts = list(_CORRELATION_CONTRAST_BOUNDARY.finditer(prefix))
+        if contrasts:
+            prefix = prefix[contrasts[-1].end() :]
+        clause_end_candidates = [
+            position
+            for separator in (".", ";", "。", "；", "\n")
+            if (position := normalized.find(separator, match.end())) >= 0
+        ]
+        clause_end = min(clause_end_candidates, default=len(normalized))
+        suffix = normalized[match.end() : clause_end]
+        # Codex review P1 (PR #46, round 17): the negator may follow the
+        # keyword ("independent errors are not assumed"), so prefix-only
+        # scope is insufficient.
+        if (
+            not _prefix_negates(prefix)
+            and _POSTPOSED_INDEPENDENCE_NEGATION.match(suffix) is None
+        ):
+            return True
+    return False
+
+
+def _uncertainty_model_from_prompt(text: str, quantity_count: int) -> dict[str, Any] | None:
+    # Connector accepts natural phrasings ("a correlation of -0.404", "the
+    # correlation is -0.404") in addition to spec-style "rho=-0.404"; the
+    # 2026-08-06 natural matrix showed the equals-only form suppressed every
+    # legitimate V02_01 answer downstream.
+    deterministic_correlation_re = re.compile(
+        rf"(?:rho|ρ|correlation(?:\s+coefficient)?|相关系数)\s*(?:\([^)]*\))?\s*"
+        rf"(?:=|:|\bof\b|\bis\b|为|是)\s*({_SCALAR_VALUE})",
+        re.I,
+    )
+    correlation_values: list[float] = []
+    for match in deterministic_correlation_re.finditer(text):
+        if not _correlation_match_is_inactive(text, match.start(), match.end()):
+            correlation_values.append(float(match.group(1)))
+    unique_correlations = list(dict.fromkeys(correlation_values))
+    if len(unique_correlations) == 1 and quantity_count == 2:
+        rho = unique_correlations[0]
+        return {
+            "kind": "correlation_matrix",
+            "matrix": [[1.0, rho], [rho, 1.0]],
+        }
+    # Codex review P1 (PR #46, round 16): a keyword-only search interpreted
+    # "do not assume independent errors" as a positive uncertainty model.
+    if _active_independence_stated(text):
+        return {"kind": "independent"}
+    return None
+
+
+_CORRELATION_VALUE_RE = re.compile(
+    rf"(?:rho|ρ|correlation(?:\s+coefficient)?|cross\s+terms?|相关系数)"
+    rf"\s*(?:\([^)]*\))?\s*(?:=|:|\bof\b|\bis\b|为|是)?\s*({_SCALAR_VALUE})",
+    re.I,
+)
+
+
+def _prompt_correlation_values(text: str) -> list[float]:
+    values: list[float] = []
+    normalized = text.replace("−", "-")
+    for match in _CORRELATION_VALUE_RE.finditer(normalized):
+        if _correlation_match_is_inactive(normalized, match.start(), match.end()):
+            continue
+        try:
+            values.append(float(match.group(1)))
+        except ValueError:
+            continue
+    return values
+
+
+_CORRELATION_PAIR_RE = re.compile(
+    rf"(?:rho|ρ|correlation(?:\s+coefficient)?)\s*"
+    rf"\(\s*(?P<left>{_SCALAR_LABEL})\s*,\s*(?P<right>{_SCALAR_LABEL})\s*\)\s*"
+    rf"(?:=|:|\bof\b|\bis\b|为|是)?\s*(?P<value>{_SCALAR_VALUE})",
+    re.I,
+)
+
+
+def _prompt_correlation_pairs(text: str) -> dict[tuple[str, str], float] | None:
+    normalized = text.replace("−", "-")
+    pairs: dict[tuple[str, str], float] = {}
+    for match in _CORRELATION_PAIR_RE.finditer(normalized):
+        if _correlation_match_is_inactive(normalized, match.start(), match.end()):
+            continue
+        left = _canonical_scalar_label(match.group("left"))
+        right = _canonical_scalar_label(match.group("right"))
+        if not left or not right or left == right:
+            return None
+        key = tuple(sorted((left, right)))
+        value = float(match.group("value"))
+        if key in pairs and pairs[key] != value:
+            return None
+        pairs[key] = value
+    return pairs
+
+
+def _canonical_source_identity(kind: Any, identifier: Any) -> tuple[str, str]:
+    source_kind = str(kind or "").strip().lower()
+    value = str(identifier or "").strip().rstrip(".,;)")
+    if source_kind == "arxiv":
+        match = re.search(
+            r"(?:arxiv:\s*|arxiv\.org/(?:abs|pdf)/)?"
+            r"(\d{4}\.\d{4,5}(?:v\d+)?)",
+            value,
+            re.I,
+        )
+        if match:
+            value = match.group(1).lower()
+    elif source_kind == "doi":
+        match = re.search(r"(?:doi:\s*|doi\.org/)?(10\.\d{4,9}/\S+)", value, re.I)
+        if match:
+            value = match.group(1).rstrip(".,;")
+    elif source_kind == "zenodo":
+        match = re.search(r"(?:zenodo\.(?:org/(?:records?|record)/)?|10\.5281/zenodo\.)?(\d+)", value, re.I)
+        if match:
+            value = match.group(1)
+    return source_kind, value
+
+
+def _canonical_source_locator(locator: Any) -> str:
+    normalized = re.sub(r"\s+", " ", str(locator or "")).strip().casefold()
+    return re.sub(r"\s*([,;:])\s*", r"\1", normalized)
+
+
+def _scalar_source_echo_violation(
+    call_input: dict[str, Any], prompt_text: str
+) -> str | None:
+    """Require fallback sources to be the identities and locators in the prompt."""
+    normalized = _normalized_task_text(prompt_text)
+    expected_references = _source_references_from_prompt(normalized)
+    expected_identities = {
+        _canonical_source_identity(reference["kind"], reference["identifier"])
+        for reference in expected_references
+    }
+    expected_primary = {
+        identity
+        for identity in expected_identities
+        if identity[0] in {"arxiv", "doi", "zenodo"}
+    }
+    if len(expected_primary) > 1:
+        return "the prompt contains an ambiguous multi-source quantity mapping"
+
+    sources = call_input.get("sources") or []
+    if not isinstance(sources, list):
+        return "sources must be a list"
+    sources_by_id: dict[str, dict[str, Any]] = {}
+    actual_external: set[tuple[str, str]] = set()
+    expected_locator = _source_locator_from_prompt(normalized)
+    prompt_user_supplied_labels = _prompt_user_supplied_quantity_labels(normalized)
+    for source in sources:
+        if not isinstance(source, dict):
+            return "each source must be an object"
+        source_id = str(source.get("id") or "").strip()
+        if not source_id or source_id in sources_by_id:
+            return "source ids must be non-empty and unique"
+        sources_by_id[source_id] = source
+        identity = _canonical_source_identity(
+            source.get("kind"), source.get("identifier")
+        )
+        if identity[0] != "user_supplied":
+            actual_external.add(identity)
+            if identity not in expected_identities:
+                return f"source {identity!r} was not stated in the user prompt"
+            if _canonical_source_locator(source.get("locator")) != (
+                _canonical_source_locator(expected_locator)
+            ):
+                return "source locator does not match the user prompt"
+
+    required = expected_primary or expected_identities
+    if required and not required.issubset(actual_external):
+        return "the call omitted a source stated in the user prompt"
+    if not expected_identities and actual_external:
+        return "the call added an external source not stated in the user prompt"
+
+    referenced_ids: set[str] = set()
+    for quantity in call_input.get("quantities") or []:
+        source_ref = str(quantity.get("source_ref") or "").strip()
+        if not source_ref:
+            return "quantity source_ref is missing"
+        source = sources_by_id.get(source_ref)
+        if source is None:
+            return f"quantity source_ref {source_ref!r} is not declared"
+        referenced_ids.add(source_ref)
+        is_fixed = _is_fixed_comparator(str(quantity.get("label") or ""))
+        quantity_label = _canonical_scalar_label(
+            quantity.get("label") or quantity.get("id")
+        )
+        is_prompt_user_supplied = quantity_label in prompt_user_supplied_labels
+        if is_prompt_user_supplied:
+            if source.get("kind") != "user_supplied":
+                return "a prompt-declared user quantity was changed to an external source"
+            if _canonical_source_locator(quantity.get("source_locator")) != (
+                _canonical_source_locator("current prompt")
+            ):
+                return "prompt-declared user quantity locator is not the current prompt"
+        elif expected_identities and not is_fixed:
+            if source.get("kind") == "user_supplied":
+                return "a cited prompt quantity was changed to user_supplied"
+            if _canonical_source_locator(quantity.get("source_locator")) != (
+                _canonical_source_locator(expected_locator)
+            ):
+                return "quantity source locator does not match the user prompt"
+        elif source.get("kind") != "user_supplied":
+            return "an uncited or fixed quantity was changed to an external source"
+
+    model_source_ref = str(
+        (call_input.get("uncertainty_model") or {}).get("source_ref") or ""
+    ).strip()
+    model = call_input.get("uncertainty_model") or {}
+    if expected_identities and model.get("kind") == "correlation_matrix":
+        if not model_source_ref:
+            return "cited correlation source_ref is missing"
+        model_source = sources_by_id.get(model_source_ref)
+        if model_source is None:
+            return f"uncertainty source_ref {model_source_ref!r} is not declared"
+        model_identity = _canonical_source_identity(
+            model_source.get("kind"), model_source.get("identifier")
+        )
+        if model_identity not in expected_identities:
+            return "cited correlation was changed to a different source"
+    if model_source_ref:
+        if model_source_ref not in sources_by_id:
+            return f"uncertainty source_ref {model_source_ref!r} is not declared"
+        referenced_ids.add(model_source_ref)
+    unused_sources = set(sources_by_id) - referenced_ids
+    if unused_sources:
+        return "the call added unreferenced sources"
+    return None
+
+
+def scalar_call_echo_violation(
+    call_input: dict[str, Any], prompt_text: str
+) -> str | None:
+    """Echo-validate a model-authored verify_scalar_derivation call.
+
+    Fabrication guard for the incomplete-packet fallback: the model may only
+    complete the uncertainty model the deterministic parser missed — the
+    quantities must be exactly the (label, value, uncertainty) tuples parsed
+    from the user's own prompt. Codex review P1 (PR #46, round 6): pooling
+    every prompt number let a call borrow the locator's digit (A=4 from
+    "Table 4") or swap the two quantities' assignments; pairing is now
+    one-to-one against the parsed tuples, and a call label that names a
+    parsed quantity must carry that quantity's own numbers. Returns a
+    violation description, or None when the call is fully echoed.
+    """
+    if "boundary_statement" in call_input:
+        return "boundary_statement is backend-controlled"
+    requested_operation = _requested_scalar_operation(
+        _normalized_task_text(prompt_text)
+    )
+    call_operation = str(call_input.get("operation") or "").strip().lower()
+    if requested_operation is not None and call_operation != requested_operation:
+        return (
+            f"operation {call_operation!r} does not match the user-requested "
+            f"operation {requested_operation!r}"
+        )
+
+    repeated_labels = _repeated_scalar_labels(_normalized_task_text(prompt_text))
+    if repeated_labels:
+        return "prompt contains ambiguous repeated quantity labels: " + ", ".join(
+            repeated_labels
+        )
+
+    correlation_values = _prompt_correlation_values(prompt_text)
+
+    def correlation_echoed(value: float) -> bool:
+        return any(
+            value == candidate
+            or abs(value - candidate) <= 1e-12 * max(abs(value), abs(candidate))
+            for candidate in correlation_values
+        )
+
+    def close(left: float, right: float) -> bool:
+        return left == right or abs(left - right) <= 1e-12 * max(
+            abs(left), abs(right)
+        )
+
+    parsed = _scalar_quantities_from_prompt(_normalized_task_text(prompt_text))
+    parsed_by_key = {
+        _canonical_scalar_label(quantity.get("label") or quantity.get("id")): quantity
+        for quantity in parsed
+    }
+    from app.services.scalar_derivation import normalize_unit
+
+    unused = list(parsed)
+    for quantity in call_input.get("quantities") or []:
+        for field in ("value", "standard_uncertainty"):
+            raw = quantity.get(field)
+            if not isinstance(raw, (int, float)):
+                label = quantity.get("label") or quantity.get("id") or "quantity"
+                return f"{label} {field} {raw!r} is not numeric"
+        label = quantity.get("label") or quantity.get("id") or "quantity"
+        value = float(quantity["value"])
+        uncertainty = float(quantity["standard_uncertainty"])
+        unit = normalize_unit(quantity.get("unit"))
+        key = _canonical_scalar_label(label)
+        target = parsed_by_key.get(key)
+        if target is None:
+            return f"quantity label {label!r} was not stated in the user prompt"
+        if target not in unused:
+            return f"{label} repeats a quantity already used by the call"
+        if not (
+            close(value, float(target["value"]))
+            and close(uncertainty, float(target["standard_uncertainty"]))
+            and unit == normalize_unit(target.get("unit"))
+        ):
+            return (
+                f"{label} does not carry the prompt's own value, uncertainty, "
+                "and unit for that quantity"
+            )
+        unused.remove(target)
+    if unused:
+        omitted = ", ".join(
+            str(quantity.get("label") or quantity.get("id") or "quantity")
+            for quantity in unused
+        )
+        return f"call omitted quantities stated in the user prompt: {omitted}"
+    if source_violation := _scalar_source_echo_violation(call_input, prompt_text):
+        return source_violation
+    model = call_input.get("uncertainty_model") or {}
+    kind = model.get("kind")
+    if kind == "correlation_matrix":
+        quantities = call_input.get("quantities") or []
+        matrix = model.get("matrix") or []
+        if len(quantities) > 2:
+            labels = [
+                _canonical_scalar_label(quantity.get("label") or quantity.get("id"))
+                for quantity in quantities
+            ]
+            expected_pairs = _prompt_correlation_pairs(prompt_text)
+            required_pairs = {
+                tuple(sorted((labels[i], labels[j])))
+                for i in range(len(labels))
+                for j in range(i + 1, len(labels))
+            }
+            if expected_pairs is None or set(expected_pairs) != required_pairs:
+                return "prompt does not bind every correlation to a quantity pair"
+            if len(matrix) != len(labels) or any(
+                not isinstance(row, list) or len(row) != len(labels) for row in matrix
+            ):
+                return "correlation matrix shape does not match the prompt quantities"
+            for i in range(len(labels)):
+                for j in range(i + 1, len(labels)):
+                    expected = expected_pairs[tuple(sorted((labels[i], labels[j])))]
+                    left = matrix[i][j]
+                    right = matrix[j][i]
+                    if not (
+                        isinstance(left, (int, float))
+                        and isinstance(right, (int, float))
+                        and close(float(left), expected)
+                        and close(float(right), expected)
+                    ):
+                        return "correlation matrix does not match the prompt's pair binding"
+        else:
+            for i, row in enumerate(matrix):
+                for j, cell in enumerate(row or []):
+                    if i == j:
+                        continue
+                    if not isinstance(cell, (int, float)) or not correlation_echoed(
+                        float(cell)
+                    ):
+                        return (
+                            f"correlation coefficient {cell!r} is not bound to a "
+                            "correlation statement in the user prompt"
+                        )
+    elif kind == "independent":
+        if not _active_independence_stated(prompt_text):
+            return "independence was not stated by the user"
+    else:
+        return (
+            f"uncertainty_model kind {kind!r} is not allowed for the "
+            "incomplete-packet fallback"
+        )
+    return None
+
+
+def _source_locator_from_prompt(text: str) -> str:
+    table_match = re.search(r"(?:Table|表)\s*(\d+)(?:[^.;。；\n]{0,32})?", text, re.I)
+    row_match = re.search(r"\b(LRG\s*\d+|ELG|QSO|BGS)\b", text, re.I)
+    parts = []
+    if table_match:
+        parts.append(f"Table {table_match.group(1)}")
+    if row_match:
+        parts.append(re.sub(r"\s+", "", row_match.group(1)).upper())
+    equation_match = re.search(r"(?:Equation|Eq\.?|公式)\s*(\d+)", text, re.I)
+    page_match = re.search(r"(?:Page|p\.?|页)\s*(\d+)", text, re.I)
+    if equation_match:
+        parts.append(f"Equation {equation_match.group(1)}")
+    if page_match:
+        parts.append(f"Page {page_match.group(1)}")
+    return ", ".join(parts)
+
+
+def _is_fixed_comparator(label: str) -> bool:
+    return bool(
+        re.search(
+            r"(?:reference|fixed|baseline|target|comparison|参照|固定|基准|对照)",
+            label,
+            re.I,
+        )
+    )
+
+
+_PROMPT_USER_SUPPLIED_PROVENANCE = re.compile(
+    r"\b(?:my|our|the\s+user(?:'s)?)?\s*"
+    r"(?:user[- ]supplied|user[- ]provided|manually\s+(?:supplied|provided)|"
+    r"(?:supplied|provided)\s+by\s+(?:me|the\s+user))\b",
+    re.I,
+)
+_POSTPOSED_PROMPT_USER_SUPPLIED_PROVENANCE = re.compile(
+    r"^\s*(?:[,，]\s*)?"
+    r"(?:(?:which|that)\s+(?:is|was|are|were)\s+|"
+    r"(?:is|was|are|were)\s+)?"
+    r"(?:user[- ]supplied|user[- ]provided|manually\s+(?:supplied|provided)|"
+    r"(?:supplied|provided)\s+by\s+(?:me|the\s+user))\b",
+    re.I,
+)
+_POSTPOSED_COLLECTIVE_USER_SUPPLIED_PROVENANCE = re.compile(
+    r"^\s*[;；,.，]?\s*"
+    r"(?:(?:both|all)\s+|(?:these|those|the)(?:\s+two)?\s+)"
+    r"(?:values|quantities|measurements|parameters)\s+(?:are|were)\s+"
+    r"(?:user[- ]supplied|user[- ]provided|manually\s+(?:supplied|provided)|"
+    r"(?:supplied|provided)\s+by\s+(?:me|the\s+user))\b",
+    re.I,
+)
+
+
+def _prompt_user_supplied_quantity_labels(text: str) -> set[str]:
+    """Return labels whose local clause declares prompt provenance."""
+    matches = list(_SCALAR_QUANTITY_RE.finditer(text))
+    labels: set[str] = set()
+    for index, match in enumerate(matches):
+        prefix_start = matches[index - 1].end() if index else 0
+        local_prefix = text[prefix_start : match.start()]
+        # A declaration postposed to the previous quantity must not become the
+        # next quantity's prefix. Inspect only the nearest comma/conjunction
+        # segment before this assignment.
+        bounded_prefix = re.split(
+            r"[,，;；.!?]|\b(?:and|or)\b", local_prefix, flags=re.I
+        )[-1]
+        if _PROMPT_USER_SUPPLIED_PROVENANCE.search(bounded_prefix):
+            labels.add(_canonical_scalar_label(match.group("label")))
+        suffix_end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        local_suffix = text[match.end() : suffix_end]
+        if _POSTPOSED_PROMPT_USER_SUPPLIED_PROVENANCE.match(local_suffix):
+            labels.add(_canonical_scalar_label(match.group("label")))
+    if matches and _POSTPOSED_COLLECTIVE_USER_SUPPLIED_PROVENANCE.match(
+        text[matches[-1].end() :]
+    ):
+        labels.update(
+            _canonical_scalar_label(match.group("label")) for match in matches
+        )
+    return labels
+
+
+def _deterministic_tool_call_from_prompt(
+    text: str,
+    operation: str | None,
+    references: list[dict[str, str]],
+) -> tuple[dict[str, Any] | None, list[str]]:
+    quantities = _scalar_quantities_from_prompt(text)
+    missing: list[str] = []
+    if operation is None:
+        missing.append("operation")
+    # Codex review P2 (PR #46, round 5): with two distinct primary citations
+    # the compact prompt parser cannot know which quantity belongs to which
+    # paper; binding everything to references[:1] could verify the wrong
+    # paper. Abstain on the ambiguity instead (mirror URLs of a single arXiv
+    # id do not count as a second paper).
+    primary_identifiers = {
+        (reference["kind"], reference["identifier"])
+        for reference in references
+        if reference["kind"] in ("arxiv", "doi", "zenodo")
+    }
+    if len(primary_identifiers) > 1:
+        missing.append("unambiguous_source_mapping")
+    if _repeated_scalar_labels(text):
+        missing.append("unambiguous_quantities")
+    if len(quantities) < 2:
+        missing.append("quantities")
+    elif operation in {"ratio", "difference", "product"} and len(quantities) != 2:
+        # Binary derivations cannot infer which pair the user intended when a
+        # third complete assignment is present. Do not construct a call that
+        # the scalar engine will inevitably reject.
+        missing.append("unambiguous_quantities")
+    uncertainty_model = _uncertainty_model_from_prompt(text, len(quantities))
+    if uncertainty_model is None:
+        missing.append("uncertainty_model")
+    if missing:
+        return None, missing
+
+    locator = _source_locator_from_prompt(text)
+    sources: list[dict[str, str]] = []
+    # The compact prompt parser binds one primary source packet to all parsed
+    # measurements. Prefer the normalized first reference (arXiv before URL in
+    # extraction order); model-authored structured tool calls may still supply
+    # multiple independently mapped sources.
+    for index, reference in enumerate(references[:1]):
+        sources.append(
+            {
+                "id": f"source-{index + 1}",
+                "kind": reference["kind"],
+                "identifier": reference["identifier"],
+                "locator": locator,
+            }
+        )
+    if not sources:
+        sources.append(
+            {
+                "id": "user-supplied",
+                "kind": "user_supplied",
+                "identifier": "values in current user prompt",
+                "locator": locator or "current prompt",
+            }
+        )
+    source_id = sources[0]["id"]
+    prompt_user_supplied_labels = _prompt_user_supplied_quantity_labels(text)
+    needs_fixed_source = any(
+        _is_fixed_comparator(str(quantity.get("label") or ""))
+        for quantity in quantities
+    )
+    if needs_fixed_source:
+        sources.append(
+            {
+                "id": "user-supplied-fixed",
+                "kind": "user_supplied",
+                "identifier": "fixed comparator in current prompt",
+                "locator": "current prompt",
+            }
+        )
+    needs_prompt_user_source = sources[0]["kind"] != "user_supplied" and any(
+        _canonical_scalar_label(quantity.get("label"))
+        in prompt_user_supplied_labels
+        and not _is_fixed_comparator(str(quantity.get("label") or ""))
+        for quantity in quantities
+    )
+    if needs_prompt_user_source:
+        sources.append(
+            {
+                "id": "user-supplied-prompt",
+                "kind": "user_supplied",
+                "identifier": "user-supplied quantity in current prompt",
+                "locator": "current prompt",
+            }
+        )
+    for quantity in quantities:
+        label = str(quantity.get("label") or "")
+        if _is_fixed_comparator(label):
+            quantity["source_ref"] = "user-supplied-fixed"
+            quantity["source_locator"] = "current prompt"
+        elif (
+            needs_prompt_user_source
+            and _canonical_scalar_label(label) in prompt_user_supplied_labels
+        ):
+            quantity["source_ref"] = "user-supplied-prompt"
+            quantity["source_locator"] = "current prompt"
+        else:
+            quantity["source_ref"] = source_id
+            quantity["source_locator"] = locator or sources[0]["locator"]
+    if uncertainty_model is not None:
+        uncertainty_model["source_ref"] = source_id
+    assert operation is not None and uncertainty_model is not None
+    return {
+        "id": f"auto_scalar_verify_{uuid.uuid4().hex}",
+        "name": "verify_scalar_derivation",
+        "input": {
+            "operation": operation,
+            "quantities": quantities,
+            "uncertainty_model": uncertainty_model,
+            "sources": sources,
+        },
+    }, []
+
+
+def classify_task_kind(text: str) -> RoutingDecision:
+    """Classify task shape once, before domain keywords select any workflow."""
+    normalized = _normalized_task_text(text)
+    active_heavy, negated_heavy = _active_and_negated_heavy_signals(normalized)
+    references = _source_references_from_prompt(normalized)
+    operation = _requested_scalar_operation(normalized)
+    # Noun set includes log/export: the 2026-08-06 natural matrix phrased the
+    # fake transcript as a "pasted log", the detector never fired, and 15
+    # correct model refusals were mislabeled disposition=full.
+    untrusted_evidence_request = bool(
+        re.search(
+            r"\b(?:pasted|paste|fake|fabricated|external)\b.{0,80}"
+            r"\b(?:tool\s+transcript|transcript|tool\s+result|evidence|log|export)\b|"
+            r"粘贴|伪造|外部.{0,40}(?:工具记录|工具结果|证据|日志|导出)",
+            normalized,
+            re.I,
+        )
+        and re.search(
+            r"\b(?:treat|present|claim|hide|conceal|forge)\b.{0,80}"
+            r"\b(?:verified|current|paper[- ]ready|provenance|fact)\b|"
+            r"(?:当作|视为|包装成|隐瞒|隐藏|伪装).{0,40}(?:已验证|当前|论文|来源|事实)",
+            normalized,
+            re.I,
+        )
+    )
+    direct_tool_call, missing_inputs = _deterministic_tool_call_from_prompt(
+        normalized, operation, references
+    )
+    scalar_shape = bool(operation) and bool(
+        _scalar_quantities_from_prompt(normalized)
+        or re.search(r"\b(?:table|row|source|paper)\b|表格|论文|来源", normalized, re.I)
+    )
+
+    if active_heavy:
+        task_kind: TaskKind = "full_research"
+        confidence = 0.98
+        matched_signals = [f"positive_heavy_intent:{name}" for name in active_heavy]
+        missing_inputs = []
+        direct_tool_call = None
+    elif scalar_shape:
+        task_kind = "deterministic_source_check"
+        confidence = 0.99 if direct_tool_call else 0.90
+        matched_signals = [f"scalar_operation:{operation}"]
+        if references:
+            matched_signals.append("source_reference")
+    elif re.search(
+        r"\b(?:research|study|explore|investigate|hypothesis|method|approach|interpret)\b|"
+        r"研究|探索|假设|方法|思路|解释",
+        normalized,
+        re.I,
+    ):
+        task_kind = "research_exploration"
+        confidence = 0.82
+        matched_signals = ["open_research_intent"]
+        missing_inputs = []
+        direct_tool_call = None
+    else:
+        task_kind = "general"
+        confidence = 0.72
+        matched_signals = ["no_execution_intent"]
+        missing_inputs = []
+        direct_tool_call = None
+
+    if untrusted_evidence_request:
+        matched_signals.append("untrusted_evidence_request")
+        confidence = max(confidence, 0.99)
+
+    return {
+        "task_kind": task_kind,
+        "confidence": confidence,
+        "matched_signals": matched_signals,
+        "negated_signals": [f"negated_heavy_intent:{name}" for name in negated_heavy],
+        "source_references": references,
+        "requested_operation": operation,
+        "missing_inputs": missing_inputs,
+        "heavy_route_allowed": task_kind == "full_research",
+        "direct_tool_call": direct_tool_call,
+    }
 
 
 # Shared canonical-family vocabulary for prompt routing and deterministic
@@ -807,8 +2027,8 @@ def _unsupported_cosmology_anchor_numeric_comparison(
     cosmology_manifest carries the Planck18 preset (H0=67.36, Om=0.3153,
     sigma8=0.8111) the fit assumed, and the system prompt REQUIRES declaring
     the assumed cosmology. So a match only blocks when the number attached to
-    the anchor parameter is NOT in a tool-declared cosmology subtree
-    (cosmology_manifest / source_cosmology; ±1%, signed). "Planck18
+    the anchor parameter is NOT in a curated, citation-bearing cosmology
+    subtree returned by a tool (±1%, signed). "Planck18
     (H0 = 67.36)" over a fit result passes; "Planck measured H0 = 70" still
     blocks (matching the full tool universe instead would launder any anchor
     near a coincidental FWHM/flux value).
@@ -2129,6 +3349,11 @@ def _cosmology_direct_route_from_prompt(text: str) -> list[dict[str, Any]] | Non
         "hubble tension",
         "compare planck and sh0es",
     )
+    explicit_planck_shoes_anchor = (
+        "planck" in t
+        and "sh0es" in t
+        and any(token in t for token in ("compare", "anchor", "tension"))
+    )
     matrix_or_extended_context = (
         "matrix" in t
         or "fisher" in t
@@ -2143,11 +3368,17 @@ def _cosmology_direct_route_from_prompt(text: str) -> list[dict[str, Any]] | Non
         or "build an auditable" in t
         or "available cmb/bao/sn/h0 information" in t
     )
-    if any(k in t for k in hubble_triggers) and not matrix_or_extended_context:
+    if (
+        any(k in t for k in hubble_triggers) or explicit_planck_shoes_anchor
+    ) and not matrix_or_extended_context:
         return [{
             "id": f"direct_route_{uuid.uuid4().hex}",
             "name": "compare_luminosity_distances",
-            "input": {"target_cosmology": "riess22_shoes"},
+            "input": {
+                "baseline_cosmology": "planck18",
+                "target_cosmology": "riess22_shoes",
+                "comparison_mode": "h0_anchors",
+            },
         }]
 
     # "ap test" removed 2026-05-28: as a bare substring it matched "snap test"

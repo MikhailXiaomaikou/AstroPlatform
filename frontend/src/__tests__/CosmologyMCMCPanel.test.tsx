@@ -235,4 +235,51 @@ describe("CosmologyMCMCPanel", () => {
     expect(lowCell.textContent).toMatch(/1\.4σ/);
     expect(lowCell.textContent).not.toContain("⚠");
   });
+
+
+  it("offers getdist chain downloads only for persisted artifacts", () => {
+    const base = {
+      sampler: "importance_bao",
+      model: "lcdm",
+      parameters: { H0: { median: 67.4 } },
+    };
+    const { rerender } = render(
+      <CosmologyMCMCPanel
+        result={{
+          ...base,
+          chain_downloads: {
+            status: "persisted",
+            run_id: "3f1b52aa-0000-4000-8000-000000000000",
+            files: [
+              {
+                name: "chain_1.txt",
+                output_path: "chains/u/3f1b52aa/chain_1.txt",
+                sha256: "ab".repeat(32),
+                size_bytes: 1024,
+              },
+              {
+                name: "chain.paramnames",
+                output_path: "chains/u/3f1b52aa/chain.paramnames",
+                sha256: "cd".repeat(32),
+                size_bytes: 64,
+              },
+            ],
+          },
+        }}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "chain_1.txt" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "chain.paramnames" })).toBeInTheDocument();
+
+    rerender(
+      <CosmologyMCMCPanel
+        result={{
+          ...base,
+          chain_downloads: { status: "persist_failed", files: [] },
+        }}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "chain_1.txt" })).not.toBeInTheDocument();
+  });
+
 });

@@ -18,7 +18,8 @@ from app.services.agent_runtime.prompt_routing import (
 def _tool_grounded_timeout_summary(tool_results: list[dict], timeout_s: int) -> str:
     """Build a safe user-facing summary when the workflow budget is exhausted."""
     grounded = (
-        _research_tool_grounded_summary(tool_results)
+        _scalar_verification_tool_grounded_summary(tool_results)
+        or _research_tool_grounded_summary(tool_results)
         or _line_lfr_tool_grounded_summary(tool_results)
         or _statistics_tool_grounded_summary(tool_results)
         or _cosmology_tool_grounded_summary(tool_results)
@@ -268,6 +269,127 @@ def _statistics_tool_grounded_summary(tool_results: list[dict]) -> str | None:
         f"- Residual RMS: {_fmt_tool_number(stats.get('residual_rms'))}.\n"
         f"- publication_ready={bool(stats.get('publication_ready'))}."
     )
+
+
+def _scalar_verification_tool_grounded_summary(
+    tool_results: list[dict],
+) -> str | None:
+    """Render only fields stamped into the compact deterministic receipt."""
+    receipt: dict[str, Any] | None = None
+    for entry in reversed(tool_results or []):
+        if entry.get("tool") != "verify_scalar_derivation":
+            continue
+        result = entry.get("result")
+        if isinstance(result, dict):
+            receipt = result
+            break
+    if not receipt:
+        return None
+    disposition = str(receipt.get("response_disposition") or "abstention")
+    if disposition == "abstention" or not isinstance(receipt.get("result"), dict):
+        missing = ", ".join(str(item) for item in receipt.get("missing_dependencies") or [])
+        return (
+            "Deterministic verification abstained before calculation.\n\n"
+            f"- Reason: {receipt.get('error') or 'required inputs were invalid or missing'}.\n"
+            f"- Missing or invalid dependency: {missing or 'not reported'}.\n"
+            f"- Safe next step: {receipt.get('safe_fallback') or 'supply the missing inputs and rerun'}."
+        )
+
+    result = receipt["result"]
+    source_status = str(receipt.get("source_status") or "unavailable")
+    source_line = (
+        "The original source values were independently matched exactly."
+        if source_status == "verified_exact"
+        else (
+            "The arithmetic is verified for the supplied inputs, but the original "
+            f"source values are not cleared for attribution (source_status={source_status})."
+        )
+    )
+    source_items = []
+    for source in receipt.get("source_evidence") or []:
+        if not isinstance(source, dict):
+            continue
+        locator = str(source.get("locator") or "unspecified locator")
+        method = str(source.get("extraction_method") or "not fetched")
+        digest = str(source.get("sha256") or "unavailable")
+        if len(digest) > 16:
+            digest = digest[:16] + "…"
+        source_items.append(
+            f"{source.get('kind') or 'source'}:{source.get('identifier') or source.get('id')} "
+            f"({locator}; {method}; SHA-256 {digest}; status={source.get('status')})"
+        )
+    assumptions = [
+        str(item).strip().rstrip(".")
+        for item in receipt.get("assumptions") or []
+        if item
+    ]
+    lines = [
+        "Deterministic source-check receipt:",
+        "",
+        f"- Result: {result.get('rounded_display') or (_fmt_tool_number(result.get('value')) + ' +/- ' + _fmt_tool_number(result.get('standard_uncertainty')))}.",
+        f"- Formula: {receipt.get('formula') or 'not reported'}; operation={receipt.get('operation')}.",
+        f"- Calculation status: {receipt.get('calculation_status')}; disposition={disposition}.",
+        f"- Source status: {source_status}. {source_line}",
+    ]
+    if result.get("standardized_difference_abs") is not None:
+        lines.append(
+            "- Standardized absolute difference: "
+            f"{_fmt_tool_number(result.get('standardized_difference_abs'))} sigma."
+        )
+    if result.get("independent_standard_uncertainty") is not None:
+        model = receipt.get("uncertainty_model")
+        matrix = model.get("matrix") if isinstance(model, dict) else None
+        rho: float | None = None
+        if (
+            isinstance(matrix, list)
+            and len(matrix) >= 2
+            and isinstance(matrix[0], list)
+            and len(matrix[0]) >= 2
+            and isinstance(matrix[0][1], (int, float))
+        ):
+            rho = float(matrix[0][1])
+        relative = result.get("relative_uncertainty_change_vs_independent")
+        relative_percent = result.get(
+            "relative_uncertainty_change_percent_vs_independent"
+        )
+        lines.append(
+            "- If correlations were instead set to zero, the propagated "
+            "uncertainty would be "
+            f"{_fmt_tool_number(result.get('independent_standard_uncertainty'))}; "
+            "relative change from that independence result = "
+            f"{_fmt_tool_number(relative)}"
+            + (
+                f" ({_fmt_tool_number(relative_percent)}%)"
+                if relative_percent is not None
+                else ""
+            )
+            + "."
+        )
+        if rho is not None and relative is not None:
+            if rho < 0 and float(relative) > 0:
+                lines.append(
+                    f"- Correlation interpretation: rho={_fmt_tool_number(rho)} "
+                    "is a negative correlation; it increases the propagated "
+                    "ratio uncertainty, so setting rho=0 would underestimate "
+                    "the uncertainty under this comparison convention."
+                )
+            elif rho > 0 and float(relative) < 0:
+                lines.append(
+                    f"- Correlation interpretation: rho={_fmt_tool_number(rho)} "
+                    "is a positive correlation; it decreases the propagated "
+                    "ratio uncertainty relative to rho=0."
+                )
+    if source_items:
+        lines.append("- Source evidence: " + "; ".join(source_items) + ".")
+    if assumptions:
+        lines.append("- Assumptions: " + "; ".join(assumptions) + ".")
+    lines.extend(
+        [
+            f"- Boundary: {receipt.get('boundary_statement') or 'This is a scalar consistency check, not a fit.'}",
+            f"- Receipt SHA-256: {receipt.get('receipt_sha256') or 'unavailable'}.",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _cosmology_requested_redshift(prompt: str) -> float | None:
@@ -634,6 +756,7 @@ def _cosmology_tool_grounded_summary(
     config: dict[str, Any] | None = None
     chain: dict[str, Any] | None = None
     ap_test: dict[str, Any] | None = None
+    h0_anchor_comparison: dict[str, Any] | None = None
     for entry in tool_results or []:
         result = entry.get("result")
         if not isinstance(result, dict):
@@ -652,8 +775,14 @@ def _cosmology_tool_grounded_summary(
             chain = result
         elif tool == "assess_bao_bin_anomaly":
             ap_test = result
+        elif (
+            tool == "compare_luminosity_distances"
+            and result.get("comparison_mode") == "h0_anchors"
+            and isinstance(result.get("anchor_comparison"), dict)
+        ):
+            h0_anchor_comparison = result
 
-    if not any((registry, config, chain, ap_test)):
+    if not any((registry, config, chain, ap_test, h0_anchor_comparison)):
         return None
 
     dataset_names: list[str] = []
@@ -782,6 +911,59 @@ def _cosmology_tool_grounded_summary(
             "- The AP test constrains Ωm through the DM/DH ratio, which is independent "
             "of H0 and the sound horizon r_d (both cancel in the ratio). Method: "
             "Alcock & Paczynski 1979."
+        )
+
+    if isinstance(h0_anchor_comparison, dict):
+        anchor = h0_anchor_comparison.get("anchor_comparison") or {}
+        display = h0_anchor_comparison.get("display_values") or {}
+        current = h0_anchor_comparison.get("current_cosmology") or {}
+        target = h0_anchor_comparison.get("target_cosmology") or {}
+        baseline_h0 = anchor.get("baseline_H0_km_s_Mpc")
+        baseline_err = anchor.get("baseline_H0_err")
+        target_h0 = anchor.get("target_H0_km_s_Mpc")
+        target_err = anchor.get("target_H0_err")
+        delta_h0 = anchor.get("target_minus_baseline_H0_km_s_Mpc")
+        delta_pct = display.get(
+            "target_minus_baseline_pct",
+            anchor.get("target_minus_baseline_pct"),
+        )
+        sigma = display.get(
+            "naive_independent_gaussian_tension_sigma",
+            anchor.get("naive_independent_gaussian_tension_sigma"),
+        )
+        if all(
+            isinstance(value, (int, float))
+            for value in (baseline_h0, baseline_err, target_h0, target_err, delta_h0, delta_pct)
+        ):
+            lines.append(
+                "- Published H0 anchors: "
+                f"{current.get('name') or 'baseline'} = {_fmt_tool_number(baseline_h0)} "
+                f"± {_fmt_tool_number(baseline_err)} km s⁻¹ Mpc⁻¹; "
+                f"{target.get('name') or 'target'} = {_fmt_tool_number(target_h0)} "
+                f"± {_fmt_tool_number(target_err)} km s⁻¹ Mpc⁻¹."
+            )
+            comparison_line = (
+                f"- Anchor offset: target minus baseline = {_fmt_tool_number(delta_h0)} "
+                f"km s⁻¹ Mpc⁻¹, or {_fmt_tool_number(delta_pct)}% relative "
+                "to the baseline"
+            )
+            if isinstance(sigma, (int, float)):
+                comparison_line += (
+                    f"; naive independent-Gaussian separation = {_fmt_tool_number(sigma)}σ"
+                )
+            lines.append(comparison_line + ".")
+            refs = [
+                str(manifest.get("bibcode") or "").strip()
+                for manifest in (current, target)
+                if isinstance(manifest, dict)
+                and str(manifest.get("bibcode") or "").strip()
+            ]
+            if refs:
+                lines.append(f"- Source citations: {', '.join(refs)}.")
+        lines.append(
+            "- Scope note: this is a comparison of published H0 anchors only. "
+            "No cached source sample was read, so no per-source luminosity "
+            "distance or delta log-luminosity was computed."
         )
 
     # Deterministic out-of-coverage guard: if the prompt asks for a quantity AT a
@@ -1265,7 +1447,8 @@ def _tool_grounded_summary(
     """Return the safest deterministic summary available from same-turn tools."""
 
     return (
-        _research_tool_grounded_summary(tool_results)
+        _scalar_verification_tool_grounded_summary(tool_results)
+        or _research_tool_grounded_summary(tool_results)
         or _line_lfr_tool_grounded_summary(tool_results)
         or _statistics_tool_grounded_summary(tool_results)
         or _cosmology_tool_grounded_summary(tool_results, user_prompt)
