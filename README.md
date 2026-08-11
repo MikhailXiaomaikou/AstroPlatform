@@ -77,8 +77,8 @@ retracted because that pipeline self-check never had the model in the loop —
 the honest framing above is the one this project reports. These are
 pre-merge snapshot numbers; the standing gate is a fresh rerun on the
 current revision before any Alpha v0.2 claim. Full record:
-[campaign report](./docs/research/STANDARD_ASTRO_V02_CAMPAIGN_REPORT_2026-08-06.zh-CN.md)
-(Chinese).
+[campaign report](./docs/research/STANDARD_ASTRO_V02_CAMPAIGN_REPORT_2026-08-06.md)
+([Chinese original](./docs/research/STANDARD_ASTRO_V02_CAMPAIGN_REPORT_2026-08-06.zh-CN.md)).
 
 ## What it does not do yet
 
@@ -124,7 +124,7 @@ npm run build
 - [Honesty evidence and known limits](./docs/HONESTY_EVIDENCE.md)
 - [Architecture](./ARCHITECTURE.md) · [Source mapping](./docs/SOURCE_MAPPING.md)
 - [Detailed quick start](./docs/QUICKSTART.md)
-- [v0.2 evaluation](./docs/research/STANDARD_ASTRO_V02_EVALUATION_2026-08-04.zh-CN.md) · [campaign and post-review record](./docs/research/STANDARD_ASTRO_V02_CAMPAIGN_REPORT_2026-08-06.zh-CN.md) (Chinese)
+- [v0.2 evaluation](./docs/research/STANDARD_ASTRO_V02_EVALUATION_2026-08-04.md) · [campaign and post-review record](./docs/research/STANDARD_ASTRO_V02_CAMPAIGN_REPORT_2026-08-06.md) (English; Chinese originals: [评测](./docs/research/STANDARD_ASTRO_V02_EVALUATION_2026-08-04.zh-CN.md) · [战役](./docs/research/STANDARD_ASTRO_V02_CAMPAIGN_REPORT_2026-08-06.zh-CN.md))
 - [Deployment](./DEPLOYMENT.md) · [Production cutover checklist](./docs/PRODUCTION_CUTOVER_CHECKLIST.md)
 - [Privacy](./PRIVACY.md) · [Security](./SECURITY.md) · [Data licences](./docs/DATA_LICENSES.md)
 - [Complete P0 + P1 roadmap](./docs/roadmaps/P0_P1_COMPLETE_PLAN.zh-CN.md) (Chinese)

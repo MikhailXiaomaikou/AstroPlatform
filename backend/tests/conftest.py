@@ -14,6 +14,9 @@ os.environ["RATE_LIMIT_ENABLED"] = "false"
 # Tests intentionally exercise the legacy local executor.  Runtime defaults
 # remain fail-closed; this opt-in is confined to the test process.
 os.environ.setdefault("SANDBOX_BACKEND", "inprocess")
+# The zero-caller routers are unmounted by default in production; API tests
+# still exercise their implementations, so mount them for the test process.
+os.environ.setdefault("ZERO_CALLER_ROUTERS_ENABLED", "1")
 
 # Prod engine (app/models/database.py) is created at import time with
 # settings.database_url, default "sqlite+aiosqlite:///<repo>/data/astro.db"
