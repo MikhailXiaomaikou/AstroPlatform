@@ -14,6 +14,9 @@ The root `AGENTS.md` delegates here so agent instructions do not drift.
   provenance, not fitting power. "Put it in front of a real user" is
   always one of the candidate next steps.
 - Unsupported scientific claims must become capability gaps, not guesses.
+- Growth gate (2026-08-11): before adding any new router, page, tool, or
+  dataset, name the real user or scheduled demo that needs it. If no one
+  can be named it goes to the backlog candidate pool, not into the tree.
 - Local development + GitHub Actions are primary. Render deploy is a side
   effect unless the user explicitly asks about deployment.
 
