@@ -351,3 +351,18 @@ def test_promoted_rerun_digits_are_still_withheld_in_a_mixed_turn() -> None:
     assert nonpublication_posterior_values(
         "The rerun is publication-ready: H0 = 67.35 +/- 0.42 km/s/Mpc.", mixed
     ) == [67.35]
+
+
+def test_prompt_states_the_rhat_failure_direction_correctly() -> None:
+    """A chain fails on R-hat by being too HIGH, not too low.
+
+    The exploratory branch listed "R-hat below threshold" among the
+    diagnostics to report, while `_assess_publication_gate` emits
+    `rank_normalized_rhat_at_or_above_1.01`; a model following the prompt
+    would have inverted the run's own reason (Codex review 2026-09-03).
+    """
+    from app.api.chat import SYSTEM_PROMPT as prompt
+
+    assert "R-hat AT OR ABOVE its threshold" in prompt
+    assert "rank_normalized_rhat_at_or_above_1.01" in prompt
+    assert "ESS or R-hat below threshold" not in prompt
