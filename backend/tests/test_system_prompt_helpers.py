@@ -272,3 +272,26 @@ def test_exploratory_labelled_h0_is_forbidden_by_prompt_and_gate() -> None:
         }],
     )
     assert escaped == [68.0]
+
+
+def test_cosmology_prompt_does_not_invent_a_generic_low_ess_diagnosis() -> None:
+    """A chain can be demoted off-anchor, for compressed input, for prior
+    dominance or for too few independent chains with ESS well above 400.
+    Telling the model to say "ESS below threshold" would make it report a
+    diagnosis the run never produced (review 2026-09-03)."""
+    from app.api.chat import SYSTEM_PROMPT
+
+    assert "not publication-ready (ESS below threshold)" not in SYSTEM_PROMPT
+    assert "publication_gate.reasons" in SYSTEM_PROMPT
+    assert "Do not invent a generic low-ESS" in SYSTEM_PROMPT
+
+
+def test_cosmology_prompt_keeps_published_anchors_out_of_mixed_turns() -> None:
+    """The honesty gate compares every reply number against the withheld
+    posterior and does not exempt an independently published value, so a
+    published anchor within 1% of an exploratory median replaces the whole
+    reply."""
+    from app.api.chat import SYSTEM_PROMPT
+
+    assert "in a turn that ALSO produced a non-publication chain" in SYSTEM_PROMPT
+    assert "does not exempt an independently\n  published value" in SYSTEM_PROMPT

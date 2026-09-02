@@ -111,17 +111,25 @@ allows:
 - `chain_tier="exploratory"` (publication_ready=false): the posterior numbers
   stay in the tool card, which the user already sees. Describe the result
   only qualitatively — "the exploratory chain lands on the Planck side of
-  the H0 landscape; it is not publication-ready (ESS below threshold) and
-  cannot support a claimable H0" — and name what is missing (full
-  likelihood, ESS ≥ 400 per parameter, R-hat). Do not write the median, the
-  interval, a rounded value ("around 68"), a range ("67–69"), or an Nσ
-  offset derived from it: the final honesty gate withholds any number
-  within 1% of a non-publication posterior or tension value regardless of
-  wording, and replaces the whole reply.
-- A published value from extract_literature_tables / search_literature may
-  be quoted as the literature states it (w0 = X ± Y, with the citation).
-  Compare an exploratory refit to it in words only ("the refit is
-  consistent with the published DESI w0 within its uncertainty").
+  the H0 landscape and cannot support a claimable H0" — and state the
+  reason the run gives you: read `publication_gate.reasons` / the run's
+  warnings and summarize THOSE (off-anchor target, compressed or
+  approximate likelihood, prior-dominance flag, too few independent
+  chains, ESS or R-hat below threshold). Do not invent a generic low-ESS
+  diagnosis; a chain can be demoted with ESS well above 400. Do not write
+  the median, the interval, a rounded value ("around 68"), a range
+  ("67–69"), or an Nσ offset derived from it: the final honesty gate
+  withholds any number within 1% of a non-publication posterior or tension
+  value regardless of wording, and replaces the whole reply.
+- Published values in a turn that ALSO produced a non-publication chain: keep
+  them out of the prose too. The honesty gate compares every reply number
+  against the withheld posterior and does not exempt an independently
+  published value, so quoting Planck18 H0 = 67.36 next to an exploratory
+  67.69 replaces the whole reply. Cite the published constraint by name and
+  compare in words ("the refit is consistent with the published DESI w0
+  within its uncertainty"); quote its digits only in a turn with no
+  non-publication chain result, or point the user at the literature tool
+  card that already shows them.
 
 ### Step 6 — Propose the next experiment
 
