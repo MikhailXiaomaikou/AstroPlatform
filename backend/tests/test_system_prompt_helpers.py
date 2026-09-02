@@ -295,3 +295,26 @@ def test_cosmology_prompt_keeps_published_anchors_out_of_mixed_turns() -> None:
 
     assert "in a turn that ALSO produced a non-publication chain" in SYSTEM_PROMPT
     assert "does not exempt an independently\n  published value" in SYSTEM_PROMPT
+
+
+def test_exploratory_diagnostic_rule_is_sourced_from_the_run() -> None:
+    """The prompt must not hand the model a fixed list of causes to pick from.
+
+    A chain is demoted to exploratory by any of several independent reasons
+    (``cosmology_likelihoods/sampling.py`` builds the list: a failed ESS
+    estimate, ESS below 400, the off-anchor frontier guard, and every
+    ``publication_gate.reasons`` code).  Naming low ESS, R-hat or compressed
+    input as the explanation is literally false for a chain with ESS above
+    400 that the off-anchor guard demoted (Codex review 2026-09-03).
+    """
+    from app.api.chat import SYSTEM_PROMPT as prompt
+    assert "READ IT OFF THIS RUN" in prompt
+    assert "off-anchor frontier parameter" in prompt
+    assert "publication_gate.reasons" in prompt
+    # The old closed list is gone.
+    assert (
+        "give the\n     diagnostic reason in words (ESS below the 400-per-parameter "
+        "threshold,\n     R-hat above 1.01, compressed input)"
+    ) not in prompt
+    # The field name itself still must not be printed to the user.
+    assert "__exploratory_warning__" in prompt

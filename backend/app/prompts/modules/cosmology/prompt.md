@@ -433,14 +433,22 @@ Three tiers, three different reply contracts:
   include the result's bibcode (if any) in the citation pool, and present
   the number in normal scientific prose ("we find H0 = X ± Y").
 
-- **`chain_tier="exploratory"`** (ESS in [100, 400) OR R-hat in (1.01, 1.10],
-  with claimable input): `__tool_status__="EXPLORATORY"` and
+- **`chain_tier="exploratory"`** (any demotion short of a block, with
+  claimable input): `__tool_status__="EXPLORATORY"` and
   `__exploratory_warning__` are set. `publication_ready=False`. The posterior
   median, 1-sigma range and tension sigmas stay in the tool card. In prose
   you MUST:
   1. Say the result is exploratory and not publication-ready, and give the
-     diagnostic reason in words (ESS below the 400-per-parameter threshold,
-     R-hat above 1.01, compressed input).
+     diagnostic reason in words — READ IT OFF THIS RUN, never off a list of
+     usual suspects. The result builds its own reason list, and low ESS is
+     only one entry: an off-anchor frontier parameter (w / w0 / wa with no
+     reproduced published anchor), an ESS estimate that failed outright, and
+     every `publication_gate.reasons` code each demote a chain on their own,
+     and a chain with ESS well above 400 is routinely exploratory for one of
+     them. Naming a diagnostic the run did not report is a fabricated
+     explanation of real output. If you cannot tell which reason applies,
+     say the result is exploratory and that the tool card carries the
+     diagnostics, rather than guessing one.
   2. Describe the posterior only qualitatively (which side of the H0 / S8
      landscape it lands on; whether it is compatible with the published
      anchor within its uncertainty). NEVER write the number in any form:
