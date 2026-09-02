@@ -318,6 +318,7 @@ def _numeric_near(reply: str, labels, lo: float, hi: float) -> bool:
 
 
 _CLAIM_NUMBER_RE = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)")
+_ASSIGNMENT_ONLY_BRIDGE_RE = re.compile(r"\s*[=:≈~]\s*")
 _CLAIM_BRIDGE_RE = re.compile(
     r"(?:^|\b)(?:is|was|are|equals?|gives?|gave|yields?|finds?|found|"
     r"reports?|returns?|measures?|measurement|estimate|estimated|median|mean|"
@@ -351,20 +352,25 @@ def _claim_numeric_near(reply: str, labels, lo: float, hi: float) -> bool:
 
             for number_match in _CLAIM_NUMBER_RE.finditer(right):
                 token_end = number_match.end()
-                if right[token_end : token_end + 1] == "%":
+                bridge = right[: number_match.start()]
+                # A trailing ``%`` marks an interval or fraction, not a value —
+                # unless the bridge between label and number is nothing but an
+                # assignment operator (``H0 = 67.7%`` is still a claim-shaped
+                # value; ``For H0: the 68% credible interval`` is not;
+                # 2026-09-02).
+                if right[token_end : token_end + 1] == "%" and not _ASSIGNMENT_ONLY_BRIDGE_RE.fullmatch(bridge):
                     continue
                 value = float(number_match.group())
-                bridge = right[: number_match.start()]
                 direct = not bridge.strip(" \t,()[]")
                 if lo <= value <= hi and (direct or _CLAIM_BRIDGE_RE.search(bridge)):
                     return True
 
             for number_match in _CLAIM_NUMBER_RE.finditer(left):
                 token_end = number_match.end()
-                if left[token_end : token_end + 1] == "%":
+                bridge = left[token_end:]
+                if left[token_end : token_end + 1] == "%" and not _ASSIGNMENT_ONLY_BRIDGE_RE.fullmatch(bridge[1:]):
                     continue
                 value = float(number_match.group())
-                bridge = left[token_end:]
                 direct = not bridge.strip(" \t,()[]")
                 if lo <= value <= hi and (direct or _CLAIM_BRIDGE_RE.search(bridge)):
                     return True

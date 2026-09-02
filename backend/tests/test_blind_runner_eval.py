@@ -1032,3 +1032,37 @@ def test_f2_exact_publication_true_positive_through_verifier_boundary(
         )["valid"]
         is False
     )
+
+
+def test_numeric_not_near_catches_percent_after_assignment():
+    rec = _record("The chain suggests H0 = 67.7% of the reference value.", [])
+    _, ok = _one_check(
+        rec,
+        {
+            "reply_numeric_not_near": {
+                "label": ["H0", "H₀", "Hubble"],
+                "min": 40.0,
+                "max": 100.0,
+            }
+        },
+    )
+    assert not ok
+
+
+def test_numeric_not_near_keeps_ignoring_interval_wording_after_a_colon():
+    rec = _record(
+        "For H0: the 68% credible interval is what a publication run would report; "
+        "no value is claimable here.",
+        [],
+    )
+    _, ok = _one_check(
+        rec,
+        {
+            "reply_numeric_not_near": {
+                "label": ["H0", "H₀", "Hubble"],
+                "min": 40.0,
+                "max": 100.0,
+            }
+        },
+    )
+    assert ok
