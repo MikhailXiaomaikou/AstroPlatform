@@ -112,6 +112,14 @@ _REPORT_FAILED_TOOL_STATUSES: frozenset[str] = frozenset(
 _REPORT_ERROR_TOOL_STATUSES: frozenset[str] = frozenset(
     {"ERROR", "BLOCKED", "CANCELLED", "TIMEOUT"}
 )
+# A tool that ran, refused to certify, and said so.  `verify_research_facts`
+# returns success=True with __tool_status__="PARTIAL" when it is handed only
+# caller-supplied data, so neither vocabulary above matched and the refusal was
+# reported as "no failed attempt recorded" (Codex review 2026-09-03).  This is
+# the report's own vocabulary: an attempt that produced no verdict.
+_REPORT_NO_VERDICT_STATUSES: frozenset[str] = frozenset(
+    {"NOT_VERIFIABLE_THIS_TURN", "NOT_VERIFIABLE"}
+)
 
 # C0 control characters minus the whitespace this module already folds away.
 _REPORT_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -1651,8 +1659,9 @@ def _report_failed_attempts(
     Three independent sources, none of which may be dropped:
 
     1. tool results whose own status word is in a failure vocabulary
-       (``_REPORT_FAILED_TOOL_STATUSES`` / ``_REPORT_ERROR_TOOL_STATUSES``), or
-       that report ``success=false`` or a non-empty ``error``;
+       (``_REPORT_FAILED_TOOL_STATUSES`` / ``_REPORT_ERROR_TOOL_STATUSES`` /
+       ``_REPORT_NO_VERDICT_STATUSES``), or that report ``success=false`` or a
+       non-empty ``error``;
     2. every research-matrix cell that is not publication-ready, rendered as
        ``label: execution_level; reasons=...; datasets_not_run=...`` from the
        cell's own ``preliminary_reasons`` / ``publication_gate.reasons``;
@@ -1682,7 +1691,11 @@ def _report_failed_attempts(
             for key in ("__tool_status__", "analysis_status", "status", "data_origin")
         }
         statuses.discard("")
-        failed_statuses = statuses & (_REPORT_FAILED_TOOL_STATUSES | _REPORT_ERROR_TOOL_STATUSES)
+        failed_statuses = statuses & (
+            _REPORT_FAILED_TOOL_STATUSES
+            | _REPORT_ERROR_TOOL_STATUSES
+            | _REPORT_NO_VERDICT_STATUSES
+        )
         error = str(result.get("error") or "")
         if failed_statuses or result.get("success") is False or error:
             bits = ["tool " + _report_safe_text(_tool_name_from_entry(item), "unknown tool")]
@@ -1733,7 +1746,18 @@ def _report_failed_cell_line(cell: dict[str, Any]) -> str:
         warnings = cell.get("warnings") if isinstance(cell.get("warnings"), list) else []
         reasons = [_md_table_cell(str(warning)) for warning in warnings[:2]] or ["not publication-ready"]
     not_run: list[str] = []
-    for dataset in cell_result.get("datasets_not_run", []) if isinstance(cell_result.get("datasets_not_run"), list) else []:
+    # Two producers, both required.  A cell that RAN records the datasets it
+    # skipped under `result.datasets_not_run`; a config-only or context-only
+    # cell never runs at all and records them on the cell itself, as
+    # `non_executable_dataset_keys` (research_program.py, matrix construction).
+    # Reading only the nested field printed "datasets_not_run=none" for exactly
+    # the cells whose whole reason for failing was a dataset that could not be
+    # executed (Codex review 2026-09-03).
+    raw_not_run: list[Any] = []
+    for source in (cell_result.get("datasets_not_run"), cell.get("non_executable_dataset_keys")):
+        if isinstance(source, list):
+            raw_not_run.extend(source)
+    for dataset in raw_not_run:
         raw = dataset.get("key") or dataset.get("dataset_key") or "" if isinstance(dataset, dict) else dataset
         key = _report_safe_text(raw)
         if key and key not in not_run:
@@ -2245,6 +2269,11 @@ def _latest_fact_check_report(tool_results: list[dict[str, Any]]) -> dict[str, A
         if isinstance(result.get("fact_check_report"), dict):
             return result["fact_check_report"]
         if result.get("analysis_status") == "FACT_CHECK_READY":
+            return result
+        # A refusal is a verification outcome too.  Reporting it as "not_run"
+        # hid the fact that `verify_research_facts` ran and declined to certify
+        # (Codex review 2026-09-03).
+        if str(result.get("analysis_status") or "").upper() in _REPORT_NO_VERDICT_STATUSES:
             return result
     return {}
 

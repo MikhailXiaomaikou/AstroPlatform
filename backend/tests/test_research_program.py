@@ -2203,3 +2203,112 @@ def test_report_package_sizes_match_their_source_fields() -> None:
             else len(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8"))
         )
         assert entry["bytes"] == expected, entry["path"]
+
+
+def test_failed_cell_line_lists_datasets_a_config_only_cell_never_ran() -> None:
+    """A cell that never ran records its datasets on the cell, not the result.
+
+    The line read only ``result.datasets_not_run``, which config-only and
+    context-only cells do not have, so the report printed
+    ``datasets_not_run=none`` for exactly the cells whose reason for failing
+    was an unexecutable dataset (Codex review 2026-09-03).
+    """
+    from app.services.research_program import export_research_report
+
+    report = export_research_report(
+        research_plan={"research_question": "probe"},
+        tool_results=[{
+            "tool": "run_research_matrix",
+            "result": {"matrix": [{
+                "label": "LCDM x context-only",
+                "model": "lcdm",
+                "publication_ready": False,
+                "execution_level": "config_only",
+                "non_executable_dataset_keys": [
+                    "planck2018_compressed", "act_dr6_lensing",
+                ],
+                "warnings": ["not numerically run"],
+            }]},
+        }],
+    )
+    section = report["markdown"].split("## Failed Attempts")[1].split("\n## ")[0]
+    assert "datasets_not_run=planck2018_compressed, act_dr6_lensing" in section
+    assert "datasets_not_run=none" not in section
+
+
+def test_a_refused_verification_is_reported_as_an_attempt() -> None:
+    """``verify_research_facts`` refusing to certify is an outcome, not silence.
+
+    Its refusal is ``success=True`` with ``__tool_status__="PARTIAL"``, so
+    neither failure vocabulary matched: the report said no failed attempt was
+    recorded and showed fact verification as ``not_run``, hiding that the tool
+    ran and declined (Codex review 2026-09-03).
+    """
+    from app.services.research_program import export_research_report
+
+    report = export_research_report(
+        research_plan={"research_question": "probe"},
+        tool_results=[{
+            "tool": "verify_research_facts",
+            "result": {
+                "success": True,
+                "__tool_status__": "PARTIAL",
+                "analysis_status": "NOT_VERIFIABLE_THIS_TURN",
+                "status": "not_verifiable_this_turn",
+                "publication_ready": False,
+                "__do_not_claim__": True,
+                "claims": [],
+                "verified_claim_count": 0,
+            },
+        }],
+    )
+    markdown = report["markdown"]
+    section = markdown.split("## Failed Attempts")[1].split("\n## ")[0]
+    assert "tool verify_research_facts" in section
+    assert "NOT_VERIFIABLE_THIS_TURN" in section
+    assert "- Status: not_verifiable_this_turn" in markdown
+    assert "- Status: not_run" not in markdown
+
+
+def test_packaged_fact_check_never_ships_a_caller_supplied_verdict() -> None:
+    """``fact_check_report.json`` must not claim a verification that never ran.
+
+    The payload is one of the ``report_package.files[].source_key`` fields, so
+    a consumer writes it out as a standalone file.  A caller-supplied
+    ``status: passed`` was copied into it verbatim and the unverified-draft
+    banner could not help, because the banner only reaches markdown fields
+    (Codex review 2026-09-03).
+    """
+    from app.services import ai_tools_research
+
+    out = ai_tools_research._exec_export_research_report({
+        "research_plan": {"research_question": "probe"},
+        # An empty server record with a caller payload is the
+        # `caller_supplied_unverified` path: no tool ran this turn.
+        "_turn_tool_results": [],
+        "tool_results": [{
+            "tool": "x",
+            "result": {"fact_check_report": {
+                "status": "passed",
+                "verified_claims": 3,
+                "summary": "All claims verified against tool evidence.",
+            }},
+        }],
+    })
+    assert out["tool_results_source"] == "caller_supplied_unverified"
+    packaged = out["fact_check_report"]
+    assert packaged["status"] == "not_verifiable_this_turn"
+    assert packaged["__do_not_claim__"] is True
+    # No caller field survives at the top level, where it would read as the
+    # server's own verdict.
+    assert "verified_claims" not in packaged
+    assert "summary" not in packaged
+    assert packaged["caller_supplied_unverified"]["status"] == "passed"
+    # The byte count still matches the payload the source_key names.
+    entry = next(
+        f for f in out["report_package"]["files"]
+        if f["source_key"] == "fact_check_report"
+    )
+    assert entry["bytes"] == len(
+        __import__("json").dumps(packaged, ensure_ascii=False).encode("utf-8")
+    )

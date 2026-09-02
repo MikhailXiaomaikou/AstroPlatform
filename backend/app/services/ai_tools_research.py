@@ -288,6 +288,32 @@ def _stamp_evidence_source(out: dict, warnings: list[str], source: str) -> dict:
         for _key in ("markdown", "report_markdown", "paper_draft_markdown"):
             if isinstance(out.get(_key), str):
                 out[_key] = _banner + out[_key]
+        # `fact_check_report` is one of the payloads
+        # `report_package.files[].source_key` names, so a consumer writes it
+        # out as a standalone fact_check_report.json. A caller-supplied
+        # "passed" verdict was copied into it verbatim, and nothing inside
+        # that file said the server had not checked anything (Codex review
+        # 2026-09-03). The banner cannot help there — it only reaches the
+        # markdown fields — so the verdict itself is replaced, in the same
+        # shape `verify_research_facts` uses when it refuses to certify.
+        _fact = out.get("fact_check_report")
+        if isinstance(_fact, dict) and _fact:
+            out["fact_check_report"] = {
+                "status": "not_verifiable_this_turn",
+                "analysis_status": "NOT_VERIFIABLE_THIS_TURN",
+                "publication_ready": False,
+                "__do_not_claim__": True,
+                "note": (
+                    "No tool ran in this turn, so the server verified nothing. "
+                    "The caller's own report is preserved verbatim under "
+                    "caller_supplied_unverified and must not be cited. Re-run "
+                    "the analyses in this turn to obtain a verdict."
+                ),
+                # Nested rather than merged: a caller field left at the top
+                # level ("summary": "All claims verified...") still reads as
+                # the server's own verdict in a standalone file.
+                "caller_supplied_unverified": _fact,
+            }
         # The banner grew two of the fields `report_package.files[].source_key`
         # names, so the sizes computed inside export_research_report are now
         # short by its length. Recompute them from the mutated fields.
