@@ -796,6 +796,7 @@ export default function ChatPage() {
         mode: evt.type === "workflow_budget" ? evt.mode : undefined,
         cacheRefs: evt.type === "workflow_checkpoint" ? evt.cache_refs : undefined,
         draft: evt.type === "agent_text" ? evt.draft === true : undefined,
+        redactedCount: evt.type === "agent_text" ? evt.redacted_count : undefined,
         disabled: evt.type === "tools_disabled" ? evt.disabled : undefined,
         iteration: evt.type === "tools_disabled" || evt.type === "tool_call" ? evt.iteration : undefined,
         maxIterations: evt.type === "tool_call" ? evt.max_iterations : undefined,

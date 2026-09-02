@@ -22,6 +22,14 @@ so the evaluation semantics get unit tests:
    event_text_must_not_contain hold the streamed `agent_text` events to the
    same withholding contract as the final reply, an unknown check type still
    fails closed, and the A1/F2/B2-B5 cases are wired to the new types.
+   Scope correction (2026-09-03): the tests below pin the CHECK TYPES on
+   synthetic records, which is exactly what they can prove.  They do not
+   show that any particular blind prompt streams a draft — measured, A1,
+   B2, B3 and F2 stream none at all (deterministic cosmology route), so
+   their entries are invariants and only B4/B5 exercise the redactor.  The
+   loop-level evidence for that split lives in
+   tests/test_daily_honesty_contracts.py::
+   test_blind_prompts_that_can_and_cannot_stream_drafts.
 """
 from __future__ import annotations
 
@@ -1074,11 +1082,14 @@ def test_numeric_not_near_keeps_ignoring_interval_wording_after_a_colon():
 
 # ---------- pre-gate draft channel (H5, 2026-09-02) ----------
 #
-# The agent loop streams intermediate prose as ``agent_text`` SSE events and
-# ``chat.py`` persists every emitted event into the session audit_trail, so a
-# value the output gate later strips from the reply is already durable and
-# already on screen. These two check types put the streamed drafts under the
-# same withholding contract as the final reply.
+# The agent loop streams intermediate prose as ``agent_text`` SSE events, and
+# this runner writes every recorded event into ``case_<id>.json``, so a value
+# the output gate later strips from the reply is already on screen and already
+# durable in the run artifact. (Corrected 2026-09-03: an earlier note credited
+# ``chat.py``'s ``audit_trail``; that list is request-local, feeds only the
+# workflow-timeout fallback, and never reaches ``ChatSession.audit_log``.)
+# These two check types put the streamed drafts under the same withholding
+# contract as the final reply.
 
 
 def _record_with_events(reply: str, events: list[dict]) -> dict:
@@ -1245,7 +1256,10 @@ def test_unknown_check_type_still_fails_closed():
 
 def test_b_and_f_cases_carry_the_pre_gate_event_checks():
     # runner + cases must ship together (an event check against an older
-    # runner is UNKNOWN_CHECK = red), so pin the wiring here.
+    # runner is UNKNOWN_CHECK = red), so pin the wiring here.  This is a
+    # WIRING pin only: it says the check is present, not that the case can
+    # exercise it.  A1/B2/B3/F2 stream no drafts at all — see the module
+    # docstring and the case comments in cases.yaml.
     by_id = {case["id"]: case for case in _load_cases()}
 
     def check_keys(case_id: str) -> set[str]:

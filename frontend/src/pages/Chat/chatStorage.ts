@@ -15,6 +15,11 @@ export interface ThinkingStep {
   // agent_text only: the prose was streamed before the output gate ran, so
   // the timeline labels it as an unverified draft (2026-09-02, H5).
   draft?: boolean;
+  // agent_text only: how many values the backend's honesty gates blanked out
+  // of this draft before streaming it. Surfaced next to the draft label so a
+  // reader can tell a redacted draft from an untouched one — a `[withheld]`
+  // marker alone does not say how much was removed (2026-09-03 review).
+  redactedCount?: number;
   // G3.5 — backend stripped these tools from the toolkit this iteration.
   disabled?: string[];
   iteration?: number;

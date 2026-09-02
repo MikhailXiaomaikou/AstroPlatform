@@ -571,24 +571,41 @@ def untrusted_evidence_echo_values(
     have supplied that very number.
     """
 
-    untrusted = _untrusted_user_values(messages)
-    if not untrusted:
+    unsupported = _unsupported_untrusted_values(messages, tool_results)
+    if not unsupported:
         return []
-    supported = _claimable_current_values(tool_results)
-    unsupported = {
-        value
-        for value in untrusted
-        if not any(math.isclose(value, current, rel_tol=1e-12, abs_tol=1e-12) for current in supported)
-    }
     hits = {
         token.value
         for token in _reply_number_spans(reply)
-        if any(
-            math.isclose(token.value, value, rel_tol=1e-12, abs_tol=1e-12)
-            for value in unsupported
-        )
+        if _echo_token_flagged(token.value, unsupported)
     }
     return sorted(hits)
+
+
+def _unsupported_untrusted_values(messages: list[dict], tool_results: Any) -> set[float]:
+    """Rejected user-supplied evidence values: untrusted minus independently
+    reproduced.  Shared by the echo gate and by ``redact_gated_values`` so the
+    two cannot drift apart."""
+    untrusted = _untrusted_user_values(messages)
+    if not untrusted:
+        return set()
+    supported = _claimable_current_values(tool_results)
+    return {
+        value
+        for value in untrusted
+        if not any(
+            math.isclose(value, current, rel_tol=1e-12, abs_tol=1e-12)
+            for current in supported
+        )
+    }
+
+
+def _echo_token_flagged(token_value: float, unsupported: set[float]) -> bool:
+    """The echo gate's per-token rule: exact match against a rejected value."""
+    return any(
+        math.isclose(token_value, value, rel_tol=1e-12, abs_tol=1e-12)
+        for value in unsupported
+    )
 
 
 def _named_numbers(value: Any, parameter: str = "", stat: str = "") -> Iterable[tuple[str, str, float]]:
@@ -779,38 +796,62 @@ def nonpublication_posterior_values(reply: str, tool_results: Any) -> list[float
     exemption by token class.
     """
 
+    withheld_all, withheld_h0 = _withheld_universes(tool_results)
+    if not withheld_all:
+        return []
+    # Emphasis and code marks are invisible to every guard below: the
+    # stripped text is what gets tokenized and inspected, so ``**68%**`` reads
+    # exactly like ``68%`` (round 17, R3).
+    text = _strip_markup_marks(str(reply or ""))
+    hits = {
+        token.value
+        for token in _reply_number_spans(text)
+        if _withheld_token_flagged(text, token, withheld_all, withheld_h0)
+    }
+    return sorted(hits)
+
+
+def _withheld_universes(tool_results: Any) -> tuple[set[float], set[float]]:
+    """``(every withheld statistic, the withheld H0 values)`` for this turn."""
     entries = tool_results if isinstance(tool_results, list) else [tool_results]
     named: set[tuple[str, str, float]] = set()
     for entry in entries or []:
         _tool, result = _entry_tool_and_result(entry)
         if result:
             named.update(_withheld_entries(result))
-    if not named:
-        return []
-    withheld_all = {value for _parameter, _stat, value in named}
-    withheld_h0 = {value for parameter, _stat, value in named if _is_h0_name(parameter)}
-    # Emphasis and code marks are invisible to every guard below: the
-    # stripped text is what gets tokenized and inspected, so ``**68%**`` reads
-    # exactly like ``68%`` (round 17, R3).
-    text = _strip_markup_marks(str(reply or ""))
+    return (
+        {value for _parameter, _stat, value in named},
+        {value for parameter, _stat, value in named if _is_h0_name(parameter)},
+    )
 
-    def _near(token_value: float, universe: set[float]) -> bool:
-        return any(
-            math.isclose(token_value, value, rel_tol=0.01, abs_tol=1e-12)
-            for value in universe
-        )
 
-    hits: set[float] = set()
-    for token in _reply_number_spans(text):
-        if token.little_h:
-            if _near(token.value, withheld_h0):
-                hits.add(token.value)
-            continue
-        if token.is_percent and _is_interval_idiom(text, token):
-            continue
-        if _near(token.value, withheld_all):
-            hits.add(token.value)
-    return sorted(hits)
+def _near_withheld(token_value: float, universe: set[float]) -> bool:
+    return any(
+        math.isclose(token_value, value, rel_tol=0.01, abs_tol=1e-12)
+        for value in universe
+    )
+
+
+def _withheld_token_flagged(
+    text: str,
+    token: _Token,
+    withheld_all: set[float],
+    withheld_h0: set[float],
+) -> bool:
+    """The withheld-posterior gate's decision for ONE token at ONE position.
+
+    Factored out so ``redact_gated_values`` can reuse the identical per-token
+    decision instead of re-matching by value.  Matching by value discarded the
+    position-dependent exemptions: a token the interval idiom exempts here was
+    blanked anyway whenever the same number was a hit somewhere else in the
+    reply, and a little-h token exempted against a non-H0 withheld statistic
+    went the same way (adversarial review 2026-09-03).
+    """
+    if token.little_h:
+        return _near_withheld(token.value, withheld_h0)
+    if token.is_percent and _is_interval_idiom(text, token):
+        return False
+    return _near_withheld(token.value, withheld_all)
 
 
 def untrusted_evidence_refusal() -> str:
@@ -837,36 +878,64 @@ def redact_gated_values(
     """Blank out only the numbers the two honesty gates would withhold.
 
     Returns ``(redacted_text, replacement_count)``.  A span is replaced with
-    the literal ``[withheld]`` only when its token value is a hit reported by
-    ``untrusted_evidence_echo_values`` or ``nonpublication_posterior_values``
-    for this same text.  Everything else survives byte-for-byte: a number that
-    is merely absent from the tool universe (a publication year, an arXiv
-    identifier, a requested redshift, an iteration budget) is not evidence and
-    is never touched.
+    the literal ``[withheld]`` only when the token AT THAT POSITION is one the
+    gates would have flagged, decided by the gates' own per-token rules
+    (``_withheld_token_flagged`` and ``_echo_token_flagged``) rather than by
+    comparing values against the gates' output.  Value matching over-redacted,
+    because a hit is reported as a bare number and the exemptions are
+    positional: ``the 68% credible interval`` was blanked as soon as 68 was a
+    hit elsewhere in the same draft (adversarial review 2026-09-03).
 
-    Used to stream intermediate draft prose (2026-09-02 review H5): the loop
-    used to emit every turn's raw text as an ``agent_text`` event before any
-    gate ran, and ``chat.py`` persisted those events into the audit trail.
+    Precise residual — the withheld-posterior rule matches at ``rel_tol=0.01``,
+    so an unrelated number that happens to land within 1% of a withheld
+    statistic (an ESS, a readiness count, a requested redshift, an iteration
+    budget) IS replaced.  That is the gate's own decision, not an extra margin
+    taken here: the same number in the final turn makes the gate refuse the
+    whole reply.  Redacting less than the gate flags would stream values the
+    gate withholds, so the draft deliberately mirrors it.  Numbers outside that
+    band — publication years, arXiv identifiers, dataset counts, a redshift or
+    an iteration budget that collides with nothing — survive byte-for-byte.
+
+    The echo rule is applied to every token, little-h tokens included: the gate
+    itself only scans non-little-h tokens, but ``h = 0.7143`` restates a
+    rejected 71.43 and must not stream.
+
+    Used on everything the loop sends out through ``on_event`` (2026-09-02
+    review H5, corrected 2026-09-03): the intermediate ``agent_text`` drafts,
+    and the ``draft_preview`` / ``final_preview`` / ``details`` of every
+    gate event.  Both channels used to carry the raw pre-gate text.
+
+    Where that text ends up, verified rather than assumed: ``chat.py``'s
+    ``audit_trail`` is a request-local list whose only consumer is
+    ``_tool_results_from_stream_audit`` in the workflow-timeout fallback —
+    it is NOT written to ``ChatSession.audit_log`` (that column now holds
+    server-owned, HMAC-signed evidence records; see
+    ``app/services/server_evidence.py``, and ``SaveSessionRequest.audit_log``
+    is deliberately ignored).  The browser side is transient too: the UI's
+    ``_thinking`` steps are dropped by ``chatStorage.serializeStored``.  The
+    durable sinks are the gate-events JSONL and the blind runner's
+    ``case_<id>.json``, which dumps the whole recorded event list to disk.
+    So the leak was live-visible on the wire and durable in the blind-test
+    artifact — which is why gate events are split: the local JSONL keeps the
+    full draft for triage, the emitted copy is redacted.
     """
 
     source = str(reply or "")
     if not source:
         return source, 0
-    hits = set(untrusted_evidence_echo_values(source, messages, tool_results))
-    hits.update(nonpublication_posterior_values(source, tool_results))
-    if not hits:
+    unsupported = _unsupported_untrusted_values(messages, tool_results)
+    withheld_all, withheld_h0 = _withheld_universes(tool_results)
+    if not unsupported and not withheld_all:
         return source, 0
 
-    # A little-h token carries value*100 (``h = 0.677`` -> 67.7), so the hit it
-    # produces is the H0 value while the span it owns covers the little-h
-    # digits; matching on the token value redacts the right characters.
+    # A little-h token carries value*100 (``h = 0.677`` -> 67.7) while the span
+    # it owns covers the little-h digits, so redacting the span the flagged
+    # token owns blanks the right characters.
     spans = sorted(
         (token.start, token.end)
         for token in _reply_number_spans(source)
-        if any(
-            math.isclose(token.value, hit, rel_tol=1e-12, abs_tol=1e-12)
-            for hit in hits
-        )
+        if _echo_token_flagged(token.value, unsupported)
+        or _withheld_token_flagged(source, token, withheld_all, withheld_h0)
     )
     if not spans:
         return source, 0

@@ -731,6 +731,7 @@ const translations: Record<string, Record<Lang, string>> = {
   // Thinking timeline: intermediate prose is streamed before the output
   // gate runs, so it is labelled as an unverified draft (2026-09-02, H5).
   "chat.thinking.draft_label": { en: "draft · unverified", zh: "草稿 · 未验证", fr: "brouillon · non vérifié", es: "borrador · sin verificar" },
+  "chat.thinking.redacted_suffix": { en: "value(s) withheld", zh: "个数值被扣留", fr: "valeur(s) retenue(s)", es: "valor(es) retenido(s)" },
 
   // Per-reply validation badge (2026-07-03 honesty surfacing). Wording is
   // deliberately understated: "passed" = checked against this turn's tool

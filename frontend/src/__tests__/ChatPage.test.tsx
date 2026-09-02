@@ -1072,6 +1072,46 @@ describe("ChatPage", () => {
     expect(screen.queryByText(/Error: Connector/)).not.toBeInTheDocument();
   });
 
+  it("surfaces the backend's redacted-value count on a streamed draft", async () => {
+    // 2026-09-03 review: `redacted_count` was parsed in client.ts and then
+    // dropped by this page's ThinkingEvent -> ThinkingStep mapping, so the
+    // timeline showed "[withheld]" with no indication of how much was
+    // removed. This drives the real SSE callback and asserts the count
+    // reaches the rendered timeline. The mocked call never resolves, which
+    // keeps the pending bubble (and therefore the live timeline) mounted.
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    vi.mocked(sendChatMessage).mockImplementationOnce(async (
+      _history,
+      _context,
+      onThinking,
+    ) => {
+      onThinking?.({
+        type: "agent_text",
+        content: "Draft: H0 = [withheld] +/- [withheld] km/s/Mpc.",
+        draft: true,
+        redacted_count: 2,
+      });
+      return new Promise(() => {}) as never;
+    });
+
+    renderChatPage();
+
+    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
+    const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
+    fireEvent.change(textarea, { target: { value: "run the compressed chain" } });
+    fireEvent.click(sendBtn);
+
+    // This page renders outside I18nProvider, so t() yields the raw keys —
+    // assert on the elements and the count, and leave the wording to
+    // ChatMessageList.test.tsx, which does wrap the provider.
+    await waitFor(() => {
+      expect(document.querySelector(".chat-thinking-draft-label")).not.toBeNull();
+    });
+    const note = document.querySelector(".chat-thinking-redacted-count");
+    expect(note).not.toBeNull();
+    expect(note?.textContent).toContain("2");
+  });
+
   it("shows attempted tool process before an honest abstention card", async () => {
     vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
     vi.mocked(sendChatMessage).mockImplementationOnce(async (

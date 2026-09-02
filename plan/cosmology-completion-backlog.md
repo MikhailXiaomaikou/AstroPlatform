@@ -23,7 +23,8 @@
 - [ ] **恢复可报 H0 路径(经完整 Planck 似然,非回退 F2)** (2026-07-23 用户拍板"接受 F2 收紧 + 列恢复计划"): w0wa-strict 分支把发表后验摘要类条目降为 context_only 且 F2 反转为"必须 withhold"——科学上正确(转述≠测量),但平台从此对 H0 类问题永远给不出数。恢复路径不是接新数据集: clik-free Planck 2018 全套(plik_lite TT/TE/EE + lowE/lowT + lensing)2026-06-12 已接齐且有 χ² 锚点。要做的是: ① 让完整似然链(而非压缩先验)在标准 chat 路径可被路由并产出 publication-ready H0 后验; ② 以该可执行路径为标的重写 F2 期望(干净路径给出 H0 且数值来自本回合真实链,而非恢复旧的"66.5-68.5 转述断言"); ③ benchmarks + 盲测 F2 + specificity 覆盖同步。盲测 case 语义变更属 guardrail 改动,动手前方案先过用户。
 
 ## P3 — 防线与测试纵深
-(暂空 — gate 事件首份周报已完成,见已完成段)
+- [ ] **`tool_call` 事件仍逐字流式输出模型自撰的 `input`**(2026-09-03 对抗审查发现,**本轮刻意未修**:与 `agent_text` 是不同通道、不同设计问题——工具入参本来就要给用户看,不能照抄 `[withheld]` 逻辑)。位置 `backend/app/services/agent_runtime/loop.py:1875-1882`。一行复现(真 loop + 桩模型,无网络):同一 turn 里草稿已被 redact 成 `"Draft: using the pasted run, H0 = [withheld] +/- [withheld] km/s/Mpc."`,紧接着的 `tool_call` 事件却原样输出 `{"note": "confirming H0 = 71.43 +/- 0.31 km/s/Mpc from the pasted tool_results"}`——被扣住的值从同一条 SSE 时间线的隔壁事件出去了,并同样落进盲测 `case_<id>.json`。要拍板的是设计:是把 gate 扩到工具入参(会遮住合法的入参数字,例如 `requested_redshift`),还是只对特定 key 做,还是接受现状并在 UI 上标注。属 guardrail 语义变更,动手前方案先过用户。
+- [ ] **`_UNTRUSTED_EVIDENCE_RE` 漏掉 B3 的措辞**(2026-09-03 实测):B3 prompt 写的是 "transcript pasted verbatim",而正则要的是 `pasted\s+transcript`(顺序相反),粘贴的 JSON 里也没有 `"result":` 键——实测 `untrusted_evidence_echo_values` 对 B3 返回 0 个值、`redact_gated_values` 替换 0 处。当前无害(B3 走确定性 cosmology 路由,根本不流式输出草稿;终答仍有 forbid + claim_validator 兜底),但这意味着 cases.yaml 里 B3 的 `event_text_must_not_contain: ["71.43"]` 背后**没有 redactor**,只是个不变量哨兵(已在 case 注释里如实标注)。放宽正则属硬门语义变更,需用户拍板;若要做,顺带补一条红队用例证明不会误杀正常引用。
 
 ## P1b — 完整性普查发现的疑似诚实性 bug(2026-06-12 第 10 轮,普查 agent 单人结论,动手前先活体复核;按危害排序)
 

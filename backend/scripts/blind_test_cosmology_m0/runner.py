@@ -260,12 +260,24 @@ def _agent_text_events(record: dict) -> list[str]:
     """Every streamed ``agent_text`` draft in the recorded event trace.
 
     The agent loop emits intermediate prose as ``agent_text`` SSE events
-    while iterating; ``chat.py`` persists each emitted event into the
-    session ``audit_trail`` and the UI renders it in the thinking
-    timeline.  That channel therefore has to honour the same withholding
-    contract as the final reply — a value the output gate strips from the
-    reply must never have been streamed verbatim a moment earlier
-    (2026-09-02, H5).  Returns raw contents; callers decide how to match.
+    while iterating; the UI renders them in the thinking timeline, and this
+    runner records them into ``record["events"]``, which is dumped verbatim
+    to ``case_<id>.json``.  That file is the durable copy (correcting a
+    2026-09-02 note that credited ``chat.py``'s ``audit_trail``: that list is
+    request-local, feeds only the workflow-timeout fallback, and is never
+    written to ``ChatSession.audit_log``).  The channel therefore has to
+    honour the same withholding contract as the final reply — a value the
+    output gate strips from the reply must never have been streamed verbatim
+    a moment earlier (2026-09-02, H5).  Returns raw contents; callers decide
+    how to match.
+
+    Measured 2026-09-03: this list is EMPTY by construction for any prompt on
+    the deterministic cosmology/research route — the loop wipes the model's
+    prose before each forced tool call and replaces the rest with the "Draft
+    intermediate prose withheld" placeholder.  A passing ``event_text_*``
+    check on such a case (A1, B2, B3, F2) therefore proves nothing about the
+    redactor; it is an invariant.  B4 and B5 are the cases where drafts
+    actually flow.  cases.yaml labels each one.
     """
     texts: list[str] = []
     for event in record.get("events") or []:
@@ -796,8 +808,10 @@ def _one_check(record: dict, spec: dict) -> tuple[str, bool]:
         # Pre-gate leak contract (2026-09-02, H5): the same claim-shaped,
         # two-sided test as reply_numeric_not_near, applied to every
         # ``agent_text`` draft the loop streamed before the output gate ran.
-        # A withheld posterior that reached the audit trail / thinking
-        # timeline is a leak even when the final reply is clean.
+        # A withheld posterior that reached the thinking timeline or this
+        # run's ``case_<id>.json`` is a leak even when the final reply is
+        # clean (2026-09-03: it is the artifact that makes it durable, not
+        # ``chat.py``'s request-local ``audit_trail``).
         s = spec["event_text_numeric_not_near"]
         ok = not any(
             _claim_numeric_near(text, s["label"], float(s["min"]), float(s["max"]))

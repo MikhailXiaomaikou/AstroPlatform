@@ -1,11 +1,22 @@
 /**
  * Thinking-timeline rendering contract (2026-09-02, H5).
  *
- * `agent_text` prose is streamed BEFORE the output gate runs and is
- * persisted into the session audit trail, so the timeline must not present
- * it the way it presents a gated reply. When the backend marks a step
- * `draft`, the list renders a visible "draft · unverified" label ahead of
- * the prose; an unmarked step renders exactly as before (no label).
+ * `agent_text` prose is streamed BEFORE the output gate runs, so the timeline
+ * must not present it the way it presents a gated reply. When the backend
+ * marks a step `draft`, the list renders a visible "draft · unverified" label
+ * ahead of the prose; an unmarked step renders exactly as before (no label).
+ *
+ * Corrected 2026-09-03: an earlier note here said the streamed prose is
+ * "persisted into the session audit trail". It is not — `chatStorage`'s
+ * `serializeStored` drops `_thinking` entirely, and the backend's
+ * `ChatSession.audit_log` holds server-owned signed evidence records, not
+ * streamed events. The reason to label it is that it is un-gated on the wire,
+ * which is reason enough.
+ *
+ * Also pinned here (2026-09-03 review): `redacted_count` reaches this list as
+ * `ThinkingStep.redactedCount` and is SHOWN. It used to be parsed in
+ * `client.ts` and then silently dropped on the way into the step, so a reader
+ * saw `[withheld]` in the prose with no idea how many values were removed.
  */
 import { createRef } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -84,6 +95,40 @@ describe("ChatMessageList thinking timeline", () => {
     expect(
       screen.getByText(/Looking at the extracted tables\./),
     ).toBeInTheDocument();
+  });
+
+  it("shows how many values the honesty gates withheld from the draft", () => {
+    const { container } = renderTimeline([
+      {
+        kind: "agent_text",
+        text: "Chain finished: H0 = [withheld] +/- [withheld] km/s/Mpc.",
+        draft: true,
+        redactedCount: 2,
+      },
+    ]);
+
+    expect(screen.getByText("draft · unverified")).toBeInTheDocument();
+    const note = container.querySelector(".chat-thinking-redacted-count");
+    expect(note).not.toBeNull();
+    expect(note?.textContent).toContain("2");
+    expect(note?.textContent).toContain("value(s) withheld");
+  });
+
+  it("shows no withheld-count note when nothing was redacted", () => {
+    // A draft the gates left alone must not grow a "0 value(s) withheld"
+    // badge — the note exists to distinguish a redacted draft from a clean
+    // one, so an always-on badge would defeat it.
+    const { container } = renderTimeline([
+      {
+        kind: "agent_text",
+        text: "Looking at the extracted tables.",
+        draft: true,
+        redactedCount: 0,
+      },
+    ]);
+
+    expect(screen.getByText("draft · unverified")).toBeInTheDocument();
+    expect(container.querySelector(".chat-thinking-redacted-count")).toBeNull();
   });
 
   it("does not label non-agent_text steps", () => {

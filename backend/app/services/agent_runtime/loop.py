@@ -466,6 +466,10 @@ async def _run_agent_loop(
       — fires before each tool starts executing.
     - {"type": "tool_result", "agent": <name>, "tool": <name>, "result": <dict>}
       — fires when each tool completes.
+    - {"type": "gate_event", ...} — one record per gate intervention.  The
+      copy emitted here is redacted (2026-09-03 review); the unredacted copy
+      with the full pre-gate draft goes only to the local, gitignored JSONL
+      triage sink.  See app/observability/gate_events.py.
     """
     # 2026-05-28: normalise public provider names to canonical backend ids.
     # The blind-test runners pass --provider anthropic / deepseek / openai,
@@ -1800,12 +1804,26 @@ async def _run_agent_loop(
                 text_parts.append(text)
                 # 2026-09-02 review H5: only intermediate prose is streamed,
                 # and only after the honesty gates have blanked the values
-                # they would withhold.  Every emitted event is persisted into
-                # the audit trail by chat.py, so a raw draft leaked durably —
-                # blind case B2 streamed an exploratory posterior and the
-                # untrusted user value before any gate ran.  The final
-                # text-only turn (no tool calls) is never streamed here: the
-                # gated `text` frame at the end of the loop carries it.
+                # they would withhold.  Blind case B2 streamed an exploratory
+                # posterior and the untrusted user value before any gate ran.
+                #
+                # Where a streamed event ends up (2026-09-03: the earlier
+                # "chat.py persists every event into the audit trail" note was
+                # wrong and is corrected here).  chat.py's `audit_trail` is a
+                # request-local list read only by the workflow-timeout
+                # fallback; it is NOT written to ChatSession.audit_log, which
+                # now holds server-owned HMAC-signed evidence records
+                # (app/services/server_evidence.py).  The browser copy is
+                # transient too — chatStorage.serializeStored drops the
+                # `_thinking` steps.  What IS durable is the blind runner's
+                # recorded event list, dumped verbatim into case_<id>.json.
+                # So this channel leaks live to whoever is watching and
+                # permanently into the blind-test artifact — both reasons
+                # enough to gate it, neither of them the database.
+                #
+                # The final text-only turn (no tool calls) is never streamed
+                # here: the gated `text` frame at the end of the loop carries
+                # it.
                 if tool_calls_in_turn and structured_abstention_reply is None:
                     redacted_text, redacted_count = redact_gated_values(
                         text, messages, all_tool_results
@@ -2475,6 +2493,7 @@ async def _run_agent_loop(
                 append_gate_event_jsonl,
                 build_gate_event,
                 claims_to_dicts,
+                redact_event_for_wire,
                 violations_to_dicts,
             )
             from app.observability.metrics import record_counter
@@ -2501,9 +2520,26 @@ async def _run_agent_loop(
                 chat_session_id=str(chat_session_id) if chat_session_id else None,
                 python_session_id=str(python_session_id) if python_session_id else None,
             )
+            # 2026-09-03 review BLOCKER: the two sinks get different text.
+            #
+            # `evt` quotes the pre-gate draft, i.e. exactly the values the
+            # gate above just withheld.  The JSONL sink keeps it in full —
+            # it is gitignored, machine-local, and reading the observed
+            # evidence verbatim is how a false kill gets diagnosed (the
+            # 9f2667e class of bug this module was built for).  The copy
+            # handed to `_emit` leaves the process (chat.py SSE -> browser;
+            # the blind runner's recorded `events` -> `case_<id>.json` on
+            # disk), so it goes through the same redactor the streamed
+            # `agent_text` drafts use.  Without this split, redacting
+            # agent_text moved the leak one event type over rather than
+            # closing it.
             append_gate_event_jsonl(evt)
             record_counter("gate_event_total", 1.0, gate=gate, action=action)
-            await _emit(evt)
+
+            def _redact_for_wire(text: str) -> tuple[str, int]:
+                return redact_gated_values(text, messages, all_tool_results)
+
+            await _emit(redact_event_for_wire(evt, _redact_for_wire))
         except Exception as exc:
             logger.debug("gate_event emission failed: %s", exc)
     # The tool-inventory bypass exists so describing the real tool schema

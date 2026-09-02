@@ -94,6 +94,20 @@ export function ChatMessageList({
                                     {t("chat.thinking.draft_label")}
                                   </em>
                                 )}
+                                {/* 2026-09-03 review: the backend also sends
+                                    how many values its honesty gates blanked
+                                    out of this draft. It was parsed and then
+                                    dropped; a bare "[withheld]" in the prose
+                                    does not say how much was removed, so the
+                                    count is shown next to the draft label. */}
+                                {typeof step.redactedCount === "number" && step.redactedCount > 0 && (
+                                  <em
+                                    className="chat-thinking-redacted-count"
+                                    style={{ color: "#92400e", marginRight: 4 }}
+                                  >
+                                    · {step.redactedCount} {t("chat.thinking.redacted_suffix")}
+                                  </em>
+                                )}
                                 {step.text}
                               </span>
                             )}
