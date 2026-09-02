@@ -31,7 +31,11 @@ _NUMBER_RE = re.compile(
     # hash) and an English ordinal suffix may not.  "the 68th sample" is a
     # draw index, and reading it as a posterior replaced whole honest replies
     # when a withheld median sat near 68 (review 2026-09-03).
-    r"(?![0-9_]|\.\d|[a-fA-F][0-9a-fA-F]{3}|(?:st|nd|rd|th)(?![A-Za-z]))"
+    # A lone count letter (68k samples, 95M draws) is a magnitude suffix, not
+    # a unit; a letter that starts a real unit (km, Mpc, Gyr) is followed by
+    # more letters and stays allowed.
+    r"(?![0-9_]|\.\d|[a-fA-F][0-9a-fA-F]{3}|(?:st|nd|rd|th)(?![A-Za-z])"
+    r"|[kKMGBb](?![A-Za-z]))"
 )
 _PERCENT_AFTER_RE = re.compile(r"\s*(?:%|percent\b|per\s+cent\b)", re.IGNORECASE)
 # H0 in little-h units, in the notations a user or model actually writes:
@@ -42,11 +46,15 @@ _LITTLE_H_RE = re.compile(
     r"\s*(?:[=≈:~]|is|of|at)\s*(0?\.\d+)",
     re.IGNORECASE,
 )
-# A parameter label with an assignment operator right before a token keeps it
-# a value claim whatever follows it: ``H0 = 68%`` is never an interval idiom.
+# A parameter label bound to the token keeps it a value claim whatever
+# follows: ``H0 = 68%`` and ``the H0 median is 68%`` are never interval
+# idioms.  The binding is a symbol OR a copula, because a model states a
+# value both ways and the symbol-only form let "the H0 median is 68%, with
+# the credible interval withheld" pass as coverage (review 2026-09-03).
 _PARAMETER_ASSIGNMENT_BEFORE_RE = re.compile(
-    r"\b(?:H0|H₀|omegam|omega_m|Omega_m|sigma8|S8|w0|wa)\b"
-    r"[^\n;]{0,28}?[=:~≈]\s*$",
+    r"\b(?:H0|H₀|omegam|omega_m|Omega_m|sigma8|S8|w0|wa|hubble)\b"
+    r"(?:[^\n;]{0,28}?[=:~≈]\s*"
+    r"|[^\n;]{0,28}?\b(?:is|was|are|were|of|at|equals?|sits\s+at|comes\s+out\s+at)\s+)$",
     re.IGNORECASE,
 )
 _H0_PARAMETER_NAMES = frozenset({"h0", "h_0", "hubble", "hubble_constant"})

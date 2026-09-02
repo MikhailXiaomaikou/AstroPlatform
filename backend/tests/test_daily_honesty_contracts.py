@@ -883,3 +883,41 @@ def test_ordinal_suffixes_are_not_posterior_values() -> None:
     assert nonpublication_posterior_values(
         "H0 = 68.0km/s/Mpc", _exploratory_chain(68.0)
     ) == [68.0]
+
+
+def test_copular_percentage_assignment_is_not_an_interval_idiom() -> None:
+    """The runner learned this in the same review round; the gate had not.
+    "The H0 median is 68%" states the value, so a nearby interval mention
+    must not exempt it."""
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    for reply in (
+        "The H0 median is 68%, with the credible interval withheld.",
+        "H0 is 68% of the reference; the confidence interval is not reported.",
+        "The Hubble value sits at 68% here, though the interval is withheld.",
+    ):
+        assert nonpublication_posterior_values(reply, _exploratory_chain(68.0)) == [68.0], reply
+
+    # The idiom itself still survives.
+    assert nonpublication_posterior_values(
+        "The 68% credible interval is withheld.", _exploratory_chain(68.3)
+    ) == []
+
+
+def test_compact_count_suffixes_are_not_posterior_values() -> None:
+    """"The run used 68k samples" is a draw count, not a posterior near 68.
+    Real units must keep working, so only a lone count letter is rejected."""
+    from app.services.agent_runtime.honesty import (
+        _reply_number_tokens,
+        nonpublication_posterior_values,
+    )
+
+    assert _reply_number_tokens("The run used 68k samples and remains exploratory") == []
+    assert _reply_number_tokens("we drew 68K and then 95M samples") == []
+    assert nonpublication_posterior_values(
+        "The run used 68k samples and remains exploratory.", _exploratory_chain(68.0)
+    ) == []
+    # Units that begin with a count letter are units, not counts.
+    assert nonpublication_posterior_values("H0 = 68.0km/s/Mpc", _exploratory_chain(68.0)) == [68.0]
+    assert _reply_number_tokens("a scale of 147.1Mpc") == [147.1]
+    assert _reply_number_tokens("an age of 13.8Gyr") == [13.8]
