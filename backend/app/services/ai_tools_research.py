@@ -288,6 +288,12 @@ def _stamp_evidence_source(out: dict, warnings: list[str], source: str) -> dict:
         for _key in ("markdown", "report_markdown", "paper_draft_markdown"):
             if isinstance(out.get(_key), str):
                 out[_key] = _banner + out[_key]
+        # The banner grew two of the fields `report_package.files[].source_key`
+        # names, so the sizes computed inside export_research_report are now
+        # short by its length. Recompute them from the mutated fields.
+        from app.services.research_program import refresh_report_package_sizes
+
+        refresh_report_package_sizes(out)
     if warnings:
         existing = out.get("warnings")
         if isinstance(existing, list):

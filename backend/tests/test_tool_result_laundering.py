@@ -24,6 +24,7 @@ Two live-confirmed bypasses of the zero-fabrication gate, both closed here:
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -254,6 +255,30 @@ def test_cross_turn_export_renders_but_marks_uncitable():
         [{"id": "ex", "tool": "export_research_report", "input": {}, "result": out}],
     )
     assert v.ok is False
+
+
+def test_cross_turn_export_package_sizes_match_the_stamped_fields():
+    # `_stamp_evidence_source` prepends the unverified-evidence banner to the
+    # markdown fields AFTER export_research_report computed
+    # report_package.files[].bytes, so on this path the package listed sizes
+    # that were short by the banner's length — a manifest that disagrees with
+    # the payload it describes. Every listed size must equal the byte length of
+    # the field its source_key names, banner included.
+    out = _exec_export_research_report({
+        "tool_results": [REAL_CHAIN], "_turn_tool_results": [], "title": "T",
+    })
+    assert out["tool_results_source"] == "caller_supplied_unverified"
+    assert out["markdown"].lstrip().startswith(">")  # the banner really is there
+    files = out["report_package"]["files"]
+    assert {f["source_key"] for f in files} >= {"markdown", "paper_draft_markdown"}
+    for entry in files:
+        value = out[entry["source_key"]]
+        expected = (
+            len(value.encode("utf-8"))
+            if isinstance(value, str)
+            else len(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+        )
+        assert entry["bytes"] == expected, entry["path"]
 
 
 def test_empty_turn_export_with_no_supplied_data_is_honest_empty():
