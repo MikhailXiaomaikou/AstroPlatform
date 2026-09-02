@@ -2378,3 +2378,56 @@ def test_narrowing_did_not_take_ordinary_hedges_with_it() -> None:
     ]
     for sentence in violations:
         assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+
+def test_the_hedge_decision_is_made_in_the_conclusion_clause() -> None:
+    """A sentence can carry a denied conclusion AND an asserted one.
+
+    Three findings, one root cause (Codex review 2026-09-03): every term of
+    the hedge decision -- the hedge, the confirmation that cancels it, the
+    denial that restores it -- describes a specific proposition, and reading
+    any of them across the whole sentence attached it to the wrong one.  The
+    detector also stopped at the first conclusion it matched, so a denied
+    curvature claim masked an asserted dark-energy one in the same sentence.
+
+    A confirmation in an EARLIER clause still cancels the hedge when what it
+    confirms is the hypothesis itself; confirming some other premise does not.
+    """
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    asserted = [
+        # A denied curvature claim no longer masks the asserted dark-energy one.
+        "Although there is no evidence for spatial curvature, our forecast is "
+        "confirmed: dark energy evolves with time.",
+        # The Hubble regex spans the comma, so the clause is taken from the
+        # conclusion's end, not its whole span.
+        "There is no evidence the Hubble tension is caused by calibration, but "
+        "our forecast is confirmed: a local void resolves the Hubble tension.",
+        "Although there is no evidence for spatial curvature, our forecast is "
+        "confirmed: the Hubble tension is resolved by a local void.",
+        # A confirmation of the hypothesis itself still cancels the hedge,
+        # in either language.
+        "Our hypothesis is confirmed: the Hubble tension is resolved by a local void.",
+        "The forecast is now confirmed: the Hubble tension is resolved by a local void.",
+        "假设：已被证实，哈勃张力被局部空洞解决。",
+        "The forecast that the Hubble tension is resolved is now confirmed.",
+        "Hypothesis: confirmed - the Hubble tension is resolved by a local void.",
+    ]
+    for sentence in asserted:
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+    hedged = [
+        # Confirming a PREMISE leaves the hedge standing.
+        "The calibration is confirmed, while our hypothesis is that a local "
+        "void resolves the Hubble tension.",
+        "The calibration is confirmed, and the Hubble tension may be resolved.",
+        # A hedge that introduces the conclusion through a colon labels the
+        # whole sentence, as long as it carries no confirmation of its own.
+        "This is a hypothesis worth testing: a local void resolves the Hubble tension.",
+        "Although the calibration is confirmed, there is no evidence the "
+        "Hubble tension is resolved.",
+        "There is no evidence that dark energy evolves with time.",
+        "Dark energy may evolve with time.",
+    ]
+    for sentence in hedged:
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence

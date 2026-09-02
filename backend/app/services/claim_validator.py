@@ -3693,6 +3693,18 @@ _CONFIRMED_ASSERTION_RE = re.compile(
     r"|(?:得到|已被|已经?)证实|已证实",
     re.I,
 )
+# A confirmation in an EARLIER clause cancels the hedge only when what it
+# confirms is the hypothesis itself ("Our forecast is confirmed: X",
+# "假设：已被证实，X").  A confirmation of some other noun ("The calibration is
+# confirmed, while our hypothesis is that X") confirms a premise and must
+# leave the hedge standing (Codex review 2026-09-03).
+_CONFIRMED_HYPOTHESIS_RE = re.compile(
+    r"\b(?:hypothes[ei]s|forecasts?|predictions?|claims?|conjectures?)\b[^\n;]{0,24}?"
+    r"\b(?:is|are|was|were|has\s+been|have\s+been|now)\s+(?:now\s+)?confirmed\b"
+    r"|\bconfirms?\s+(?:the|our|this)\s+(?:hypothes[ei]s|forecast|prediction|claim)\b"
+    r"|^[^\n]{0,24}?(?:假设|预测|猜想)[:：][^\n]{0,12}?(?:得到|已被|已经?)?证实",
+    re.IGNORECASE,
+)
 _ZH_HUBBLE_TENSION_RESOLUTION_RE = re.compile(
     r"(?:哈勃|H\s*0)张力[^。；;.!！？\n]{0,80}(?:已)?(?:解决|缓解|消除|解除|终结)|"
     r"(?:解决|缓解|消除|解除|终结)[^。；;.!！？\n]{0,80}(?:哈勃|H\s*0)张力",
@@ -3935,8 +3947,8 @@ def _validated_conclusion_attestations(tool_results: Any) -> dict[str, dict[str,
 _CONCLUSION_CLAUSE_BREAK_RE = re.compile(r"[,;:\u2014\uff0c\uff1b\uff1a]")
 
 
-def _clause_around(sentence: str, start: int, end: int) -> str:
-    """The clause of ``sentence`` that contains the span ``start:end``."""
+def _clause_bounds(sentence: str, start: int, end: int) -> tuple[int, int]:
+    """Offsets of the clause of ``sentence`` containing the span ``start:end``."""
     left = 0
     for mark in _CONCLUSION_CLAUSE_BREAK_RE.finditer(sentence):
         if mark.end() > start:
@@ -3946,101 +3958,182 @@ def _clause_around(sentence: str, start: int, end: int) -> str:
     after = _CONCLUSION_CLAUSE_BREAK_RE.search(sentence, end)
     if after is not None:
         right = after.start()
+    return left, right
+
+
+def _clause_around(sentence: str, start: int, end: int) -> str:
+    """The clause of ``sentence`` that contains the span ``start:end``."""
+    left, right = _clause_bounds(sentence, start, end)
     return sentence[left:right]
 
 
+def _dark_energy_evolution_anchor(sentence: str) -> int | None:
+    """Character offset just past the last evolution word in ``sentence``.
+
+    ``_dark_energy_evolution_claim`` is a token scan that returns a bool, so
+    the conclusion has no span to take a clause from.  The last evolution or
+    variation word is where the assertion lands, which is the anchor the
+    clause is built around.
+    """
+    records = _scientific_word_tokens(sentence)
+    words = {
+        "evolve", "evolves", "evolved", "evolving", "dynamical",
+        "vary", "varies", "varied", "variation",
+        "timevarying", "timedependent", "varying", "dependent",
+        "wa", "nonzero",
+    }
+    end: int | None = None
+    for token, _start, stop in records:
+        if token in words:
+            end = stop
+    return end
+
+
 def _strong_conclusion_from_sentence(sentence: str) -> dict[str, str | None] | None:
+    """The first strong conclusion in ``sentence`` that its own clause asserts.
+
+    Every candidate is considered, not just the first that matches.  One
+    sentence can carry a DENIED conclusion and an ASSERTED one -- "Although
+    there is no evidence for spatial curvature, our forecast is confirmed:
+    dark energy evolves with time" -- and stopping at the first match reported
+    the denied curvature claim, whose clause is exempt, and never looked at
+    the dark-energy claim the sentence actually asserts (Codex review
+    2026-09-03).
+    """
     if not sentence or "?" in sentence or "？" in sentence:
         return None
-    kind: str | None = None
-    subject: str | None = None
-    baseline: str | None = None
-    alternative: str | None = None
-    match: re.Match[str] | None = None
-    if (match := (
-        _HUBBLE_TENSION_RESOLUTION_RE.search(sentence)
-        or _ZH_HUBBLE_TENSION_RESOLUTION_RE.search(sentence)
-    )):
-        kind = "hubble_tension_resolution"
-        subject = "hubble_tension"
-    elif (match := (
-        _SPATIAL_CURVATURE_CONCLUSION_RE.search(sentence)
-        or _ZH_SPATIAL_CURVATURE_CONCLUSION_RE.search(sentence)
-    )):
-        kind = "spatial_curvature_preference"
-        subject = "spatial_curvature"
-        baseline = "lcdm"
-        alternative = "ok_lcdm"
-    elif (match := (
-        _NEUTRINO_MASS_DETECTION_RE.search(sentence)
-        or _ZH_NEUTRINO_MASS_DETECTION_RE.search(sentence)
-    )):
-        kind = "neutrino_mass_detection"
-        subject = "neutrino_mass"
-        baseline = "lcdm"
-        alternative = "lcdm_mnu"
-    elif (match := (
-        _GENERAL_RELATIVITY_REJECTION_RE.search(sentence)
-        or _ZH_GENERAL_RELATIVITY_REJECTION_RE.search(sentence)
-    )):
-        kind = "general_relativity_rejection"
-        subject = "general_relativity"
-        baseline = "gr"
-        alternative = "modified_gravity"
-    elif (match := (
-        _BASELINE_REJECTION_RE.search(sentence)
-        or _ZH_BASELINE_REJECTION_RE.search(sentence)
-    )):
-        kind = "baseline_rejection"
-    elif (match := (
-        _MODEL_PREFERENCE_RE.search(sentence)
-        or _ZH_MODEL_PREFERENCE_RE.search(sentence)
-    )):
-        kind = "extended_model_preference"
-    elif _dark_energy_evolution_claim(sentence) or _ZH_DARK_ENERGY_EVOLUTION_RE.search(sentence):
-        kind = "dark_energy_evolution"
-        match = _ZH_DARK_ENERGY_EVOLUTION_RE.search(sentence)
-    if kind is None:
+    for candidate in _conclusion_candidates(sentence):
+        kind, subject, baseline, alternative, conclusion_end = candidate
+        if _clause_hedges_the_conclusion(sentence, conclusion_end):
+            continue
+        if baseline is None and kind not in _CONCLUSION_CLAIM_SUBJECTS:
+            baseline = "lcdm" if _LCDM_RE.search(sentence) else None
+        if alternative is None and kind not in _CONCLUSION_CLAIM_SUBJECTS:
+            alternative = (
+                "w0wa_cdm"
+                if _W0WA_RE.search(sentence)
+                else "wcdm"
+                if _WCDM_RE.search(sentence)
+                else None
+            )
+        return {
+            "kind": kind,
+            "subject": subject,
+            "baseline_model": baseline,
+            "alternative_model": alternative,
+        }
+    return None
+
+
+def _conclusion_candidates(
+    sentence: str,
+) -> list[tuple[str, str | None, str | None, str | None, int | None]]:
+    """``(kind, subject, baseline, alternative, end offset)`` for every match.
+
+    Order is the historical priority order; the caller takes the first
+    candidate whose own clause asserts it.
+    """
+    found: list[tuple[str, str | None, str | None, str | None, int | None]] = []
+
+    def _end(*matches: "re.Match[str] | None") -> int | None:
+        for item in matches:
+            if item is not None:
+                return item.end()
         return None
-    # The hedge decision is made AFTER the conclusion is located, because an
-    # explicit denial only restores the hedge exemption for the conclusion it
-    # actually governs.  Sentence-wide, a denial about an unrelated topic
-    # washed a confirmed conclusion elsewhere: "Although there is no evidence
-    # for spatial curvature, our forecast is confirmed: the Hubble tension is
-    # resolved by a local void" (Codex review 2026-09-03).  The confirmation
-    # and the hedge stay sentence-scoped, so this only ever REMOVES an
-    # exemption; the label stays sentence-scoped because it labels the whole
-    # sentence.
-    denial_clause = (
-        _clause_around(sentence, match.start(), match.end())
-        if match is not None
-        else sentence
+
+    hubble = _end(
+        _HUBBLE_TENSION_RESOLUTION_RE.search(sentence),
+        _ZH_HUBBLE_TENSION_RESOLUTION_RE.search(sentence),
     )
-    if (
-        not _CONFIRMED_ASSERTION_RE.search(sentence)
-        or _EXPLICIT_DENIAL_RE.search(denial_clause)
-    ) and (
-        _HYPOTHESIS_LABEL_RE.search(sentence)
-        or _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(sentence)
-        or _ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(sentence)
-    ):
-        return None
-    if baseline is None and kind not in _CONCLUSION_CLAIM_SUBJECTS:
-        baseline = "lcdm" if _LCDM_RE.search(sentence) else None
-    if alternative is None and kind not in _CONCLUSION_CLAIM_SUBJECTS:
-        alternative = (
-            "w0wa_cdm"
-            if _W0WA_RE.search(sentence)
-            else "wcdm"
-            if _WCDM_RE.search(sentence)
-            else None
+    if hubble is not None:
+        found.append(("hubble_tension_resolution", "hubble_tension", None, None, hubble))
+    curvature = _end(
+        _SPATIAL_CURVATURE_CONCLUSION_RE.search(sentence),
+        _ZH_SPATIAL_CURVATURE_CONCLUSION_RE.search(sentence),
+    )
+    if curvature is not None:
+        found.append((
+            "spatial_curvature_preference", "spatial_curvature", "lcdm", "ok_lcdm", curvature,
+        ))
+    neutrino = _end(
+        _NEUTRINO_MASS_DETECTION_RE.search(sentence),
+        _ZH_NEUTRINO_MASS_DETECTION_RE.search(sentence),
+    )
+    if neutrino is not None:
+        found.append((
+            "neutrino_mass_detection", "neutrino_mass", "lcdm", "lcdm_mnu", neutrino,
+        ))
+    relativity = _end(
+        _GENERAL_RELATIVITY_REJECTION_RE.search(sentence),
+        _ZH_GENERAL_RELATIVITY_REJECTION_RE.search(sentence),
+    )
+    if relativity is not None:
+        found.append((
+            "general_relativity_rejection", "general_relativity", "gr",
+            "modified_gravity", relativity,
+        ))
+    baseline_rejection = _end(
+        _BASELINE_REJECTION_RE.search(sentence),
+        _ZH_BASELINE_REJECTION_RE.search(sentence),
+    )
+    if baseline_rejection is not None:
+        found.append(("baseline_rejection", None, None, None, baseline_rejection))
+    preference = _end(
+        _MODEL_PREFERENCE_RE.search(sentence),
+        _ZH_MODEL_PREFERENCE_RE.search(sentence),
+    )
+    if preference is not None:
+        found.append(("extended_model_preference", None, None, None, preference))
+    if _dark_energy_evolution_claim(sentence) or _ZH_DARK_ENERGY_EVOLUTION_RE.search(sentence):
+        zh = _ZH_DARK_ENERGY_EVOLUTION_RE.search(sentence)
+        # The English detector is a token scan with no span, so the last
+        # evolution word is the anchor its clause is built around.
+        found.append((
+            "dark_energy_evolution", None, None, None,
+            zh.end() if zh is not None else _dark_energy_evolution_anchor(sentence),
+        ))
+    return found
+
+
+def _clause_hedges_the_conclusion(sentence: str, conclusion_end: int | None) -> bool:
+    """True when the conclusion's own clause hedges, denies or labels it.
+
+    Every term describes a specific proposition, so all three are read in the
+    conclusion's clause: reading them across the whole sentence attached a
+    denial of another topic to a confirmed conclusion, and a confirmation of
+    another topic to a real hedge (Codex review 2026-09-03).  The clause is
+    taken from the conclusion's END, because the subject regexes may run
+    across a comma.
+
+    Two sentence-scoped exceptions, both of which label the WHOLE sentence:
+    a sentence-initial "Hypothesis:" marker, and a hedge that introduces the
+    conclusion through a colon ("This is a hypothesis worth testing: ...").
+    The colon prefix counts only when it carries no confirmation of its own,
+    which is what separates it from "our forecast is confirmed: ...".
+    """
+    if conclusion_end is None:
+        clause, clause_start = sentence, 0
+    else:
+        clause_start, clause_end = _clause_bounds(
+            sentence, max(0, conclusion_end - 1), conclusion_end
         )
-    return {
-        "kind": kind,
-        "subject": subject,
-        "baseline_model": baseline,
-        "alternative_model": alternative,
-    }
+        clause = sentence[clause_start:clause_end]
+    prefix = sentence[:clause_start]
+    confirmed = bool(_CONFIRMED_ASSERTION_RE.search(clause)) or bool(
+        _CONFIRMED_HYPOTHESIS_RE.search(prefix)
+    )
+    if confirmed and not _EXPLICIT_DENIAL_RE.search(clause):
+        return False
+    if _HYPOTHESIS_LABEL_RE.search(sentence):
+        return True
+    if _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(clause) or _ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(clause):
+        return True
+    if prefix.rstrip().endswith((":", "\uff1a")) and not _CONFIRMED_ASSERTION_RE.search(prefix):
+        return bool(
+            _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(prefix)
+            or _ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(prefix)
+        )
+    return False
 
 
 def _attestation_matches_claim(
