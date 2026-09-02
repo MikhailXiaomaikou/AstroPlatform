@@ -197,9 +197,16 @@ export default function CosmologyMCMCPanel({ result }: { result: Record<string, 
             marginBottom: 8,
           }}
         >
+          {/* The fallback runs when a result carries no __exploratory_warning__
+              (the external Cobaya and compressed CMB-rotation paths), and it
+              said the median "may be discussed" -- the opposite of the
+              contract the reply gate enforces, which withholds any number
+              within 1% of a non-publication posterior (Codex review
+              2026-09-03). */}
           {exploratoryWarning
-            || "Exploratory chain: posterior median and 1σ range may be discussed, "
-              + "but MUST NOT be quoted as a published constraint or added to a bibcode pool."}
+            || "Exploratory chain: the posterior median and 1σ range stay in this card. "
+              + "They must not be repeated in the reply, quoted as a published "
+              + "constraint, or added to a bibcode pool."}
         </div>
       )}
 

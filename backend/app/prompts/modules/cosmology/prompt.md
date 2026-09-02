@@ -115,9 +115,12 @@ allows:
   reason the run gives you: read `publication_gate.reasons` / the run's
   warnings and summarize THOSE (off-anchor target, compressed or
   approximate likelihood, prior-dominance flag, too few independent
-  chains, ESS below its threshold, R-hat AT OR ABOVE its threshold — the
-  gate's own reason code is `rank_normalized_rhat_at_or_above_1.01`, so a
-  chain fails on R-hat by being too HIGH). Do not invent a generic low-ESS
+  chains, ESS below its threshold, R-hat AT OR ABOVE its threshold — a chain
+  fails on R-hat by being too HIGH, not too low. Name the direction in
+  words and do NOT repeat the numeric threshold or the reason code's
+  digits: the final gate withholds any number within 1% of a value under
+  `parameters`, and a chain's own R-hat sits right beside 1.01, so quoting
+  the threshold can replace the whole reply). Do not invent a generic low-ESS
   diagnosis; a chain can be demoted with ESS well above 400. Do not write
   the median, the interval, a rounded value ("around 68"), a range
   ("67–69"), or an Nσ offset derived from it: the final honesty gate

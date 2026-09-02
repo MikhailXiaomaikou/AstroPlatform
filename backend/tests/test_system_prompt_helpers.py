@@ -364,5 +364,9 @@ def test_prompt_states_the_rhat_failure_direction_correctly() -> None:
     from app.api.chat import SYSTEM_PROMPT as prompt
 
     assert "R-hat AT OR ABOVE its threshold" in prompt
-    assert "rank_normalized_rhat_at_or_above_1.01" in prompt
     assert "ESS or R-hat below threshold" not in prompt
+    # And the threshold's digits are NOT quoted back: a chain's own R-hat
+    # sits within 1% of 1.01, so repeating it can replace the whole reply
+    # (Codex review 2026-09-03).
+    assert "do NOT repeat the numeric threshold" in prompt
+    assert "rank_normalized_rhat_at_or_above_1.01" not in prompt
