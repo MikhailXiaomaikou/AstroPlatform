@@ -4825,6 +4825,66 @@
   margin: 0.5rem 0;
 }
 
+/* ── Research report markdown ──
+   The report renders inside `.chat-actions-list`, which is a SIBLING of
+   `.chat-message-content`, so none of the `.chat-message-content .md-…` rules
+   above reach it. These are the same rules scoped to the report container,
+   plus the matrix-table rules the chat scope never needed. The container
+   itself scrolls (inline `overflow: auto`), so a wide robustness matrix
+   scrolls inside the card instead of widening the page. */
+
+.research-report-markdown .md-h2 { font-size: 1.02rem; font-weight: 600; margin: 0.7rem 0 0.3rem; }
+.research-report-markdown .md-h3 { font-size: 0.94rem; font-weight: 600; margin: 0.6rem 0 0.2rem; }
+.research-report-markdown .md-h4 { font-size: 0.88rem; font-weight: 600; margin: 0.45rem 0 0.2rem; }
+
+.research-report-markdown .md-list {
+  margin: 0.25rem 0;
+  padding-left: 1.3rem;
+}
+
+.research-report-markdown .md-list li {
+  margin-bottom: 0.12rem;
+}
+
+.research-report-markdown .md-inline-code {
+  background: var(--color-hover);
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  font-family: "SF Mono", "Fira Code", monospace;
+  font-size: 0.85em;
+}
+
+.research-report-markdown .md-link {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+
+.research-report-markdown .md-hr {
+  border: none;
+  border-top: 1px solid var(--color-separator);
+  margin: 0.5rem 0;
+}
+
+.research-report-markdown .md-table {
+  border-collapse: collapse;
+  margin: 0.4rem 0;
+  font-size: 0.92em;
+}
+
+.research-report-markdown .md-table th,
+.research-report-markdown .md-table td {
+  border: 1px solid var(--color-separator);
+  padding: 0.2rem 0.45rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.research-report-markdown .md-table th {
+  background: var(--color-hover);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 /* ── Action cards ── */
 
 .chat-actions-list {

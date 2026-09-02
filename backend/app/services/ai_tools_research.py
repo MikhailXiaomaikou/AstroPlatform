@@ -41,8 +41,8 @@ RESEARCH_TOOL_SCHEMAS = [
             "ONLY USE for broad open-ended research turns that span >=3 distinct "
             "tool layers (e.g. 'design a study to test if dark energy is dynamical', "
             "'draft a paper section on the S8 tension'). Returns a research plan "
-            "(hypotheses, probes, datasets, models, gaps); does NOT produce posterior "
-            "numbers or fit results."
+            "(a rule-derived platform checklist, probes, datasets, models, gaps); does "
+            "NOT produce posterior numbers or fit results."
         ),
         "input_schema": {
             "type": "object",

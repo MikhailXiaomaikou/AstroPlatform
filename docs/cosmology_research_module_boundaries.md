@@ -26,7 +26,7 @@ surgery does NOT need to consolidate any of them.
 user research question (text)
         ↓
    plan_research_program  ←  research_program.py
-        ↓ produces hypotheses / probes / dataset candidates / experiment matrix
+        ↓ produces platform checklist (rule-derived) / probes / dataset candidates / experiment matrix
    run_research_matrix     ←  research_program.py  →  cosmology_likelihoods.run_likelihood_chain
         ↓ executes registered probes
    build_evidence_graph    ←  research_program.py
@@ -83,7 +83,7 @@ audit bundle.
 **Public API**:
 | Function | Input | Output |
 |---|---|---|
-| `plan_research_program(question)` | research question text | hypotheses, probes, dataset candidates, model families, experiment matrix, alpha-test protocol |
+| `plan_research_program(question)` | research question text | platform checklist (rule-derived; JSON key `hypotheses`), probes, dataset candidates, model families, experiment matrix, alpha-test protocol |
 | `run_research_matrix(matrix, …)` | experiment matrix from `plan_…` | per-cell run results, failure categories |
 | `build_evidence_graph(tool_results, final_reply)` | tool_results + final assistant text | nodes + edges connecting claims → results → tools → datasets |
 | `verify_research_facts(final_reply, claimable, tool_results)` | final reply + claim spec + tool_results | fact-check report (per-claim status + evidence path) |
