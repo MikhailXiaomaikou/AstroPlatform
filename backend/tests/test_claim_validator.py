@@ -2210,3 +2210,54 @@ def test_hypothesis_label_regex_is_linear_on_a_pathological_prefix() -> None:
     started = time.perf_counter()
     assert _HYPOTHESIS_LABEL_RE.search(pathological) is None
     assert time.perf_counter() - started < 0.5
+
+
+def test_hedge_phrase_does_not_launder_a_confirmed_conclusion() -> None:
+    """A hedge word plus a confirmation in the same sentence is an assertion,
+    not a hypothesis: "The forecast that X is resolved is now confirmed"
+    must not skip the attestation requirement (review 2026-09-03)."""
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    for sentence in (
+        "The forecast that the Hubble tension is resolved is now confirmed.",
+        "This is a hypothesis worth testing, and the Hubble tension is resolved "
+        "by a local void as now confirmed.",
+        "Hypothesis: confirmed - the Hubble tension is resolved by a local void.",
+        "假设：已被证实，哈勃张力被局部空洞解决。",
+    ):
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+    # Unrelated pre-existing gap, recorded so it is not mistaken for this
+    # change: the strong-conclusion patterns require "Hubble tension ...
+    # resolved" in that order, so "a local void resolving the Hubble tension"
+    # is not detected as a conclusion at all, with or without a confirmation.
+    assert (
+        _strong_conclusion_from_sentence(
+            "A local void resolving the Hubble tension is now confirmed."
+        )
+        is None
+    )
+
+    # A hedge without a confirmation is still a hedge.
+    for sentence in (
+        "Hypothesis: a local void resolves the Hubble tension.",
+        "The model forecast that the Hubble tension is resolved once calibration improves.",
+    ):
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+
+def test_hypothesis_label_accepts_nested_markdown_markers() -> None:
+    """``- **Hypothesis:** ...`` is the shape a model actually writes; missing
+    it turned an explicitly labelled hypothesis into a blocked conclusion."""
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    for sentence in (
+        "- **Hypothesis:** a local void resolves the Hubble tension.",
+        "* **Hypothesis:** a local void resolves the Hubble tension.",
+        "> **Hypothesis:** a local void resolves the Hubble tension.",
+        "1. **Hypothesis:** a local void resolves the Hubble tension.",
+        "- **Hypothesis**: a local void resolves the Hubble tension.",
+        "**Hypothesis:** a local void resolves the Hubble tension.",
+        "- Hypothesis: a local void resolves the Hubble tension.",
+    ):
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence

@@ -3639,11 +3639,27 @@ _ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE = re.compile(
 )
 # Sentence-initial "Hypothesis:" (optionally bold or as a list item) marks the
 # whole sentence as a labelled hypothesis, not a conclusion.
-# The bold marker is part of the literal alternative rather than an optional
+# The bold marker is part of each literal alternative rather than an optional
 # group between two \s* runs: the latter shape backtracks polynomially on
 # "hypothesis" followed by a long run of spaces (CodeQL py/polynomial-redos).
+# All three Markdown shapes a model actually writes are accepted, including a
+# bold span that swallows the colon inside a list item
+# ("- **Hypothesis:** ...", review 2026-09-03).
 _HYPOTHESIS_LABEL_RE = re.compile(
-    r"^[ \t]*(?:[-*>#]+[ \t]*)?(?:\*\*hypothesis\*\*|hypothesis)[ \t]*:", re.I
+    r"^[ \t]*(?:(?:[-*>#]+|\d+[.)])[ \t]*)?"
+    r"(?:\*\*[ \t]*hypothesis[ \t]*:[ \t]*\*\*"
+    r"|\*\*[ \t]*hypothesis[ \t]*\*\*[ \t]*:"
+    r"|hypothesis[ \t]*:)",
+    re.I,
+)
+# A hedge word does not hedge a sentence that also announces a confirmation:
+# "The forecast that X is resolved is now confirmed" is an assertion.  Checked
+# after the hedge patterns so it can only REMOVE an exemption.
+_CONFIRMED_ASSERTION_RE = re.compile(
+    r"\b(?:is|are|was|were|has\s+been|have\s+been|now)\s+(?:now\s+)?confirmed\b"
+    r"|\bconfirms?\s+that\b|\bconfirmed\s*[:\u2014-]"
+    r"|(?:得到|已被|已经?)证实|已证实",
+    re.I,
 )
 _ZH_HUBBLE_TENSION_RESOLUTION_RE = re.compile(
     r"(?:哈勃|H\s*0)张力[^。；;.!！？\n]{0,80}(?:已)?(?:解决|缓解|消除|解除|终结)|"
@@ -3886,9 +3902,14 @@ def _strong_conclusion_from_sentence(sentence: str) -> dict[str, str | None] | N
         not sentence
         or "?" in sentence
         or "？" in sentence
-        or _HYPOTHESIS_LABEL_RE.search(sentence)
-        or _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(sentence)
-        or _ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(sentence)
+        or (
+            not _CONFIRMED_ASSERTION_RE.search(sentence)
+            and (
+                _HYPOTHESIS_LABEL_RE.search(sentence)
+                or _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(sentence)
+                or _ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(sentence)
+            )
+        )
     ):
         return None
     kind: str | None = None
