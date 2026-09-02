@@ -1500,3 +1500,50 @@ def test_c2a_samples_carry_the_appendix_digest(tmp_path) -> None:
     )
     assert spec.appendix_sha256 == digests[0]
     assert digests[0][:12] in spec.key
+
+
+def test_resume_refuses_a_different_run_configuration(tmp_path) -> None:
+    """A resume that changes what the arm measures must not append silently.
+
+    Rerunning C2c at the same revision with ``--budget production`` after a
+    long-budget run skipped the completed long samples and appended
+    production ones, and the scorer pools both into one stratum because
+    budget is not part of its stratification (Codex review 2026-09-03).
+    """
+    import json
+
+    import pytest
+
+    samples = tmp_path / "samples.jsonl"
+    samples.write_text(
+        json.dumps({
+            "sample_key": "claude-fable-5|standard_astro|V03_03|1",
+            "arm": "C2c",
+            "budget_mode": "long",
+            "steering_disabled": False,
+            "exploration_phase_enabled": False,
+            "system_appendix_sha256": None,
+            "tasks_sha256": "abc",
+            "status": "completed",
+        }) + "\n",
+        encoding="utf-8",
+    )
+    same = {
+        "arm": "C2c",
+        "budget_mode": "long",
+        "steering_disabled": False,
+        "exploration_phase_enabled": False,
+        "system_appendix_sha256": None,
+        "tasks_sha256": "abc",
+    }
+    # Same configuration resumes.
+    evaluator._assert_resume_configuration_matches(samples, same)
+    # A different budget, appendix or task file does not.
+    for field, value in (
+        ("budget_mode", "default"),
+        ("system_appendix_sha256", "deadbeef"),
+        ("tasks_sha256", "def"),
+        ("steering_disabled", True),
+    ):
+        with pytest.raises(SystemExit):
+            evaluator._assert_resume_configuration_matches(samples, {**same, field: value})

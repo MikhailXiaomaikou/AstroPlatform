@@ -975,11 +975,17 @@
         "flag_off": [
           "build_cosmology_likelihood",
           "build_cosmology_likelihood",
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain",
+          "run_cosmology_likelihood_chain",
           "run_cosmology_likelihood_chain"
         ],
         "flag_on": [
           "build_cosmology_likelihood",
           "build_cosmology_likelihood",
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain",
+          "run_cosmology_likelihood_chain",
           "run_cosmology_likelihood_chain"
         ]
       }
@@ -1157,5 +1163,5 @@
       }
     }
   ],
-  "next_obvious_tools_note": "next_obvious_sequence is the human-readable step list. next_obvious_tools is the machine-comparable projection the scorer uses: bare tool names per flag state, derived from the sequence before freezing. Every tool named anywhere in a step is projected, including the second half of a chained step written 'build_cosmology_likelihood(...) -> run_cosmology_likelihood_chain'; a step prefixed 'flag_off:' or 'flag_on:' is projected into that flag state only. The scorer compares tool names, never the descriptive strings, so a step written as 'list_cosmology_datasets([...])' still matches a recorded tool_sequence entry."
+  "next_obvious_tools_note": "next_obvious_sequence is the human-readable step list. next_obvious_tools is the machine-comparable projection the scorer uses: bare tool names per flag state, derived from the sequence before freezing. Every tool named anywhere in a step is projected, including the second half of a chained step written 'build_cosmology_likelihood(...) -> run_cosmology_likelihood_chain'; a step prefixed 'flag_off:' or 'flag_on:' is projected into that flag state only. The scorer compares tool names, never the descriptive strings, so a step written as 'list_cosmology_datasets([...])' still matches a recorded tool_sequence entry. V03_06 is projected by hand rather than derived from the step text: its first step describes TWO ACT builds in one sentence and its third step says \"on each rebuilt leg\", so a per-name derivation undercounted it as two builds and one run. The registered projection is three builds and three runs."
 }

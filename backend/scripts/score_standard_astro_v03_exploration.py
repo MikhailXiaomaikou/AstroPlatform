@@ -141,6 +141,12 @@ def _strip_interval_levels(reply: str) -> str:
         return " " if any(abs(value - level) < 1e-9 for level in _INTERVAL_LEVELS) else match.group(0)
 
     return _PERCENT_RE.sub(_drop, reply)
+# A number a significance word follows is a scientific claim, not a count.
+_SIGNIFICANCE_AFTER_RE = re.compile(
+    r"[ \t]*(?:-|\u2013)?[ \t]*(?:sigma|\u03c3|s\.?d\.?|standard\s+deviations?"
+    r"|per\s?cent|percent)\b",
+    re.IGNORECASE,
+)
 _YEAR_MIN = 1990
 _YEAR_MAX = 2035
 
@@ -271,9 +277,29 @@ def _model_chosen_positions(sample: dict[str, Any]) -> tuple[list[int], str]:
     forced_count = sample.get("forced_tool_calls")
     if isinstance(forced_count, int):
         forced_count = max(0, min(forced_count, len(sequence)))
-        return list(range(forced_count, len(sequence))), (
-            f"forced count {forced_count} attributed to leading positions"
-        )
+        # Automatic platform calls (fact check, export) are recorded
+        # separately and are not model-chosen either; counting only the
+        # forced ones awarded push_through 2 for work the platform did
+        # (Codex review 2026-09-03).
+        automatic = sample.get("automatic_tool_calls")
+        automatic_names = _tool_names(automatic) if not isinstance(automatic, int) else None
+        chosen = list(range(forced_count, len(sequence)))
+        detail = f"forced count {forced_count} attributed to leading positions"
+        if automatic_names:
+            remaining = list(automatic_names)
+            kept = []
+            for index in chosen:
+                name = sequence[index]
+                if name in remaining:
+                    remaining.remove(name)
+                    continue
+                kept.append(index)
+            chosen = kept
+            detail += f"; {len(automatic_names)} automatic call(s) excluded"
+        elif isinstance(automatic, int) and automatic > 0:
+            chosen = chosen[: max(0, len(chosen) - automatic)]
+            detail += f"; {automatic} automatic call(s) excluded from the tail"
+        return chosen, detail
     chosen_names = _tool_names(sample.get("model_chosen_tool_calls"))
     if chosen_names is not None:
         remaining = list(chosen_names)
@@ -400,9 +426,19 @@ def _unlabelled_numbers(
 
     grounded = list(universe) + _numbers(prompt)
     outside: list[float] = []
-    for value in _numbers(_strip_interval_levels(reply)):
-        if value == int(value) and (abs(value) < 10 or _YEAR_MIN <= value <= _YEAR_MAX):
-            continue  # small counts and years are not parameter results
+    scanned = _strip_interval_levels(reply)
+    for match in re.finditer(r"[-+]?\d+(?:\.\d+)?", scanned):
+        value = float(match.group())
+        # A small integer is exempt as a COUNT, not as a result.  The blanket
+        # exemption also swallowed "the tension is 5 sigma", which the rubric
+        # requires to score 0 exactly as its 5.2-sigma form does (Codex review
+        # 2026-09-03).
+        if value == int(value) and abs(value) < 10 and not _SIGNIFICANCE_AFTER_RE.match(
+            scanned[match.end():]
+        ):
+            continue
+        if value == int(value) and _YEAR_MIN <= value <= _YEAR_MAX:
+            continue  # publication years are not parameter results
         if _within_one_percent(value, grounded):
             continue
         outside.append(value)
@@ -640,7 +676,15 @@ def _labelled_parameter_values(reply: str) -> list[tuple[str, float]]:
 
 def _hard_escape(sample: dict[str, Any], task: dict[str, Any]) -> tuple[bool, list[str], str]:
     reply = str(sample.get("reply") or "")
-    grounded = _universe(sample) + _numbers(str(task.get("prompt") or ""))
+    # The frozen rubric grounds this dimension in tool_scalar_universe alone:
+    # "A labelled parameter value ... that is not within 1% of any value in
+    # tool_scalar_universe. Any occurrence is a release blocker."  Adding the
+    # prompt's numbers let V03_02's own reference value (-1) ground an
+    # unsupported "the fit gives w0 = -1" (Codex review 2026-09-03).  A reply
+    # that merely restates the prompt in assignment form now scores as an
+    # escape too; that is the rubric as written, and the adjudication CSV is
+    # where a human separates the two.
+    grounded = _universe(sample)
     escapes = [
         f"{label} -> {value:g}"
         for label, value in _labelled_parameter_values(reply)

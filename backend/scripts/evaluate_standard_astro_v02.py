@@ -304,6 +304,44 @@ def _sample_key(
     return key
 
 
+# Switches that DEFINE what a sample measures.  A resume that changes one of
+# them appends samples the scorer cannot tell apart -- rerunning C2c at the
+# same revision with --budget production after a long-budget run skipped the
+# completed long samples and pooled production ones into the same stratum
+# (Codex review 2026-09-03).  Recorded on every sample, compared here.
+_RUN_DEFINING_FIELDS = (
+    "arm",
+    "budget_mode",
+    "steering_disabled",
+    "exploration_phase_enabled",
+    "system_appendix_sha256",
+    "tasks_sha256",
+)
+
+
+def _assert_resume_configuration_matches(path: Path, expected: dict[str, object]) -> None:
+    """Refuse to append to a file recorded under a different configuration."""
+    if not path.exists():
+        return
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            sample = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        for field in _RUN_DEFINING_FIELDS:
+            if field not in sample or field not in expected:
+                continue
+            if sample[field] != expected[field]:
+                raise SystemExit(
+                    f"{path} line {line_number} was recorded with {field}="
+                    f"{sample[field]!r}, but this run uses {expected[field]!r}. "
+                    "Resuming would append samples the scorer pools into one "
+                    "stratum. Use a different --output, or --no-resume."
+                )
+
+
 def _completed_keys(path: Path) -> set[str]:
     if not path.exists():
         return set()
@@ -954,17 +992,31 @@ async def main() -> None:
     # An explicit --repeats overrides the registered per-class counts.
     repeats_by_task = {} if args.repeats is not None else _registered_repeats(args.tasks_path, tasks)
     expanded_tasks = _expand_variants(tasks)
+    _appendix_text = (
+        args.system_appendix.read_text(encoding="utf-8")
+        if args.system_appendix is not None
+        else None
+    )
+    _appendix_sha = (
+        hashlib.sha256(_appendix_text.encode("utf-8")).hexdigest()
+        if _appendix_text is not None
+        else None
+    )
+    if not args.no_resume:
+        _assert_resume_configuration_matches(args.output, {
+            "arm": args.arm,
+            "budget_mode": _workflow_budget_for(args.budget).get("mode"),
+            "steering_disabled": args.steering == "off",
+            "exploration_phase_enabled": bool(args.exploration_phase),
+            "system_appendix_sha256": _appendix_sha,
+            "tasks_sha256": _sha256_of(args.tasks_path),
+        })
     completed = set() if args.no_resume else _completed_keys(args.output)
     _install_llm_call_counter()
 
     git_rev = _git_rev()
     # _resolve_arm already refused this run if the steering switch is missing.
     steering_off = args.steering == "off"
-    _appendix_text = (
-        args.system_appendix.read_text(encoding="utf-8")
-        if args.system_appendix is not None
-        else None
-    )
     options = RunOptions(
         budget=args.budget,
         steering_off=steering_off,
@@ -973,11 +1025,7 @@ async def main() -> None:
         system_appendix_path=(
             str(args.system_appendix) if args.system_appendix is not None else None
         ),
-        system_appendix_sha256=(
-            hashlib.sha256(_appendix_text.encode("utf-8")).hexdigest()
-            if _appendix_text is not None
-            else None
-        ),
+        system_appendix_sha256=_appendix_sha,
         lane_override=bool(args.lane_override),
         exploration_phase=bool(args.exploration_phase),
         # Offline pre-gate drafts: evaluation-only, never served, never
