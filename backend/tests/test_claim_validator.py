@@ -2431,3 +2431,54 @@ def test_the_hedge_decision_is_made_in_the_conclusion_clause() -> None:
     ]
     for sentence in hedged:
         assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+
+def test_a_parenthetical_and_an_unpunctuated_coordination_are_read_correctly() -> None:
+    """Two more clause-boundary errors, both false kills (Codex review 2026-09-03).
+
+    A comma pair with no coordinating word is a parenthetical, not a clause
+    boundary: "The Hubble tension may, after recalibration, be resolved" was
+    reduced to " be resolved by a local void" and lost its own hedge.  The
+    hedge pattern also could not span the parenthetical -- a gap present on
+    main too -- so the modal now tolerates one interposed comma phrase.
+
+    And two propositions can be joined with no punctuation at all: "The
+    calibration is confirmed and our hypothesis is that X" stayed one clause,
+    so the confirmation of the premise cancelled the hedge on the hypothesis.
+    """
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    hedged = [
+        "The Hubble tension may, after recalibration, be resolved by a local void.",
+        "The Hubble tension may be resolved by a local void.",
+        "The calibration is confirmed and our hypothesis is that a local void "
+        "resolves the Hubble tension.",
+        "The calibration is confirmed, and the Hubble tension may be resolved.",
+    ]
+    for sentence in hedged:
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+    asserted = [
+        # The same parenthetical around an ASSERTION is still a conclusion.
+        "The Hubble tension is, after recalibration, resolved by a local void.",
+        "This is a hypothesis worth testing, and the Hubble tension is resolved "
+        "by a local void as now confirmed.",
+        "The Hubble tension is resolved by a local void.",
+    ]
+    for sentence in asserted:
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+
+def test_the_hedge_pattern_stays_linear_with_a_parenthetical() -> None:
+    """The interposed group is comma-anchored, so nothing splits ambiguously."""
+    import time
+
+    from app.services.claim_validator import _NONASSERTIVE_COSMOLOGY_CONTEXT_RE
+
+    timings = []
+    for size in (4000, 16000, 64000):
+        probe = "may" + " " * size + "," + "x" * size + "," + " " * size + "z"
+        started = time.perf_counter()
+        _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(probe)
+        timings.append(time.perf_counter() - started)
+    assert timings[-1] < 1.0

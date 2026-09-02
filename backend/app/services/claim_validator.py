@@ -3612,6 +3612,12 @@ _NONASSERTIVE_COSMOLOGY_CONTEXT_RE = re.compile(
     # the sentence ("... evolves, and this result should appear in the
     # abstract") must not wash an assertive conclusion.
     r"(?:may|might|could|would|should)(?:\s+not)?"
+    # An interposed parenthetical is part of the same hedge: "may, after
+    # recalibration, be resolved" is "may be resolved" (Codex review
+    # 2026-09-03; a pre-existing gap, present on main too).  Comma-anchored
+    # and bounded, so nothing here can be split ambiguously with the
+    # whitespace runs around it.
+    r"(?:\s*,[^,;:\n]{0,40},)?"
     r"(?:\s+(?:be|been|have|still|also|yet|then|instead|plausibly|possibly|"
     r"eventually|partially|fully))*"
     r"\s+(?:evolv\w*|resolv\w*|alleviat\w*|eliminat\w*|indicat\w*|"
@@ -3944,15 +3950,40 @@ def _validated_conclusion_attestations(tool_results: Any) -> dict[str, dict[str,
 # A conclusion sits in one clause of its sentence.  Splitting on these marks
 # is only used to decide WHICH clause an explicit denial governs; it never
 # decides whether a conclusion exists.
-_CONCLUSION_CLAUSE_BREAK_RE = re.compile(r"[,;:\u2014\uff0c\uff1b\uff1a]")
+# Clause boundaries for the hedge decision.  Punctuation, and the
+# coordinating words that join two propositions without any: "The
+# calibration is confirmed and our hypothesis is that X" is two
+# propositions and was being read as one, so the confirmation of the first
+# cancelled the hedge on the second (Codex review 2026-09-03).
+_CONCLUSION_CLAUSE_BREAK_RE = re.compile(
+    r"[,;:\u2014\uff0c\uff1b\uff1a]"
+    r"|\b(?:and|but|while|whereas|although|though|however|so\s+that|yet)\b",
+    re.IGNORECASE,
+)
+# A comma pair with no coordinating word between them is a parenthetical, not
+# a clause boundary: "The Hubble tension may, after recalibration, be resolved
+# by a local void" was reduced to " be resolved by a local void" and lost its
+# own hedge (Codex review 2026-09-03).
+_PARENTHETICAL_RE = re.compile(
+    r",[^,;:\n]{0,60},$"
+)
 
 
 def _clause_bounds(sentence: str, start: int, end: int) -> tuple[int, int]:
     """Offsets of the clause of ``sentence`` containing the span ``start:end``."""
     left = 0
+    previous_left = 0
     for mark in _CONCLUSION_CLAUSE_BREAK_RE.finditer(sentence):
         if mark.end() > start:
             break
+        # A comma that CLOSES a parenthetical is not a clause start: the
+        # clause reverts to where it began before the parenthetical opened.
+        head = sentence[:mark.end()]
+        parenthetical = _PARENTHETICAL_RE.search(head)
+        if parenthetical is not None and parenthetical.start() + 1 >= left:
+            left = previous_left
+            continue
+        previous_left = left
         left = mark.end()
     right = len(sentence)
     after = _CONCLUSION_CLAUSE_BREAK_RE.search(sentence, end)
