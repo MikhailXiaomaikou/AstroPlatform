@@ -2360,3 +2360,38 @@ def test_every_packaged_artifact_is_marked_unverified_not_only_the_fact_check() 
             else len(_json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8"))
         )
         assert entry["bytes"] == expected, entry["path"]
+
+
+def test_displayed_probes_come_from_the_server_plan_record() -> None:
+    """``_trusted_tool_results`` authenticates the LIST, not the plan argument.
+
+    A turn that already ran ``plan_research_program`` could still hand
+    ``export_research_report`` a different ``research_plan`` and have its
+    probes rendered into the audit report as if they had been planned (Codex
+    review 2026-09-03).
+    """
+    from app.services.research_program import export_research_report
+
+    report = export_research_report(
+        research_plan={
+            "research_question": "probe",
+            "required_probes": ["fabricated_probe"],
+            "model_families": ["fabricated_model"],
+        },
+        tool_results=[{
+            "tool": "plan_research_program",
+            "result": {
+                "success": True,
+                "research_plan": {
+                    "research_question": "probe",
+                    "required_probes": ["registered_probe"],
+                    "model_families": ["lcdm"],
+                },
+            },
+        }],
+    )
+    markdown = report["markdown"]
+    assert "registered_probe" in markdown
+    assert "fabricated_probe" not in markdown
+    assert "lcdm" in markdown
+    assert "fabricated_model" not in markdown

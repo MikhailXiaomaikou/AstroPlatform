@@ -1273,12 +1273,21 @@ def export_research_report(
         plan_lines.append(
             "- No checklist was supplied, and no plan_research_program record backs this report."
         )
+    # The server-side plan record wins over the caller's argument wherever it
+    # exists.  `_trusted_tool_results` authenticates the tool-result LIST, not
+    # the `research_plan` argument, so a turn that already ran
+    # plan_research_program could still have arbitrary probes and model
+    # families rendered into an audit report (Codex review 2026-09-03).
     plan_lines.extend(["", "### Required probes"])
-    probes = plan.get("required_probes")
+    probes = trusted_plan.get("required_probes") if trusted_plan else None
+    if not isinstance(probes, list):
+        probes = plan.get("required_probes")
     probe_items = [_report_safe_text(entry) for entry in probes if entry] if isinstance(probes, list) else []
     plan_lines.append("- " + (", ".join(probe_items) if probe_items else "not recorded"))
     plan_lines.extend(["", "### Model families"])
-    models = plan.get("model_families")
+    models = trusted_plan.get("model_families") if trusted_plan else None
+    if not isinstance(models, list):
+        models = plan.get("model_families")
     model_items = [_report_safe_text(entry) for entry in models if entry] if isinstance(models, list) else []
     plan_lines.append("- " + (", ".join(model_items) if model_items else "not recorded"))
 
