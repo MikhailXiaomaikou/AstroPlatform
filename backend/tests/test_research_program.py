@@ -2312,3 +2312,51 @@ def test_packaged_fact_check_never_ships_a_caller_supplied_verdict() -> None:
     assert entry["bytes"] == len(
         __import__("json").dumps(packaged, ensure_ascii=False).encode("utf-8")
     )
+
+
+def test_every_packaged_artifact_is_marked_unverified_not_only_the_fact_check() -> None:
+    """references.bib and reproducibility_manifest.json are source_key payloads too.
+
+    A consumer writes each of them out as a standalone file, and on the
+    caller-supplied-unverified path they looked like provenance records from a
+    run that never happened; only the fact check carried a marker (Codex
+    review 2026-09-03).
+    """
+    from app.services import ai_tools_research
+
+    out = ai_tools_research._exec_export_research_report({
+        "research_plan": {"research_question": "probe"},
+        "_turn_tool_results": [],
+        "tool_results": [{
+            "tool": "search_literature",
+            "result": {
+                "success": True,
+                "results": [{
+                    "bibcode": "2024ApJ...999X..99A",
+                    "title": "Fake paper",
+                    "author": ["A"],
+                    "year": 2024,
+                }],
+                "fact_check_report": {"status": "passed"},
+            },
+        }],
+    })
+    assert out["tool_results_source"] == "caller_supplied_unverified"
+    assert out["bibtex"].startswith("% UNVERIFIED DRAFT")
+    manifest = out["reproducibility_manifest"]
+    assert manifest["status"] == "not_verifiable_this_turn"
+    assert manifest["__do_not_claim__"] is True
+    assert "caller_supplied_unverified" in manifest
+    # Every entry states the serialization its byte count assumes, and the
+    # count still matches the payload after all of these mutations.
+    import json as _json
+
+    for entry in out["report_package"]["files"]:
+        payload = out[entry["source_key"]]
+        assert entry["serialization"]
+        expected = (
+            len(payload.encode("utf-8"))
+            if isinstance(payload, str)
+            else len(_json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+        )
+        assert entry["bytes"] == expected, entry["path"]

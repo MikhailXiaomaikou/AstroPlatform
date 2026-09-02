@@ -154,8 +154,16 @@ export default function MarkdownText({ content }: { content: string }) {
         i++;
       }
       if (tableLines.length >= 2) {
+        // Split on UNESCAPED pipes only. The backend escapes a pipe inside a
+        // cell as a backslash-pipe (research_program._md_table_cell) so a
+        // dataset key or error text containing one cannot break the row;
+        // splitting on every pipe undid that escaping and shifted every later
+        // cell by one column (Codex review 2026-09-03).
         const parseRow = (row: string) =>
-          row.split("|").slice(1, -1).map((cell) => cell.trim());
+          row
+            .split(/(?<!\\)\|/)
+            .slice(1, -1)
+            .map((cell) => cell.trim().replace(/\\\|/g, "|"));
         const headerCells = parseRow(tableLines[0]);
         // tableLines[1] is the separator row — skip it
         const bodyRows = tableLines.slice(2).map(parseRow);

@@ -1612,11 +1612,22 @@ def export_research_report(
     return refresh_report_package_sizes(result)
 
 
+# A JSON entry's byte count is only checkable against a stated serialization:
+# the caller receives the OBJECT, not the string counted here, and a different
+# separator choice writes a different number of bytes (Codex review
+# 2026-09-03).  Each entry names the serialization its count assumes.
+_REPORT_PACKAGE_JSON_SERIALIZATION = (
+    "json.dumps(obj, ensure_ascii=False, sort_keys=True), utf-8"
+)
+_REPORT_PACKAGE_TEXT_SERIALIZATION = "utf-8 text, verbatim"
+
+
 def _report_package_bytes(value: Any) -> int:
     """Serialized size of one package file, from the result field holding it.
 
-    Markdown/BibTeX fields ship as-is; the ``.json`` files are the very
-    serialization used here, so the count matches what a caller writes to disk.
+    Markdown/BibTeX fields ship as-is.  A ``.json`` file is counted under
+    ``_REPORT_PACKAGE_JSON_SERIALIZATION``, which each package entry names, so
+    a caller can reproduce the number exactly instead of assuming it.
     """
 
     if isinstance(value, str):
@@ -1647,7 +1658,13 @@ def refresh_report_package_sizes(result: dict[str, Any]) -> dict[str, Any]:
         source_key = entry.get("source_key")
         if not isinstance(source_key, str) or source_key not in result:
             continue
-        entry["bytes"] = _report_package_bytes(result[source_key])
+        payload = result[source_key]
+        entry["bytes"] = _report_package_bytes(payload)
+        entry["serialization"] = (
+            _REPORT_PACKAGE_TEXT_SERIALIZATION
+            if isinstance(payload, str)
+            else _REPORT_PACKAGE_JSON_SERIALIZATION
+        )
     return result
 
 

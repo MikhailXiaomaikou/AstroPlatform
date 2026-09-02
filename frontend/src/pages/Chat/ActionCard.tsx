@@ -96,12 +96,17 @@ export function VisibleResearchReport({
       tool: String(action.action || ""),
       result: resultForAction(action, index, actionResults),
     }))
-    .find(({ tool, result }) => (
+    // The LAST successful export, not the first: a turn can export a draft
+    // and then export again after further verification, and showing the
+    // earlier one presents superseded content as the report (Codex review
+    // 2026-09-03).
+    .filter(({ tool, result }) => (
       tool === "export_research_report"
       && result
       && typeof result.markdown === "string"
       && result.markdown.trim() !== ""
-    ));
+    ))
+    .at(-1);
 
   if (!primary?.result) return null;
 

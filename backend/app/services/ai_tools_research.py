@@ -314,6 +314,32 @@ def _stamp_evidence_source(out: dict, warnings: list[str], source: str) -> dict:
                 # the server's own verdict in a standalone file.
                 "caller_supplied_unverified": _fact,
             }
+        # Every packaged artifact, not just the fact check.  references.bib
+        # and reproducibility_manifest.json are `source_key` payloads too, so
+        # a consumer writes them out as standalone files that looked like
+        # provenance records from a run that never happened (Codex review
+        # 2026-09-03).  The manifest gets the same explicit marker as the
+        # fact check; the BibTeX file gets a comment header, which is the
+        # only in-band marker its format has.
+        _manifest = out.get("reproducibility_manifest")
+        if _manifest is not None:
+            out["reproducibility_manifest"] = {
+                "status": "not_verifiable_this_turn",
+                "__do_not_claim__": True,
+                "note": (
+                    "No tool ran in this turn. Nothing below was produced or "
+                    "checked by the server; it is the caller's own payload, "
+                    "preserved verbatim under caller_supplied_unverified."
+                ),
+                "caller_supplied_unverified": _manifest,
+            }
+        _bibtex = out.get("bibtex")
+        if isinstance(_bibtex, str) and not _bibtex.startswith("% UNVERIFIED"):
+            out["bibtex"] = (
+                "% UNVERIFIED DRAFT - no tool ran in this turn. These entries "
+                "come from caller-supplied data the server could not check "
+                "and must not be cited.\n" + _bibtex
+            )
         # The banner grew two of the fields `report_package.files[].source_key`
         # names, so the sizes computed inside export_research_report are now
         # short by its length. Recompute them from the mutated fields.
