@@ -31,8 +31,11 @@ The root `AGENTS.md` delegates here so agent instructions do not drift.
 - Instrument-first: no behaviour change merges while the Daily blind suite
   or the Weekly Scientific Validation workflow is red, or while HEAD has
   no rerun baseline
-  (`.local/standard-astro-v02-natural/rerun_<rev>_summary.json`). At
-  session start run `gh run list --workflow=daily.yml --limit 3` and
+  (`.local/standard-astro-v02-natural/rerun_<rev>_summary.json`). The one
+  exception is the change that repairs the failing instrument itself (the
+  defect a red suite is red for): it merges on focused tests plus the full
+  deterministic suite, and the suite's next scheduled run is its
+  acceptance. At session start run `gh run list --workflow=daily.yml --limit 3` and
   `gh run list --workflow='Weekly Scientific Validation' --limit 3`; a red
   scheduled suite is P0 before any other work, and an identical error
   repeated across two runs is a product defect that gets an issue the

@@ -157,7 +157,7 @@ git push --force-with-lease origin <branch> && gh pr checks <n> --watch
 | ARCHITECTURE.md | `:122-123` | 写明 hypotheses 是关键词模板（`_hypotheses_from_question`, research_program.py:1683） | `git diff --check` |
 | | `:489` | "Wiring into chat.py is a follow-up" → 已接入 `agent_runtime/tool_execution.py` | |
 | | `:627` | 改为"编排器每轮跑一个工具回路；专家表用于构造每轮运行时上下文（工具过滤 + 专家提示）；`chat.py:1543-1605` 串行交接只在 `build_runtime_context` 返回多个 agent 时运行"。**是否真会多 agent 未核实**：`rg -n "agent_names" backend/app/ai/orchestrator.py`，若确认从不发生则写明 | |
-| SKILL.md | `.claude/skills/cosmology-smoke/SKILL.md:43` | `== "publication"` → `in {"publication","exploratory"}`（压缩链在 `cosmology_likelihoods/verification.py:292-296` 必带两条降级理由，`publication` 不可达） | 手动跑 skill |
+| SKILL.md | `.claude/skills/cosmology-smoke/SKILL.md:43` | `== "publication"` → `== "exploratory"`（压缩链在 `cosmology_likelihoods/verification.py:292-296` 必带两条降级理由，`publication` 不可达；断言 exploratory 而不是二选一，否则会掩盖 tier 回归） | 手动跑 skill |
 | HONESTY:79-80 | "16 cases" → "18 cases" | 由 0.3 测试覆盖 | |
 | v02 副本未跟踪文件 | `docs/research/demos/…html`、`docs/research/standard_astro_v02_experiment_reports/{demo,evidence}/…`（含 99.045% 的确定性重放专家包） | **移不删**：`mkdir -p .local/retracted-2026-08-04-deterministic-pack && mv docs/research/demos docs/research/standard_astro_v02_experiment_reports/demo docs/research/standard_astro_v02_experiment_reports/evidence .local/retracted-2026-08-04-deterministic-pack/`（`.local/` 在 `.gitignore:62`，可 mv 回去） | `git -C "<v02>" status --short` 下 `docs/research` 无 `??` |
 
