@@ -56,7 +56,11 @@ _APPROVAL_LINE_RE = re.compile(
     # 2026-09-03).  It consumes a fixed three-or-four character token, so it
     # adds no new way to split a whitespace run.
     r"(?:[-*>#][ \t]*|[0-9]{1,3}[.)][ \t]*|\[[ \txX]?\][ \t]*){0,8}"
-    r"(?:\*\*)?)"
+    # A bold span can wrap the verdict WORD alone: "**APPROVED** by
+    # reviewer: ..." consumed the opening ** and then the closing ** stopped
+    # the lookahead from matching (Codex review 2026-09-03).  The emphasis
+    # markers inside the phrase are skipped when the phrase is tested.
+    r"(?:\*\*|__|\*)?)"
     # The platform's OWN vocabulary counts too.  The review lane stores the
     # verdict as review_status == "APPROVED" / decision == "APPROVED"
     # (services/union3_research_loop.py), so "Review status: APPROVED" and
@@ -64,10 +68,12 @@ _APPROVAL_LINE_RE = re.compile(
     # unmarked (Codex review 2026-09-03).  A bare "APPROVED" counts only when
     # a separator follows it, so ordinary prose beginning with the word is
     # left alone.
-    r"(?=(?:draft[ \t]+claim\b|approved[ \t]+by\b|reviewer[ \t]+approved\b"
-    r"|(?:review[ \t_-]*)?status[ \t]*:[ \t]*approved\b"
-    r"|decision[ \t]*:[ \t]*approved\b"
-    r"|approved[ \t]*[:\u2014-]))"
+    r"(?=(?:draft[ \t]*(?:\*\*|__|\*)?[ \t]+claim\b"
+    r"|approved(?:\*\*|__|\*)?[ \t]+by\b"
+    r"|reviewer(?:\*\*|__|\*)?[ \t]+approved\b"
+    r"|(?:review[ \t_-]*)?status[ \t]*:[ \t]*(?:\*\*|__|\*)?approved\b"
+    r"|decision[ \t]*:[ \t]*(?:\*\*|__|\*)?approved\b"
+    r"|approved(?:\*\*|__|\*)?[ \t]*[:\u2014-]))"
 )
 _MARKER = "NOT APPROVED - "
 
