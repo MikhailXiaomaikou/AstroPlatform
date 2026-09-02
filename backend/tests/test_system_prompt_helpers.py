@@ -318,3 +318,36 @@ def test_exploratory_diagnostic_rule_is_sourced_from_the_run() -> None:
     ) not in prompt
     # The field name itself still must not be printed to the user.
     assert "__exploratory_warning__" in prompt
+
+
+def test_prompt_warns_that_a_promoted_rerun_still_cannot_quote_digits() -> None:
+    """The publication branch invited a number the gate then replaces.
+
+    Step 3's required retry leaves the first, non-publication posterior in
+    the same turn's results, and successive chains on the same data usually
+    land within 1% of each other, so `nonpublication_posterior_values` reads
+    a promoted median as the withheld one (measured: a promoted 67.35 against
+    a withheld 67.32 returns [67.35]).  The prompt now says so instead of
+    inviting the blocked sentence (Codex review 2026-09-03).
+    """
+    from app.api.chat import SYSTEM_PROMPT as prompt
+
+    assert "PROMOTED RERUN" in prompt
+    assert "reached publication tier" in prompt
+
+
+def test_promoted_rerun_digits_are_still_withheld_in_a_mixed_turn() -> None:
+    """The measurement behind the prompt rule above, pinned so it cannot drift."""
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    mixed = [
+        {"tool": "run_cosmology_likelihood_chain", "result": {
+            "success": True, "publication_ready": False, "chain_tier": "exploratory",
+            "parameters": {"H0": {"median": 67.32, "std": 0.60}}}},
+        {"tool": "run_cosmology_likelihood_chain", "result": {
+            "success": True, "publication_ready": True, "chain_tier": "publication",
+            "parameters": {"H0": {"median": 67.35, "std": 0.42}}}},
+    ]
+    assert nonpublication_posterior_values(
+        "The rerun is publication-ready: H0 = 67.35 +/- 0.42 km/s/Mpc.", mixed
+    ) == [67.35]

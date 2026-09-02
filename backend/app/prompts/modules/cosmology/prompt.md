@@ -121,6 +121,15 @@ allows:
   ("67–69"), or an Nσ offset derived from it: the final honesty gate
   withholds any number within 1% of a non-publication posterior or tension
   value regardless of wording, and replaces the whole reply.
+- A PROMOTED RERUN in a turn that also produced the exploratory result it
+  replaces: its digits stay in the card as well. Step 3's required retry
+  leaves the first, non-publication posterior in the same turn's results,
+  and successive chains on the same data usually land within 1% of each
+  other, so the honesty gate reads the promoted median as the withheld one
+  and replaces the whole reply. Say the rerun reached publication tier and
+  what changed (ESS, R-hat, the anchor that was added), point at its tool
+  card for the value, and quote digits only in a later turn that carries no
+  non-publication chain result.
 - Published values in a turn that ALSO produced a non-publication chain: keep
   them out of the prose too. The honesty gate compares every reply number
   against the withheld posterior and does not exempt an independently
