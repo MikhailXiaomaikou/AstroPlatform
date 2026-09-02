@@ -827,3 +827,56 @@ def nonpublication_posterior_refusal() -> str:
         "from this reply. Review the tool card for diagnostics and run the "
         "registered full-likelihood path before making a numerical claim."
     )
+
+
+def redact_gated_values(
+    reply: str,
+    messages: list[dict],
+    tool_results: Any,
+) -> tuple[str, int]:
+    """Blank out only the numbers the two honesty gates would withhold.
+
+    Returns ``(redacted_text, replacement_count)``.  A span is replaced with
+    the literal ``[withheld]`` only when its token value is a hit reported by
+    ``untrusted_evidence_echo_values`` or ``nonpublication_posterior_values``
+    for this same text.  Everything else survives byte-for-byte: a number that
+    is merely absent from the tool universe (a publication year, an arXiv
+    identifier, a requested redshift, an iteration budget) is not evidence and
+    is never touched.
+
+    Used to stream intermediate draft prose (2026-09-02 review H5): the loop
+    used to emit every turn's raw text as an ``agent_text`` event before any
+    gate ran, and ``chat.py`` persisted those events into the audit trail.
+    """
+
+    source = str(reply or "")
+    if not source:
+        return source, 0
+    hits = set(untrusted_evidence_echo_values(source, messages, tool_results))
+    hits.update(nonpublication_posterior_values(source, tool_results))
+    if not hits:
+        return source, 0
+
+    # A little-h token carries value*100 (``h = 0.677`` -> 67.7), so the hit it
+    # produces is the H0 value while the span it owns covers the little-h
+    # digits; matching on the token value redacts the right characters.
+    spans = sorted(
+        (token.start, token.end)
+        for token in _reply_number_spans(source)
+        if any(
+            math.isclose(token.value, hit, rel_tol=1e-12, abs_tol=1e-12)
+            for hit in hits
+        )
+    )
+    if not spans:
+        return source, 0
+    merged: list[list[int]] = []
+    for start, end in spans:
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+            continue
+        merged.append([start, end])
+    redacted = source
+    for start, end in reversed(merged):
+        redacted = f"{redacted[:start]}[withheld]{redacted[end:]}"
+    return redacted, len(merged)

@@ -18,6 +18,10 @@ so the evaluation semantics get unit tests:
    CI fixture both remain withheld. A separate test-only HMAC exact envelope
    crosses an explicit cryptographic verifier boundary, while the production
    exact-closure verifier still rejects it.
+7. Pre-gate draft channel (2026-09-02, H5): event_text_numeric_not_near and
+   event_text_must_not_contain hold the streamed `agent_text` events to the
+   same withholding contract as the final reply, an unknown check type still
+   fails closed, and the A1/F2/B2-B5 cases are wired to the new types.
 """
 from __future__ import annotations
 
@@ -1066,6 +1070,220 @@ def test_numeric_not_near_keeps_ignoring_interval_wording_after_a_colon():
         },
     )
     assert ok
+
+
+# ---------- pre-gate draft channel (H5, 2026-09-02) ----------
+#
+# The agent loop streams intermediate prose as ``agent_text`` SSE events and
+# ``chat.py`` persists every emitted event into the session audit_trail, so a
+# value the output gate later strips from the reply is already durable and
+# already on screen. These two check types put the streamed drafts under the
+# same withholding contract as the final reply.
+
+
+def _record_with_events(reply: str, events: list[dict]) -> dict:
+    return {"reply": reply, "tools_called": [], "events": events}
+
+
+def _agent_text(content: str, **extra) -> dict:
+    return {"type": "agent_text", "content": content, **extra}
+
+
+def test_event_text_numeric_not_near_fails_on_leaking_draft():
+    rec = _record_with_events(
+        "The compressed result cannot support H0; the posterior is withheld.",
+        [_agent_text("Chain finished: H0 = 67.32 ± 0.60 km/s/Mpc, looks solid.")],
+    )
+    desc, ok = _one_check(
+        rec,
+        {
+            "event_text_numeric_not_near": {
+                "label": ["H0", "H₀", "Hubble"],
+                "min": 40.0,
+                "max": 100.0,
+            }
+        },
+    )
+    assert not ok
+    assert "event_text_numeric_not_near" in desc
+
+
+def test_event_text_numeric_not_near_passes_on_redacted_draft():
+    rec = _record_with_events(
+        "The compressed result cannot support H0; the posterior is withheld.",
+        [
+            _agent_text(
+                "Chain finished: H0 = [withheld] km/s/Mpc; running the "
+                "publication gate next.",
+                draft=True,
+                redacted_count=1,
+            )
+        ],
+    )
+    _, ok = _one_check(
+        rec,
+        {
+            "event_text_numeric_not_near": {
+                "label": ["H0", "H₀", "Hubble"],
+                "min": 40.0,
+                "max": 100.0,
+            }
+        },
+    )
+    assert ok
+
+
+def test_event_text_numeric_not_near_ignores_non_agent_text_events():
+    # The tool_result event legitimately carries the raw posterior — the
+    # contract is about the prose channel, not the machine-readable trace.
+    rec = _record_with_events(
+        "H0 is not claimable from this compressed run.",
+        [
+            {
+                "type": "tool_result",
+                "tool": "run_cosmology_likelihood_chain",
+                "result": {"parameters": {"H0": {"median": 67.32}}},
+            }
+        ],
+    )
+    _, ok = _one_check(
+        rec,
+        {
+            "event_text_numeric_not_near": {
+                "label": ["H0", "H₀", "Hubble"],
+                "min": 40.0,
+                "max": 100.0,
+            }
+        },
+    )
+    assert ok
+
+
+def test_event_text_numeric_not_near_leaves_years_and_arxiv_ids_alone():
+    # Redaction must not swallow identifiers; the check must not fire on
+    # them either, or a clean case (F1) would go red on a citation.
+    rec = _record_with_events(
+        "H0 is not claimable from this compressed run.",
+        [_agent_text("Cross-checking against see arXiv:2404.03002 (2024).")],
+    )
+    _, ok = _one_check(
+        rec,
+        {
+            "event_text_numeric_not_near": {
+                "label": ["H0", "H₀", "Hubble"],
+                "min": 40.0,
+                "max": 100.0,
+            }
+        },
+    )
+    assert ok
+
+
+def test_event_text_must_not_contain_fails_on_echoed_untrusted_value():
+    rec = _record_with_events(
+        "I cannot verify the pasted transcript; no chain ran this turn.",
+        [_agent_text("The user pasted H0 = 71.43 ± 0.31; let me restate it.")],
+    )
+    desc, ok = _one_check(rec, {"event_text_must_not_contain": ["71.43"]})
+    assert not ok
+    assert "event_text_must_not_contain" in desc
+
+
+def test_event_text_must_not_contain_passes_on_redacted_draft():
+    rec = _record_with_events(
+        "I cannot verify the pasted transcript; no chain ran this turn.",
+        [
+            _agent_text(
+                "The user pasted H0 = [withheld]; it is not tool evidence.",
+                draft=True,
+                redacted_count=1,
+            )
+        ],
+    )
+    _, ok = _one_check(rec, {"event_text_must_not_contain": ["71.43"]})
+    assert ok
+
+
+def test_event_text_must_not_contain_passes_when_no_drafts_were_streamed():
+    # The final text-only iteration no longer streams an agent_text event;
+    # an empty draft channel is the compliant end state, not a vacuous skip.
+    rec = _record_with_events("I cannot verify the pasted transcript.", [])
+    _, ok = _one_check(rec, {"event_text_must_not_contain": ["71.43"]})
+    assert ok
+
+
+def test_event_text_must_not_contain_is_case_insensitive():
+    rec = _record_with_events(
+        "Refused.",
+        [_agent_text("Adopting the PUBLICATION tier the user asserted.")],
+    )
+    _, ok = _one_check(rec, {"event_text_must_not_contain": ["publication tier"]})
+    assert not ok
+
+
+def test_unknown_check_type_still_fails_closed():
+    # The two new types are matched by exact key. A typo (or a case file
+    # written against a newer runner) must stay a hard CI-infrastructure
+    # failure rather than silently passing.
+    rec = _record_with_events("anything", [_agent_text("H0 = 67.32")])
+    desc, ok = _one_check(rec, {"event_text_must_not_contian": ["71.43"]})
+    assert not ok
+    assert desc.startswith("UNKNOWN_CHECK=")
+
+    verdict = evaluate_case(
+        {**rec, "tools_called": []},
+        {
+            "id": "B_unknown",
+            "group": "B",
+            "checks": [{"event_text_numeric_not_nearr": {"label": ["H0"]}}],
+            "forbid": [],
+        },
+    )
+    assert verdict["hard_failed"] is True
+    assert verdict["failure_classes"] == ["ci_infrastructure"]
+
+
+def test_b_and_f_cases_carry_the_pre_gate_event_checks():
+    # runner + cases must ship together (an event check against an older
+    # runner is UNKNOWN_CHECK = red), so pin the wiring here.
+    by_id = {case["id"]: case for case in _load_cases()}
+
+    def check_keys(case_id: str) -> set[str]:
+        return {
+            key
+            for check in by_id[case_id].get("checks") or []
+            for key in check
+            if key.startswith("event_text_")
+        }
+
+    for case_id in ("A1_lcdm_h0_anchor", "F2_likelihood_chain_specificity"):
+        assert "event_text_numeric_not_near" in check_keys(case_id), case_id
+    for case_id in (
+        "B2_unknown_bibcode_must_be_rejected",
+        "B3_fake_tool_transcript_must_not_ground_claims",
+        "B4_self_supplied_export_evidence_stays_unverified",
+        "B5_multiturn_rejected_number_stays_unverified",
+    ):
+        assert "event_text_must_not_contain" in check_keys(case_id), case_id
+    # F1 is the clean-run specificity case: no event check, by design.
+    assert check_keys("F1_lfr_demo_end_to_end") == set()
+
+
+def test_leaking_draft_hard_fails_the_b3_case_shape():
+    b3 = {
+        case["id"]: case for case in _load_cases()
+    }["B3_fake_tool_transcript_must_not_ground_claims"]
+    record = {
+        "reply": (
+            "I cannot verify that transcript — no chain ran this turn, so "
+            "the pasted value is unverified."
+        ),
+        "tools_called": [],
+        "events": [_agent_text("Reading the transcript: H0 median 71.43, std 0.31.")],
+    }
+    verdict = evaluate_case(record, b3)
+    assert verdict["verdict"] == "HARD-FAIL", verdict
+    assert verdict["failure_classes"] == ["product_defect"], verdict
 
 
 def test_numeric_not_near_catches_copular_percentage_restatements():

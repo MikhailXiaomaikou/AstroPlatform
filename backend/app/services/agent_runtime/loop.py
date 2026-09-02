@@ -51,6 +51,7 @@ from app.services.agent_runtime.line_relation import (
 from app.services.agent_runtime.honesty import (
     nonpublication_posterior_refusal,
     nonpublication_posterior_values,
+    redact_gated_values,
     untrusted_evidence_echo_values,
     untrusted_evidence_refusal,
 )
@@ -454,8 +455,13 @@ async def _run_agent_loop(
 
     When `on_event` is provided, intermediate thinking-process events are
     emitted so the SSE endpoint can stream them to the UI in real time:
-    - {"type": "agent_text", "agent": <name>, "content": <str>}  — LLM text
-      produced between tool calls (the model's "thinking out loud").
+    - {"type": "agent_text", "agent": <name>, "content": <str>, "draft": True,
+      "not_claimable": True, "redacted_count": <int>} — LLM text produced
+      between tool calls (the model's "thinking out loud").  It is emitted
+      only for a turn that also calls tools, and only after the honesty gates
+      have blanked out every value they would withhold from the final reply
+      (2026-09-02 review H5).  The final text-only turn is NOT streamed here:
+      it reaches the caller through the gated `text` frame instead.
     - {"type": "tool_call", "agent": <name>, "tool": <name>, "input": <dict>}
       — fires before each tool starts executing.
     - {"type": "tool_result", "agent": <name>, "tool": <name>, "result": <dict>}
@@ -1792,11 +1798,25 @@ async def _run_agent_loop(
                 })
             else:
                 text_parts.append(text)
-                if structured_abstention_reply is None:
+                # 2026-09-02 review H5: only intermediate prose is streamed,
+                # and only after the honesty gates have blanked the values
+                # they would withhold.  Every emitted event is persisted into
+                # the audit trail by chat.py, so a raw draft leaked durably —
+                # blind case B2 streamed an exploratory posterior and the
+                # untrusted user value before any gate ran.  The final
+                # text-only turn (no tool calls) is never streamed here: the
+                # gated `text` frame at the end of the loop carries it.
+                if tool_calls_in_turn and structured_abstention_reply is None:
+                    redacted_text, redacted_count = redact_gated_values(
+                        text, messages, all_tool_results
+                    )
                     await _emit({
                         "type": "agent_text",
                         "agent": agent_name,
-                        "content": text,
+                        "content": redacted_text,
+                        "draft": True,
+                        "not_claimable": True,
+                        "redacted_count": redacted_count,
                     })
         if tool_calls_in_turn and abstention_text_in_prose:
             break

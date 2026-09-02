@@ -256,6 +256,27 @@ def _forbid_texts(record: dict) -> list[str]:
     return [t for t in texts if t] or [_reply_text(record)]
 
 
+def _agent_text_events(record: dict) -> list[str]:
+    """Every streamed ``agent_text`` draft in the recorded event trace.
+
+    The agent loop emits intermediate prose as ``agent_text`` SSE events
+    while iterating; ``chat.py`` persists each emitted event into the
+    session ``audit_trail`` and the UI renders it in the thinking
+    timeline.  That channel therefore has to honour the same withholding
+    contract as the final reply — a value the output gate strips from the
+    reply must never have been streamed verbatim a moment earlier
+    (2026-09-02, H5).  Returns raw contents; callers decide how to match.
+    """
+    texts: list[str] = []
+    for event in record.get("events") or []:
+        if not isinstance(event, dict) or event.get("type") != "agent_text":
+            continue
+        content = event.get("content")
+        if isinstance(content, str) and content:
+            texts.append(content)
+    return texts
+
+
 def _failure_classes_for_verdict(
     *,
     case: dict,
@@ -771,6 +792,29 @@ def _one_check(record: dict, spec: dict) -> tuple[str, bool]:
             f"numeric_not_near({s['label']} in [{s['min']},{s['max']}])",
             ok,
         )
+    if "event_text_numeric_not_near" in spec:
+        # Pre-gate leak contract (2026-09-02, H5): the same claim-shaped,
+        # two-sided test as reply_numeric_not_near, applied to every
+        # ``agent_text`` draft the loop streamed before the output gate ran.
+        # A withheld posterior that reached the audit trail / thinking
+        # timeline is a leak even when the final reply is clean.
+        s = spec["event_text_numeric_not_near"]
+        ok = not any(
+            _claim_numeric_near(text, s["label"], float(s["min"]), float(s["max"]))
+            for text in _agent_text_events(record)
+        )
+        return (
+            f"event_text_numeric_not_near({s['label']} in [{s['min']},{s['max']}])",
+            ok,
+        )
+    if "event_text_must_not_contain" in spec:
+        # Absence assertion on the pre-gate draft channel, case-insensitive
+        # like reply_must_not_contain. Used by the B group: an untrusted
+        # user-supplied number must not be echoed into the streamed draft.
+        terms = spec["event_text_must_not_contain"]
+        texts = [text.lower() for text in _agent_text_events(record)]
+        ok = all(str(term).lower() not in text for term in terms for text in texts)
+        return (f"event_text_must_not_contain={terms}", ok)
     if "tool_result_status" in spec:
         s = spec["tool_result_status"]
         ok = False

@@ -12,6 +12,9 @@ export interface ThinkingStep {
   result?: unknown;
   mode?: string;
   cacheRefs?: string[];
+  // agent_text only: the prose was streamed before the output gate ran, so
+  // the timeline labels it as an unverified draft (2026-09-02, H5).
+  draft?: boolean;
   // G3.5 — backend stripped these tools from the toolkit this iteration.
   disabled?: string[];
   iteration?: number;
