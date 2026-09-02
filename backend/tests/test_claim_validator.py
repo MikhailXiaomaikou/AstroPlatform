@@ -2518,3 +2518,37 @@ def test_predicate_hedges_and_coordinated_predicates_survive() -> None:
     ]
     for sentence in asserted:
         assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+
+def test_an_adverb_in_the_auxiliary_and_a_shared_modal() -> None:
+    """Two more shapes, one in each direction (Codex review 2026-09-03).
+
+    ``has now been confirmed`` is as ordinary as ``has been confirmed``, and
+    the auxiliary pattern did not admit the adverb, so the confirmation was
+    missed and a laundered conclusion stayed exempt.
+
+    And one modal can scope two coordinated clauses: "The Hubble tension may
+    weaken and the remaining discrepancy be resolved by a local void" leaves
+    the second clause with a bare infinitive and no modal of its own.  Only a
+    bare infinitive triggers the lookback, so a second clause with its own
+    finite verb still stands alone.
+    """
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    asserted = [
+        "The forecast that the Hubble tension is resolved has now been confirmed.",
+        "Our hypothesis has now been confirmed: the Hubble tension is resolved "
+        "by a local void.",
+        # A finite verb after "and" is its own clause, hedge or not.
+        "The data may be noisy and the Hubble tension is resolved by a local void.",
+    ]
+    for sentence in asserted:
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+    hedged = [
+        "The Hubble tension may weaken and the remaining discrepancy be "
+        "resolved by a local void.",
+        "The Hubble tension may weaken and ultimately be resolved by a local void.",
+    ]
+    for sentence in hedged:
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence

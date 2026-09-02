@@ -3699,7 +3699,9 @@ _EXPLICIT_DENIAL_RE = re.compile(
 # "The forecast that X is resolved is now confirmed" is an assertion.  Checked
 # after the hedge patterns so it can only REMOVE an exemption.
 _CONFIRMED_ASSERTION_RE = re.compile(
-    r"\b(?:is|are|was|were|has\s+been|have\s+been|now)\s+(?:now\s+)?confirmed\b"
+    r"\b(?:is|are|was|were|has|have|had|now)"
+    r"(?:\s+(?:now|since|already|finally|independently|subsequently))?"
+    r"(?:\s+been)?\s+(?:now\s+)?confirmed\b"
     r"|\bconfirms?\s+that\b|\bconfirmed\s*[:\u2014-]"
     r"|(?:得到|已被|已经?)证实|已证实",
     re.I,
@@ -3711,7 +3713,9 @@ _CONFIRMED_ASSERTION_RE = re.compile(
 # leave the hedge standing (Codex review 2026-09-03).
 _CONFIRMED_HYPOTHESIS_RE = re.compile(
     r"\b(?:hypothes[ei]s|forecasts?|predictions?|claims?|conjectures?)\b[^\n;]{0,24}?"
-    r"\b(?:is|are|was|were|has\s+been|have\s+been|now)\s+(?:now\s+)?confirmed\b"
+    r"\b(?:is|are|was|were|has|have|had|now)"
+    r"(?:\s+(?:now|since|already|finally|independently|subsequently))?"
+    r"(?:\s+been)?\s+(?:now\s+)?confirmed\b"
     r"|\bconfirms?\s+(?:the|our|this)\s+(?:hypothes[ei]s|forecast|prediction|claim)\b"
     r"|^[^\n]{0,24}?(?:假设|预测|猜想)[:：][^\n]{0,12}?(?:得到|已被|已经?)?证实",
     re.IGNORECASE,
@@ -3975,6 +3979,13 @@ _CONCLUSION_CLAUSE_BREAK_RE = re.compile(
 # a clause boundary: "The Hubble tension may, after recalibration, be resolved
 # by a local void" was reduced to " be resolved by a local void" and lost its
 # own hedge (Codex review 2026-09-03).
+# A clause whose verb is a bare infinitive has no finite verb of its own, so
+# its modal (if any) came from the clause before it.
+_BARE_INFINITIVE_RE = re.compile(
+    r"\b(?:be|been|become|remain|persist|weaken|strengthen|evolve|resolve)\s+\w",
+    re.IGNORECASE,
+)
+_MODAL_RE = re.compile(r"\b(?:may|might|could|would|should|can|will)\b", re.IGNORECASE)
 _PARENTHETICAL_RE = re.compile(
     r",[^,;:\n]{0,60},$"
 )
@@ -4170,6 +4181,17 @@ def _clause_hedges_the_conclusion(sentence: str, conclusion_end: int | None) -> 
         return True
     if _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(clause) or _ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(clause):
         return True
+    # One modal can scope two coordinated clauses: "The Hubble tension may
+    # weaken and the remaining discrepancy be resolved by a local void" leaves
+    # the second clause with a BARE infinitive and no modal of its own, so its
+    # hedge lives in the clause before it (Codex review 2026-09-03).  Only a
+    # bare infinitive triggers the lookback, so "... and the Hubble tension IS
+    # resolved" still stands on its own.
+    if _BARE_INFINITIVE_RE.search(clause) and not _MODAL_RE.search(clause):
+        previous = sentence[:clause_start]
+        previous_clause = _CONCLUSION_CLAUSE_BREAK_RE.split(previous)[-1] if previous else ""
+        if _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(previous_clause):
+            return True
     if prefix.rstrip().endswith((":", "\uff1a")) and not _CONFIRMED_ASSERTION_RE.search(prefix):
         return bool(
             _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(prefix)
