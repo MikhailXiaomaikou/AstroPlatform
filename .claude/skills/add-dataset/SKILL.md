@@ -71,7 +71,7 @@ FIRST: plik_lite was 1.47 MB (vendorable); full Planck clik is ~GB (not).
    - **FULL backend suite** — `./venv/bin/python3 -m pytest tests/` from
      `backend/` (the venv python — system python lacks the deps and dies in
      collection). Iterate with targeted runs **adding `--no-cov`**
-     (pytest.ini carries `--cov-fail-under=45`, so any small selection exits
+     (pytest.ini carries a `--cov-fail-under` floor, so any small selection exits
      1 with a coverage FAIL even when every test passes), but gate on one
      full run before commit: cross-cutting tests like
      `test_cobaya_adapter_registry` and the manifest-consistency suite fail
