@@ -370,3 +370,25 @@ def test_prompt_states_the_rhat_failure_direction_correctly() -> None:
     # (Codex review 2026-09-03).
     assert "do NOT repeat the numeric threshold" in prompt
     assert "rank_normalized_rhat_at_or_above_1.01" not in prompt
+
+
+def test_tool_payloads_do_not_invite_preliminary_numbers() -> None:
+    """A tool's own message to the model is part of the reply contract.
+
+    The external Cobaya and compressed CMB-rotation paths told the model to
+    "report it only as preliminary" and to describe beta_deg as "compressed
+    preliminary" -- inviting exactly the prose number the reply gate
+    withholds, and those paths are the ones that carry no
+    __exploratory_warning__ (Codex review 2026-09-03).
+    """
+    from pathlib import Path
+
+    runner = Path(__file__).resolve().parents[1] / "app/services/cobaya_runner.py"
+    rotation = Path(__file__).resolve().parents[1] / "app/services/cmb_rotation_likelihoods.py"
+    runner_text = runner.read_text(encoding="utf-8")
+    rotation_text = rotation.read_text(encoding="utf-8")
+
+    assert "report it only " not in runner_text
+    assert "stay in this tool card" in runner_text
+    assert "described as " not in rotation_text.split("__message_to_model__")[1][:400]
+    assert "stays in this tool card" in rotation_text

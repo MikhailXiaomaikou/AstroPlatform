@@ -1189,8 +1189,13 @@ def _runner_success(
             "Publication requires at least four independent chains, rank-normalized "
             "R-hat < 1.01, bulk ESS >= 400 for every critical parameter, and "
             "hash-verified non-compressed likelihood inputs, including the real "
-            "low-l EE likelihood when tau is sampled. Otherwise report it only "
-            "as preliminary."
+            "low-l EE likelihood when tau is sampled. Otherwise its posterior "
+            "numbers stay in this tool card: say the run is exploratory and "
+            "why, and describe the result qualitatively. Do not write the "
+            "median, the interval, a rounded value or an Nsigma derived from "
+            "them, with or without a 'preliminary' label -- the reply gate "
+            "withholds any number within 1% of a non-publication posterior "
+            "and replaces the whole reply."
         ),
         "provenance": {
             "cosmology_likelihood": {
