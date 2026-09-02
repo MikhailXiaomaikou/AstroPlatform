@@ -642,6 +642,9 @@ async def _run_agent_loop(
     # of shipping a dangling partial sentence to the UI.
     last_stop_reason: str | None = None
     for _iteration in range(max_iterations):
+        # Draft prose written alongside this turn's tool calls, held until
+        # those results exist so it can be redacted against them.
+        pending_draft_text: str | None = None
         if _time.monotonic() > _loop_deadline:
             hit_deadline = True
             # B1: do NOT ship accumulated LLM prose here. This early return
@@ -1824,18 +1827,16 @@ async def _run_agent_loop(
                 # The final text-only turn (no tool calls) is never streamed
                 # here: the gated `text` frame at the end of the loop carries
                 # it.
+                #
+                # The draft is HELD here rather than emitted, because the
+                # results it has to be redacted against are the ones this
+                # same turn is about to request: prose that anticipates a
+                # value the pending tool then returns as non-publication-
+                # ready would have streamed before that result existed
+                # (Codex review 2026-09-03).  It is emitted after the
+                # executed results join `all_tool_results`, below.
                 if tool_calls_in_turn and structured_abstention_reply is None:
-                    redacted_text, redacted_count = redact_gated_values(
-                        text, messages, all_tool_results
-                    )
-                    await _emit({
-                        "type": "agent_text",
-                        "agent": agent_name,
-                        "content": redacted_text,
-                        "draft": True,
-                        "not_claimable": True,
-                        "redacted_count": redacted_count,
-                    })
+                    pending_draft_text = text
         if tool_calls_in_turn and abstention_text_in_prose:
             break
         if not tool_calls_in_turn:
@@ -2206,6 +2207,24 @@ async def _run_agent_loop(
                     "live": True,
                     "tool_call_id": tc["id"],
                 })
+        # The held draft (above) is redacted only now, against a
+        # `all_tool_results` that already carries this turn's results, and
+        # emitted after them.  Emitting it earlier would have meant grading
+        # the prose against an evidence set that did not yet contain the very
+        # tool the prose was anticipating.
+        if pending_draft_text is not None:
+            redacted_text, redacted_count = redact_gated_values(
+                pending_draft_text, messages, all_tool_results
+            )
+            pending_draft_text = None
+            await _emit({
+                "type": "agent_text",
+                "agent": agent_name,
+                "content": redacted_text,
+                "draft": True,
+                "not_claimable": True,
+                "redacted_count": redacted_count,
+            })
         working_messages.append({"role": "user", "content": tool_result_blocks})
         # Claude uses "tool_use", OpenAI uses "tool_calls" as stop reason
         if (

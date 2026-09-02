@@ -1518,6 +1518,54 @@ def test_compact_count_suffixes_are_not_posterior_values() -> None:
     assert _reply_number_tokens("an age of 13.8Gyr") == [13.8]
 
 
+def test_draft_is_redacted_against_the_results_its_own_turn_requests(
+    monkeypatch,
+) -> None:
+    """Prose that anticipates the value its own turn is about to fetch.
+
+    The draft used to be redacted and emitted before the turn's tool calls
+    were dispatched, so ``all_tool_results`` did not yet contain the result
+    the prose was anticipating and nothing was blanked.  A model that writes
+    "this should land near 67.32" in the same turn that runs the chain
+    therefore streamed the withheld posterior verbatim (Codex review
+    2026-09-03).  The draft is now held until those results exist.
+    """
+    turns = [
+        {
+            "content": (
+                "Running the exploratory chain now; from the compressed "
+                "inputs I expect H0 = 67.32 km/s/Mpc."
+            ),
+            "tool_calls": [{
+                "id": "call_chain",
+                "name": "run_cosmology_likelihood_chain",
+                "input": {},
+            }],
+        },
+        {"content": "The chain is exploratory, so its posterior stays in the card."},
+    ]
+    events: list[dict] = []
+    _run_loop(
+        monkeypatch,
+        messages=[{"role": "user", "content": _B2_STYLE_PROMPT}],
+        tools=_CHAIN_TOOLS,
+        fake_llm=_staged_llm(turns),
+        fake_exec=_fake_exec_staged,
+        events=events,
+    )
+
+    streamed = _agent_text_events(events)
+    assert len(streamed) == 1
+    content = str(streamed[0]["content"])
+    assert "67.32" not in content
+    assert "[withheld]" in content
+    assert streamed[0]["redacted_count"] >= 1
+    # The draft is emitted after the result it is graded against, so the UI
+    # still receives it in the same turn.
+    order = [event.get("type") for event in events]
+    assert order.index("tool_result") < order.index("agent_text")
+
+
 def test_interval_subject_copula_does_not_bind_the_percentage_as_a_value() -> None:
     """``For H0, the credible interval is 68%`` is an honest explanation.
 
