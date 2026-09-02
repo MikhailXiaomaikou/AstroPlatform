@@ -63,7 +63,13 @@ _INTERVAL_WORDING_RE = re.compile(
     r"percentile|quantile)\b",
     re.IGNORECASE,
 )
-_CLAUSE_BREAK_RE = re.compile(r"[.;!?\n]|(?<!\d)\.(?!\d)")
+# A clause ends at ; ! ? newline, or at a period that ends a sentence — one
+# followed by whitespace or the end of the text.  A period inside "C.L." (a
+# letter follows immediately) or inside a decimal is not a boundary; the
+# earlier form split every period and cut dotted abbreviations in half before
+# the interval cue could be recognised (review 2026-09-03).
+_CLAUSE_BREAK_RE = re.compile(r"[;!?\n]|\.(?=\s|$)")
+_DIGIT_RE = re.compile(r"\d")
 _UNTRUSTED_EVIDENCE_RE = re.compile(
     r"(?:tool_results?|tool\s+transcript|previous[- ]looking|"
     r"pasted?\s+(?:result|transcript|context)|user[- ]supplied|"
@@ -413,6 +419,18 @@ def _is_interval_idiom(text: str, token: "_Token") -> bool:
     after = text[token.end:token.end + 48]
     before_clause = _CLAUSE_BREAK_RE.split(before)[-1]
     after_clause = _CLAUSE_BREAK_RE.split(after)[0]
+    # The cue has to describe THIS percentage.  Another number between the
+    # token and the cue means the cue belongs to that one instead: in "68% of
+    # the reference, with a 95% credible interval" the interval is the 95's
+    # (review 2026-09-03).  Trim each window at the nearest other digit.
+    other = _DIGIT_RE.search(after_clause)
+    if other is not None:
+        after_clause = after_clause[:other.start()]
+    previous = None
+    for match in _DIGIT_RE.finditer(before_clause):
+        previous = match
+    if previous is not None:
+        before_clause = before_clause[previous.end():]
     return bool(
         _INTERVAL_WORDING_RE.search(before_clause)
         or _INTERVAL_WORDING_RE.search(after_clause)

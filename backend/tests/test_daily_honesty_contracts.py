@@ -824,3 +824,42 @@ def test_interval_idiom_exemption_needs_an_exact_standard_level() -> None:
     assert nonpublication_posterior_values(
         "Report the 95% confidence level, not a value.", _exploratory_chain(95.4)
     ) == []
+
+
+def test_interval_cue_must_describe_the_same_percentage() -> None:
+    """A cue that belongs to a different percentage must not exempt this one:
+    "68% of the reference, with a 95% credible interval" describes the 95."""
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    assert nonpublication_posterior_values(
+        "The H0 median is 68% of the reference, with a 95% credible interval.",
+        _exploratory_chain(68.0),
+    ) == [68.0]
+    assert nonpublication_posterior_values(
+        "H0 sits at 68%, and separately the 95% credible interval is wide.",
+        _exploratory_chain(67.9),
+    ) == [68.0]
+    # The cue still exempts the level it actually describes.
+    assert nonpublication_posterior_values(
+        "The 68% credible interval is withheld.", _exploratory_chain(68.3)
+    ) == []
+
+
+def test_dotted_confidence_level_abbreviation_is_not_a_false_kill() -> None:
+    """``the 68% C.L. is withheld`` is honest wording; the clause splitter must
+    not cut inside the abbreviation before the interval cue is recognised."""
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    assert nonpublication_posterior_values(
+        "the 68% C.L. is withheld until the full likelihood runs.",
+        _exploratory_chain(68.2),
+    ) == []
+    assert nonpublication_posterior_values(
+        "Report the 95% C.L., not a value.", _exploratory_chain(95.3)
+    ) == []
+    # A real sentence boundary still splits, so a cue in the NEXT sentence
+    # cannot reach back and exempt this token.
+    assert nonpublication_posterior_values(
+        "H0 came out at 68%. The credible interval is reported separately.",
+        _exploratory_chain(68.1),
+    ) == [68.0]
