@@ -120,6 +120,19 @@ _REPORT_ERROR_TOOL_STATUSES: frozenset[str] = frozenset(
 _REPORT_NO_VERDICT_STATUSES: frozenset[str] = frozenset(
     {"NOT_VERIFIABLE_THIS_TURN", "NOT_VERIFIABLE"}
 )
+# A runner that returned a structured NON-RUN: success=True,
+# __tool_status__="PARTIAL", publication_ready=False and no error, so none of
+# the vocabularies above matched and the attempt vanished from the report
+# (Codex review 2026-09-03).  These are direct results, not matrix cells, so
+# the cell walk does not see them either.
+_REPORT_NOT_RUN_STATUSES: frozenset[str] = frozenset({
+    "NO_COMPRESSED_LIKELIHOOD",
+    "EXTERNAL_COBAYA_NOT_RUN",
+    "NOT_RUN",
+    "NOT_EXECUTED",
+    "CONFIG_ONLY",
+    "SKIPPED",
+})
 
 # C0 control characters minus the whitespace this module already folds away.
 _REPORT_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -1226,7 +1239,13 @@ def export_research_report(
     # 3. Research Plan
     plan_lines = body["Research Plan"]
     plan_lines.append("### Planned Tests")
-    proposed = plan.get("proposed_experiment_matrix")
+    # Same rule as the probes below: `_trusted_tool_results` authenticates
+    # the tool-result LIST, not this argument, so an omitted or altered
+    # `research_plan` could make the report claim a different experiment
+    # matrix -- or none at all (Codex review 2026-09-03).
+    proposed = trusted_plan.get("proposed_experiment_matrix") if trusted_plan else None
+    if not isinstance(proposed, list):
+        proposed = plan.get("proposed_experiment_matrix")
     proposed_cells = [cell for cell in proposed if isinstance(cell, dict)] if isinstance(proposed, list) else []
     if proposed_cells:
         for cell in proposed_cells:
@@ -1471,7 +1490,9 @@ def export_research_report(
     else:
         uncertainty_lines.append("- No publication-gate threshold record was present in the supplied tool results.")
     uncertainty_lines.extend(["", "### Blocking gaps"])
-    gaps = plan.get("blocking_gaps")
+    gaps = trusted_plan.get("blocking_gaps") if trusted_plan else None
+    if not isinstance(gaps, list):
+        gaps = plan.get("blocking_gaps")
     gap_items = [_report_safe_text(gap) for gap in gaps if gap] if isinstance(gaps, list) else []
     if gap_items:
         uncertainty_lines.extend(f"- {gap}" for gap in gap_items)
@@ -1721,6 +1742,7 @@ def _report_failed_attempts(
             _REPORT_FAILED_TOOL_STATUSES
             | _REPORT_ERROR_TOOL_STATUSES
             | _REPORT_NO_VERDICT_STATUSES
+            | _REPORT_NOT_RUN_STATUSES
         )
         error = str(result.get("error") or "")
         if failed_statuses or result.get("success") is False or error:

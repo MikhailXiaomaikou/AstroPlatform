@@ -2395,3 +2395,66 @@ def test_displayed_probes_come_from_the_server_plan_record() -> None:
     assert "fabricated_probe" not in markdown
     assert "lcdm" in markdown
     assert "fabricated_model" not in markdown
+
+
+def test_the_whole_plan_section_comes_from_the_server_record() -> None:
+    """Not just the probes: the matrix and the blocking gaps too.
+
+    ``_trusted_tool_results`` authenticates the tool-result LIST, not the
+    ``research_plan`` argument, so an omitted or altered argument could make
+    the report claim a different experiment matrix -- or none at all -- and
+    a different set of blocking gaps (Codex review 2026-09-03).
+    """
+    from app.services.research_program import export_research_report
+
+    report = export_research_report(
+        research_plan={
+            "research_question": "probe",
+            "proposed_experiment_matrix": [
+                {"label": "fabricated", "dataset_keys": ["fake_ds"], "model": "lcdm"},
+            ],
+            "blocking_gaps": ["fabricated_gap"],
+        },
+        tool_results=[{
+            "tool": "plan_research_program",
+            "result": {"success": True, "research_plan": {
+                "research_question": "probe",
+                "proposed_experiment_matrix": [
+                    {"label": "registered", "dataset_keys": ["desi_dr2_bao"], "model": "lcdm"},
+                ],
+                "blocking_gaps": ["registered_gap"],
+            }},
+        }],
+    )
+    markdown = report["markdown"]
+    assert "registered" in markdown and "registered_gap" in markdown
+    assert "fabricated" not in markdown and "fabricated_gap" not in markdown
+
+
+def test_a_structured_non_run_is_a_recorded_attempt() -> None:
+    """success=True, PARTIAL, publication_ready=False and no error.
+
+    A runner that returned a structured non-run matched none of the failure
+    vocabularies and, being a direct result rather than a matrix cell, was
+    not seen by the cell walk either -- so the attempt vanished from the
+    report entirely (Codex review 2026-09-03).
+    """
+    from app.services.research_program import export_research_report
+
+    for status in ("NO_COMPRESSED_LIKELIHOOD", "EXTERNAL_COBAYA_NOT_RUN"):
+        report = export_research_report(
+            research_plan={"research_question": "probe"},
+            tool_results=[{
+                "tool": "run_cosmology_likelihood_chain",
+                "result": {
+                    "success": True,
+                    "__tool_status__": "PARTIAL",
+                    "analysis_status": status,
+                    "publication_ready": False,
+                },
+            }],
+        )
+        section = report["markdown"].split("## Failed Attempts")[1].split("\n## ")[0]
+        assert "run_cosmology_likelihood_chain" in section, status
+        assert status in section, status
+        assert "No failed tool result" not in section, status
