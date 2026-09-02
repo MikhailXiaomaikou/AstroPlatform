@@ -108,8 +108,19 @@ _DIGIT_RE = re.compile(r"\d")
 # "Another number" for the interval-cue trim: a digit, or a spelled number
 # word.  Only the words that can carry a coverage level are listed, so an
 # ordinary "one" or "two" in prose does not cut a cue short.
+# A digit that is part of a LABEL is not another number: the "0" in H0, the
+# "8" in sigma8 and the "2" in DR2 truncated the cue window right before the
+# token, so "The credible interval for H0 is 68%" lost its own cue (Codex
+# review 2026-09-03).
+# The spelled phrase continues: another number word, or a decimal "point".
+_SPELLED_CONTINUES_RE = re.compile(
+    r"[-\s]+(?:point\b|zero|oh|one|two|three|four|five|six|seven|eight|nine|"
+    r"ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|"
+    r"nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\b",
+    re.IGNORECASE,
+)
 _OTHER_NUMBER_RE = re.compile(
-    r"\d|\b(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|"
+    r"(?<![A-Za-z_])\d|\b(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|"
     r"sixty[-\s]eight|ninety[-\s]five|ninety[-\s]nine)\b",
     re.IGNORECASE,
 )
@@ -239,6 +250,16 @@ def _untrusted_user_values(messages: list[dict]) -> set[float]:
             continue
         for match in _DIRECT_PARAMETER_RE.finditer(text):
             values.add(float(match.group("value")))
+        # The pasted evidence may itself be in little-h units.  Only the
+        # reply side was converted, so a user who pasted "h = 0.677" and a
+        # model that answered "H0 = 67.7" produced no echo hit at all -- B5
+        # bypassed by switching units between the turns (Codex review
+        # 2026-09-03).
+        for match in _LITTLE_H_RE.finditer(text):
+            try:
+                values.add(float(match.group(1)) * 100.0)
+            except ValueError:
+                continue
         for parameter in _STRUCTURED_PARAMETER_RE.finditer(text):
             for stat in _STRUCTURED_STAT_RE.finditer(parameter.group("body")):
                 values.add(float(stat.group("value")))
@@ -344,23 +365,45 @@ def _reply_number_spans(reply: str) -> list[_Token]:
     #     idiom rather than a bare value.
     sign = r"(?:(?P<sign>negative|minus)\s+)?"
     tens = r"(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)"
+    # A spelled whole number is a value only where the sentence treats it as
+    # one.  "sixty-eight samples were retained" is a diagnostic count, and
+    # reading every tens phrase as a posterior falsely replaced an honest
+    # reply (Codex review 2026-09-03).  A decimal form ("sixty-eight point
+    # two") stays unconditional: nobody counts samples that way.
     spelled = re.compile(
         rf"\b{sign}(?P<number>"
         rf"{_NUMBER_WORD_TOKEN}(?:[-\s]{_NUMBER_WORD_TOKEN})?"
         rf"\s+point(?:\s+{_NUMBER_WORD_TOKEN})+"
-        rf"|{tens}(?:[-\s]{_NUMBER_WORD_TOKEN})?"
         rf")\b",
+        re.IGNORECASE,
+    )
+    spelled_whole = re.compile(
+        rf"\b{sign}(?P<number>{tens}(?:[-\s]{_NUMBER_WORD_TOKEN})?)\b"
+        rf"(?P<unit>\s*(?:%|percent\b|per\s+cent\b|km\s*/\s*s|km/s/Mpc"
+        rf"|kilometres?|kilometers?))?",
         re.IGNORECASE,
     )
     signed_unit = re.compile(
         rf"\b(?P<sign>negative|minus)\s+(?P<number>{_NUMBER_WORD_TOKEN})\b",
         re.IGNORECASE,
     )
-    for pattern in (spelled, signed_unit):
+    for pattern in (spelled, spelled_whole, signed_unit):
         for match in pattern.finditer(text):
             value = _spelled_number_to_float(match.group("number"))
             if value is None or not math.isfinite(value):
                 continue
+            if pattern is spelled_whole:
+                # Not a fragment of a longer spelled number: "seventy-three
+                # point two" is one number, and a lookahead in the pattern
+                # only made it backtrack to "seventy" (a spurious 70).
+                if _SPELLED_CONTINUES_RE.match(text[match.end():]):
+                    continue
+            if pattern is spelled_whole and not match.group("sign"):
+                # Claim context required: a unit or percent sign of its own,
+                # or an assignment subject in front of it.
+                before = text[max(0, match.start() - 48):match.start()]
+                if not match.group("unit") and not _parameter_assignment_before(before):
+                    continue
             if match.group("sign"):
                 value = -value
             tokens.append(_Token(
@@ -372,9 +415,16 @@ def _reply_number_spans(reply: str) -> list[_Token]:
             ))
     for match in _LITTLE_H_RE.finditer(text):
         try:
-            value = float(match.group(1)) * 100.0
+            reduced = float(match.group(1))
         except ValueError:
             continue
+        # Little h is a reduced value below 1.  Widening the literal grammar
+        # to the full numeric form let "H0 is 68" match the `h0` alternative
+        # and invent a 6800 token (Codex review 2026-09-03); the magnitude is
+        # what distinguishes the reduced notation from the value itself.
+        if not 0.0 < reduced < 1.0:
+            continue
+        value = reduced * 100.0
         tokens.append(_Token(value, bmap[match.start(1)], bmap[match.end(1)], False, True))
     # The raw and rewritten passes yield the same token wherever no rewrite
     # applied; keep one per (value, span) so callers see a clean list.
@@ -505,7 +555,16 @@ def _parameter_assignment_before(before: str) -> bool:
     gap = match.group("copula_gap")
     if gap is None:
         return True
-    return not _INTERVAL_WORDING_RE.search(gap)
+    if _INTERVAL_WORDING_RE.search(gap):
+        return False
+    # The interval subject can also PRECEDE the parameter label: "The
+    # credible interval for H0 is 68%" puts it before "H0", where the gap
+    # cannot see it, and the assignment then read the coverage level as an
+    # H0 value (Codex review 2026-09-03).  Only the words between the start
+    # of the clause and the label are inspected, so "H0's credible interval
+    # is 68%" is still covered by the gap check above.
+    head = _CLAUSE_BREAK_RE.split(before[: match.start()])[-1]
+    return not _INTERVAL_WORDING_RE.search(head)
 
 
 def _is_interval_idiom(text: str, token: "_Token") -> bool:

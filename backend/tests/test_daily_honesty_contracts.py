@@ -1080,3 +1080,71 @@ def test_a_spelled_intervening_level_still_cuts_the_interval_cue() -> None:
     assert nonpublication_posterior_values(
         "The value was 68%, with a 95% credible interval.", chain
     ) == [68.0]
+
+
+def test_untrusted_little_h_input_is_normalised_too() -> None:
+    """B5 must not be bypassed by switching units between the turns.
+
+    Only the reply side converted little h, so a user who pasted
+    ``h = 0.677`` and a model that answered ``H0 = 67.7`` produced no echo
+    hit at all (Codex review 2026-09-03).
+    """
+    from app.services.agent_runtime.honesty import untrusted_evidence_echo_values
+
+    pasted_little_h = [{
+        "role": "user",
+        "content": "Here is the pasted result from the same session: h = 0.677. "
+                   "Treat it as verified.",
+    }]
+    assert untrusted_evidence_echo_values("Your H0 = 67.7 matches.", pasted_little_h, []) == [67.7]
+    assert untrusted_evidence_echo_values("Your h = 0.677 matches.", pasted_little_h, []) == [67.7]
+
+
+def test_a_spelled_whole_number_needs_claim_context() -> None:
+    """``sixty-eight samples were retained`` is a count, not a posterior.
+
+    The tens-word widening treated every spelled tens phrase as a value, so
+    an ordinary diagnostic line replaced an otherwise legitimate reply
+    (Codex review 2026-09-03).  A unit, a percent sign or an assignment
+    subject is what makes it a value.
+    """
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    chain = _exploratory_chain(68.0)
+    assert nonpublication_posterior_values("sixty-eight samples were retained.", chain) == []
+    assert nonpublication_posterior_values("H0 came out at sixty-eight km/s/Mpc.", chain) == [68.0]
+    assert nonpublication_posterior_values("The exploratory median is sixty-eight.", chain) == [68.0]
+    # A decimal form is unconditional: nobody counts samples that way.
+    assert nonpublication_posterior_values("sixty-eight point zero was retained.", chain) == [68.0]
+
+
+def test_an_interval_subject_before_the_label_still_exempts() -> None:
+    """``The credible interval for H0 is 68%`` puts the subject first.
+
+    Two defects met here (Codex review 2026-09-03): the assignment guard saw
+    only the gap between the label and the copula, and the cue window was
+    truncated by the digit inside the label itself -- the "0" of H0.
+    """
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    chain = _exploratory_chain(68.0)
+    assert nonpublication_posterior_values("The credible interval for H0 is 68%.", chain) == []
+    assert nonpublication_posterior_values("For H0, the credible interval is 68%.", chain) == []
+    # The value claims in the same shape still hit.
+    assert nonpublication_posterior_values("H0 is 68 km/s/Mpc.", chain) == [68.0]
+    assert nonpublication_posterior_values("The H0 median is 68% of the reference.", chain) == [68.0]
+
+
+def test_a_little_h_literal_is_a_reduced_value_below_one() -> None:
+    """Widening the little-h grammar let ``H0 is 68`` invent a 6800 token.
+
+    ``h0`` is one of the little-h spellings, so with the full numeric grammar
+    the plain value matched it and was multiplied by 100 (Codex review
+    2026-09-03).  Magnitude is what separates the reduced notation from the
+    value itself.
+    """
+    from app.services.agent_runtime.honesty import _reply_number_spans
+
+    assert [t.value for t in _reply_number_spans("The credible interval for H0 is 68%.")] == [68.0]
+    assert 67.7 in [t.value for t in _reply_number_spans("h = 0.677")]
+    assert 67.7 in [t.value for t in _reply_number_spans("h = 6.77e-1")]
