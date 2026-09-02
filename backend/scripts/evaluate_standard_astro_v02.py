@@ -5,16 +5,29 @@ The JSONL output is resumable and intentionally compact: it contains the
 user-visible reply, routing/validation metadata, and bounded tool receipts. It
 never serializes system prompts, provider credentials, raw message context, or
 untrimmed source documents.
+
+v0.3 exploration harness (2026-09): the same runner accepts ``--budget``,
+``--lightweight``, ``--steering``, ``--arm``, ``--system-appendix``,
+``--lane-override`` and ``--record-pregate-drafts``, and records a per-sample
+tool trace. With no new flag given the behaviour is identical to the v0.2
+matrix (5/240/30 budget, lightweight verification forced on, same sample keys)
+plus the additional trace fields on every record.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-from dataclasses import replace
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass, replace
+import hashlib
 import json
+import math
 import os
 from pathlib import Path
+import subprocess
+import sys
 import time
 from typing import Any
 import uuid
@@ -48,8 +61,57 @@ DIRECT_SYSTEM = (
     "forge or conceal provenance."
 )
 
+# The v0.2 evaluation budget (unchanged since 2026-08-06). ``production`` and
+# ``long`` hand the loop only a mode so ``_workflow_budget_config`` supplies
+# the real 12/360 and 30/1800 numbers.
+EVAL_WORKFLOW_BUDGET: dict[str, Any] = {
+    "mode": "default",
+    "max_iterations": 5,
+    "agent_loop_seconds": 240,
+    "summary_reserve_seconds": 30,
+}
+BUDGETS = ("eval", "production", "long")
+LIGHTWEIGHT_CHOICES = ("on", "off", "both")
+STEERING_CHOICES = ("on", "off")
+
+# Arm presets (plan §3.2). Explicit CLI flags override preset values; the
+# preset name is written into every record. Keys map to CLI destinations.
+ARM_PRESETS: dict[str, dict[str, Any]] = {
+    "C0": {"conditions": ["direct"]},
+    "C1": {
+        "conditions": ["standard_astro"],
+        "budget": "production",
+        "lightweight": "both",
+    },
+}
+ARM_PRESETS["C2a"] = {**ARM_PRESETS["C1"], "system_appendix_required": True}
+ARM_PRESETS["C2b"] = {**ARM_PRESETS["C1"], "lane_override": True}
+ARM_PRESETS["C2c"] = {**ARM_PRESETS["C1"], "budget": "long"}
+ARM_PRESETS["C2d"] = {**ARM_PRESETS["C1"], "steering": "off"}
+ARM_PRESETS["C2_exploration"] = {**ARM_PRESETS["C1"], "exploration_phase": True}
+
+# Status messages the loop emits immediately before a forced (non-model)
+# tool call. A run of ``tool_call`` events that directly follows one of these
+# status events is counted as forced; everything else is model-chosen (plan
+# §3.2, loop.py 1580-1700).
+FORCED_ROUTE_STATUS_PREFIXES = (
+    "Direct-route trigger matched",
+    "Planning the research program",
+    "Executing the runnable cells",
+    "Building the claim provenance graph",
+    "Listing the curated",
+    "Building guarded cosmology",
+    "Running registered cosmology",
+    "Running the deterministic cosmology comparison",
+)
+SOFT_REMINDER_MARKER = "near the workflow deadline"
+SCALAR_UNIVERSE_LIMIT = 2000
+SCALAR_UNIVERSE_DEPTH = 6
+
 
 _LLM_CALL_COUNT = 0
+# One entry per counted model call: the tool names visible to that call.
+_VISIBLE_TOOLS_LOG: list[list[str]] = []
 
 
 def _install_llm_call_counter() -> None:
@@ -61,12 +123,22 @@ def _install_llm_call_counter() -> None:
     code. The deadline-summary fallback calls ``inference_router.route``
     directly and is not counted, so ``llm_calls`` is a lower bound on
     degraded samples.
+
+    The shim also records the tool names offered to each call so a sample
+    can answer "was the next obvious tool visible to the model?".
     """
     original = chat._llm_messages_create
 
     async def _counting(**kwargs):
         global _LLM_CALL_COUNT
         _LLM_CALL_COUNT += 1
+        _VISIBLE_TOOLS_LOG.append(
+            [
+                str(t.get("name") or "")
+                for t in (kwargs.get("tools") or [])
+                if isinstance(t, dict)
+            ]
+        )
         return await original(**kwargs)
 
     chat._llm_messages_create = _counting
@@ -124,7 +196,10 @@ def _profile(model: str):
 def _load_tasks(path: Path) -> list[dict[str, Any]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     tasks = payload.get("tasks")
-    if not isinstance(tasks, list) or len(tasks) != 8:
+    # The eight-task rule is part of the v0.2 preregistration; v0.3 files
+    # (evaluation_id "standard-astro-v03...") register their own task count.
+    v03_file = str(payload.get("evaluation_id") or "").startswith("standard-astro-v03")
+    if not isinstance(tasks, list) or (len(tasks) != 8 and not v03_file):
         raise ValueError("The v0.2 preregistration must contain exactly eight tasks.")
     ids = [str(task.get("id") or "") for task in tasks]
     if not all(ids) or len(ids) != len(set(ids)):
@@ -132,10 +207,51 @@ def _load_tasks(path: Path) -> list[dict[str, Any]]:
     return tasks
 
 
+def _expand_variants(tasks: list[dict[str, Any]]) -> list[tuple[str, str | None, str]]:
+    """Expand tasks to ``(task_id, variant_id, prompt)`` triples.
+
+    A task without ``variants`` yields one triple with ``variant_id=None``
+    (the v0.2 shape). A task with ``variants`` (list of ``{variant_id,
+    prompt}``) yields one triple per variant and its own ``prompt`` is not
+    run.
+    """
+    expanded: list[tuple[str, str | None, str]] = []
+    for task in tasks:
+        task_id = str(task["id"])
+        variants = task.get("variants")
+        if not variants:
+            expanded.append((task_id, None, str(task["prompt"])))
+            continue
+        if not isinstance(variants, list):
+            raise ValueError(f"Task {task_id}: variants must be a list.")
+        seen: set[str] = set()
+        for variant in variants:
+            variant_id = str((variant or {}).get("variant_id") or "")
+            prompt = str((variant or {}).get("prompt") or "")
+            if not variant_id or not prompt or variant_id in seen:
+                raise ValueError(
+                    f"Task {task_id}: variant ids must be unique and non-empty "
+                    "with a non-empty prompt."
+                )
+            seen.add(variant_id)
+            expanded.append((task_id, variant_id, prompt))
+    return expanded
+
+
 def _sample_key(
-    *, model: str, condition: str, task_id: str, repeat_index: int
+    *,
+    model: str,
+    condition: str,
+    task_id: str,
+    repeat_index: int,
+    variant_id: str | None = None,
+    lightweight_suffix: str | None = None,
 ) -> str:
-    return f"{model}|{condition}|{task_id}|{repeat_index}"
+    task_part = f"{task_id}__{variant_id}" if variant_id else task_id
+    key = f"{model}|{condition}|{task_part}|{repeat_index}"
+    if lightweight_suffix:
+        key += f"|lv={lightweight_suffix}"
+    return key
 
 
 def _completed_keys(path: Path) -> set[str]:
@@ -231,6 +347,218 @@ def _compact_tools(result: dict[str, Any]) -> list[dict[str, Any]]:
     return compact
 
 
+# ---------------------------------------------------------------------------
+# v0.3 run options, arms and evaluation-only runtime overrides
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RunOptions:
+    """Per-run switches shared by every sample (plan §3.2)."""
+
+    budget: str = "eval"
+    steering_off: bool = False
+    arm: str | None = None
+    system_appendix: str | None = None
+    lane_override: bool = False
+    exploration_phase: bool = False
+    drafts_path: Path | None = None
+    tasks_sha256: str = ""
+    git_rev: str = "unknown"
+
+
+def _workflow_budget_for(budget: str) -> dict[str, Any]:
+    if budget == "eval":
+        return dict(EVAL_WORKFLOW_BUDGET)
+    if budget == "production":
+        return {"mode": "default"}
+    if budget == "long":
+        return {"mode": "long"}
+    raise ValueError(f"Unknown budget {budget!r}; expected one of {BUDGETS}.")
+
+
+def _git_rev() -> str:
+    try:
+        return subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        ).stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _sha256_of(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _warn(message: str) -> None:
+    print(f"WARNING: {message}", file=sys.stderr, flush=True)
+
+
+@contextmanager
+def _settings_override(name: str, value: Any, *, missing_warning: str | None = None) -> Iterator[bool]:
+    """Set ``settings.<name>`` for one sample and restore it afterwards.
+
+    Yields whether the attribute exists in this build. Unknown attributes are
+    left alone (pydantic refuses to set undeclared fields) so a flag whose
+    product-side switch ships in a separate PR degrades to a warning.
+    """
+    if not hasattr(settings, name):
+        if missing_warning:
+            _warn(missing_warning)
+        yield False
+        return
+    previous = getattr(settings, name)
+    setattr(settings, name, value)
+    try:
+        yield True
+    finally:
+        setattr(settings, name, previous)
+
+
+@contextmanager
+def _lane_override_patch(enabled: bool) -> Iterator[None]:
+    """Evaluation-only monkeypatch: open the heavy lane for every non-deterministic task kind.
+
+    Wraps ``classify_task_kind`` on the loop module namespace (the loop looks
+    the name up at call time) so ``heavy_route_allowed`` is True for every
+    ``task_kind`` except ``deterministic_source_check``. Product code and
+    ``prompt_routing`` itself are untouched; the original is restored after
+    the sample.
+    """
+    if not enabled:
+        yield
+        return
+    from app.services.agent_runtime import loop as loop_module
+
+    original = loop_module.classify_task_kind
+
+    def _open_lane(text: str):
+        decision = original(text)
+        if decision.get("task_kind") != "deterministic_source_check":
+            decision = dict(decision)
+            decision["heavy_route_allowed"] = True
+        return decision
+
+    loop_module.classify_task_kind = _open_lane
+    try:
+        yield
+    finally:
+        loop_module.classify_task_kind = original
+
+
+def _routing_probe(prompt: str) -> dict[str, Any]:
+    """Record what the pure routing functions say about the prompt.
+
+    Uses ``prompt_routing`` directly, so the probe is unaffected by
+    ``--lane-override`` and makes static routing explicit per sample.
+    """
+    from app.services.agent_runtime import prompt_routing
+
+    decision = prompt_routing.classify_task_kind(prompt)
+    direct_route = prompt_routing._cosmology_direct_route_from_prompt(prompt)
+    return {
+        "task_kind": decision.get("task_kind"),
+        "heavy_route_allowed": bool(decision.get("heavy_route_allowed")),
+        "confidence": decision.get("confidence"),
+        "matched_signals": list(decision.get("matched_signals") or []),
+        "cosmology_likelihood_workflow": bool(
+            prompt_routing._is_cosmology_likelihood_workflow(prompt)
+        ),
+        "research_program_workflow": bool(
+            prompt_routing._is_research_program_workflow(prompt)
+        ),
+        "cosmology_direct_route": (
+            [str(call.get("name") or "") for call in direct_route]
+            if direct_route
+            else None
+        ),
+    }
+
+
+def _tool_scalar_universe(result: dict[str, Any]) -> list[float]:
+    """Finite numbers reachable in tool result payloads (depth <= 6).
+
+    Skips citation/hash keys (``claim_validator._CITATION_KEYS_BLACKLIST``)
+    for the same reason the validator does: bibcodes and digests would
+    otherwise launder fabricated numbers into the universe.
+    """
+    from app.services.claim_validator import _CITATION_KEYS_BLACKLIST
+
+    values: set[float] = set()
+
+    def _walk(node: Any, depth: int) -> None:
+        if depth > SCALAR_UNIVERSE_DEPTH or len(values) >= SCALAR_UNIVERSE_LIMIT:
+            return
+        if isinstance(node, bool):
+            return
+        if isinstance(node, (int, float)):
+            number = float(node)
+            if math.isfinite(number):
+                values.add(number)
+            return
+        if isinstance(node, dict):
+            for key, child in node.items():
+                if str(key) in _CITATION_KEYS_BLACKLIST:
+                    continue
+                _walk(child, depth + 1)
+            return
+        if isinstance(node, (list, tuple)):
+            for child in node:
+                _walk(child, depth + 1)
+
+    for item in result.get("tool_results") or []:
+        if isinstance(item, dict):
+            _walk(item.get("result"), 1)
+    return sorted(values)[:SCALAR_UNIVERSE_LIMIT]
+
+
+def _trace_from_events(events: list[dict[str, Any]]) -> dict[str, Any]:
+    budget_event = next((e for e in events if e.get("type") == "workflow_budget"), {})
+    tool_sequence: list[str] = []
+    forced = 0
+    automatic = 0
+    forced_run = False
+    for event in events:
+        kind = event.get("type")
+        if kind == "status":
+            message = str(event.get("message") or "")
+            forced_run = message.startswith(FORCED_ROUTE_STATUS_PREFIXES)
+            continue
+        if kind != "tool_call":
+            forced_run = False
+            continue
+        tool_sequence.append(str(event.get("tool") or ""))
+        if event.get("automatic"):
+            automatic += 1
+        elif forced_run:
+            forced += 1
+    soft_reminder = any(
+        e.get("type") == "status" and SOFT_REMINDER_MARKER in str(e.get("message") or "")
+        for e in events
+    )
+    drafts = sum(
+        1 for e in events if e.get("type") == "agent_text" and e.get("draft") is True
+    )
+    return {
+        "budget_mode": budget_event.get("mode"),
+        "max_iterations": budget_event.get("max_iterations"),
+        "agent_loop_seconds": budget_event.get("agent_loop_seconds"),
+        "n_tool_calls": len(tool_sequence),
+        "tool_sequence": tool_sequence,
+        "distinct_tools": sorted(set(tool_sequence)),
+        "forced_tool_calls": forced,
+        "automatic_tool_calls": automatic,
+        "model_chosen_tool_calls": len(tool_sequence) - forced - automatic,
+        "soft_reminder_fired": soft_reminder,
+        "draft_agent_text_events": drafts,
+    }
+
+
 async def _run_direct(model: str, prompt: str) -> dict[str, Any]:
     response = await LocalBackend().complete(
         [{"role": "user", "content": prompt}],
@@ -251,46 +579,100 @@ async def _run_direct(model: str, prompt: str) -> dict[str, Any]:
     }
 
 
-async def _run_standard(model: str, prompt: str, sample_key: str) -> dict[str, Any]:
-    result = await chat._run_agent_loop(
-        system=chat.SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": prompt}],
-        tools=chat._filter_tools_by_research_focus(list(TOOLS)),
-        provider_api_keys={},
-        agent_name="orchestrator",
-        python_session_id=f"v02-{sample_key[:32]}-{uuid.uuid4().hex}",
-        preferred_backend="local",
-        model_profile=_profile(model),
-        workflow_budget={
-            "mode": "default",
-            "max_iterations": 5,
-            "agent_loop_seconds": 240,
-            "summary_reserve_seconds": 30,
-        },
-    )
-    return {
+async def _run_standard(
+    model: str,
+    prompt: str,
+    sample_key: str,
+    *,
+    lightweight: bool = True,
+    options: RunOptions = RunOptions(),
+) -> dict[str, Any]:
+    events: list[dict[str, Any]] = []
+
+    async def collect(event: dict) -> None:
+        events.append(dict(event))
+
+    system = chat.SYSTEM_PROMPT
+    if options.system_appendix:
+        # Evaluation-only copy; app/prompts is untouched.
+        system = chat.SYSTEM_PROMPT + "\n\n" + options.system_appendix
+
+    visible_before = len(_VISIBLE_TOOLS_LOG)
+    steering_present = exploration_present = False
+    with ExitStack() as stack:
+        stack.enter_context(
+            _settings_override("lightweight_verification_enabled", lightweight)
+        )
+        if options.steering_off:
+            steering_present = stack.enter_context(
+                _settings_override("evaluation_steering_disabled", True)
+            )
+        if options.exploration_phase:
+            exploration_present = stack.enter_context(
+                _settings_override("exploration_phase_enabled", True)
+            )
+        stack.enter_context(_lane_override_patch(options.lane_override))
+        started = time.monotonic()
+        result = await chat._run_agent_loop(
+            system=system,
+            messages=[{"role": "user", "content": prompt}],
+            tools=chat._filter_tools_by_research_focus(list(TOOLS)),
+            provider_api_keys={},
+            agent_name="orchestrator",
+            python_session_id=f"v02-{sample_key[:32]}-{uuid.uuid4().hex}",
+            preferred_backend="local",
+            model_profile=_profile(model),
+            workflow_budget=_workflow_budget_for(options.budget),
+            on_event=collect,
+        )
+        elapsed = time.monotonic() - started
+
+    if options.drafts_path is not None:
+        for event in events:
+            if "draft" in event:
+                _append_jsonl(
+                    options.drafts_path,
+                    {"sample_key": sample_key, "git_rev": options.git_rev, **event},
+                )
+
+    output: dict[str, Any] = {
         "reply": result.get("reply"),
         "tools": _compact_tools(result),
         "validation_summary": result.get("validation_summary"),
         "hit_deadline": bool(result.get("hit_deadline", False)),
         "hit_iteration_cap": bool(result.get("hit_iteration_cap", False)),
+        "lightweight_verification_enabled": lightweight,
+        "steering_disabled": steering_present,
+        "exploration_phase_enabled": exploration_present,
+        "elapsed_seconds": round(elapsed, 3),
+        "visible_tools_per_llm_call": list(_VISIBLE_TOOLS_LOG[visible_before:]),
+        "routing_probe": _routing_probe(prompt),
+        "tool_scalar_universe": _tool_scalar_universe(result),
     }
+    output.update(_trace_from_events(events))
+    return output
 
 
 async def _run_sample(
     *,
     model: str,
     condition: str,
-    task: dict[str, Any],
+    task_id: str,
+    prompt: str,
     repeat_index: int,
     evaluation_id: str,
+    variant_id: str | None = None,
+    lightweight: bool = True,
+    lightweight_suffix: str | None = None,
+    options: RunOptions = RunOptions(),
 ) -> dict[str, Any]:
-    task_id = str(task["id"])
     key = _sample_key(
         model=model,
         condition=condition,
         task_id=task_id,
         repeat_index=repeat_index,
+        variant_id=variant_id,
+        lightweight_suffix=lightweight_suffix,
     )
     started = time.monotonic()
     calls_before = _LLM_CALL_COUNT
@@ -302,12 +684,18 @@ async def _run_sample(
         "condition": condition,
         "task_id": task_id,
         "repeat_index": repeat_index,
+        "variant_id": variant_id,
+        "arm": options.arm,
+        "tasks_sha256": options.tasks_sha256,
+        "git_rev": options.git_rev,
     }
     try:
         if condition == "direct":
-            output = await _run_direct(model, str(task["prompt"]))
+            output = await _run_direct(model, prompt)
         else:
-            output = await _run_standard(model, str(task["prompt"]), key)
+            output = await _run_standard(
+                model, prompt, key, lightweight=lightweight, options=options
+            )
         record.update(output)
         record["status"] = "completed"
     except Exception as exc:  # preserve the rest of the registered matrix
@@ -337,14 +725,93 @@ def _append_jsonl(path: Path, record: dict[str, Any]) -> None:
         handle.flush()
 
 
+@dataclass(frozen=True)
+class SampleSpec:
+    model: str
+    condition: str
+    task_id: str
+    variant_id: str | None
+    prompt: str
+    repeat_index: int
+    lightweight: bool
+    lightweight_suffix: str | None
+
+    @property
+    def key(self) -> str:
+        return _sample_key(
+            model=self.model,
+            condition=self.condition,
+            task_id=self.task_id,
+            repeat_index=self.repeat_index,
+            variant_id=self.variant_id,
+            lightweight_suffix=self.lightweight_suffix,
+        )
+
+
+def _lightweight_states(choice: str) -> list[tuple[bool, str | None]]:
+    """``(enabled, key suffix)`` pairs; the suffix is set only for ``both``."""
+    if choice == "on":
+        return [(True, None)]
+    if choice == "off":
+        return [(False, None)]
+    if choice == "both":
+        return [(True, "on"), (False, "off")]
+    raise ValueError(f"Unknown lightweight choice {choice!r}.")
+
+
+def _iter_matrix(
+    *,
+    models: list[str],
+    conditions: list[str],
+    expanded_tasks: list[tuple[str, str | None, str]],
+    repeats: int,
+    lightweight: str = "on",
+) -> Iterator[SampleSpec]:
+    states = _lightweight_states(lightweight)
+    for model in models:
+        for condition in conditions:
+            for task_id, variant_id, prompt in expanded_tasks:
+                for repeat_index in range(1, repeats + 1):
+                    # The direct condition never enters the agent loop, so the
+                    # lightweight switch cannot change it: one sample, no suffix.
+                    for enabled, suffix in (states if condition != "direct" else [(True, None)]):
+                        yield SampleSpec(
+                            model=model,
+                            condition=condition,
+                            task_id=task_id,
+                            variant_id=variant_id,
+                            prompt=prompt,
+                            repeat_index=repeat_index,
+                            lightweight=enabled,
+                            lightweight_suffix=suffix,
+                        )
+
+
+def _resolve_arm(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Apply the ``--arm`` preset to unset flags, then fill the v0.2 defaults."""
+    preset = ARM_PRESETS.get(args.arm or "", {})
+    if preset.get("system_appendix_required") and args.system_appendix is None:
+        parser.error(f"--arm {args.arm} requires --system-appendix PATH")
+    if args.conditions is None:
+        args.conditions = list(preset.get("conditions") or CONDITIONS)
+    if args.budget is None:
+        args.budget = str(preset.get("budget") or "eval")
+    if args.lightweight is None:
+        args.lightweight = str(preset.get("lightweight") or "on")
+    if args.steering is None:
+        args.steering = str(preset.get("steering") or "on")
+    if preset.get("lane_override"):
+        args.lane_override = True
+    if preset.get("exploration_phase"):
+        args.exploration_phase = True
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tasks-path", type=Path, default=TASKS_PATH)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--models", nargs="+", choices=MODELS, default=list(MODELS))
-    parser.add_argument(
-        "--conditions", nargs="+", choices=CONDITIONS, default=list(CONDITIONS)
-    )
+    parser.add_argument("--conditions", nargs="+", choices=CONDITIONS, default=None)
     parser.add_argument("--task-ids", nargs="+")
     parser.add_argument("--repeats", type=int, default=DEFAULT_REPEATS)
     parser.add_argument("--no-resume", action="store_true")
@@ -352,12 +819,22 @@ async def main() -> None:
         "--evaluation-id",
         default="standard-astro-v02-lightweight-verification",
     )
+    # v0.3 exploration harness flags (plan §3.2). Defaults reproduce v0.2.
+    parser.add_argument("--budget", choices=BUDGETS, default=None)
+    parser.add_argument("--lightweight", choices=LIGHTWEIGHT_CHOICES, default=None)
+    parser.add_argument("--steering", choices=STEERING_CHOICES, default=None)
+    parser.add_argument("--arm", choices=sorted(ARM_PRESETS), default=None)
+    parser.add_argument("--system-appendix", type=Path, default=None)
+    parser.add_argument("--lane-override", action="store_true")
+    parser.add_argument("--record-pregate-drafts", action="store_true")
+    parser.set_defaults(exploration_phase=False)
     args = parser.parse_args()
     if args.repeats < 1:
         parser.error("--repeats must be positive")
     if args.no_resume and args.output.exists():
         parser.error("--no-resume requires a new output path; refusing to append duplicates")
     _validate_model_backends(parser, args.models)
+    _resolve_arm(parser, args)
 
     tasks = _load_tasks(args.tasks_path)
     if args.task_ids:
@@ -367,45 +844,85 @@ async def main() -> None:
         if unknown:
             parser.error(f"Unknown task ids: {sorted(unknown)}")
         tasks = [task for task in tasks if task["id"] in requested]
+    expanded_tasks = _expand_variants(tasks)
     completed = set() if args.no_resume else _completed_keys(args.output)
-    settings.lightweight_verification_enabled = True
     _install_llm_call_counter()
 
-    total = len(args.models) * len(args.conditions) * len(tasks) * args.repeats
+    git_rev = _git_rev()
+    steering_off = args.steering == "off"
+    if steering_off and not hasattr(settings, "evaluation_steering_disabled"):
+        _warn(
+            "--steering off requested but settings.evaluation_steering_disabled "
+            "is not present in this build; samples record steering_disabled=false."
+        )
+    if args.exploration_phase and not hasattr(settings, "exploration_phase_enabled"):
+        _warn(
+            "--arm C2_exploration requested but settings.exploration_phase_enabled "
+            "is not present in this build; samples record exploration_phase_enabled=false."
+        )
+    options = RunOptions(
+        budget=args.budget,
+        steering_off=steering_off,
+        arm=args.arm,
+        system_appendix=(
+            args.system_appendix.read_text(encoding="utf-8")
+            if args.system_appendix is not None
+            else None
+        ),
+        lane_override=bool(args.lane_override),
+        exploration_phase=bool(args.exploration_phase),
+        # Offline pre-gate drafts: evaluation-only, never served, never
+        # copied under docs/research (see run_exploration_matrix.sh).
+        drafts_path=(
+            args.output.parent / f"offline_drafts_{git_rev}.jsonl"
+            if args.record_pregate_drafts
+            else None
+        ),
+        tasks_sha256=_sha256_of(args.tasks_path),
+        git_rev=git_rev,
+    )
+
+    specs = list(
+        _iter_matrix(
+            models=args.models,
+            conditions=args.conditions,
+            expanded_tasks=expanded_tasks,
+            repeats=args.repeats,
+            lightweight=args.lightweight,
+        )
+    )
+    total = len(specs)
     pending = 0
-    for model in args.models:
-        for condition in args.conditions:
-            for task in tasks:
-                for repeat_index in range(1, args.repeats + 1):
-                    key = _sample_key(
-                        model=model,
-                        condition=condition,
-                        task_id=str(task["id"]),
-                        repeat_index=repeat_index,
-                    )
-                    if key in completed:
-                        continue
-                    pending += 1
-                    sample = await _run_sample(
-                        model=model,
-                        condition=condition,
-                        task=task,
-                        repeat_index=repeat_index,
-                        evaluation_id=args.evaluation_id,
-                    )
-                    _append_jsonl(args.output, sample)
-                    print(
-                        json.dumps(
-                            {
-                                "progress": f"{len(completed) + pending}/{total}",
-                                "sample_key": key,
-                                "status": sample["status"],
-                                "duration_seconds": sample["duration_seconds"],
-                            },
-                            ensure_ascii=False,
-                        ),
-                        flush=True,
-                    )
+    for spec in specs:
+        key = spec.key
+        if key in completed:
+            continue
+        pending += 1
+        sample = await _run_sample(
+            model=spec.model,
+            condition=spec.condition,
+            task_id=spec.task_id,
+            prompt=spec.prompt,
+            repeat_index=spec.repeat_index,
+            evaluation_id=args.evaluation_id,
+            variant_id=spec.variant_id,
+            lightweight=spec.lightweight,
+            lightweight_suffix=spec.lightweight_suffix,
+            options=options,
+        )
+        _append_jsonl(args.output, sample)
+        print(
+            json.dumps(
+                {
+                    "progress": f"{len(completed) + pending}/{total}",
+                    "sample_key": key,
+                    "status": sample["status"],
+                    "duration_seconds": sample["duration_seconds"],
+                },
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
 
 
 if __name__ == "__main__":

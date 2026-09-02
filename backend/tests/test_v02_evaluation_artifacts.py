@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 from pathlib import Path
 
@@ -1078,3 +1079,231 @@ def test_completed_keys_duplicate_after_success_still_raises(
         evaluator._completed_keys(samples)
     with pytest.raises(ValueError):
         scorer._read_samples(samples)
+
+
+# ---------------------------------------------------------------------------
+# v0.3 exploration harness extensions (plan §3.2) — default behaviour is the
+# v0.2 matrix byte-for-byte; only explicit flags change anything.
+# ---------------------------------------------------------------------------
+
+
+def test_budget_flag_maps_to_runtime_config() -> None:
+    from app.services.agent_runtime.runtime_config import _workflow_budget_config
+
+    assert evaluator._workflow_budget_for("eval") == {
+        "mode": "default",
+        "max_iterations": 5,
+        "agent_loop_seconds": 240,
+        "summary_reserve_seconds": 30,
+    }
+    assert evaluator._workflow_budget_for("production") == {"mode": "default"}
+    assert evaluator._workflow_budget_for("long") == {"mode": "long"}
+    with pytest.raises(ValueError):
+        evaluator._workflow_budget_for("bogus")
+
+    # The loop applies ``budget = config(mode); budget.update(overrides)``.
+    for name, expected in (("eval", (5, 240)), ("production", (12, 360)), ("long", (30, 1800))):
+        overrides = evaluator._workflow_budget_for(name)
+        budget = _workflow_budget_config(overrides.get("mode"))
+        budget.update(overrides)
+        assert (budget["max_iterations"], int(budget["agent_loop_seconds"])) == expected
+
+
+def test_variant_sample_keys_are_unique_and_default_keys_unchanged() -> None:
+    # v0.2 shape: no variant, no lightweight suffix -> today's key.
+    assert (
+        evaluator._sample_key(
+            model="claude-fable-5", condition="standard_astro", task_id="V02_01", repeat_index=2
+        )
+        == "claude-fable-5|standard_astro|V02_01|2"
+    )
+    assert (
+        evaluator._sample_key(
+            model="m", condition="c", task_id="T", repeat_index=1, variant_id="zh"
+        )
+        == "m|c|T__zh|1"
+    )
+    assert (
+        evaluator._sample_key(
+            model="m", condition="c", task_id="T", repeat_index=1, lightweight_suffix="off"
+        )
+        == "m|c|T|1|lv=off"
+    )
+
+    tasks = [
+        {"id": "T1", "prompt": "plain"},
+        {
+            "id": "T2",
+            "prompt": "unused reference",
+            "variants": [
+                {"variant_id": "formal_en", "prompt": "formal"},
+                {"variant_id": "zh", "prompt": "中文"},
+            ],
+        },
+    ]
+    expanded = evaluator._expand_variants(tasks)
+    assert expanded == [
+        ("T1", None, "plain"),
+        ("T2", "formal_en", "formal"),
+        ("T2", "zh", "中文"),
+    ]
+    specs = list(
+        evaluator._iter_matrix(
+            models=["m"], conditions=["direct", "standard_astro"], expanded_tasks=expanded, repeats=2
+        )
+    )
+    keys = [spec.key for spec in specs]
+    assert len(keys) == len(set(keys)) == 2 * 3 * 2
+    assert "m|direct|T1|1" in keys and "m|standard_astro|T2__zh|2" in keys
+    assert not any("lv=" in key for key in keys)
+
+    # The frozen paraphrase file (2026-08-06) expands to unique keys too.
+    variants_path = evaluator.REPO_ROOT / "docs/research/standard_astro_v02_paraphrase_variants.json"
+    frozen = evaluator._expand_variants(evaluator._load_tasks(variants_path))
+    frozen_keys = {
+        evaluator._sample_key(
+            model="m", condition="standard_astro", task_id=task_id, repeat_index=1, variant_id=variant_id
+        )
+        for task_id, variant_id, _prompt in frozen
+    }
+    assert len(frozen_keys) == len(frozen) == 8 * 4
+
+    with pytest.raises(ValueError, match="variant ids"):
+        evaluator._expand_variants(
+            [{"id": "T", "variants": [{"variant_id": "a", "prompt": "x"}, {"variant_id": "a", "prompt": "y"}]}]
+        )
+
+
+def test_lightweight_both_doubles_matrix_and_restores_setting(monkeypatch) -> None:
+    expanded = [("T1", None, "prompt one")]
+    single = list(
+        evaluator._iter_matrix(
+            models=["m"], conditions=["standard_astro"], expanded_tasks=expanded, repeats=2
+        )
+    )
+    both = list(
+        evaluator._iter_matrix(
+            models=["m"],
+            conditions=["standard_astro"],
+            expanded_tasks=expanded,
+            repeats=2,
+            lightweight="both",
+        )
+    )
+    assert [spec.key for spec in single] == ["m|standard_astro|T1|1", "m|standard_astro|T1|2"]
+    assert [spec.key for spec in both] == [
+        "m|standard_astro|T1|1|lv=on",
+        "m|standard_astro|T1|1|lv=off",
+        "m|standard_astro|T1|2|lv=on",
+        "m|standard_astro|T1|2|lv=off",
+    ]
+    assert [spec.lightweight for spec in both] == [True, False, True, False]
+    # The direct condition never enters the agent loop: one sample, no suffix.
+    direct = list(
+        evaluator._iter_matrix(
+            models=["m"], conditions=["direct"], expanded_tasks=expanded, repeats=1, lightweight="both"
+        )
+    )
+    assert [spec.key for spec in direct] == ["m|direct|T1|1"]
+
+    observed: list[bool] = []
+
+    async def fake_loop(**kwargs):
+        observed.append(bool(evaluator.settings.lightweight_verification_enabled))
+        on_event = kwargs["on_event"]
+        await on_event({"type": "workflow_budget", "mode": "default", "max_iterations": 12, "agent_loop_seconds": 360})
+        await on_event({"type": "status", "message": "Listing the curated observational-cosmology dataset registry."})
+        await on_event({"type": "tool_call", "tool": "list_cosmology_datasets", "input": {}})
+        await on_event({"type": "tool_call", "tool": "build_cosmology_likelihood", "input": {}})
+        await on_event({"type": "agent_text", "content": "thinking"})
+        await on_event({"type": "tool_call", "tool": "run_cosmology_likelihood", "input": {}})
+        await on_event({"type": "agent_text", "content": "withheld", "draft": True})
+        assert kwargs["workflow_budget"] == {"mode": "default"}
+        return {
+            "reply": "done",
+            "validation_summary": None,
+            "tool_results": [
+                {"tool": "run_cosmology_likelihood", "result": {"H0": 67.4, "bibcode": "2020A&A...641A...6P", "n": 3}}
+            ],
+        }
+
+    monkeypatch.setattr(evaluator.chat, "_run_agent_loop", fake_loop)
+    monkeypatch.setattr(evaluator.settings, "lightweight_verification_enabled", False)
+    options = evaluator.RunOptions(budget="production", arm="C1", tasks_sha256="abc", git_rev="deadbee")
+
+    records = []
+    for spec in both[:2]:
+        records.append(
+            asyncio.run(
+                evaluator._run_sample(
+                    model=spec.model,
+                    condition=spec.condition,
+                    task_id=spec.task_id,
+                    prompt=spec.prompt,
+                    repeat_index=spec.repeat_index,
+                    evaluation_id="test",
+                    variant_id=spec.variant_id,
+                    lightweight=spec.lightweight,
+                    lightweight_suffix=spec.lightweight_suffix,
+                    options=options,
+                )
+            )
+        )
+        # Restored after every sample, whatever the sample set.
+        assert evaluator.settings.lightweight_verification_enabled is False
+
+    assert observed == [True, False]
+    assert [r["status"] for r in records] == ["completed", "completed"]
+    assert [r["lightweight_verification_enabled"] for r in records] == [True, False]
+    first = records[0]
+    assert first["sample_key"] == "m|standard_astro|T1|1|lv=on"
+    assert first["arm"] == "C1" and first["git_rev"] == "deadbee" and first["tasks_sha256"] == "abc"
+    assert first["variant_id"] is None
+    assert (first["budget_mode"], first["max_iterations"], first["agent_loop_seconds"]) == ("default", 12, 360)
+    assert first["tool_sequence"] == [
+        "list_cosmology_datasets",
+        "build_cosmology_likelihood",
+        "run_cosmology_likelihood",
+    ]
+    assert first["n_tool_calls"] == 3
+    assert first["forced_tool_calls"] == 2
+    assert first["model_chosen_tool_calls"] == 1
+    assert first["soft_reminder_fired"] is False
+    assert first["draft_agent_text_events"] == 1
+    assert first["steering_disabled"] is False
+    assert first["tool_scalar_universe"] == [3.0, 67.4]
+    assert first["routing_probe"]["task_kind"] in {
+        "deterministic_source_check",
+        "research_exploration",
+        "full_research",
+        "general",
+    }
+    assert first["llm_calls"] == 0 and first["visible_tools_per_llm_call"] == []
+    assert first["elapsed_seconds"] >= 0
+
+
+def test_v03_task_file_loads_without_the_eight_task_rule(tmp_path: Path) -> None:
+    v03 = tmp_path / "v03.json"
+    v03.write_text(
+        json.dumps(
+            {
+                "evaluation_id": "standard-astro-v03-exploration-depth",
+                "tasks": [{"id": "V03_01", "prompt": "a"}, {"id": "V03_02", "prompt": "b"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert [task["id"] for task in evaluator._load_tasks(v03)] == ["V03_01", "V03_02"]
+
+    v02 = tmp_path / "v02.json"
+    v02.write_text(
+        json.dumps(
+            {
+                "evaluation_id": "standard-astro-v02-something",
+                "tasks": [{"id": "V02_01", "prompt": "a"}, {"id": "V02_02", "prompt": "b"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="exactly eight tasks"):
+        evaluator._load_tasks(v02)

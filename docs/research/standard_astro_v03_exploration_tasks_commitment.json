@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0",
+  "artifact_role": "preregistration_commitment",
+  "tasks_file": "standard_astro_v03_exploration_tasks.json",
+  "evaluation_id": "standard-astro-v03-exploration-depth",
+  "sha256": "4c0a449da5c1b0e6384f9b722c5c2c9cbdbdfcda76147cecc11f513216118b3a",
+  "size_bytes": 53656,
+  "frozen_at": "2026-09-03",
+  "frozen_at_commit": "3a7e6e4",
+  "status": "FROZEN_NOT_YET_RUN",
+  "purpose": "Freeze the eight exploration-depth prompts, their reachable sets and their expected routing before any run, so a result cannot be produced by editing the task after seeing the samples.",
+  "amendment_policy": "Any change to a prompt, reachable set, next-obvious sequence or decision rule requires a NEW task file with a NEW commitment; this file and its tasks file are retained unchanged. Editing the frozen file in place invalidates the pre-registration.",
+  "verification": "backend/tests/test_v03_exploration_tasks.py recomputes the digest and re-derives the routing of every prompt from app.services.agent_runtime.prompt_routing."
+}
