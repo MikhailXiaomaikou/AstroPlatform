@@ -910,6 +910,19 @@ def _canonical_parameter(name: str) -> str:
     return _PARAMETER_ALIASES.get(key, key)
 
 
+# Statistics that ARE the parameter's value.  A spread (std, sigma, error,
+# an interval edge) is a different quantity and must not ground a bare
+# assignment like "H0 = 0.42".
+_CENTRAL_ESTIMATE_STATS = frozenset({
+    "median", "mean", "value", "best_fit", "bestfit", "map", "mode",
+    "central", "central_value", "point_estimate", "estimate", "",
+})
+
+
+def _is_central_estimate(stat: str) -> bool:
+    return str(stat or "").strip().lower() in _CENTRAL_ESTIMATE_STATS
+
+
 def _claimable_values_by_parameter(tool_results: Any) -> dict[str, set[float]]:
     """Claimable current-turn values, bucketed by the parameter they measure.
 
@@ -924,13 +937,27 @@ def _claimable_values_by_parameter(tool_results: Any) -> dict[str, set[float]]:
         tool, result = _entry_tool_and_result(entry)
         if not result or not _claimable_result(tool, result):
             continue
-        for container_key in _POSTERIOR_KEYS:
-            container = result.get(container_key)
-            if container is None:
-                continue
-            for parameter, _stat, value in _named_numbers(container):
-                if parameter:
-                    buckets.setdefault(_canonical_parameter(parameter), set()).add(value)
+        # `_claimable_result` accepts a publication-ready payload nested under
+        # `result` (get_cosmology_run_status), so the scan has to look there
+        # too: a nested posterior_summary supported the value in
+        # validate_claims while this replaced it with [withheld] (Codex review
+        # 2026-09-03).
+        payloads = [result]
+        nested = result.get("result")
+        if isinstance(nested, dict):
+            payloads.append(nested)
+        for payload in payloads:
+            for container_key in _POSTERIOR_KEYS:
+                container = payload.get(container_key)
+                if container is None:
+                    continue
+                for parameter, stat, value in _named_numbers(container):
+                    # The statistic TYPE matters.  Dropping every leaf of an
+                    # H0 record into one bucket let its own std, 0.42, support
+                    # an invented central estimate "H0 = 0.42", which
+                    # validate_claims rejects (Codex review 2026-09-03).
+                    if parameter and _is_central_estimate(stat):
+                        buckets.setdefault(_canonical_parameter(parameter), set()).add(value)
     return buckets
 
 

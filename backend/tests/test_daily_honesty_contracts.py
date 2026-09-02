@@ -2219,3 +2219,47 @@ def test_draft_redaction_covers_every_validated_parameter_and_its_uncertainty() 
         "Draft: H0 = 73.24 km/s/Mpc, at redshift 0.51.", [], _LISTED_ONLY
     )
     assert count == 1 and "0.51" in partial
+
+
+def test_a_spread_does_not_ground_a_central_estimate() -> None:
+    """H0's own std must not support an invented "H0 = 0.42".
+
+    Every leaf of an H0 record went into one bucket, so the record's spread
+    grounded a bare assignment that ``validate_claims`` rejects (Codex review
+    2026-09-03).  Only central-estimate statistics ground a value.
+    """
+    from app.services.agent_runtime.honesty import redact_gated_values
+
+    published = _claimable("H0", 67.36, 0.42)
+    redacted, count = redact_gated_values("Draft: H0 = 0.42 km/s/Mpc.", [], published)
+    assert count == 1 and "0.42" not in redacted
+    # The central estimate still grounds itself, and a supported pair with its
+    # own uncertainty is still untouched.
+    survives, count = redact_gated_values("Draft: H0 = 67.36 km/s/Mpc.", [], published)
+    assert count == 0
+    survives, count = redact_gated_values("Draft: H0 = 67.36 ± 0.42 km/s/Mpc.", [], published)
+    assert count == 0
+
+
+def test_a_nested_publication_ready_result_grounds_its_values() -> None:
+    """``get_cosmology_run_status`` nests its payload under ``result``.
+
+    ``_claimable_result`` accepts that shape, so ``validate_claims`` treats
+    the nested posterior as support while the draft channel replaced the same
+    value with ``[withheld]`` -- the two disagreeing about the same evidence
+    (Codex review 2026-09-03).
+    """
+    from app.services.agent_runtime.honesty import redact_gated_values
+
+    nested = [{
+        "tool": "get_cosmology_run_status",
+        "result": {"success": True, "result": {
+            "publication_ready": True, "chain_tier": "publication",
+            "posterior_summary": {"H0": {"median": 67.36, "std": 0.42}},
+        }},
+    }]
+    survives, count = redact_gated_values("Draft: H0 = 67.36 km/s/Mpc.", [], nested)
+    assert count == 0 and survives.endswith("H0 = 67.36 km/s/Mpc.")
+    # A value that record does NOT carry is still blanked.
+    redacted, count = redact_gated_values("Draft: H0 = 73.24 km/s/Mpc.", [], nested)
+    assert count == 1 and "73.24" not in redacted
