@@ -218,6 +218,40 @@ def _load_tasks(path: Path) -> list[dict[str, Any]]:
     return tasks
 
 
+def _registered_repeats(path: Path, tasks: list[dict[str, Any]]) -> dict[str, int]:
+    """Per-task repeat counts taken from the task file's registered design.
+
+    The v0.3 file registers repeats per ``task_class`` (chain x2, open x4;
+    conditions.C1 and analysis_plan.power_note). A single global ``--repeats``
+    would run the open tasks at the underpowered count where a zero-event
+    result cannot exclude the 25% threshold (review 2026-09-03). A file with
+    no ``registered_repeats`` (every v0.2 file) yields an empty mapping and the
+    caller keeps its own default.
+    """
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    registered = payload.get("registered_repeats")
+    if not isinstance(registered, dict) or not registered:
+        return {}
+    counts: dict[str, int] = {}
+    for task_class, value in registered.items():
+        count = int(value)
+        if count < 1:
+            raise ValueError(
+                f"registered_repeats[{task_class!r}] must be positive, got {value!r}."
+            )
+        counts[str(task_class)] = count
+    per_task: dict[str, int] = {}
+    for task in tasks:
+        task_class = str(task.get("task_class") or "")
+        if task_class not in counts:
+            raise ValueError(
+                f"Task {task['id']} has task_class {task_class!r}, which "
+                f"registered_repeats does not cover ({sorted(counts)})."
+            )
+        per_task[str(task["id"])] = counts[task_class]
+    return per_task
+
+
 def _expand_variants(tasks: list[dict[str, Any]]) -> list[tuple[str, str | None, str]]:
     """Expand tasks to ``(task_id, variant_id, prompt)`` triples.
 
@@ -777,12 +811,16 @@ def _iter_matrix(
     expanded_tasks: list[tuple[str, str | None, str]],
     repeats: int,
     lightweight: str = "on",
+    repeats_by_task: dict[str, int] | None = None,
 ) -> Iterator[SampleSpec]:
     states = _lightweight_states(lightweight)
     for model in models:
         for condition in conditions:
             for task_id, variant_id, prompt in expanded_tasks:
-                for repeat_index in range(1, repeats + 1):
+                # Each task gets its registered repeat count; ``repeats`` is
+                # the fallback and the explicit ``--repeats`` override.
+                task_repeats = (repeats_by_task or {}).get(task_id, repeats)
+                for repeat_index in range(1, task_repeats + 1):
                     # The direct condition never enters the agent loop, so the
                     # lightweight switch cannot change it: one sample, no suffix.
                     for enabled, suffix in (states if condition != "direct" else [(True, None)]):
@@ -799,7 +837,11 @@ def _iter_matrix(
 
 
 def _resolve_arm(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
-    """Apply the ``--arm`` preset to unset flags, then fill the v0.2 defaults."""
+    """Apply the ``--arm`` preset to unset flags, then fill the v0.2 defaults.
+
+    Also the choke point that refuses an arm whose intervention this build
+    cannot perform.
+    """
     preset = ARM_PRESETS.get(args.arm or "", {})
     if preset.get("system_appendix_required") and args.system_appendix is None:
         parser.error(f"--arm {args.arm} requires --system-appendix PATH")
@@ -815,6 +857,15 @@ def _resolve_arm(parser: argparse.ArgumentParser, args: argparse.Namespace) -> N
         args.lane_override = True
     if preset.get("exploration_phase"):
         args.exploration_phase = True
+    if args.steering == "off" and not hasattr(settings, "evaluation_steering_disabled"):
+        # Fail closed. Without the switch the run collects ordinary flag-off
+        # samples that are merely labelled C2d, and an ablation that intervened
+        # in nothing would read as if it had (review 2026-09-03).
+        parser.error(
+            "steering off requires settings.evaluation_steering_disabled, which this "
+            "build does not have; the run would collect ordinary samples labelled as "
+            "the steering ablation. Ship the product-side switch (PR-3b) first."
+        )
 
 
 async def main() -> None:
@@ -824,7 +875,9 @@ async def main() -> None:
     parser.add_argument("--models", nargs="+", choices=MODELS, default=list(MODELS))
     parser.add_argument("--conditions", nargs="+", choices=CONDITIONS, default=None)
     parser.add_argument("--task-ids", nargs="+")
-    parser.add_argument("--repeats", type=int, default=DEFAULT_REPEATS)
+    # Default None: each task takes the repeat count its file registers, and
+    # falls back to DEFAULT_REPEATS when the file registers none (v0.2 files).
+    parser.add_argument("--repeats", type=int, default=None)
     parser.add_argument("--no-resume", action="store_true")
     parser.add_argument(
         "--evaluation-id",
@@ -840,7 +893,7 @@ async def main() -> None:
     parser.add_argument("--record-pregate-drafts", action="store_true")
     parser.set_defaults(exploration_phase=False)
     args = parser.parse_args()
-    if args.repeats < 1:
+    if args.repeats is not None and args.repeats < 1:
         parser.error("--repeats must be positive")
     if args.no_resume and args.output.exists():
         parser.error("--no-resume requires a new output path; refusing to append duplicates")
@@ -867,17 +920,15 @@ async def main() -> None:
                 "but the task file has no such task."
             )
         tasks = selected
+    # An explicit --repeats overrides the registered per-class counts.
+    repeats_by_task = {} if args.repeats is not None else _registered_repeats(args.tasks_path, tasks)
     expanded_tasks = _expand_variants(tasks)
     completed = set() if args.no_resume else _completed_keys(args.output)
     _install_llm_call_counter()
 
     git_rev = _git_rev()
+    # _resolve_arm already refused this run if the steering switch is missing.
     steering_off = args.steering == "off"
-    if steering_off and not hasattr(settings, "evaluation_steering_disabled"):
-        _warn(
-            "--steering off requested but settings.evaluation_steering_disabled "
-            "is not present in this build; samples record steering_disabled=false."
-        )
     if args.exploration_phase and not hasattr(settings, "exploration_phase_enabled"):
         _warn(
             "--arm C2_exploration requested but settings.exploration_phase_enabled "
@@ -910,8 +961,9 @@ async def main() -> None:
             models=args.models,
             conditions=args.conditions,
             expanded_tasks=expanded_tasks,
-            repeats=args.repeats,
+            repeats=args.repeats if args.repeats is not None else DEFAULT_REPEATS,
             lightweight=args.lightweight,
+            repeats_by_task=repeats_by_task,
         )
     )
     total = len(specs)

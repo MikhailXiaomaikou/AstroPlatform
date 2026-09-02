@@ -111,3 +111,59 @@ def test_v03_analysis_plan_never_blends_strata() -> None:
     assert "premature_stop" in text
     assert "rule of three" in text or "rule_of_three" in text
     assert "0.25" in text or "25%" in text
+
+
+def _steps_for_flag(task: dict, flag: str) -> list[str]:
+    """The frozen steps that apply to one flag state.
+
+    A step prefixed ``flag_off:``/``flag_on:`` belongs to that state only;
+    every other step applies to both.
+    """
+    sequence = task["next_obvious_sequence"]
+    if isinstance(sequence, dict):
+        sequence = sequence.get(flag) or []
+    steps = []
+    for step in sequence:
+        prefix = step.split(":", 1)[0].strip() if ":" in step else ""
+        if prefix in {"flag_off", "flag_on"} and prefix != flag:
+            continue
+        steps.append(step)
+    return steps
+
+
+def test_v03_next_obvious_tools_projects_every_tool_named_in_a_step() -> None:
+    """The scorer declares a task complete once every projected name appears in
+    the trace, so a tool named in a step but missing from the projection makes a
+    stop before it score completed_reachable.  The four open tasks dropped
+    ``run_cosmology_likelihood_chain`` from their flag-off projection even though
+    the step reads ``build_cosmology_likelihood(...) ->
+    run_cosmology_likelihood_chain`` (review 2026-09-03)."""
+    for task in _tasks():
+        known_tools = set(task["reachable_set"]["flag_off"]) | set(task["reachable_set"]["flag_on"])
+        for flag in ("flag_off", "flag_on"):
+            named = {
+                tool
+                for step in _steps_for_flag(task, flag)
+                for tool in known_tools
+                if tool in step
+            }
+            projected = set(task["next_obvious_tools"][flag])
+            assert named <= projected, (task["id"], flag, sorted(named - projected))
+            # And nothing is projected that no step names.
+            assert projected <= named, (task["id"], flag, sorted(projected - named))
+
+
+def test_v03_registered_repeats_match_the_frozen_design() -> None:
+    """conditions.C1 and analysis_plan.power_note fix chain x2 and open x4; the
+    runner reads the mapping instead of applying one global --repeats, which
+    would put the open tasks at 12 samples per flag - the underpowered zone
+    where a zero-event result cannot exclude the 25% threshold."""
+    payload = _payload()
+    registered = payload["registered_repeats"]
+    assert registered == {"chain": 2, "open": 4}
+    assert "chain tasks x2 repeats, open tasks x4 repeats" in payload["conditions"]["C1"]
+    assert "--repeats 4" in payload["analysis_plan"]["power_note"]
+    classes = {task["task_class"] for task in _tasks()}
+    assert classes <= set(registered), classes - set(registered)
+    open_samples = registered["open"] * sum(1 for t in _tasks() if t["task_class"] == "open")
+    assert open_samples == 16  # per flag state; 3/16 = 18.75% excludes 25%

@@ -1307,3 +1307,95 @@ def test_v03_task_file_loads_without_the_eight_task_rule(tmp_path: Path) -> None
     )
     with pytest.raises(ValueError, match="exactly eight tasks"):
         evaluator._load_tasks(v02)
+
+
+def test_registered_repeats_give_each_task_class_its_count() -> None:
+    """The frozen v0.3 design registers chain x2 and open x4.  One global
+    --repeats produced 12 open samples per flag state - the underpowered zone
+    where a zero-event result cannot exclude the 25% threshold (review
+    2026-09-03).  An explicit --repeats still overrides the file."""
+    tasks_path = (
+        evaluator.REPO_ROOT / "docs/research/standard_astro_v03_exploration_tasks.json"
+    )
+    tasks = evaluator._load_tasks(tasks_path)
+    per_task = evaluator._registered_repeats(tasks_path, tasks)
+    task_class = {str(t["id"]): str(t["task_class"]) for t in tasks}
+    assert {task_class[k]: v for k, v in per_task.items()} == {"chain": 2, "open": 4}
+
+    specs = list(
+        evaluator._iter_matrix(
+            models=["m"],
+            conditions=["standard_astro"],
+            expanded_tasks=evaluator._expand_variants(tasks),
+            repeats=evaluator.DEFAULT_REPEATS,
+            lightweight="both",
+            repeats_by_task=per_task,
+        )
+    )
+    assert len({spec.key for spec in specs}) == len(specs)
+    open_off = [s for s in specs if task_class[s.task_id] == "open" and not s.lightweight]
+    chain_off = [s for s in specs if task_class[s.task_id] == "chain" and not s.lightweight]
+    assert len(open_off) == 16 and len(chain_off) == 8
+    assert sorted({s.repeat_index for s in open_off}) == [1, 2, 3, 4]
+    assert sorted({s.repeat_index for s in chain_off}) == [1, 2]
+
+    # No registered_repeats (every v0.2 file) -> the caller's own default.
+    v02_path = evaluator.REPO_ROOT / "docs/research/standard_astro_v02_preregistered_tasks.json"
+    assert evaluator._registered_repeats(v02_path, evaluator._load_tasks(v02_path)) == {}
+
+    # An explicit --repeats overrides: main() passes an empty mapping.
+    overridden = list(
+        evaluator._iter_matrix(
+            models=["m"],
+            conditions=["standard_astro"],
+            expanded_tasks=evaluator._expand_variants(tasks),
+            repeats=1,
+            lightweight="off",
+            repeats_by_task={},
+        )
+    )
+    assert len(overridden) == len(tasks)
+
+
+def test_steering_ablation_is_refused_when_the_switch_is_missing(monkeypatch) -> None:
+    """C2d's whole intervention is settings.evaluation_steering_disabled.  When
+    the build has no such switch the runner used to warn and then collect
+    ordinary flag-off samples labelled arm="C2d", so an ablation that
+    intervened in nothing could read as if it had (review 2026-09-03)."""
+
+    def _args(**overrides):
+        base = dict(
+            arm="C2d",
+            system_appendix=None,
+            conditions=None,
+            budget=None,
+            lightweight=None,
+            steering=None,
+            lane_override=False,
+            exploration_phase=False,
+        )
+        base.update(overrides)
+        return argparse.Namespace(**base)
+
+    parser = argparse.ArgumentParser()
+    monkeypatch.delattr(
+        type(evaluator.settings), "evaluation_steering_disabled", raising=False
+    )
+    assert not hasattr(evaluator.settings, "evaluation_steering_disabled")
+    with pytest.raises(SystemExit):
+        evaluator._resolve_arm(parser, _args())
+    # An explicit --steering off is refused for the same reason.
+    with pytest.raises(SystemExit):
+        evaluator._resolve_arm(parser, _args(arm=None, steering="off"))
+    # Arms that do not touch steering are unaffected.
+    resolved = _args(arm="C1")
+    evaluator._resolve_arm(parser, resolved)
+    assert resolved.steering == "on" and resolved.lightweight == "both"
+
+    # With the switch present the arm resolves to its registered cell.
+    monkeypatch.setattr(
+        type(evaluator.settings), "evaluation_steering_disabled", False, raising=False
+    )
+    c2d = _args()
+    evaluator._resolve_arm(parser, c2d)
+    assert (c2d.steering, c2d.lightweight, c2d.budget) == ("off", "off", "production")

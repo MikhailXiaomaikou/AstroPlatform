@@ -3,9 +3,14 @@
 #
 # Usage:
 #   bash scripts/run_exploration_matrix.sh ARM [MODEL ...] [-- extra runner flags]
-#   bash scripts/run_exploration_matrix.sh C1 claude-fable-5 --repeats 2 --budget production --lightweight both
+#   bash scripts/run_exploration_matrix.sh C1 claude-fable-5
 #   bash scripts/run_exploration_matrix.sh C0 claude-fable-5 --repeats 2
 #   bash scripts/run_exploration_matrix.sh C1 claude-fable-5 --task-ids V03_03_h0_anchor_clustering --repeats 1 --lightweight off
+#
+# With no --repeats, each task takes the count registered in the task file
+# (registered_repeats: chain x2, open x4), so a C1 run collects the 16 open
+# samples per flag state the power note asks for. An explicit --repeats
+# overrides the file for every task.
 #
 # ARM is one of C0 C1 C2a C2b C2c C2d C2_exploration (presets live in
 # scripts/evaluate_standard_astro_v02.py; explicit flags override the preset).

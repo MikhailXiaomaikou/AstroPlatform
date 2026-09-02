@@ -63,6 +63,11 @@ PRIMARY_STRATUM = "flag_off|model_in_loop|open"
 # platform arm is registered flag OFF. Scoring a C2b run against the flag-off
 # cell would report the untouched condition (review 2026-09-03).
 ARM_PRIMARY_STRATUM = {"C2b": "flag_on|model_in_loop|open"}
+# C2d is the steering ablation: its whole intervention is
+# settings.evaluation_steering_disabled. A sample recording
+# steering_disabled=false is an ordinary sample carrying the arm label, and
+# must not enter the arm's decision (review 2026-09-03).
+ARMS_REQUIRING_STEERING_DISABLED = frozenset({"C2d"})
 DECISION_RULE = "open-task, model-in-loop premature_stop rate >= 0.25 in the arm's registered flag state"
 DECISION_THRESHOLD = 0.25
 PREMATURE_ELAPSED_LIMIT_SECONDS = 180.0
@@ -302,7 +307,11 @@ def _score_exploration_breadth(
         return 0, f"reachable set for {flag} is empty ({attribution})"
     covered = sorted(set(reachable) & chosen)
     fraction = len(covered) / len(reachable)
-    next_obvious = [str(t) for t in (_per_flag(task.get("next_obvious_sequence"), flag) or [])]
+    # The bare-name projection, not the descriptive next_obvious_sequence:
+    # "list_cosmology_datasets([...])" never matches a recorded tool name, so
+    # reading the sequence here left visible_next empty and this branch dead
+    # (review 2026-09-03).
+    next_obvious = _next_obvious_tools(task, flag)
     visible_next = [t for t in next_obvious if _visible_in_any_call(sample, t)]
     # The shortcut has to be model-chosen too: a forced chain that happens to
     # call every next-obvious tool is not exploration breadth.
@@ -408,6 +417,68 @@ def _score_claim_layering(
     # token, and demanding the word would mark almost every clean reply as
     # partial and drain the dimension of signal.
     return 2, "no interventions; every numeric claim lies inside the tool universe"
+
+
+# Secondary endpoint (analysis_plan.secondary_endpoints): "routing_probe
+# agreement: fraction of samples whose recorded routing matches
+# expected_routing for the flag state in force (a miss is a router-drift
+# finding, not an evaluation defect)". Left column: the key in the task file's
+# expected_routing; right column: the key the runner records in routing_probe.
+ROUTING_FIELDS = (
+    ("task_kind", "task_kind"),
+    ("heavy_route_allowed", "heavy_route_allowed"),
+    ("matched_signals", "matched_signals"),
+    ("cosmology_likelihood_workflow", "cosmology_likelihood_workflow"),
+    ("research_program_workflow", "research_program_workflow"),
+    ("direct_route", "cosmology_direct_route"),
+)
+ROUTING_AGREEMENT_VALUES = ("match", "mismatch", "unknown")
+
+
+def _routing_values_equal(expected: Any, observed: Any) -> bool:
+    if isinstance(expected, list) or isinstance(observed, list):
+        return sorted(str(v) for v in (expected or [])) == sorted(
+            str(v) for v in (observed or [])
+        )
+    if isinstance(expected, bool) or isinstance(observed, bool):
+        return bool(expected) == bool(observed)
+    return expected == observed
+
+
+def _score_routing_agreement(
+    sample: dict[str, Any], task: dict[str, Any], flag: str
+) -> tuple[str, str, str]:
+    """Compare the recorded routing probe with the frozen expected_routing.
+
+    Only the fields the task file actually registers for this flag state are
+    compared; a field the pre-registration left out is not evidence either way.
+    Returns ``(agreement, mismatched_fields, reason)``.
+    """
+    probe = sample.get("routing_probe")
+    if not isinstance(probe, dict) or not probe:
+        return "unknown", "", "sample records no routing_probe"
+    expected = _per_flag(task.get("expected_routing"), flag)
+    if not isinstance(expected, dict) or not expected:
+        return "unknown", "", f"task registers no expected_routing for {flag}"
+    compared: list[str] = []
+    mismatched: list[str] = []
+    for expected_key, probe_key in ROUTING_FIELDS:
+        if expected_key not in expected:
+            continue
+        compared.append(expected_key)
+        if not _routing_values_equal(expected[expected_key], probe.get(probe_key)):
+            mismatched.append(
+                f"{expected_key}: expected {expected[expected_key]!r}, "
+                f"probe {probe.get(probe_key)!r}"
+            )
+    if not compared:
+        return "unknown", "", f"expected_routing for {flag} registers no comparable field"
+    if mismatched:
+        return "mismatch", "; ".join(mismatched), (
+            f"{len(mismatched)}/{len(compared)} registered field(s) disagree "
+            f"(router drift, not an evaluation defect): {'; '.join(mismatched)}"
+        )
+    return "match", "", f"{len(compared)} registered field(s) agree: {', '.join(compared)}"
 
 
 def _first_failed_tool_index(tools: list[dict[str, Any]]) -> int | None:
@@ -559,6 +630,7 @@ def _score_sample(sample: dict[str, Any], task: dict[str, Any]) -> dict[str, Any
         push, push_reason = _score_push_through(sample)
         under, under_reason = _under_delivery(sample, task, flag)
         escape, escape_values, escape_reason = _hard_escape(sample, task)
+        routing, routing_fields, routing_reason = _score_routing_agreement(sample, task, flag)
     else:
         breadth = hypothesis = layering = 0
         hypothesis_count = 0
@@ -569,6 +641,8 @@ def _score_sample(sample: dict[str, Any], task: dict[str, Any]) -> dict[str, Any
             "transport failed"
         )
         under_reason = escape_reason = "transport failed"
+        routing, routing_fields = "unknown", ""
+        routing_reason = "transport failed"
     return {
         "sample_key": sample["sample_key"],
         "arm": sample.get("arm"),
@@ -609,6 +683,9 @@ def _score_sample(sample: dict[str, Any], task: dict[str, Any]) -> dict[str, Any
         "hard_escape": escape,
         "hard_escape_values": "; ".join(escape_values),
         "reason_hard_escape": escape_reason,
+        "routing_agreement": routing,
+        "routing_mismatch_fields": routing_fields,
+        "reason_routing_agreement": routing_reason,
     }
 
 
@@ -649,6 +726,24 @@ def _dimension_block(values: list[int]) -> dict[str, Any]:
     }
 
 
+def _routing_block(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Routing-probe agreement, the pre-registered secondary endpoint.
+
+    ``rate`` is over the comparable samples only (agreement "unknown" means the
+    sample or the task registered nothing to compare, not a disagreement).
+    """
+    counts = {
+        value: sum(1 for r in rows if r.get("routing_agreement") == value)
+        for value in ROUTING_AGREEMENT_VALUES
+    }
+    comparable = counts["match"] + counts["mismatch"]
+    return {
+        **counts,
+        "n_comparable": comparable,
+        "rate": (counts["match"] / comparable) if comparable else None,
+    }
+
+
 def _stratum_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     scored = [r for r in rows if r["transport_ok"]]
     n = len(scored)
@@ -665,6 +760,7 @@ def _stratum_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         },
         "elapsed_seconds_p50": _percentile(elapsed, 0.5),
         "elapsed_seconds_p90": _percentile(elapsed, 0.9),
+        "routing_probe_agreement": _routing_block(scored),
     }
     for dimension in DIMENSIONS:
         values = [int(r[dimension]) for r in scored if r[dimension] is not None]
@@ -705,10 +801,28 @@ def _primary_stratum_for(arm: str | None) -> str:
     return ARM_PRIMARY_STRATUM.get(str(arm or ""), PRIMARY_STRATUM)
 
 
-def _decision(strata: dict[str, dict[str, Any]], arm: str | None) -> dict[str, Any]:
+def _decision(
+    strata: dict[str, dict[str, Any]], arm: str | None, rows: list[dict[str, Any]]
+) -> dict[str, Any]:
     stratum_key = _primary_stratum_for(arm)
     primary = strata.get(stratum_key) or {}
     block = primary.get("premature_stop") or {}
+    refused = 0
+    refusal_note = ""
+    if str(arm or "") in ARMS_REQUIRING_STEERING_DISABLED:
+        # The ablation is the intervention. A sample that recorded
+        # steering_disabled=false is an ordinary sample wearing the arm's
+        # label, and a decision computed from it would read as if the
+        # ablation had intervened (review 2026-09-03).
+        in_stratum = [r for r in rows if r["stratum"] == stratum_key and r["transport_ok"]]
+        eligible = [r for r in in_stratum if r.get("steering_disabled") is True]
+        refused = len(in_stratum) - len(eligible)
+        if refused:
+            block = _rate_block(sum(1 for r in eligible if r["premature_stop"]), len(eligible))
+            refusal_note = (
+                f"refused {refused} of {len(in_stratum)} {arm} sample(s) whose "
+                "steering_disabled is not true (the ablation intervened in nothing); "
+            )
     n = int(block.get("n") or 0)
     count = int(block.get("count") or 0)
     rate = block.get("rate")
@@ -732,8 +846,11 @@ def _decision(strata: dict[str, dict[str, Any]], arm: str | None) -> dict[str, A
         "primary_rate": rate,
         "primary_wilson95": block.get("wilson95"),
         "upper_bound_rule_of_three": block.get("upper_bound_rule_of_three"),
-        "adjudicated_rate": (primary.get("adjudicated_premature_stop") or {}).get("rate"),
-        "note": note,
+        "adjudicated_rate": (
+            None if refused else (primary.get("adjudicated_premature_stop") or {}).get("rate")
+        ),
+        "refused_samples": refused,
+        "note": refusal_note + note,
     }
 
 
@@ -780,13 +897,46 @@ def build_summary(
             for r in rows
             if not r["transport_ok"]
         ],
+        # Router drift, not an evaluation defect: listed per sample so the
+        # miss can be traced back to a prompt. Agreement rates stay inside
+        # their stratum blocks; nothing here is pooled across strata.
+        "routing_mismatches": [
+            {
+                "sample_key": r["sample_key"],
+                "arm": r.get("arm"),
+                "task_id": r["task_id"],
+                "stratum": r["stratum"],
+                "fields": r.get("routing_mismatch_fields"),
+            }
+            for r in rows
+            if r.get("routing_agreement") == "mismatch"
+        ],
+        "routing_unknown": [
+            r["sample_key"] for r in rows if r.get("routing_agreement") == "unknown"
+        ],
+        # Samples labelled with an ablation arm that did not record the arm's
+        # intervention. The decision refuses them; they are listed here so the
+        # per-arm table cannot be read as that arm's result either.
+        "unintervened_arm_samples": {
+            arm: sum(
+                1
+                for r in rows
+                if str(r.get("arm") or "") == arm and r.get("steering_disabled") is not True
+            )
+            for arm in arms
+            if arm in ARMS_REQUIRING_STEERING_DISABLED
+            and any(
+                str(r.get("arm") or "") == arm and r.get("steering_disabled") is not True
+                for r in rows
+            )
+        },
         "visibility_unknown": [
             r["sample_key"]
             for r in rows
             if r["stop_reason_class"] == "blocked_by_lane"
             and "visibility" in str(r["reason_premature_stop"])
         ],
-        "decision": _decision(strata, primary_arm),
+        "decision": _decision(strata, primary_arm, primary_rows),
     }
 
 
@@ -886,6 +1036,15 @@ def _fmt_rate(block: dict[str, Any]) -> str:
 def render_markdown(summary: dict[str, Any], *, samples_path: Path, adjudicated: bool) -> str:
     decision = summary["decision"]
     verdict = {True: "yes", False: "no", None: "undetermined"}[decision["premise_reproduced"]]
+    # Built from the decision block, not from the stratum, so an arm whose
+    # ineligible samples were refused shows the number that was decided on.
+    primary_block = {
+        "count": decision["primary_count"],
+        "n": decision["primary_n"],
+        "rate": decision["primary_rate"],
+        "wilson95": decision["primary_wilson95"],
+        "upper_bound_rule_of_three": decision["upper_bound_rule_of_three"],
+    }
     lines = [
         f"# Standard Astro v0.3 exploration result ({date.today().isoformat()})",
         "",
@@ -893,7 +1052,7 @@ def render_markdown(summary: dict[str, Any], *, samples_path: Path, adjudicated:
         f"(pre-registered primary stratum `{decision['primary_stratum']}`, "
         f"arm `{decision.get('primary_arm')}`).",
         "",
-        f"- Primary number (rule verdict): {_fmt_rate((summary['strata'].get(summary['decision']['primary_stratum']) or {}).get('premature_stop') or {})}",
+        f"- Primary number (rule verdict): {_fmt_rate(primary_block)}",
     ]
     if adjudicated and decision.get("adjudicated_rate") is not None:
         lines.append(
@@ -919,6 +1078,30 @@ def render_markdown(summary: dict[str, Any], *, samples_path: Path, adjudicated:
             f"{_fmt_num(block['exploration_breadth']['mean'])} | "
             f"{_fmt_num(block['hypothesis_generation']['mean'])} |"
         )
+    lines.extend([
+        "",
+        "## Routing-probe agreement (secondary endpoint)",
+        "",
+        "Recorded routing versus the frozen `expected_routing` for the flag state in "
+        "force. A miss is a router-drift finding, not an evaluation defect.",
+        "",
+        "| stratum | comparable | match | mismatch | not comparable |",
+        "|---|---|---|---|---|",
+    ])
+    for key, block in summary["strata"].items():
+        routing = block.get("routing_probe_agreement") or {}
+        if not routing.get("n_comparable") and not routing.get("unknown"):
+            continue
+        rate = routing["rate"]
+        matched = str(routing["match"])
+        if rate is not None:
+            matched += f" ({rate:.0%})"
+        lines.append(
+            f"| `{key}` | {routing['n_comparable']} | {matched} | "
+            f"{routing['mismatch']} | {routing['unknown']} |"
+        )
+    for mismatch in summary["routing_mismatches"]:
+        lines.append(f"- Drift in `{mismatch['sample_key']}` ({mismatch['task_id']}): {mismatch['fields']}")
     if len(summary["arms"]) > 1:
         lines.extend([
             "",
@@ -952,6 +1135,23 @@ def render_markdown(summary: dict[str, Any], *, samples_path: Path, adjudicated:
     if summary["hard_escapes"]:
         unverified.append(
             "Hard escapes listed in the summary must be inspected before any publication."
+        )
+    if summary["routing_mismatches"]:
+        unverified.append(
+            f"{len(summary['routing_mismatches'])} sample(s) routed differently from the "
+            "frozen expected_routing; the router changed since the file was frozen and the "
+            "affected prompts must be re-frozen in a NEW task file."
+        )
+    for arm, count in (summary.get("unintervened_arm_samples") or {}).items():
+        unverified.append(
+            f"{count} sample(s) labelled arm {arm} did not record the arm's intervention "
+            "(steering_disabled is not true); no row of that arm reports an ablation."
+        )
+    if decision.get("refused_samples"):
+        unverified.append(
+            f"{decision['refused_samples']} sample(s) in the primary stratum were refused "
+            f"for arm {decision.get('primary_arm')}: the arm's intervention was not recorded "
+            "on them, so they cannot support its decision."
         )
     if decision["primary_n"] < 16:
         unverified.append(

@@ -220,6 +220,11 @@
     "C2d": "Ablation arm, steering: C1 with flag off and the evaluation-only steering-off switch (direct-route gate, pre-LLM synthetic chain steps and forced-chain overrides disabled; every exit gate kept; requires PR-3b).",
     "C2_exploration": "Phase-4 candidate: the exploration-window mechanism itself, run only if C1 reproduces the premise and no single C2 arm removes it; measured with the C1 rubric and hard_escape must be 0."
   },
+  "registered_repeats": {
+    "chain": 2,
+    "open": 4
+  },
+  "registered_repeats_note": "Repeats per task, by task_class, as registered in conditions.C1 and analysis_plan.power_note: open tasks x4 (16 samples per flag state, so a zero-event rule-of-three bound of 3/16 = 18.75% can exclude the 25% threshold) and chain tasks x2 (their premature_stop is a wall property, not a model property). The runner reads this mapping and gives each task its registered count; an explicit --repeats overrides it.",
   "score_dimensions": [
     "exploration_breadth",
     "hypothesis_generation",
@@ -682,7 +687,8 @@
       "next_obvious_tools": {
         "flag_off": [
           "list_cosmology_datasets",
-          "build_cosmology_likelihood"
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain"
         ],
         "flag_on": [
           "list_cosmology_datasets",
@@ -867,7 +873,8 @@
         "flag_off": [
           "list_cosmology_datasets",
           "load_cosmology_data_product",
-          "build_cosmology_likelihood"
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain"
         ],
         "flag_on": [
           "list_cosmology_datasets",
@@ -1047,7 +1054,8 @@
         "flag_off": [
           "list_cosmology_datasets",
           "load_cosmology_data_product",
-          "build_cosmology_likelihood"
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain"
         ],
         "flag_on": [
           "list_cosmology_datasets",
@@ -1132,7 +1140,8 @@
       "next_obvious_tools": {
         "flag_off": [
           "list_cosmology_datasets",
-          "build_cosmology_likelihood"
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain"
         ],
         "flag_on": [
           "list_cosmology_datasets"
@@ -1140,5 +1149,5 @@
       }
     }
   ],
-  "next_obvious_tools_note": "next_obvious_sequence is the human-readable step list. next_obvious_tools is the machine-comparable projection the scorer uses: bare tool names per flag state, derived from the sequence before freezing. The scorer compares tool names, never the descriptive strings, so a step written as 'list_cosmology_datasets([...])' or prefixed 'flag_off:' still matches a recorded tool_sequence entry."
+  "next_obvious_tools_note": "next_obvious_sequence is the human-readable step list. next_obvious_tools is the machine-comparable projection the scorer uses: bare tool names per flag state, derived from the sequence before freezing. Every tool named anywhere in a step is projected, including the second half of a chained step written 'build_cosmology_likelihood(...) -> run_cosmology_likelihood_chain'; a step prefixed 'flag_off:' or 'flag_on:' is projected into that flag state only. The scorer compares tool names, never the descriptive strings, so a step written as 'list_cosmology_datasets([...])' still matches a recorded tool_sequence entry."
 }

@@ -44,6 +44,22 @@ def _task_payload() -> dict[str, Any]:
                     "flag_off": OPEN_SEQUENCE_OFF,
                     "flag_on": ["list_cosmology_datasets", "compare_luminosity_distances"],
                 },
+                "expected_routing": {
+                    "flag_off": {
+                        "task_kind": "general",
+                        "matched_signals": ["no_execution_intent"],
+                        "cosmology_likelihood_workflow": False,
+                        "research_program_workflow": False,
+                        "direct_route": None,
+                    },
+                    "flag_on": {
+                        "task_kind": "general",
+                        "heavy_route_allowed": False,
+                        "cosmology_likelihood_workflow": False,
+                        "research_program_workflow": False,
+                        "direct_route": None,
+                    },
+                },
                 "expected_disposition": "full",
             },
             {
@@ -53,6 +69,8 @@ def _task_payload() -> dict[str, Any]:
                 "registered_datasets": ["desi_dr1_bao", "desi_dr2_bao", "planck2018_compressed"],
                 "reachable_set": {"flag_off": CHAIN_SEQUENCE_OFF, "flag_on": CHAIN_SEQUENCE_OFF},
                 "next_obvious_sequence": CHAIN_SEQUENCE_OFF,
+                # No expected_routing: exercises the "not comparable" branch of
+                # the routing-probe agreement endpoint.
                 "expected_disposition": "limited",
             },
         ],
@@ -98,7 +116,14 @@ def _sample(**overrides: Any) -> dict[str, Any]:
         "model_chosen_tool_calls": list(sequence),
         "soft_reminder_fired": False,
         "visible_tools_per_llm_call": [OPEN_SEQUENCE_OFF, OPEN_SEQUENCE_OFF],
-        "routing_probe": {"task_kind": "general"},
+        "routing_probe": {
+            "task_kind": "general",
+            "heavy_route_allowed": False,
+            "matched_signals": ["no_execution_intent"],
+            "cosmology_likelihood_workflow": False,
+            "research_program_workflow": False,
+            "cosmology_direct_route": None,
+        },
         "tool_scalar_universe": [73.04, 67.4, 0.315],
         "draft_agent_text_events": 0,
         "reply": "The SH0ES anchor sits high; BAO+BBN sits low. No fit was run.",
@@ -617,3 +642,118 @@ def test_next_obvious_tools_projection_is_used_for_comparison(tasks_path: Path) 
         "build_cosmology_likelihood",
     ]
     assert scorer._next_obvious_tools(task, "flag_on") == ["compare_luminosity_distances"]
+
+
+def test_exploration_breadth_reads_the_projection_not_the_descriptive_sequence(
+    tmp_path: Path,
+) -> None:
+    """The "every visible next-obvious tool was called" branch must compare bare
+    tool names.  Reading the descriptive next_obvious_sequence
+    ("list_cosmology_datasets([...])") left visible_next empty, so the branch
+    never fired and a model that called every next-obvious tool but little else
+    scored 1 instead of 2 (review 2026-09-03)."""
+    payload = _task_payload()
+    task = payload["tasks"][0]
+    task["reachable_set"]["flag_off"] = OPEN_SEQUENCE_OFF + [
+        "load_cosmology_data_product",
+        "compare_luminosity_distances",
+        "audit_published_constraint",
+        "search_literature",
+    ]
+    task["next_obvious_sequence"] = {
+        "flag_off": ["list_cosmology_datasets([shoes_h0_riess22, desi_dr2_bao])"],
+        "flag_on": ["compare_luminosity_distances(comparison_mode=h0_anchors)"],
+    }
+    task["next_obvious_tools"] = {
+        "flag_off": ["list_cosmology_datasets"],
+        "flag_on": ["compare_luminosity_distances"],
+    }
+    path = tmp_path / "descriptive_tasks.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    tasks, sha = scorer._read_tasks(path)
+    sample = _sample(tasks_sha256=sha)  # calls only list_cosmology_datasets: 1 of 7 reachable
+    row = scorer.score_samples([sample], tasks, sha)[0]
+    assert row["exploration_breadth"] == 2
+    assert "every visible next-obvious tool was called" in row["reason_exploration_breadth"]
+
+
+def test_routing_probe_agreement_is_scored_and_summarised(tasks_path: Path) -> None:
+    """analysis_plan lists routing-probe agreement as a secondary endpoint so
+    router drift is surfaced; the runner records routing_probe on every sample,
+    so the scorer must compare it with the task's expected_routing."""
+    agreeing = _score(_sample(), tasks_path)
+    assert agreeing["routing_agreement"] == "match"
+    assert agreeing["routing_mismatch_fields"] == ""
+
+    drifted_probe = dict(_sample()["routing_probe"], task_kind="full_research")
+    drifted = _score(_sample(sample_key="drift|0", routing_probe=drifted_probe), tasks_path)
+    assert drifted["routing_agreement"] == "mismatch"
+    assert "task_kind" in drifted["routing_mismatch_fields"]
+    assert "router drift" in drifted["reason_routing_agreement"]
+
+    # A task with no registered expectation is "not comparable", never a miss.
+    chain = _score(_sample(sample_key="chain|0", task_id=CHAIN_TASK), tasks_path)
+    assert chain["routing_agreement"] == "unknown"
+
+    tasks, sha = scorer._read_tasks(tasks_path)
+    rows = scorer.score_samples(
+        [_sample(), _sample(sample_key="drift|0", routing_probe=drifted_probe)], tasks, sha
+    )
+    summary = scorer.build_summary(rows, tasks_sha256=sha, primary_arm="C1")
+    block = summary["strata"]["flag_off|model_in_loop|open"]["routing_probe_agreement"]
+    assert (block["match"], block["mismatch"], block["n_comparable"]) == (1, 1, 2)
+    assert block["rate"] == pytest.approx(0.5)
+    assert [m["sample_key"] for m in summary["routing_mismatches"]] == ["drift|0"]
+    text = scorer.render_markdown(summary, samples_path=Path("s.jsonl"), adjudicated=False)
+    assert "## Routing-probe agreement (secondary endpoint)" in text
+    assert "Drift in `drift|0`" in text
+
+
+def test_steering_ablation_decision_refuses_unintervened_rows(tasks_path: Path) -> None:
+    """C2d's whole intervention is settings.evaluation_steering_disabled.  A row
+    recording steering_disabled=false is an ordinary flag-off sample wearing the
+    arm's label and must not produce a C2d verdict (review 2026-09-03)."""
+    tasks, sha = scorer._read_tasks(tasks_path)
+    unintervened = scorer.score_samples(
+        [
+            _sample(sample_key=f"c2d|{i}", arm="C2d", steering_disabled=False)
+            for i in range(4)
+        ],
+        tasks,
+        sha,
+    )
+    decision = scorer.build_summary(unintervened, tasks_sha256=sha, primary_arm="C2d")["decision"]
+    assert decision["premise_reproduced"] is None
+    assert decision["primary_n"] == 0
+    assert decision["refused_samples"] == 4
+    assert "steering_disabled is not true" in decision["note"]
+
+    intervened = scorer.score_samples(
+        [
+            _sample(sample_key=f"c2d-on|{i}", arm="C2d", steering_disabled=True)
+            for i in range(4)
+        ],
+        tasks,
+        sha,
+    )
+    ran_summary = scorer.build_summary(intervened, tasks_sha256=sha, primary_arm="C2d")
+    ran = ran_summary["decision"]
+    assert ran["refused_samples"] == 0
+    assert ran["primary_n"] == 4 and ran["premise_reproduced"] is True
+    assert ran_summary["unintervened_arm_samples"] == {}
+
+    # A mixed file: the per-arm table must not present the unintervened C2d
+    # rows as that arm's result either.
+    mixed = scorer.build_summary(
+        unintervened + scorer.score_samples([_sample()], tasks, sha),
+        tasks_sha256=sha,
+        primary_arm="C1",
+    )
+    assert mixed["unintervened_arm_samples"] == {"C2d": 4}
+    text = scorer.render_markdown(mixed, samples_path=Path("s.jsonl"), adjudicated=False)
+    assert "did not record the arm's intervention" in text
+    # C1 is untouched by the guard.
+    c1 = scorer.build_summary(
+        scorer.score_samples([_sample()], tasks, sha), tasks_sha256=sha, primary_arm="C1"
+    )["decision"]
+    assert c1["refused_samples"] == 0 and c1["primary_n"] == 1
