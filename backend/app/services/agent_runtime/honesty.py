@@ -54,7 +54,8 @@ _LITTLE_H_RE = re.compile(
 _PARAMETER_ASSIGNMENT_BEFORE_RE = re.compile(
     r"\b(?:H0|H₀|omegam|omega_m|Omega_m|sigma8|S8|w0|wa|hubble)\b"
     r"(?:[^\n;]{0,28}?[=:~≈]\s*"
-    r"|[^\n;]{0,28}?\b(?:is|was|are|were|of|at|equals?|sits\s+at|comes\s+out\s+at)\s+)$",
+    r"|(?P<copula_gap>[^\n;]{0,28}?)"
+    r"\b(?:is|was|are|were|of|at|equals?|sits\s+at|comes\s+out\s+at)\s+)$",
     re.IGNORECASE,
 )
 _H0_PARAMETER_NAMES = frozenset({"h0", "h_0", "hubble", "hubble_constant"})
@@ -341,6 +342,13 @@ def untrusted_evidence_echo_values(
     produced the same number.  Exact matching is intentional: this gate closes
     the echo channel without treating ordinary request parameters (such as a
     requested redshift) as evidence claims.
+
+    Little-h tokens are scanned here, unlike in the withheld-posterior gate:
+    ``h = 0.677`` carries the value 67.7 and restates a rejected H0 in the
+    standard equivalent representation, so excluding it let the number cross
+    turns unchanged (Codex review 2026-09-03).  Because the comparison is
+    exact, including the token widens nothing it should not: the user has to
+    have supplied that very number.
     """
 
     untrusted = _untrusted_user_values(messages)
@@ -353,9 +361,12 @@ def untrusted_evidence_echo_values(
         if not any(math.isclose(value, current, rel_tol=1e-12, abs_tol=1e-12) for current in supported)
     }
     hits = {
-        token
-        for token in _reply_number_tokens(reply)
-        if any(math.isclose(token, value, rel_tol=1e-12, abs_tol=1e-12) for value in unsupported)
+        token.value
+        for token in _reply_number_spans(reply)
+        if any(
+            math.isclose(token.value, value, rel_tol=1e-12, abs_tol=1e-12)
+            for value in unsupported
+        )
     }
     return sorted(hits)
 
@@ -413,6 +424,28 @@ def _is_h0_name(parameter: str) -> bool:
     return parameter.replace("₀", "0").strip().lower() in _H0_PARAMETER_NAMES
 
 
+def _parameter_assignment_before(before: str) -> bool:
+    """True when the text ending at a token binds it as a parameter VALUE.
+
+    A copula only assigns to the parameter while the parameter is still the
+    subject of the clause.  In ``For H0, the credible interval is 68%`` the
+    interval noun has taken the subject over, so ``is`` assigns the coverage
+    level to the interval rather than a value to H0, and blocking that
+    sentence was a false kill (Codex review 2026-09-03).  The window is not
+    widened and no threshold moves: the copular branch simply stops binding
+    across an intervening interval subject.  An explicit symbol
+    (``H0 = 67.7%``) still binds regardless of what sits between, and a
+    non-interval noun still binds (``the H0 median is 68%``).
+    """
+    match = _PARAMETER_ASSIGNMENT_BEFORE_RE.search(before)
+    if match is None:
+        return False
+    gap = match.group("copula_gap")
+    if gap is None:
+        return True
+    return not _INTERVAL_WORDING_RE.search(gap)
+
+
 def _is_interval_idiom(text: str, token: "_Token") -> bool:
     """``the 68% credible interval``: a standard interval level, written as a
     percentage, with interval wording in the same clause and no parameter
@@ -427,7 +460,7 @@ def _is_interval_idiom(text: str, token: "_Token") -> bool:
     ):
         return False
     before = text[max(0, token.start - 48):token.start]
-    if _PARAMETER_ASSIGNMENT_BEFORE_RE.search(before):
+    if _parameter_assignment_before(before):
         return False
     after = text[token.end:token.end + 48]
     before_clause = _CLAUSE_BREAK_RE.split(before)[-1]
