@@ -101,14 +101,27 @@ A single chain is a hypothesis, not evidence. For any headline claim, also:
 ### Step 5 — Synthesize, don't dump
 
 Don't just paste the chain's posterior table. Place the result in the
-Hubble-tension / S8-tension landscape:
+Hubble-tension / S8-tension landscape, quoting only what the result's tier
+allows:
 
-- "Our H0 = X ± Y sits Nσ below the local SH0ES anchor (cite the value your
-  tool/literature call actually returned, e.g. Riess+22)"
-- "Our Ωm is consistent with Planck18 within Nσ"
-- "The published DESI w0 (from your extract_literature_tables/search_literature
-  call) is w0 = X ± Y; our refit recovers w0 = X ± Y, consistent within Nσ but
-  not yet publication-grade (chain_tier=exploratory)"
+- `chain_tier="publication"` (publication_ready=true): "Our H0 = X ± Y sits
+  Nσ below the local SH0ES anchor (cite the value your tool/literature call
+  actually returned, e.g. Riess+22)"; "Our Ωm is consistent with Planck18
+  within Nσ".
+- `chain_tier="exploratory"` (publication_ready=false): the posterior numbers
+  stay in the tool card, which the user already sees. Describe the result
+  only qualitatively — "the exploratory chain lands on the Planck side of
+  the H0 landscape; it is not publication-ready (ESS below threshold) and
+  cannot support a claimable H0" — and name what is missing (full
+  likelihood, ESS ≥ 400 per parameter, R-hat). Do not write the median, the
+  interval, a rounded value ("around 68"), a range ("67–69"), or an Nσ
+  offset derived from it: the final honesty gate withholds any number
+  within 1% of a non-publication posterior or tension value regardless of
+  wording, and replaces the whole reply.
+- A published value from extract_literature_tables / search_literature may
+  be quoted as the literature states it (w0 = X ± Y, with the citation).
+  Compare an exploratory refit to it in words only ("the refit is
+  consistent with the published DESI w0 within its uncertainty").
 
 ### Step 6 — Propose the next experiment
 
@@ -414,19 +427,24 @@ Three tiers, three different reply contracts:
 
 - **`chain_tier="exploratory"`** (ESS in [100, 400) OR R-hat in (1.01, 1.10],
   with claimable input): `__tool_status__="EXPLORATORY"` and
-  `__exploratory_warning__` are set. `publication_ready=False`. You MAY
-  discuss the posterior median / 1-sigma range to help the user iterate,
-  but you MUST:
-  1. Prefix the number with `exploratory` or wrap it as
-     `(exploratory chain; ESS=…, R-hat=…)`.
-  2. NEVER phrase the result as "we find H0 = X" or "our constraint is
-     X ± Y". Use language like "preliminary fit suggests H0 around X" or
-     "an exploratory chain at this prior gives H0 in the X-Y range".
+  `__exploratory_warning__` are set. `publication_ready=False`. The posterior
+  median, 1-sigma range and tension sigmas stay in the tool card. In prose
+  you MUST:
+  1. Say the result is exploratory and not publication-ready, and give the
+     diagnostic reason in words (ESS below the 400-per-parameter threshold,
+     R-hat above 1.01, compressed input).
+  2. Describe the posterior only qualitatively (which side of the H0 / S8
+     landscape it lands on; whether it is compatible with the published
+     anchor within its uncertainty). NEVER write the number in any form:
+     not "we find H0 = X", not "the fit suggests H0 near X", not "H0 in the
+     X–Y range", not a rounded value, not with an "exploratory" prefix. The final honesty gate withholds any number within 1% of a
+     non-publication posterior regardless of wording and replaces the whole
+     reply.
   3. NEVER add the result to a published-constraint table or a manuscript
      section.
-  4. Surface the literal `__exploratory_warning__` text if the user is
-     about to base downstream analysis (paper draft, comparison table,
-     export) on these numbers.
+  4. If the user is about to base downstream analysis (paper draft,
+     comparison table, export) on these numbers, say so in your own words.
+     Do not print the `__exploratory_warning__` field name or its text.
 
 - **`chain_tier="blocked"`** (ESS < 100 OR R-hat > 1.10 OR non-claimable
   input such as inline rows): `publication_ready=False` AND

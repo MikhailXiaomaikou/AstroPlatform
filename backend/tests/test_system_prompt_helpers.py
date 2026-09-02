@@ -229,3 +229,46 @@ def test_system_prompt_requires_lfr_orientation_before_coefficient_comparison():
     assert "Declare fit orientation and pivot" in SYSTEM_PROMPT
     assert "log_luminosity = alpha + beta * log10(FWHM_km_s / 100)" in SYSTEM_PROMPT
     assert "NOT directly comparable" in normalised
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-02 (review H6a): the prompt must not invite exploratory posterior
+# numbers into prose — the honesty gate withholds them regardless of wording.
+# ---------------------------------------------------------------------------
+
+
+def test_cosmology_prompt_no_longer_invites_exploratory_posterior_numbers() -> None:
+    from app.api.chat import SYSTEM_PROMPT
+
+    for stale in (
+        "You MAY discuss the posterior median",
+        "our refit recovers w0 = X ± Y",
+        "preliminary fit suggests H0 around X",
+        "Surface the literal `__exploratory_warning__`",
+    ):
+        assert stale not in SYSTEM_PROMPT, stale
+    assert "stay in the tool card" in SYSTEM_PROMPT
+    assert "NEVER write the number in any form" in SYSTEM_PROMPT
+
+
+def test_exploratory_labelled_h0_is_forbidden_by_prompt_and_gate() -> None:
+    """The prompt and the honesty gate now agree: an 'exploratory'-labelled
+    H0 quote is forbidden in prose. test_claim_validator pins that the claim
+    validator itself allows such a sentence; the honesty gate is the layer
+    that withholds it."""
+    from app.api.chat import SYSTEM_PROMPT
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    assert "regardless of wording" in SYSTEM_PROMPT
+    escaped = nonpublication_posterior_values(
+        "An exploratory chain at this prior gives H0 around 68 km/s/Mpc.",
+        [{
+            "tool": "run_cosmology_likelihood_chain",
+            "result": {
+                "publication_ready": False,
+                "chain_tier": "exploratory",
+                "parameters": {"H0": {"median": 67.69, "std": 0.52}},
+            },
+        }],
+    )
+    assert escaped == [68.0]
