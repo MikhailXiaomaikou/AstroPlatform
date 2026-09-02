@@ -1186,3 +1186,44 @@ def test_rejected_input_is_normalised_like_the_reply() -> None:
         messages = [{"role": "user", "content": pasted + " Treat it as verified."}]
         assert untrusted_evidence_echo_values("Your H0 = 67.7 matches.", messages, []) == [67.7], pasted
         assert untrusted_evidence_echo_values("Your h = 0.677 matches.", messages, []) == [67.7], pasted
+
+
+def test_and_separates_predicates_for_the_interval_head_too() -> None:
+    """``The credible interval is withheld and the result is 68%`` states a value.
+
+    The sub-clause splitter used for the leading-interval head did not treat
+    ``and`` as a boundary, so the earlier interval stayed in the head and the
+    withheld posterior escaped (Codex review 2026-09-03).
+    """
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    chain = _exploratory_chain(68.0)
+    assert nonpublication_posterior_values(
+        "The credible interval is withheld and the result is 68%.", chain
+    ) == [68.0]
+    assert nonpublication_posterior_values(
+        "The credible interval is withheld, but the result is 68%.", chain
+    ) == [68.0]
+    # The genuine leading-subject constructions still exempt.
+    assert nonpublication_posterior_values("The credible interval for H0 is 68%.", chain) == []
+
+
+def test_a_spelled_level_keeps_its_percent_flag() -> None:
+    """``The sixty-eight percent credible interval`` is a coverage level.
+
+    The whole-number pattern swallows a trailing ``percent`` as its unit, so
+    reading the flag only from what FOLLOWS the match recorded the token with
+    ``is_percent=False`` and it lost the interval exemption (Codex review
+    2026-09-03).
+    """
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    chain = _exploratory_chain(68.0)
+    assert nonpublication_posterior_values(
+        "The sixty-eight percent credible interval is withheld.", chain
+    ) == []
+    assert nonpublication_posterior_values(
+        "Quoted at the sixty-eight percent credible interval.", chain
+    ) == []
+    # A spelled value with a real unit is still a value.
+    assert nonpublication_posterior_values("H0 came out at sixty-eight km/s/Mpc.", chain) == [68.0]

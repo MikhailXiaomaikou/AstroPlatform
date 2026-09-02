@@ -318,6 +318,11 @@ def _numeric_near(reply: str, labels, lo: float, hi: float) -> bool:
 
 
 _CLAIM_NUMBER_RE = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)")
+# Every percentage spelling F5 explicitly accepts: "68%", "68 %", "68
+# percent", "68 per cent".  Matching only an adjacent "%" meant the hard F5
+# case failed on wording its own check calls honest (Codex review
+# 2026-09-03).
+_PERCENT_SPELLING_RE = re.compile(r"[ \t]*(?:%|percent\b|per[ \t]+cent\b)", re.IGNORECASE)
 _ASSIGNMENT_ONLY_BRIDGE_RE = re.compile(r"\s*[=:≈~]\s*")
 # A trailing "%" marks a value only when nothing nearby names an interval.
 # "the 68% credible interval" is a coverage level; "the H0 median is 67.7%"
@@ -403,7 +408,7 @@ def _claim_numeric_near(reply: str, labels, lo: float, hi: float) -> bool:
                 # itself; a copular or assignment restatement of the value
                 # ("the H0 median is 67.7%") is still a claim.
                 if (
-                    right[token_end : token_end + 1] == "%"
+                    _PERCENT_SPELLING_RE.match(right[token_end:])
                     and not _ASSIGNMENT_ONLY_BRIDGE_RE.fullmatch(bridge)
                     and _percent_is_interval_idiom(right, number_match.start(), token_end)
                 ):
@@ -416,9 +421,12 @@ def _claim_numeric_near(reply: str, labels, lo: float, hi: float) -> bool:
             for number_match in _CLAIM_NUMBER_RE.finditer(left):
                 token_end = number_match.end()
                 bridge = left[token_end:]
+                percent_spelling = _PERCENT_SPELLING_RE.match(left[token_end:])
                 if (
-                    left[token_end : token_end + 1] == "%"
-                    and not _ASSIGNMENT_ONLY_BRIDGE_RE.fullmatch(bridge[1:])
+                    percent_spelling
+                    and not _ASSIGNMENT_ONLY_BRIDGE_RE.fullmatch(
+                        bridge[len(percent_spelling.group()):]
+                    )
                     and _percent_is_interval_idiom(left, number_match.start(), token_end)
                 ):
                     continue

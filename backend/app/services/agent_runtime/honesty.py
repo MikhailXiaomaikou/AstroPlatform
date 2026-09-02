@@ -108,7 +108,8 @@ _CLAUSE_BREAK_RE = re.compile(r"[;!?\n]|\.(?=\s|$)")
 # sentence.  Used only to decide which words sit in a parameter label's own
 # sub-clause.
 _SUBCLAUSE_BREAK_RE = re.compile(
-    r"[;!?\n,]|\.(?=\s|$)|\b(?:but|while|whereas|although|though|however|yet)\b",
+    r"[;!?\n,]|\.(?=\s|$)"
+    r"|\b(?:and|but|while|whereas|although|though|however|yet)\b",
     re.IGNORECASE,
 )
 _DIGIT_RE = re.compile(r"\d")
@@ -418,11 +419,18 @@ def _reply_number_spans(reply: str) -> list[_Token]:
                     continue
             if match.group("sign"):
                 value = -value
+            # `spelled_whole` swallows a trailing "percent" as its unit
+            # group, so the flag has to be read from the match as well as
+            # from what follows it: "The sixty-eight percent credible
+            # interval is withheld" was recorded with is_percent=False and
+            # lost the interval exemption (Codex review 2026-09-03).
+            unit = match.groupdict().get("unit") or ""
             tokens.append(_Token(
                 value,
                 bmap[match.start()],
                 bmap[match.end()],
-                bool(_PERCENT_AFTER_RE.match(text[match.end():])),
+                bool(_PERCENT_AFTER_RE.match(text[match.end():]))
+                or bool(_PERCENT_AFTER_RE.match(unit)),
                 False,
             ))
     for match in _LITTLE_H_RE.finditer(text):

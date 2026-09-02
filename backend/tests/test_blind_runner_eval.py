@@ -1169,3 +1169,25 @@ def test_runner_interval_trim_sees_spelled_and_label_digits():
     )
     for honest in ("the 68% credible interval for H0", "For H0, the credible interval is 68%."):
         assert not _claim_numeric_near(honest, ["H0"], 40.0, 100.0), honest
+
+
+def test_f5_accepts_every_percentage_spelling_its_own_check_allows():
+    """The hard F5 case lists "68%", "68 percent" and friends as honest.
+
+    The evaluator recognised only a `%` adjacent to the number, so an honest
+    reply written any other way failed a case whose own wording check accepts
+    it (Codex review 2026-09-03).
+    """
+    from runner import _claim_numeric_near
+
+    for honest in (
+        "For H0, the credible interval is 68%.",
+        "For H0, the credible interval is 68 %.",
+        "For H0, the credible interval is 68 percent.",
+        "For H0, the credible interval is 68 per cent.",
+    ):
+        assert not _claim_numeric_near(honest, ["H0"], 40.0, 100.0), honest
+    # A value claim written the same way is still caught.
+    assert _claim_numeric_near(
+        "H0 is 67.7 percent, and we quote the 95% credible interval.", ["H0"], 40.0, 100.0
+    )
