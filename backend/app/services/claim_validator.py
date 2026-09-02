@@ -3916,53 +3916,101 @@ def _validated_conclusion_attestations(tool_results: Any) -> dict[str, dict[str,
     return indexed
 
 
+# A conclusion sits in one clause of its sentence.  Splitting on these marks
+# is only used to decide WHICH clause an explicit denial governs; it never
+# decides whether a conclusion exists.
+_CONCLUSION_CLAUSE_BREAK_RE = re.compile(r"[,;:\u2014\uff0c\uff1b\uff1a]")
+
+
+def _clause_around(sentence: str, start: int, end: int) -> str:
+    """The clause of ``sentence`` that contains the span ``start:end``."""
+    left = 0
+    for mark in _CONCLUSION_CLAUSE_BREAK_RE.finditer(sentence):
+        if mark.end() > start:
+            break
+        left = mark.end()
+    right = len(sentence)
+    after = _CONCLUSION_CLAUSE_BREAK_RE.search(sentence, end)
+    if after is not None:
+        right = after.start()
+    return sentence[left:right]
+
+
 def _strong_conclusion_from_sentence(sentence: str) -> dict[str, str | None] | None:
-    if (
-        not sentence
-        or "?" in sentence
-        or "？" in sentence
-        or (
-            (
-                not _CONFIRMED_ASSERTION_RE.search(sentence)
-                or _EXPLICIT_DENIAL_RE.search(sentence)
-            )
-            and (
-                _HYPOTHESIS_LABEL_RE.search(sentence)
-                or _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(sentence)
-                or _ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(sentence)
-            )
-        )
-    ):
+    if not sentence or "?" in sentence or "？" in sentence:
         return None
     kind: str | None = None
     subject: str | None = None
     baseline: str | None = None
     alternative: str | None = None
-    if _HUBBLE_TENSION_RESOLUTION_RE.search(sentence) or _ZH_HUBBLE_TENSION_RESOLUTION_RE.search(sentence):
+    match: re.Match[str] | None = None
+    if (match := (
+        _HUBBLE_TENSION_RESOLUTION_RE.search(sentence)
+        or _ZH_HUBBLE_TENSION_RESOLUTION_RE.search(sentence)
+    )):
         kind = "hubble_tension_resolution"
         subject = "hubble_tension"
-    elif _SPATIAL_CURVATURE_CONCLUSION_RE.search(sentence) or _ZH_SPATIAL_CURVATURE_CONCLUSION_RE.search(sentence):
+    elif (match := (
+        _SPATIAL_CURVATURE_CONCLUSION_RE.search(sentence)
+        or _ZH_SPATIAL_CURVATURE_CONCLUSION_RE.search(sentence)
+    )):
         kind = "spatial_curvature_preference"
         subject = "spatial_curvature"
         baseline = "lcdm"
         alternative = "ok_lcdm"
-    elif _NEUTRINO_MASS_DETECTION_RE.search(sentence) or _ZH_NEUTRINO_MASS_DETECTION_RE.search(sentence):
+    elif (match := (
+        _NEUTRINO_MASS_DETECTION_RE.search(sentence)
+        or _ZH_NEUTRINO_MASS_DETECTION_RE.search(sentence)
+    )):
         kind = "neutrino_mass_detection"
         subject = "neutrino_mass"
         baseline = "lcdm"
         alternative = "lcdm_mnu"
-    elif _GENERAL_RELATIVITY_REJECTION_RE.search(sentence) or _ZH_GENERAL_RELATIVITY_REJECTION_RE.search(sentence):
+    elif (match := (
+        _GENERAL_RELATIVITY_REJECTION_RE.search(sentence)
+        or _ZH_GENERAL_RELATIVITY_REJECTION_RE.search(sentence)
+    )):
         kind = "general_relativity_rejection"
         subject = "general_relativity"
         baseline = "gr"
         alternative = "modified_gravity"
-    elif _BASELINE_REJECTION_RE.search(sentence) or _ZH_BASELINE_REJECTION_RE.search(sentence):
+    elif (match := (
+        _BASELINE_REJECTION_RE.search(sentence)
+        or _ZH_BASELINE_REJECTION_RE.search(sentence)
+    )):
         kind = "baseline_rejection"
-    elif _MODEL_PREFERENCE_RE.search(sentence) or _ZH_MODEL_PREFERENCE_RE.search(sentence):
+    elif (match := (
+        _MODEL_PREFERENCE_RE.search(sentence)
+        or _ZH_MODEL_PREFERENCE_RE.search(sentence)
+    )):
         kind = "extended_model_preference"
     elif _dark_energy_evolution_claim(sentence) or _ZH_DARK_ENERGY_EVOLUTION_RE.search(sentence):
         kind = "dark_energy_evolution"
+        match = _ZH_DARK_ENERGY_EVOLUTION_RE.search(sentence)
     if kind is None:
+        return None
+    # The hedge decision is made AFTER the conclusion is located, because an
+    # explicit denial only restores the hedge exemption for the conclusion it
+    # actually governs.  Sentence-wide, a denial about an unrelated topic
+    # washed a confirmed conclusion elsewhere: "Although there is no evidence
+    # for spatial curvature, our forecast is confirmed: the Hubble tension is
+    # resolved by a local void" (Codex review 2026-09-03).  The confirmation
+    # and the hedge stay sentence-scoped, so this only ever REMOVES an
+    # exemption; the label stays sentence-scoped because it labels the whole
+    # sentence.
+    denial_clause = (
+        _clause_around(sentence, match.start(), match.end())
+        if match is not None
+        else sentence
+    )
+    if (
+        not _CONFIRMED_ASSERTION_RE.search(sentence)
+        or _EXPLICIT_DENIAL_RE.search(denial_clause)
+    ) and (
+        _HYPOTHESIS_LABEL_RE.search(sentence)
+        or _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(sentence)
+        or _ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(sentence)
+    ):
         return None
     if baseline is None and kind not in _CONCLUSION_CLAIM_SUBJECTS:
         baseline = "lcdm" if _LCDM_RE.search(sentence) else None

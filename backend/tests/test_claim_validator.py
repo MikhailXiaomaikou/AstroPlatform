@@ -2302,3 +2302,37 @@ def test_chinese_hypothesis_label_survives_markdown_markers() -> None:
     assert _strong_conclusion_from_sentence(
         "我们的假设得到证实：哈勃张力已被局部空洞解决。"
     ) is not None
+
+
+def test_a_denial_of_another_topic_does_not_wash_a_confirmed_conclusion() -> None:
+    """An explicit denial only restores the exemption it actually governs.
+
+    The denial was matched against the whole sentence, so a denial about an
+    unrelated subject cancelled the confirmation rule and let a confirmed
+    conclusion through untouched (Codex review 2026-09-03).  The denial is now
+    read in the clause that holds the conclusion; the confirmation and the
+    hedge stay sentence-scoped, so this can only remove an exemption.
+    """
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    washed = [
+        "Although there is no evidence for spatial curvature, our forecast "
+        "is confirmed: the Hubble tension is resolved by a local void.",
+        "There is no evidence for a neutrino mass, and the forecast is now "
+        "confirmed: the Hubble tension is resolved by a local void.",
+    ]
+    for sentence in washed:
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+    # A denial that DOES govern the conclusion still exempts it, and so does
+    # every other shape the exemption was built for.
+    preserved = [
+        "Although the calibration is confirmed, there is no evidence the "
+        "Hubble tension is resolved.",
+        "There is no evidence that the Hubble tension is resolved by a local void.",
+        "Hypothesis: a local void resolves the Hubble tension.",
+        "A local void may resolve the Hubble tension.",
+        "没有证据表明哈勃张力已解决。",
+    ]
+    for sentence in preserved:
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
