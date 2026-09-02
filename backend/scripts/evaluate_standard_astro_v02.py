@@ -291,11 +291,16 @@ def _sample_key(
     repeat_index: int,
     variant_id: str | None = None,
     lightweight_suffix: str | None = None,
+    appendix_sha256: str | None = None,
 ) -> str:
     task_part = f"{task_id}__{variant_id}" if variant_id else task_id
     key = f"{model}|{condition}|{task_part}|{repeat_index}"
     if lightweight_suffix:
         key += f"|lv={lightweight_suffix}"
+    if appendix_sha256:
+        # Twelve hex characters are enough to separate two appendix texts in a
+        # resume file and short enough to keep the key readable.
+        key += f"|sa={appendix_sha256[:12]}"
     return key
 
 
@@ -405,6 +410,12 @@ class RunOptions:
     steering_off: bool = False
     arm: str | None = None
     system_appendix: str | None = None
+    # Identity of the appendix text, not just its content: two different C2a
+    # appendices produced indistinguishable samples under identical sample
+    # keys, so a resume could mix or skip interventions without any artifact
+    # recording which text ran (Codex review 2026-09-03).
+    system_appendix_path: str | None = None
+    system_appendix_sha256: str | None = None
     lane_override: bool = False
     exploration_phase: bool = False
     drafts_path: Path | None = None
@@ -718,6 +729,7 @@ async def _run_sample(
         repeat_index=repeat_index,
         variant_id=variant_id,
         lightweight_suffix=lightweight_suffix,
+        appendix_sha256=options.system_appendix_sha256,
     )
     started = time.monotonic()
     calls_before = _LLM_CALL_COUNT
@@ -732,6 +744,8 @@ async def _run_sample(
         "variant_id": variant_id,
         "arm": options.arm,
         "tasks_sha256": options.tasks_sha256,
+        "system_appendix_path": options.system_appendix_path,
+        "system_appendix_sha256": options.system_appendix_sha256,
         "git_rev": options.git_rev,
     }
     try:
@@ -780,6 +794,7 @@ class SampleSpec:
     repeat_index: int
     lightweight: bool
     lightweight_suffix: str | None
+    appendix_sha256: str | None = None
 
     @property
     def key(self) -> str:
@@ -790,6 +805,7 @@ class SampleSpec:
             repeat_index=self.repeat_index,
             variant_id=self.variant_id,
             lightweight_suffix=self.lightweight_suffix,
+            appendix_sha256=self.appendix_sha256,
         )
 
 
@@ -812,6 +828,7 @@ def _iter_matrix(
     repeats: int,
     lightweight: str = "on",
     repeats_by_task: dict[str, int] | None = None,
+    appendix_sha256: str | None = None,
 ) -> Iterator[SampleSpec]:
     states = _lightweight_states(lightweight)
     for model in models:
@@ -833,6 +850,7 @@ def _iter_matrix(
                             repeat_index=repeat_index,
                             lightweight=enabled,
                             lightweight_suffix=suffix,
+                            appendix_sha256=appendix_sha256,
                         )
 
 
@@ -857,6 +875,19 @@ def _resolve_arm(parser: argparse.ArgumentParser, args: argparse.Namespace) -> N
         args.lane_override = True
     if preset.get("exploration_phase"):
         args.exploration_phase = True
+    if args.exploration_phase and not hasattr(settings, "exploration_phase_enabled"):
+        # Same failure mode as the steering ablation below, and the same
+        # answer.  Warning and continuing collected ordinary flag-off samples
+        # labelled C2_exploration, and the scorer does not exclude rows whose
+        # `exploration_phase_enabled` is false, so an arm that intervened in
+        # nothing could be reported as evidence about the exploration window
+        # (Codex review 2026-09-03).
+        parser.error(
+            "--arm C2_exploration requires settings.exploration_phase_enabled, which "
+            "this build does not have; the run would collect ordinary samples "
+            "labelled as the exploration arm. Ship the product-side switch "
+            "(PR-4a) first."
+        )
     if args.steering == "off" and not hasattr(settings, "evaluation_steering_disabled"):
         # Fail closed. Without the switch the run collects ordinary flag-off
         # samples that are merely labelled C2d, and an ablation that intervened
@@ -929,18 +960,22 @@ async def main() -> None:
     git_rev = _git_rev()
     # _resolve_arm already refused this run if the steering switch is missing.
     steering_off = args.steering == "off"
-    if args.exploration_phase and not hasattr(settings, "exploration_phase_enabled"):
-        _warn(
-            "--arm C2_exploration requested but settings.exploration_phase_enabled "
-            "is not present in this build; samples record exploration_phase_enabled=false."
-        )
+    _appendix_text = (
+        args.system_appendix.read_text(encoding="utf-8")
+        if args.system_appendix is not None
+        else None
+    )
     options = RunOptions(
         budget=args.budget,
         steering_off=steering_off,
         arm=args.arm,
-        system_appendix=(
-            args.system_appendix.read_text(encoding="utf-8")
-            if args.system_appendix is not None
+        system_appendix=_appendix_text,
+        system_appendix_path=(
+            str(args.system_appendix) if args.system_appendix is not None else None
+        ),
+        system_appendix_sha256=(
+            hashlib.sha256(_appendix_text.encode("utf-8")).hexdigest()
+            if _appendix_text is not None
             else None
         ),
         lane_override=bool(args.lane_override),
@@ -964,6 +999,7 @@ async def main() -> None:
             repeats=args.repeats if args.repeats is not None else DEFAULT_REPEATS,
             lightweight=args.lightweight,
             repeats_by_task=repeats_by_task,
+            appendix_sha256=options.system_appendix_sha256,
         )
     )
     total = len(specs)

@@ -1399,3 +1399,104 @@ def test_steering_ablation_is_refused_when_the_switch_is_missing(monkeypatch) ->
     c2d = _args()
     evaluator._resolve_arm(parser, c2d)
     assert (c2d.steering, c2d.lightweight, c2d.budget) == ("off", "off", "production")
+
+
+def test_exploration_arm_is_refused_when_its_switch_is_missing(monkeypatch) -> None:
+    """C2_exploration's intervention is settings.exploration_phase_enabled.
+
+    It warned and continued while C2d refused, and the scorer excludes neither
+    ``exploration_phase_enabled=false`` rows nor the arm label, so an arm that
+    intervened in nothing could be reported as evidence about the exploration
+    window (Codex review 2026-09-03).
+    """
+
+    def _args(**overrides):
+        base = dict(
+            arm="C2_exploration",
+            system_appendix=None,
+            conditions=None,
+            budget=None,
+            lightweight=None,
+            steering=None,
+            lane_override=False,
+            exploration_phase=False,
+        )
+        base.update(overrides)
+        return argparse.Namespace(**base)
+
+    parser = argparse.ArgumentParser()
+    monkeypatch.delattr(
+        type(evaluator.settings), "exploration_phase_enabled", raising=False
+    )
+    with pytest.raises(SystemExit):
+        evaluator._resolve_arm(parser, _args())
+    # An explicit --exploration-phase is refused for the same reason.
+    with pytest.raises(SystemExit):
+        evaluator._resolve_arm(parser, _args(arm=None, exploration_phase=True))
+    # Arms that do not touch the window are unaffected.
+    resolved = _args(arm="C1")
+    evaluator._resolve_arm(parser, resolved)
+    assert resolved.exploration_phase is False
+
+    monkeypatch.setattr(
+        type(evaluator.settings), "exploration_phase_enabled", False, raising=False
+    )
+    monkeypatch.setattr(
+        type(evaluator.settings), "evaluation_steering_disabled", False, raising=False
+    )
+    armed = _args()
+    evaluator._resolve_arm(parser, armed)
+    assert armed.exploration_phase is True
+
+
+def test_c2a_samples_carry_the_appendix_digest(tmp_path) -> None:
+    """Two different C2a appendices must not produce identical artifacts.
+
+    The appendix text was read and used but never recorded, so samples from
+    two different interventions shared a sample key and a task digest, and a
+    resume could mix or skip them silently (Codex review 2026-09-03).
+    """
+    import hashlib
+
+    first = "Explore before you conclude.\n"
+    second = "State one alternative explanation.\n"
+    digests = [
+        hashlib.sha256(text.encode("utf-8")).hexdigest() for text in (first, second)
+    ]
+    keys = [
+        evaluator._sample_key(
+            model="claude-fable-5",
+            condition="standard_astro",
+            task_id="V03_03_h0_anchor_clustering",
+            repeat_index=1,
+            appendix_sha256=digest,
+        )
+        for digest in digests
+    ]
+    assert keys[0] != keys[1]
+    assert all(digest[:12] in key for digest, key in zip(digests, keys))
+    # No appendix leaves the key exactly as it was before this field existed.
+    assert evaluator._sample_key(
+        model="claude-fable-5",
+        condition="standard_astro",
+        task_id="V03_03_h0_anchor_clustering",
+        repeat_index=1,
+    ) == "claude-fable-5|standard_astro|V03_03_h0_anchor_clustering|1"
+
+    options = evaluator.RunOptions(
+        arm="C2a",
+        system_appendix=first,
+        system_appendix_path=str(tmp_path / "arm_C2a.md"),
+        system_appendix_sha256=digests[0],
+    )
+    spec = next(
+        evaluator._iter_matrix(
+            models=["claude-fable-5"],
+            conditions=["standard_astro"],
+            expanded_tasks=[("V03_03_h0_anchor_clustering", None, "prompt")],
+            repeats=1,
+            appendix_sha256=options.system_appendix_sha256,
+        )
+    )
+    assert spec.appendix_sha256 == digests[0]
+    assert digests[0][:12] in spec.key

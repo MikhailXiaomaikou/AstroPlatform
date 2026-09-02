@@ -494,9 +494,13 @@
       "next_obvious_tools": {
         "flag_off": [
           "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain",
+          "build_cosmology_likelihood",
           "run_cosmology_likelihood_chain"
         ],
         "flag_on": [
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain",
           "build_cosmology_likelihood",
           "run_cosmology_likelihood_chain"
         ]
@@ -970,9 +974,11 @@
       "next_obvious_tools": {
         "flag_off": [
           "build_cosmology_likelihood",
+          "build_cosmology_likelihood",
           "run_cosmology_likelihood_chain"
         ],
         "flag_on": [
+          "build_cosmology_likelihood",
           "build_cosmology_likelihood",
           "run_cosmology_likelihood_chain"
         ]
@@ -1140,6 +1146,8 @@
       "next_obvious_tools": {
         "flag_off": [
           "list_cosmology_datasets",
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain",
           "build_cosmology_likelihood",
           "run_cosmology_likelihood_chain"
         ],

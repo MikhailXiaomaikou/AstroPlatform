@@ -757,3 +757,67 @@ def test_steering_ablation_decision_refuses_unintervened_rows(tasks_path: Path) 
         scorer.score_samples([_sample()], tasks, sha), tasks_sha256=sha, primary_arm="C1"
     )["decision"]
     assert c1["refused_samples"] == 0 and c1["primary_n"] == 1
+
+
+def test_stop_classifier_counts_repeated_legs(tmp_path: Path) -> None:
+    """One leg of a two-leg task is not "every next-obvious tool was called".
+
+    V03_08 builds and runs a Lyman-alpha leg and an SDSS DR12 leg, and V03_01
+    runs a DR1 leg and a DR2 leg.  The classifier tested ``tool not in
+    sequence``, so a sample that finished one leg and stopped scored
+    ``completed_reachable`` and never entered the primary endpoint (Codex
+    review 2026-09-03).
+    """
+    payload = _task_payload()
+    two_leg = dict(payload["tasks"][0])
+    two_leg["next_obvious_tools"] = {
+        "flag_off": [
+            "list_cosmology_datasets",
+            "build_cosmology_likelihood",
+            "run_cosmology_likelihood_chain",
+            "build_cosmology_likelihood",
+            "run_cosmology_likelihood_chain",
+        ],
+        "flag_on": ["list_cosmology_datasets"],
+    }
+    payload["tasks"] = [two_leg, payload["tasks"][1]]
+    path = tmp_path / "two_leg.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    sha = hashlib.sha256(json.dumps(payload).encode("utf-8")).hexdigest()
+    one_leg = ["list_cosmology_datasets", "build_cosmology_likelihood", "run_cosmology_likelihood_chain"]
+    stopped = _sample(
+        tasks_sha256=sha,
+        tool_sequence=one_leg,
+        model_chosen_tool_calls=list(one_leg),
+        forced_tool_calls=[],
+        visible_tools_per_llm_call=[one_leg + ["build_cosmology_likelihood"]],
+    )
+    row = _score(stopped, path)
+    assert row["stop_reason_class"] == "premature_stop"
+    assert row["premature_stop"] is True
+
+    both_legs = one_leg + ["build_cosmology_likelihood", "run_cosmology_likelihood_chain"]
+    finished = _sample(
+        tasks_sha256=sha,
+        tool_sequence=both_legs,
+        model_chosen_tool_calls=list(both_legs),
+        forced_tool_calls=[],
+        visible_tools_per_llm_call=[both_legs],
+    )
+    assert _score(finished, path)["stop_reason_class"] == "completed_reachable"
+
+
+def test_claim_layering_counts_a_fabricated_percentage() -> None:
+    """A percentage is a number unless it is a standard coverage level.
+
+    Every percentage was stripped before the universe check, so "the tension
+    increases by 47%" could still score 2 while the frozen rubric says any
+    number outside ``tool_scalar_universe`` scores 0 (Codex review
+    2026-09-03).
+    """
+    assert scorer._unlabelled_numbers("The tension increases by 47%.", "", []) == [47.0]
+    # Coverage levels stay exempt, or every honest interval sentence would
+    # score 0.
+    assert scorer._unlabelled_numbers("Quoted at the 68% credible interval.", "", []) == []
+    assert scorer._unlabelled_numbers("the 95% credible interval", "", []) == []
