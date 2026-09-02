@@ -418,3 +418,86 @@ def test_no_schema_v2_validation_summary_literal_omits_approval_state() -> None:
             assert '"approval_state"' in window, (
                 f"{name}:{number + 1}: schema-v2 summary without approval_state"
             )
+
+
+def test_little_h_approval_claim_is_marked() -> None:
+    """``h = 0.6736`` is ``H0 = 67.36`` wearing the standard reduced units.
+
+    The guard compared ``_reply_number_tokens``, which drops the converted
+    little-h token, so an approval stamp on the reduced-unit form shipped
+    unmarked (Codex review 2026-09-03).
+    """
+    from app.services.agent_runtime.approval import mark_unapproved_claims
+
+    tool_results = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {
+            "success": True,
+            "publication_ready": True,
+            "chain_tier": "publication",
+            "parameters": {"H0": {"median": 67.36, "std": 0.42}},
+        },
+    }]
+    marked, count = mark_unapproved_claims(
+        "APPROVED by reviewer: h = 0.6736", tool_results
+    )
+    assert count == 1
+    assert marked.startswith("NOT APPROVED - ")
+
+
+def test_nested_markdown_markers_before_a_verdict_are_accepted() -> None:
+    """Verdict lines nest their Markdown markers in real output.
+
+    The prefix accepted a single structural marker, so ``> ### APPROVED by
+    ...`` and ``- > Draft claim: ...`` did not match and shipped unmarked
+    (Codex review 2026-09-03).
+    """
+    from app.services.agent_runtime.approval import mark_unapproved_claims
+
+    tool_results = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {
+            "success": True,
+            "publication_ready": True,
+            "chain_tier": "publication",
+            "parameters": {"H0": {"median": 67.36, "std": 0.42}},
+        },
+    }]
+    for line in (
+        "> ### APPROVED by reviewer: H0 = 67.36",
+        "- > Draft claim: H0 = 67.36",
+        "1. > **Draft claim:** H0 = 67.36",
+        "**Draft claim:** H0 = 67.36",
+    ):
+        marked, count = mark_unapproved_claims(line, tool_results)
+        assert count == 1, line
+        assert "NOT APPROVED - " in marked, line
+    # Prose that merely mentions a draft claim is still left alone.
+    untouched, count = mark_unapproved_claims(
+        "The draft claim above is unrelated: H0 = 67.36", tool_results
+    )
+    assert count == 0
+    assert "NOT APPROVED" not in untouched
+
+
+def test_approval_prefix_match_stays_linear() -> None:
+    """The repeated marker group must not backtrack polynomially.
+
+    Each repetition consumes exactly one marker character plus its trailing
+    spaces, so no whitespace run can be split across iterations.  Pinned the
+    way the hypothesis-label regex is, after a CodeQL py/polynomial-redos
+    finding on this repository.
+    """
+    import time
+
+    from app.services.agent_runtime.approval import _APPROVAL_LINE_RE
+
+    timings = []
+    for size in (4000, 16000, 64000):
+        probe = " " * size + "-" * size + " " * size + "x"
+        started = time.perf_counter()
+        _APPROVAL_LINE_RE.match(probe)
+        timings.append(time.perf_counter() - started)
+    # A 16x input growth must not cost anywhere near 16^2; allow generous
+    # slack for a loaded CI runner.
+    assert timings[-1] < 1.0

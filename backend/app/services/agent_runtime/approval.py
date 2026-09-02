@@ -25,7 +25,7 @@ import re
 
 from app.services.agent_runtime.honesty import (
     _claimable_current_values,
-    _reply_number_tokens,
+    _reply_number_spans,
 )
 
 APPROVAL_STATE_NONE = "none"
@@ -35,18 +35,22 @@ APPROVAL_STATE_NONE = "none"
 #
 # The accepted prefix covers the Markdown shapes a model actually writes for a
 # verdict line: bullets/blockquotes ("- ", "> "), ATX headings ("### "),
-# ordered-list markers ("1. ", "2) ") and a bold run ("**").
+# ordered-list markers ("1. ", "2) ") and a bold run ("**").  These NEST in
+# real output ("> ### APPROVED by ...", "- > Draft claim: ..."), and a single
+# optional group accepted only one of them, so nested verdict lines shipped
+# unmarked (Codex review 2026-09-03).
 #
 # Linearity matters here (a CodeQL finding on this repository was exactly the
-# "optional group between two whitespace runs" shape).  Every marker
-# alternative starts with a literal class that cannot match a space or a tab,
-# so the leading [ \t]* and the marker's own trailing [ \t] run are always
-# separated by at least one non-whitespace character: there is no ambiguous
-# split for a backtracker to explore.  [ \t] is used instead of \s so a
-# newline can never be consumed inside a line-anchored prefix.
+# "optional group between two whitespace runs" shape).  Each repetition
+# consumes exactly ONE marker character (or one numbered marker) plus its
+# trailing spaces, and every iteration must begin with a non-space marker
+# character, so no whitespace run can be split between two iterations and a
+# backtracker has nothing to explore.  The repetition is bounded as well.
+# [ \t] is used instead of \s so a newline can never be consumed inside a
+# line-anchored prefix.
 _APPROVAL_LINE_RE = re.compile(
     r"(?im)^(?P<prefix>[ \t]*"
-    r"(?:[-*>]+[ \t]*|#{1,6}[ \t]+|[0-9]{1,3}[.)][ \t]+)?"
+    r"(?:[-*>#][ \t]*|[0-9]{1,3}[.)][ \t]*){0,8}"
     r"(?:\*\*)?)"
     r"(?=(?:draft[ \t]+claim|approved[ \t]+by|reviewer[ \t]+approved)\b)"
 )
@@ -79,12 +83,16 @@ def mark_unapproved_claims(
     for line in text.splitlines(keepends=True):
         match = _APPROVAL_LINE_RE.match(line)
         if match and not line.lstrip().startswith(_MARKER):
+            # Every token, little-h included: "APPROVED by reviewer:
+            # h = 0.6736" is the standard equivalent of H0 = 67.36 and the
+            # line was shipping unmarked because `_reply_number_tokens` drops
+            # the converted token (Codex review 2026-09-03).
             if any(
                 any(
-                    math.isclose(token, value, rel_tol=0.01, abs_tol=1e-12)
+                    math.isclose(token.value, value, rel_tol=0.01, abs_tol=1e-12)
                     for value in claimable
                 )
-                for token in _reply_number_tokens(line)
+                for token in _reply_number_spans(line)
             ):
                 prefix = match.group("prefix")
                 line = prefix + _MARKER + line[len(prefix):]
