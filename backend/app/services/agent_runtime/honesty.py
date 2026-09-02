@@ -41,9 +41,15 @@ _PERCENT_AFTER_RE = re.compile(r"\s*(?:%|percent\b|per\s+cent\b)", re.IGNORECASE
 # H0 in little-h units, in the notations a user or model actually writes:
 # ``h = 0.732``, ``h ≈ .683``, ``h0 = 0.677``, ``H0/100 = 0.677``,
 # ``little-h value of 0.677``.  Compared only against withheld H0.
+# The value accepts the same numeric grammar as the ordinary tokenizer, not
+# just "0.677"/".677": an equivalent "h = 6.77e-1" produced a plain 0.677
+# token with no x100 conversion, so the withheld H0 was never matched (Codex
+# review 2026-09-03).  The sci-notation rewrite runs before this scan, so the
+# superscript form arrives here as "6.77e-1".
 _LITTLE_H_RE = re.compile(
     r"(?<![A-Za-z0-9_])(?:H0\s*/\s*100|little[-\s]h(?:\s+value)?|h0|h)"
-    r"\s*(?:[=≈:~]|is|of|at)\s*(0?\.\d+)",
+    r"\s*(?:[=≈:~]|is|of|at)\s*"
+    r"((?:\d+\.\d+|\d+|\.\d+)(?:[eE][-+]?\d+)?)",
     re.IGNORECASE,
 )
 # A parameter label bound to the token keeps it a value claim whatever
@@ -59,8 +65,12 @@ _LITTLE_H_RE = re.compile(
 # was missing from the parameter list for the same reason.
 _ASSIGNMENT_SUBJECT = (
     r"(?:H0|H_0|H₀|omegam|omega_m|Omega_m|sigma8|S8|w0|wa|hubble"
-    r"|(?:posterior\s+|marginal(?:ised|ized)?\s+)?"
-    r"(?:median|mean|best[-\s]?fit|central\s+value|point\s+estimate))"
+    r"|(?:posterior\s+|marginal(?:ised|ized)?\s+|exploratory\s+|fitted\s+)?"
+    # "result" and a bare "value" are the plainest way to state a number and
+    # were missing, so "The result is 68%, with the credible interval
+    # withheld" was exempted by the later cue (Codex review 2026-09-03).
+    r"(?:median|mean|best[-\s]?fit|central\s+value|point\s+estimate"
+    r"|result|value|figure))"
 )
 _PARAMETER_ASSIGNMENT_BEFORE_RE = re.compile(
     rf"\b{_ASSIGNMENT_SUBJECT}\b"
@@ -95,6 +105,14 @@ _INTERVAL_WORDING_RE = re.compile(
 # the interval cue could be recognised (review 2026-09-03).
 _CLAUSE_BREAK_RE = re.compile(r"[;!?\n]|\.(?=\s|$)")
 _DIGIT_RE = re.compile(r"\d")
+# "Another number" for the interval-cue trim: a digit, or a spelled number
+# word.  Only the words that can carry a coverage level are listed, so an
+# ordinary "one" or "two" in prose does not cut a cue short.
+_OTHER_NUMBER_RE = re.compile(
+    r"\d|\b(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|"
+    r"sixty[-\s]eight|ninety[-\s]five|ninety[-\s]nine)\b",
+    re.IGNORECASE,
+)
 _UNTRUSTED_EVIDENCE_RE = re.compile(
     r"(?:tool_results?|tool\s+transcript|previous[- ]looking|"
     r"pasted?\s+(?:result|transcript|context)|user[- ]supplied|"
@@ -513,11 +531,15 @@ def _is_interval_idiom(text: str, token: "_Token") -> bool:
     # token and the cue means the cue belongs to that one instead: in "68% of
     # the reference, with a 95% credible interval" the interval is the 95's
     # (review 2026-09-03).  Trim each window at the nearest other digit.
-    other = _DIGIT_RE.search(after_clause)
+    # A spelled number is an intervening number as well: without this,
+    # "68% and a ninety-five percent credible interval" let the 95's cue
+    # exempt the withheld 68 (Codex review 2026-09-03).  Reachable because
+    # the tokenizer now recognises spelled numbers.
+    other = _OTHER_NUMBER_RE.search(after_clause)
     if other is not None:
         after_clause = after_clause[:other.start()]
     previous = None
-    for match in _DIGIT_RE.finditer(before_clause):
+    for match in _OTHER_NUMBER_RE.finditer(before_clause):
         previous = match
     if previous is not None:
         before_clause = before_clause[previous.end():]

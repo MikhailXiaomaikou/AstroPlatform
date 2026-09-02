@@ -1133,3 +1133,19 @@ def test_interval_cue_past_another_percentage_does_not_exempt():
     # A copular or symbol restatement of the value still counts.
     assert _claim_numeric_near("The H0 median is 67.7%.", ["H0"], 40.0, 100.0)
     assert _claim_numeric_near("H0 = 67.7%", ["H0"], 40.0, 100.0)
+
+
+def test_interval_cue_before_its_level_is_not_cut_by_the_token_itself():
+    """The backward window must stop where the token starts.
+
+    It ended at the token's END, so the token's own digits were the "nearest
+    other number" and every preceding word was discarded: "For H0, the
+    credible interval is 68%" lost its cue and failed the blind check on a
+    construction the production gate exempts (Codex review 2026-09-03).
+    """
+    from runner import _claim_numeric_near
+
+    assert not _claim_numeric_near("For H0, the credible interval is 68%.", ["H0"], 40.0, 100.0)
+    assert not _claim_numeric_near("the 68% credible interval for H0", ["H0"], 40.0, 100.0)
+    # A value claim in the same shape is still caught.
+    assert _claim_numeric_near("H0 is 67.7%, and we quote the 95% credible interval.", ["H0"], 40.0, 100.0)

@@ -332,20 +332,25 @@ _INTERVAL_IDIOM_RE = re.compile(
 _ANY_DIGIT_RE = re.compile(r"\d")
 
 
-def _percent_is_interval_idiom(text: str, token_end: int) -> bool:
+def _percent_is_interval_idiom(text: str, token_start: int, token_end: int) -> bool:
     """True when interval wording describes THIS percentage token.
 
-    Each window is trimmed at the nearest other digit, the way the honesty
+    Each window is trimmed at the nearest OTHER number, the way the honesty
     gate's ``_is_interval_idiom`` does it: a cue past another number belongs
     to that number, and without the trim "H0 is 67.7%, and we quote the 95%
-    credible interval" exempted the 67.7 restatement that B6 exists to catch
-    (Codex review 2026-09-03).
+    credible interval" exempted the 67.7 restatement that B6 exists to catch.
+
+    The backward window ends at the token's START, not its end.  Ending it at
+    the end meant the token's own digits were the "nearest other number", so
+    everything before them was discarded and "For H0, the credible interval
+    is 68%" lost its cue entirely -- a false kill on the construction the
+    production gate exempts (Codex review 2026-09-03).
     """
     after = text[token_end : token_end + 40]
     other = _ANY_DIGIT_RE.search(after)
     if other is not None:
         after = after[: other.start()]
-    before = text[max(0, token_end - 48) : token_end]
+    before = text[max(0, token_start - 48) : token_start]
     previous = None
     for match in _ANY_DIGIT_RE.finditer(before):
         previous = match
@@ -392,7 +397,7 @@ def _claim_numeric_near(reply: str, labels, lo: float, hi: float) -> bool:
                 if (
                     right[token_end : token_end + 1] == "%"
                     and not _ASSIGNMENT_ONLY_BRIDGE_RE.fullmatch(bridge)
-                    and _percent_is_interval_idiom(right, token_end)
+                    and _percent_is_interval_idiom(right, number_match.start(), token_end)
                 ):
                     continue
                 value = float(number_match.group())
@@ -406,7 +411,7 @@ def _claim_numeric_near(reply: str, labels, lo: float, hi: float) -> bool:
                 if (
                     left[token_end : token_end + 1] == "%"
                     and not _ASSIGNMENT_ONLY_BRIDGE_RE.fullmatch(bridge[1:])
-                    and _percent_is_interval_idiom(left, token_end)
+                    and _percent_is_interval_idiom(left, number_match.start(), token_end)
                 ):
                     continue
                 value = float(number_match.group())

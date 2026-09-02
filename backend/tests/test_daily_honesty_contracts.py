@@ -1028,3 +1028,55 @@ def test_an_unlabelled_posterior_subject_still_binds_the_value() -> None:
     # The interval subject is still not a value subject.
     assert nonpublication_posterior_values("For H0, the credible interval is 68%.", chain) == []
     assert nonpublication_posterior_values("Quoted at the 68% credible interval.", chain) == []
+
+
+def test_little_h_reads_the_full_numeric_grammar() -> None:
+    """``h = 6.77e-1`` is ``h = 0.677`` and must convert the same way.
+
+    The pattern accepted only a leading ``0.`` or ``.``, so the equivalent
+    scientific-notation form produced a plain 0.677 token with no x100
+    conversion and the withheld H0 was never matched (Codex review
+    2026-09-03).
+    """
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    chain = _exploratory_chain(67.7)
+    for text in (
+        "The reduced value is h = 6.77e-1.",
+        "The reduced value is h = 6.77 × 10^-1.",
+        "h = 0.677",
+    ):
+        assert nonpublication_posterior_values(text, chain) == [67.7], text
+    # A bare decimal that is not a little-h claim is still not one.
+    assert nonpublication_posterior_values("at redshift 0.677", chain) == []
+
+
+def test_a_generic_result_subject_assigns_a_value() -> None:
+    """``The result is 68%`` states the number as plainly as ``the median is``."""
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    chain = _exploratory_chain(68.0)
+    assert nonpublication_posterior_values(
+        "The result is 68%, with the credible interval withheld.", chain
+    ) == [68.0]
+    assert nonpublication_posterior_values("The value was 68%.", chain) == [68.0]
+    assert nonpublication_posterior_values("Quoted at the 68% credible interval.", chain) == []
+
+
+def test_a_spelled_intervening_level_still_cuts_the_interval_cue() -> None:
+    """The cue belongs to the number nearest it, spelled or not.
+
+    The trim searched for digits only, so "68% and a ninety-five percent
+    credible interval" let the 95's cue exempt the withheld 68 -- reachable
+    since the tokenizer began reading spelled numbers (Codex review
+    2026-09-03).
+    """
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    chain = _exploratory_chain(68.0)
+    assert nonpublication_posterior_values(
+        "68% and a ninety-five percent credible interval.", chain
+    ) == [68.0]
+    assert nonpublication_posterior_values(
+        "The value was 68%, with a 95% credible interval.", chain
+    ) == [68.0]
