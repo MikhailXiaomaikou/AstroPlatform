@@ -39,6 +39,14 @@ on:
           - auto
           - anthropic
           - deepseek
+      deepseek_profile:
+        description: "DeepSeek model profile when provider=deepseek or auto-picked deepseek. v4-pro runs with thinking enabled (the cron default); v4-flash is the non-thinking fallback."
+        required: false
+        default: "deepseek:v4-pro"
+        type: choice
+        options:
+          - deepseek:v4-pro
+          - deepseek:v4-flash
       model:
         description: "Claude model id when provider=anthropic (claude-opus-4-7 or claude-sonnet-4-6). Ignored when provider=deepseek or auto-picked deepseek."
         required: false
@@ -93,6 +101,8 @@ jobs:
           BLIND_MODULE: ${{ inputs.module || 'cosmology' }}
           BLIND_CASES: ${{ inputs.cases || '' }}
           BLIND_PROVIDER: ${{ inputs.provider || 'auto' }}
+          # Read by runner.py when the deepseek provider is active.
+          BLIND_DEEPSEEK_PROFILE: ${{ inputs.deepseek_profile || 'deepseek:v4-pro' }}
           # CLAUDE_MODEL is read directly by app.ai.model_profiles when
           # provider=anthropic; ignored otherwise.
           CLAUDE_MODEL: ${{ inputs.model || 'claude-sonnet-4-6' }}

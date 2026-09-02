@@ -133,7 +133,13 @@ async def run_one_case(case: dict, api_key: str | None, out_dir: Path, *, provid
     if provider == "local":
         profile = resolve_model_profile("local", "local:openai-cli")
     elif provider == "deepseek":
-        profile = resolve_model_profile("deepseek", "deepseek:v4-pro")
+        # BLIND_DEEPSEEK_PROFILE lets a manual daily.yml dispatch pick the
+        # non-thinking deepseek:v4-flash profile as a fallback; the cron
+        # default stays deepseek:v4-pro (thinking enabled). Each case record
+        # stores profile.resolved_model_id, so results self-identify.
+        profile = resolve_model_profile(
+            "deepseek", os.environ.get("BLIND_DEEPSEEK_PROFILE", "deepseek:v4-pro")
+        )
     else:
         profile = resolve_model_profile("anthropic", "anthropic:default")
 
