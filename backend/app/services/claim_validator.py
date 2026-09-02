@@ -3619,15 +3619,31 @@ _NONASSERTIVE_COSMOLOGY_CONTEXT_RE = re.compile(
     r"show\w*|reject\w*|exclud\w*|rule\s+out|reconcil\w*|explain\w*|"
     r"remain\w*|persist\w*|disappear\w*|weaken\w*|strengthen\w*|point\w*|"
     r"hint\w*|deviat\w*|differ\w*|change\w*|shift\w*|vary\w*|help\w*)|"
-    r"hypothesis|forecast|"
+    # A hypothesis / forecast word hedges only in label or predicate form
+    # ("a hypothesis worth testing", "the model forecasts that ...").  The
+    # bare noun ("Our hypothesis is confirmed: the Hubble tension is
+    # resolved ...") must not wash an assertive conclusion (2026-09-02 review
+    # H9).  "we hypothesise that" is deliberately NOT exempt.  A
+    # sentence-initial "Hypothesis:" label is handled by
+    # _HYPOTHESIS_LABEL_RE in _strong_conclusion_from_sentence.
+    r"a\s+hypothesis\s+worth\s+testing|forecast\s+that|"
     r"not\s+ruled\s+out|consistent\s+with\s+zero|does\s+not\s+evolve|"
     r"(?:is|are|remains?)\s+unresolved|(?:is|are)\s+not\s+(?:resolved|detected))\b",
     re.I,
 )
 _ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE = re.compile(
     r"(?:没有|并无|无)(?:统计显著|显著)?证据|证据不足|无法(?:得出|断定|证明)|"
-    r"不能(?:得出|断定|证明)|尚未|未能|是否|可能|或许|假设|预测|"
+    r"不能(?:得出|断定|证明)|尚未|未能|是否|可能|或许|"
+    r"^\s*假设[:：]|值得(?:检验|验证)的假设|预测[^。；;.!！？\n]{0,20}将|"
     r"仍未解决|没有解决|未(?:探测|检测)到|与零一致|不随时间演化|未被排除"
+)
+# Sentence-initial "Hypothesis:" (optionally bold or as a list item) marks the
+# whole sentence as a labelled hypothesis, not a conclusion.
+# The bold marker is part of the literal alternative rather than an optional
+# group between two \s* runs: the latter shape backtracks polynomially on
+# "hypothesis" followed by a long run of spaces (CodeQL py/polynomial-redos).
+_HYPOTHESIS_LABEL_RE = re.compile(
+    r"^[ \t]*(?:[-*>#]+[ \t]*)?(?:\*\*hypothesis\*\*|hypothesis)[ \t]*:", re.I
 )
 _ZH_HUBBLE_TENSION_RESOLUTION_RE = re.compile(
     r"(?:哈勃|H\s*0)张力[^。；;.!！？\n]{0,80}(?:已)?(?:解决|缓解|消除|解除|终结)|"
@@ -3870,6 +3886,7 @@ def _strong_conclusion_from_sentence(sentence: str) -> dict[str, str | None] | N
         not sentence
         or "?" in sentence
         or "？" in sentence
+        or _HYPOTHESIS_LABEL_RE.search(sentence)
         or _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(sentence)
         or _ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(sentence)
     ):

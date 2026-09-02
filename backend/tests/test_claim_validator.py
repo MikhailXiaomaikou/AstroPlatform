@@ -2144,3 +2144,69 @@ def test_data_rows_still_populate_universe():
     payload = {"result": {"rows": [{"mag": 12.3}, {"mag": 13.1}]}}
     universe = set(_iter_numeric_values(payload))
     assert 12.3 in universe and 13.1 in universe
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-02 (review H9): a bare hypothesis / forecast noun must not wash a
+# strong cosmology conclusion through the conclusion gate.
+# ---------------------------------------------------------------------------
+
+
+def test_bare_hypothesis_or_forecast_noun_does_not_wash_strong_conclusion() -> None:
+    from app.services.claim_validator import (
+        _strong_conclusion_from_sentence,
+        scientific_conclusion_scope_violations,
+    )
+
+    washing = [
+        "Our hypothesis is confirmed: the Hubble tension is resolved by a local void.",
+        "Consistent with our hypothesis, the data reject LCDM and dark energy evolves.",
+        "The forecast is now confirmed: the Hubble tension is resolved by a local void.",
+        "We hypothesise that the Hubble tension is resolved by a local void.",
+        "我们的假设得到证实：哈勃张力已被局部空洞解决。",
+        "预测已被证实：哈勃张力已被局部空洞解决。",
+    ]
+    for sentence in washing:
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+        assert scientific_conclusion_scope_violations(sentence, []), sentence
+
+    hedged = [
+        "Hypothesis: a local void resolves the Hubble tension.",
+        "**Hypothesis:** a local void resolves the Hubble tension.",
+        "- Hypothesis: a local void resolves the Hubble tension.",
+        "A local void resolving the Hubble tension is a hypothesis worth testing.",
+        "The model forecast that the Hubble tension is resolved once calibration improves.",
+        "假设：局部空洞解决哈勃张力。",
+        "预测新的标定将解决哈勃张力。",
+    ]
+    for sentence in hedged:
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+
+def test_hypothesis_narrowing_is_a_strict_subset_of_the_old_exemption() -> None:
+    """The narrowed hedge must never exempt a form the bare-noun alternation
+    did not already exempt. "forecasts that" (plural) and 预计 were outside
+    \bforecast\b / 预测 at origin/main, so they stay non-exempt here; only the
+    label and predicate forms that contained the bare noun survive."""
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    for sentence in (
+        "The model forecasts that the Hubble tension is resolved once calibration improves.",
+        "预计新的标定将解决哈勃张力。",
+    ):
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+
+def test_hypothesis_label_regex_is_linear_on_a_pathological_prefix() -> None:
+    """CodeQL py/polynomial-redos: the first draft wrote the bold marker as an
+    optional group between two ``\\s*`` runs, which backtracks polynomially on
+    "hypothesis" followed by a long whitespace run.  The reply text is
+    attacker-influenced, so the shape matters, not just the result."""
+    import time
+
+    from app.services.claim_validator import _HYPOTHESIS_LABEL_RE
+
+    pathological = "hypothesis" + " " * 60_000 + "!"
+    started = time.perf_counter()
+    assert _HYPOTHESIS_LABEL_RE.search(pathological) is None
+    assert time.perf_counter() - started < 0.5
