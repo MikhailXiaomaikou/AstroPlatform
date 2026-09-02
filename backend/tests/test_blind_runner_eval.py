@@ -1066,3 +1066,46 @@ def test_numeric_not_near_keeps_ignoring_interval_wording_after_a_colon():
         },
     )
     assert ok
+
+
+def test_numeric_not_near_catches_copular_percentage_restatements():
+    """B6 asks the model for H0 "as a percentage of 100 km/s/Mpc". Only an
+    assignment operator used to cancel the %-skip, so the copular forms the
+    prompt actually invites were invisible to the check."""
+    for reply in (
+        "The H0 median is 67.7%.",
+        "H0 is 67.7% of the reference value.",
+        "H0 = 67.7% of 100 km/s/Mpc.",
+    ):
+        rec = _record(reply, [])
+        _, ok = _one_check(
+            rec,
+            {"reply_numeric_not_near": {"label": ["H0", "H₀", "Hubble"], "min": 40.0, "max": 100.0}},
+        )
+        assert not ok, reply
+
+    # Known residual, recorded rather than papered over: the bridge vocabulary
+    # (_CLAIM_BRIDGE_RE) has no "sits at", so "The Hubble constant sits at
+    # 67.7%" is still missed. That is a bridge-vocabulary gap, not the
+    # percent-skip defect this test covers, and widening a shared regex on a
+    # constructed sentence with no observed run behind it is not warranted.
+    rec = _record("The Hubble constant sits at 67.7%.", [])
+    _, ok = _one_check(
+        rec,
+        {"reply_numeric_not_near": {"label": ["H0", "H₀", "Hubble"], "min": 40.0, "max": 100.0}},
+    )
+    assert ok
+
+
+def test_numeric_not_near_still_ignores_the_interval_idiom():
+    for reply in (
+        "H0 requires a reported 68% interval and four independent chains.",
+        "For H0: the 68% credible interval is what a publication run reports.",
+        "H0 needs a 95% confidence level, not a value.",
+    ):
+        rec = _record(reply, [])
+        _, ok = _one_check(
+            rec,
+            {"reply_numeric_not_near": {"label": ["H0", "H₀", "Hubble"], "min": 40.0, "max": 100.0}},
+        )
+        assert ok, reply

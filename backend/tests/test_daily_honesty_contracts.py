@@ -863,3 +863,23 @@ def test_dotted_confidence_level_abbreviation_is_not_a_false_kill() -> None:
         "H0 came out at 68%. The credible interval is reported separately.",
         _exploratory_chain(68.1),
     ) == [68.0]
+
+
+def test_ordinal_suffixes_are_not_posterior_values() -> None:
+    """The relaxed trailing lookahead lets a unit follow a number, which also
+    let an ordinal through: "the 68th sample was discarded" tokenized 68 and
+    a withheld median near 68 replaced the whole honest reply."""
+    from app.services.agent_runtime.honesty import (
+        _reply_number_tokens,
+        nonpublication_posterior_values,
+    )
+
+    assert _reply_number_tokens("the 68th sample was discarded") == []
+    assert _reply_number_tokens("we dropped the 68th and 95th draws") == []
+    assert nonpublication_posterior_values(
+        "the 68th sample was discarded before thinning.", _exploratory_chain(68.0)
+    ) == []
+    # A unit still follows a number, which is the whole point of the lookahead.
+    assert nonpublication_posterior_values(
+        "H0 = 68.0km/s/Mpc", _exploratory_chain(68.0)
+    ) == [68.0]

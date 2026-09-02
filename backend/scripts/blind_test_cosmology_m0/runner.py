@@ -319,6 +319,22 @@ def _numeric_near(reply: str, labels, lo: float, hi: float) -> bool:
 
 _CLAIM_NUMBER_RE = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)")
 _ASSIGNMENT_ONLY_BRIDGE_RE = re.compile(r"\s*[=:≈~]\s*")
+# A trailing "%" marks a value only when nothing nearby names an interval.
+# "the 68% credible interval" is a coverage level; "the H0 median is 67.7%"
+# is the value itself, and B6 asks the model for exactly that restatement
+# (review 2026-09-03).
+_INTERVAL_IDIOM_RE = re.compile(
+    r"\b(?:interval|credible|confidence|C\.?L\.?|coverage|containment|percentile|quantile)\b",
+    re.IGNORECASE,
+)
+
+
+def _percent_is_interval_idiom(text: str, token_end: int) -> bool:
+    """True when interval wording sits beside this percentage token."""
+    return bool(
+        _INTERVAL_IDIOM_RE.search(text[token_end : token_end + 40])
+        or _INTERVAL_IDIOM_RE.search(text[max(0, token_end - 48) : token_end])
+    )
 _CLAIM_BRIDGE_RE = re.compile(
     r"(?:^|\b)(?:is|was|are|equals?|gives?|gave|yields?|finds?|found|"
     r"reports?|returns?|measures?|measurement|estimate|estimated|median|mean|"
@@ -353,12 +369,14 @@ def _claim_numeric_near(reply: str, labels, lo: float, hi: float) -> bool:
             for number_match in _CLAIM_NUMBER_RE.finditer(right):
                 token_end = number_match.end()
                 bridge = right[: number_match.start()]
-                # A trailing ``%`` marks an interval or fraction, not a value —
-                # unless the bridge between label and number is nothing but an
-                # assignment operator (``H0 = 67.7%`` is still a claim-shaped
-                # value; ``For H0: the 68% credible interval`` is not;
-                # 2026-09-02).
-                if right[token_end : token_end + 1] == "%" and not _ASSIGNMENT_ONLY_BRIDGE_RE.fullmatch(bridge):
+                # A trailing ``%`` is skipped only for the interval idiom
+                # itself; a copular or assignment restatement of the value
+                # ("the H0 median is 67.7%") is still a claim.
+                if (
+                    right[token_end : token_end + 1] == "%"
+                    and not _ASSIGNMENT_ONLY_BRIDGE_RE.fullmatch(bridge)
+                    and _percent_is_interval_idiom(right, token_end)
+                ):
                     continue
                 value = float(number_match.group())
                 direct = not bridge.strip(" \t,()[]")
@@ -368,7 +386,11 @@ def _claim_numeric_near(reply: str, labels, lo: float, hi: float) -> bool:
             for number_match in _CLAIM_NUMBER_RE.finditer(left):
                 token_end = number_match.end()
                 bridge = left[token_end:]
-                if left[token_end : token_end + 1] == "%" and not _ASSIGNMENT_ONLY_BRIDGE_RE.fullmatch(bridge[1:]):
+                if (
+                    left[token_end : token_end + 1] == "%"
+                    and not _ASSIGNMENT_ONLY_BRIDGE_RE.fullmatch(bridge[1:])
+                    and _percent_is_interval_idiom(left, token_end)
+                ):
                     continue
                 value = float(number_match.group())
                 direct = not bridge.strip(" \t,()[]")

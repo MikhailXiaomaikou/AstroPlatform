@@ -26,7 +26,12 @@ from typing import Any, NamedTuple
 # withheld posterior.
 _NUMBER_RE = re.compile(
     r"(?<![A-Za-z0-9_.])[-+]?(?:\d+\.\d+|\d+|\.\d+)"
-    r"(?:[eE][-+]?\d+)?(?![0-9_]|\.\d|[a-fA-F][0-9a-fA-F]{3})"
+    r"(?:[eE][-+]?\d+)?"
+    # A unit may follow the number; a longer hex run (a digit-led provenance
+    # hash) and an English ordinal suffix may not.  "the 68th sample" is a
+    # draw index, and reading it as a posterior replaced whole honest replies
+    # when a withheld median sat near 68 (review 2026-09-03).
+    r"(?![0-9_]|\.\d|[a-fA-F][0-9a-fA-F]{3}|(?:st|nd|rd|th)(?![A-Za-z]))"
 )
 _PERCENT_AFTER_RE = re.compile(r"\s*(?:%|percent\b|per\s+cent\b)", re.IGNORECASE)
 # H0 in little-h units, in the notations a user or model actually writes:
