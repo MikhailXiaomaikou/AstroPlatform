@@ -420,6 +420,10 @@ def _not_run_validation_summary(
     full_research_gap = task_kind == "full_research"
     return {
         "schema_version": 2,
+        # Same reason as _derive_validation_summary: an absent field must never
+        # be the only thing telling a reader there is no approval.  An
+        # early-return path has done even less review work, not more.
+        "approval_state": APPROVAL_STATE_NONE,
         "numeric_gate": "not_run",
         "citation_gate": "not_run",
         "regen_count": 0,

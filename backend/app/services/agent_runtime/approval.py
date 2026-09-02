@@ -32,8 +32,22 @@ APPROVAL_STATE_NONE = "none"
 
 # Line-anchored on purpose: "the draft claim above" mid-sentence is prose,
 # while a line that OPENS with approval language is presenting a verdict.
+#
+# The accepted prefix covers the Markdown shapes a model actually writes for a
+# verdict line: bullets/blockquotes ("- ", "> "), ATX headings ("### "),
+# ordered-list markers ("1. ", "2) ") and a bold run ("**").
+#
+# Linearity matters here (a CodeQL finding on this repository was exactly the
+# "optional group between two whitespace runs" shape).  Every marker
+# alternative starts with a literal class that cannot match a space or a tab,
+# so the leading [ \t]* and the marker's own trailing [ \t] run are always
+# separated by at least one non-whitespace character: there is no ambiguous
+# split for a backtracker to explore.  [ \t] is used instead of \s so a
+# newline can never be consumed inside a line-anchored prefix.
 _APPROVAL_LINE_RE = re.compile(
-    r"(?im)^(?P<prefix>[ \t]*(?:[-*>]+[ \t]*)?(?:\*\*)?)"
+    r"(?im)^(?P<prefix>[ \t]*"
+    r"(?:[-*>]+[ \t]*|#{1,6}[ \t]+|[0-9]{1,3}[.)][ \t]+)?"
+    r"(?:\*\*)?)"
     r"(?=(?:draft[ \t]+claim|approved[ \t]+by|reviewer[ \t]+approved)\b)"
 )
 _MARKER = "NOT APPROVED - "

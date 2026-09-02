@@ -45,6 +45,8 @@ from app.services.agent_session_state import update_session_status as _update_ch
 # _execute_tool_calls / _filter_tools_by_research_focus /
 # _ASTRO_RESEARCH_FOCUS through THIS module at call time (see
 # app/services/agent_runtime/loop.py shims).
+from app.services.agent_runtime.approval import APPROVAL_STATE_NONE
+from app.services.agent_runtime.approval import mark_unapproved_claims
 from app.services.agent_runtime.runtime_config import _DEFAULT_WORKFLOW_BUDGET  # noqa: F401
 from app.services.agent_runtime.runtime_config import _LONG_WORKFLOW_BUDGET  # noqa: F401
 from app.services.agent_runtime.runtime_config import _workflow_budget_config  # noqa: F401
@@ -1746,6 +1748,7 @@ async def _run_orchestrated_chat(
                 )
         abstention_validation_summary: dict[str, Any] = {
             "schema_version": 2,
+            "approval_state": APPROVAL_STATE_NONE,
             "numeric_gate": "not_run",
             "citation_gate": "not_run",
             "regen_count": 0,
@@ -2348,6 +2351,28 @@ async def _run_orchestrated_chat(
         })
         logger.exception("Merged scientific-conclusion gate failed closed")
 
+    # Approval language that no stored review backs, applied to the MERGED
+    # prose.  The per-specialist marker in the agent loop does not cover this
+    # text: merge_responses writes a new public reply, and the merged boundary
+    # only re-runs the numeric, citation and scientific-conclusion gates — all
+    # of which pass a line like "APPROVED by reviewer: H0 = 67.36" because the
+    # number really did come from a claimable tool result.  Same gate event and
+    # same limited flag as the loop, so the badge cannot differ between a
+    # single-specialist and a multi-specialist turn.
+    _merged_approval_draft = merged_reply
+    merged_reply, _merged_approval_marked = mark_unapproved_claims(
+        merged_reply, merged_tool_results
+    )
+    if _merged_approval_marked:
+        _merged_limited = True
+        _merged_gate_interventions.append({
+            "gate": "approval_marker",
+            "action": "annotated_limited",
+            "reason": "no_bound_claim_audit_review",
+            "marked_lines": _merged_approval_marked,
+            "draft_changed": _merged_approval_draft != merged_reply,
+        })
+
     # Assemble the merged validation summary.  Top-level states describe the
     # SHIPPED merged prose (validated above against the union of tool
     # results); per-agent interventions are folded in so a member reply
@@ -2431,6 +2456,10 @@ async def _run_orchestrated_chat(
     )
     merged_validation_summary: dict = {
         "schema_version": 2,
+        # Merging does not create an approval either: no chat path can read or
+        # write a ClaimAuditReview row, so the merged badge states "none"
+        # rather than leaving the reader to infer it from a missing field.
+        "approval_state": APPROVAL_STATE_NONE,
         "numeric_gate": _merged_numeric_state,
         "citation_gate": _merged_citation_state,
         "regen_count": sum(
