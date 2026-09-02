@@ -51,7 +51,11 @@ APPROVAL_STATE_NONE = "none"
 # line-anchored prefix.
 _APPROVAL_LINE_RE = re.compile(
     r"(?im)^(?P<prefix>[ \t]*"
-    r"(?:[-*>#][ \t]*|[0-9]{1,3}[.)][ \t]*){0,8}"
+    # A task-list marker is a marker too: "- [x] APPROVED by reviewer: ..."
+    # left "[x]" in front of the lookahead and shipped unmarked (Codex review
+    # 2026-09-03).  It consumes a fixed three-or-four character token, so it
+    # adds no new way to split a whitespace run.
+    r"(?:[-*>#][ \t]*|[0-9]{1,3}[.)][ \t]*|\[[ \txX]?\][ \t]*){0,8}"
     r"(?:\*\*)?)"
     # The platform's OWN vocabulary counts too.  The review lane stores the
     # verdict as review_status == "APPROVED" / decision == "APPROVED"
@@ -66,6 +70,27 @@ _APPROVAL_LINE_RE = re.compile(
     r"|approved[ \t]*[:\u2014-]))"
 )
 _MARKER = "NOT APPROVED - "
+
+
+_FENCE_RE = re.compile(r"^[ \t]{0,3}(?:```|~~~)")
+
+
+def _fenced_lines(lines: list[str]) -> list[bool]:
+    """Which lines sit inside a fenced code block, fences included.
+
+    A reply that TELLS the user not to write an approval line quotes one
+    inside a fence, and rewriting that example marked an otherwise clean
+    response as limited (Codex review 2026-09-03).
+    """
+    inside = False
+    flags: list[bool] = []
+    for line in lines:
+        if _FENCE_RE.match(line):
+            flags.append(True)
+            inside = not inside
+            continue
+        flags.append(inside)
+    return flags
 
 
 def _states_a_claimable_value(line: str, claimable: set[float]) -> bool:
@@ -123,10 +148,11 @@ def mark_unapproved_claims(
 
     lines = text.splitlines(keepends=True)
     states_claim = [_states_a_claimable_value(line, claimable) for line in lines]
+    fenced = _fenced_lines(lines)
     marked = 0
     out: list[str] = []
     for index, line in enumerate(lines):
-        match = _APPROVAL_LINE_RE.match(line)
+        match = None if fenced[index] else _APPROVAL_LINE_RE.match(line)
         if match and not line.lstrip().startswith(_MARKER):
             # The verdict may stand on its own line, with the result on the
             # line above or below it -- "H0 = 67.36 km/s/Mpc." then "APPROVED

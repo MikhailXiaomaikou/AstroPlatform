@@ -596,3 +596,38 @@ def test_the_platforms_own_approval_vocabulary_is_recognised() -> None:
         "Review status: APPROVED — nothing numeric here.", tool_results
     )
     assert count == 0
+
+
+def test_task_list_markers_and_fenced_examples() -> None:
+    """Two more verdict-prefix shapes, in opposite directions.
+
+    ``- [x] APPROVED by reviewer: H0 = 67.36`` left ``[x]`` in front of the
+    lookahead and shipped unmarked; and a reply that TELLS the user not to
+    write an approval line quotes one inside a fence, which was rewritten and
+    marked the clean response limited (Codex review 2026-09-03).
+    """
+    from app.services.agent_runtime.approval import mark_unapproved_claims
+
+    tool_results = _published_h0()
+    for text in (
+        "- [x] APPROVED by reviewer: H0 = 67.36",
+        "- [ ] Draft claim: H0 = 67.36",
+        "[x] APPROVED by reviewer: H0 = 67.36",
+    ):
+        marked, count = mark_unapproved_claims(text, tool_results)
+        assert count == 1, text
+        assert "NOT APPROVED - " in marked, text
+
+    for fenced in (
+        "Never write:\n```\nAPPROVED by reviewer: H0 = 67.36\n```\nUse the card.",
+        "~~~\nAPPROVED by reviewer: H0 = 67.36\n~~~",
+    ):
+        untouched, count = mark_unapproved_claims(fenced, tool_results)
+        assert count == 0, fenced
+        assert "NOT APPROVED" not in untouched, fenced
+
+    # A verdict AFTER the fence closes is still marked.
+    marked, count = mark_unapproved_claims(
+        "```\ncode\n```\nAPPROVED by reviewer: H0 = 67.36", tool_results
+    )
+    assert count == 1 and "NOT APPROVED - " in marked
