@@ -977,3 +977,54 @@ def test_echo_gate_reads_the_little_h_restatement_of_a_rejected_value() -> None:
     assert untrusted_evidence_echo_values(
         "A redshift of 0.677 was requested.", messages, []
     ) == []
+
+
+def test_spelled_posterior_values_keep_their_sign_and_whole_numbers() -> None:
+    """Three measured escapes in the spelled-number grammar.
+
+    ``negative one point zero`` produced +1.0, so a withheld w0 = -1.0 was
+    never matched; ``sixty-eight`` produced no token at all because the
+    grammar required ``point``; and a spelled percentage was always created
+    with ``is_percent=False``, so an honest spelled interval level could not
+    be recognised as one (Codex review 2026-09-03).
+    """
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    w0 = _exploratory_chain(0.0)
+    w0[0]["result"]["parameters"] = {"w0": {"median": -1.0, "std": 0.05}}
+    assert nonpublication_posterior_values("w0 is negative one point zero.", w0) == [-1.0]
+    assert nonpublication_posterior_values("The preferred w0 is negative one.", w0) == [-1.0]
+
+    h0 = _exploratory_chain(68.0)
+    assert nonpublication_posterior_values("The exploratory median is sixty-eight.", h0) == [68.0]
+    # A spelled coverage level is an interval idiom, not a bare value.
+    assert nonpublication_posterior_values(
+        "Quoted at the sixty-eight point zero percent credible interval.", h0
+    ) == []
+    # Unit words stay unparsed unless signed, so ordinary counts are not
+    # posterior values.
+    assert nonpublication_posterior_values("We ran two chains.", _exploratory_chain(2.0)) == []
+    assert nonpublication_posterior_values("Three tools were called.", _exploratory_chain(3.0)) == []
+
+
+def test_an_unlabelled_posterior_subject_still_binds_the_value() -> None:
+    """``The posterior median is 68%`` states a value; no parameter is named.
+
+    The assignment guard recognised only named parameters, so a later interval
+    word exempted a withheld value the sentence had just stated.  ``H_0`` was
+    missing from the parameter list for the same reason (Codex review
+    2026-09-03).
+    """
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    chain = _exploratory_chain(68.0)
+    for sentence in (
+        "The posterior median is 68%, with the credible interval withheld.",
+        "H_0 is 68%, with the credible interval withheld.",
+        "The mean is 68 km/s/Mpc.",
+        "The best-fit value is 68.",
+    ):
+        assert nonpublication_posterior_values(sentence, chain) == [68.0], sentence
+    # The interval subject is still not a value subject.
+    assert nonpublication_posterior_values("For H0, the credible interval is 68%.", chain) == []
+    assert nonpublication_posterior_values("Quoted at the 68% credible interval.", chain) == []

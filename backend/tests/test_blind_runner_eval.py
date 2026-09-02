@@ -1109,3 +1109,27 @@ def test_numeric_not_near_still_ignores_the_interval_idiom():
             {"reply_numeric_not_near": {"label": ["H0", "H₀", "Hubble"], "min": 40.0, "max": 100.0}},
         )
         assert ok, reply
+
+
+def test_interval_cue_past_another_percentage_does_not_exempt():
+    """The B6 evaluator must bind the cue to the percentage it describes.
+
+    Interval wording anywhere in the next 40 characters exempted the current
+    percentage even when another percentage intervened, so "H0 is 67.7%, and
+    we quote the 95% credible interval" hid exactly the restatement B6 exists
+    to catch (Codex review 2026-09-03).  Each window is now trimmed at the
+    nearest other digit, the way the honesty gate does it.
+    """
+    from runner import _claim_numeric_near
+
+    assert _claim_numeric_near(
+        "H0 is 67.7%, and we quote the 95% credible interval.", ["H0"], 40.0, 100.0
+    )
+    # An honest interval sentence is still not a value claim.
+    assert not _claim_numeric_near("H0 needs a 68% interval.", ["H0"], 40.0, 100.0)
+    assert not _claim_numeric_near(
+        "the 68% credible interval for H0", ["H0"], 40.0, 100.0
+    )
+    # A copular or symbol restatement of the value still counts.
+    assert _claim_numeric_near("The H0 median is 67.7%.", ["H0"], 40.0, 100.0)
+    assert _claim_numeric_near("H0 = 67.7%", ["H0"], 40.0, 100.0)

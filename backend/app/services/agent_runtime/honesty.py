@@ -51,8 +51,19 @@ _LITTLE_H_RE = re.compile(
 # idioms.  The binding is a symbol OR a copula, because a model states a
 # value both ways and the symbol-only form let "the H0 median is 68%, with
 # the credible interval withheld" pass as coverage (review 2026-09-03).
+# The subject a value can be assigned TO: a named parameter, or an unlabeled
+# posterior statistic.  "The posterior median is 68%, with the credible
+# interval withheld" names no parameter, so the named-only pattern let the
+# later interval word exempt a withheld value that the sentence had just
+# stated (Codex review 2026-09-03).  ``H_0`` is the conventional spelling and
+# was missing from the parameter list for the same reason.
+_ASSIGNMENT_SUBJECT = (
+    r"(?:H0|H_0|H₀|omegam|omega_m|Omega_m|sigma8|S8|w0|wa|hubble"
+    r"|(?:posterior\s+|marginal(?:ised|ized)?\s+)?"
+    r"(?:median|mean|best[-\s]?fit|central\s+value|point\s+estimate))"
+)
 _PARAMETER_ASSIGNMENT_BEFORE_RE = re.compile(
-    r"\b(?:H0|H₀|omegam|omega_m|Omega_m|sigma8|S8|w0|wa|hubble)\b"
+    rf"\b{_ASSIGNMENT_SUBJECT}\b"
     r"(?:[^\n;]{0,28}?[=:~≈]\s*"
     r"|(?P<copula_gap>[^\n;]{0,28}?)"
     r"\b(?:is|was|are|were|of|at|equals?|sits\s+at|comes\s+out\s+at)\s+)$",
@@ -299,15 +310,48 @@ def _reply_number_spans(reply: str) -> list[_Token]:
             bool(_PERCENT_AFTER_RE.match(text[match.end():])),
             False,
         ))
+    # Three widenings over the original "<word> point <word>+" grammar, each
+    # from a measured escape (Codex review 2026-09-03):
+    #   * a leading "negative"/"minus" is part of the number.  Without it
+    #     "w0 is negative one point zero" produced +1.0 and a withheld -1.0
+    #     was never matched.
+    #   * a whole-number word with no "point" is a number too.  "The
+    #     exploratory median is sixty-eight" produced no token at all.  Only
+    #     forms that cannot be an ordinary count are accepted: a tens word
+    #     (twenty..ninety), optionally with a unit, or ANY unit word once it
+    #     carries an explicit sign.  A bare "two"/"ten" stays unparsed, so
+    #     "two tools" and "ten iterations" are still not posterior values.
+    #   * the percent flag is read after a spelled token as well, so "the
+    #     sixty-eight point zero percent credible interval" is an interval
+    #     idiom rather than a bare value.
+    sign = r"(?:(?P<sign>negative|minus)\s+)?"
+    tens = r"(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)"
     spelled = re.compile(
-        rf"\b({_NUMBER_WORD_TOKEN}(?:[-\s]{_NUMBER_WORD_TOKEN})?"
-        rf"\s+point(?:\s+{_NUMBER_WORD_TOKEN})+)\b",
+        rf"\b{sign}(?P<number>"
+        rf"{_NUMBER_WORD_TOKEN}(?:[-\s]{_NUMBER_WORD_TOKEN})?"
+        rf"\s+point(?:\s+{_NUMBER_WORD_TOKEN})+"
+        rf"|{tens}(?:[-\s]{_NUMBER_WORD_TOKEN})?"
+        rf")\b",
         re.IGNORECASE,
     )
-    for match in spelled.finditer(text):
-        value = _spelled_number_to_float(match.group(1))
-        if value is not None and math.isfinite(value):
-            tokens.append(_Token(value, bmap[match.start()], bmap[match.end()], False, False))
+    signed_unit = re.compile(
+        rf"\b(?P<sign>negative|minus)\s+(?P<number>{_NUMBER_WORD_TOKEN})\b",
+        re.IGNORECASE,
+    )
+    for pattern in (spelled, signed_unit):
+        for match in pattern.finditer(text):
+            value = _spelled_number_to_float(match.group("number"))
+            if value is None or not math.isfinite(value):
+                continue
+            if match.group("sign"):
+                value = -value
+            tokens.append(_Token(
+                value,
+                bmap[match.start()],
+                bmap[match.end()],
+                bool(_PERCENT_AFTER_RE.match(text[match.end():])),
+                False,
+            ))
     for match in _LITTLE_H_RE.finditer(text):
         try:
             value = float(match.group(1)) * 100.0

@@ -329,12 +329,29 @@ _INTERVAL_IDIOM_RE = re.compile(
 )
 
 
+_ANY_DIGIT_RE = re.compile(r"\d")
+
+
 def _percent_is_interval_idiom(text: str, token_end: int) -> bool:
-    """True when interval wording sits beside this percentage token."""
-    return bool(
-        _INTERVAL_IDIOM_RE.search(text[token_end : token_end + 40])
-        or _INTERVAL_IDIOM_RE.search(text[max(0, token_end - 48) : token_end])
-    )
+    """True when interval wording describes THIS percentage token.
+
+    Each window is trimmed at the nearest other digit, the way the honesty
+    gate's ``_is_interval_idiom`` does it: a cue past another number belongs
+    to that number, and without the trim "H0 is 67.7%, and we quote the 95%
+    credible interval" exempted the 67.7 restatement that B6 exists to catch
+    (Codex review 2026-09-03).
+    """
+    after = text[token_end : token_end + 40]
+    other = _ANY_DIGIT_RE.search(after)
+    if other is not None:
+        after = after[: other.start()]
+    before = text[max(0, token_end - 48) : token_end]
+    previous = None
+    for match in _ANY_DIGIT_RE.finditer(before):
+        previous = match
+    if previous is not None:
+        before = before[previous.end():]
+    return bool(_INTERVAL_IDIOM_RE.search(after) or _INTERVAL_IDIOM_RE.search(before))
 _CLAIM_BRIDGE_RE = re.compile(
     r"(?:^|\b)(?:is|was|are|equals?|gives?|gave|yields?|finds?|found|"
     r"reports?|returns?|measures?|measurement|estimate|estimated|median|mean|"
