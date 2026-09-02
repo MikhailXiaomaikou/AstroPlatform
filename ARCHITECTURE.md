@@ -626,7 +626,7 @@ transient 502/503s.
 
 - Python sandbox is **stability-hardened**, not adversarial-grade. `seccomp` / `gVisor` / `Firecracker` are out of scope.
 - Connector cache is opt-in at the call site; migration to every connector is incremental.
-- The orchestrator (`app/ai/orchestrator.py`) classifies intent with regexes and narrows the chat-path toolset to the matched specialists' allowlists (no specialist lists a cosmology or research-program tool; those run only through the loop's forced routes). Composite prompts run the specialists sequentially in `chat.py` with a 400-character handoff; there is no parallel multi-agent execution.
+- The orchestrator (`app/ai/orchestrator.py`) classifies intent with regexes and narrows the chat-path toolset to the matched specialists' allowlists. Those allowlists cover a minority of the cosmology manifest (analysis_agent carries `compare_luminosity_distances`, `demagnify_sample`, `estimate_photo_z` and similar analysis tools); the likelihood-chain, sampler and research-program tools (`build_cosmology_likelihood`, `run_cosmology_likelihood_chain`, `fit_cosmology_mcmc`, `plan_research_program`, `run_research_matrix`, ...) are in no specialist allowlist and reach the model only through the loop's forced routes. Composite prompts run the specialists sequentially in `chat.py` with a 400-character handoff; there is no parallel multi-agent execution.
 - Opt-in research memory uses hashed embeddings, not a vector DB.
 - ADQL cache stores full result sets; the AI sees 100 rows; Python gets the rest via the cache key.
 - System prompt is ~26 k tokens under cosmology focus (`scripts/stats.sh` for the live number). Further per-module growth will require a jump-to section index.
