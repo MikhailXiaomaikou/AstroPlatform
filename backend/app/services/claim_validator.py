@@ -3649,7 +3649,26 @@ _HYPOTHESIS_LABEL_RE = re.compile(
     r"^[ \t]*(?:(?:[-*>#]+|\d+[.)])[ \t]*)?"
     r"(?:\*\*[ \t]*hypothesis[ \t]*:[ \t]*\*\*"
     r"|\*\*[ \t]*hypothesis[ \t]*\*\*[ \t]*:"
-    r"|hypothesis[ \t]*:)",
+    r"|hypothesis[ \t]*:"
+    # The Chinese label is written in the same Markdown forms; recognising
+    # only the bare form blocked "- **假设：** ..." as a strong conclusion
+    # (review 2026-09-03).
+    r"|\*\*[ \t]*假设[ \t]*[:：][ \t]*\*\*"
+    r"|\*\*[ \t]*假设[ \t]*\*\*[ \t]*[:：]"
+    r"|假设[ \t]*[:：])",
+    re.I,
+)
+# A confirmation only cancels a hedge when the sentence is not itself denying
+# the conclusion.  "Although the calibration is confirmed, there is no
+# evidence the Hubble tension is resolved" confirms an unrelated premise
+# (review 2026-09-03).
+_EXPLICIT_DENIAL_RE = re.compile(
+    r"\bno\s+(?:statistically\s+significant\s+)?evidence\b"
+    r"|\binsufficient\s+evidence\b"
+    r"|\bcan(?:not|'t)\s+conclude\b"
+    r"|\bdo(?:es)?\s+not\s+(?:show|support|establish|favou?r|indicate)\b"
+    r"|\bfailed?\s+to\s+(?:show|establish|detect)\b"
+    r"|没有(?:统计显著|显著)?证据|证据不足|无法(?:得出|断定|证明)",
     re.I,
 )
 # A hedge word does not hedge a sentence that also announces a confirmation:
@@ -3903,7 +3922,10 @@ def _strong_conclusion_from_sentence(sentence: str) -> dict[str, str | None] | N
         or "?" in sentence
         or "？" in sentence
         or (
-            not _CONFIRMED_ASSERTION_RE.search(sentence)
+            (
+                not _CONFIRMED_ASSERTION_RE.search(sentence)
+                or _EXPLICIT_DENIAL_RE.search(sentence)
+            )
             and (
                 _HYPOTHESIS_LABEL_RE.search(sentence)
                 or _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(sentence)

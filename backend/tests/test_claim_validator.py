@@ -2261,3 +2261,44 @@ def test_hypothesis_label_accepts_nested_markdown_markers() -> None:
         "- Hypothesis: a local void resolves the Hubble tension.",
     ):
         assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+
+def test_a_confirmation_of_an_unrelated_premise_keeps_the_hedge() -> None:
+    """The confirmation guard must qualify the conclusion, not any clause:
+    "Although the calibration is confirmed, there is no evidence the Hubble
+    tension is resolved" is a denial, and blocking it is a false kill
+    (review 2026-09-03)."""
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    for sentence in (
+        "Although the calibration is confirmed, there is no evidence the Hubble tension is resolved.",
+        "The pipeline is confirmed, but we cannot conclude that the Hubble tension is resolved.",
+        "The instrument model is confirmed; the data do not show that dark energy evolves.",
+    ):
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+    # The laundering shapes stay flagged.
+    for sentence in (
+        "The forecast that the Hubble tension is resolved is now confirmed.",
+        "Our hypothesis is confirmed: the Hubble tension is resolved by a local void.",
+    ):
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+
+def test_chinese_hypothesis_label_survives_markdown_markers() -> None:
+    """The English label matcher learned list and bold markers; the Chinese
+    one is written in the same forms and must not be blocked."""
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    for sentence in (
+        "- **假设：** 局部空洞解决哈勃张力。",
+        "* 假设：局部空洞解决哈勃张力。",
+        "1. **假设：** 局部空洞解决哈勃张力。",
+        "> 假设：局部空洞解决哈勃张力。",
+        "假设：局部空洞解决哈勃张力。",
+    ):
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+    assert _strong_conclusion_from_sentence(
+        "我们的假设得到证实：哈勃张力已被局部空洞解决。"
+    ) is not None
