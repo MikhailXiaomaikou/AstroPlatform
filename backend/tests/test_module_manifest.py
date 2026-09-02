@@ -156,3 +156,19 @@ def test_every_real_tool_appears_in_a_manifest_or_retained_set():
         f"Add them to core/infrastructure.yaml, modules/<m>/manifest.yaml, or "
         f"(if intentionally dormant/shared) _RETAINED_UNMANIFESTED_TOOLS."
     )
+
+
+def test_cosmology_manifest_total_comment_matches_allowed_tool_count() -> None:
+    import re
+
+    from app.services.prompt_loader import build_allowed_tools
+
+    text = (_MODULES_DIR / "cosmology" / "manifest.yaml").read_text(encoding="utf-8")
+    match = re.search(r"# Total: (\d+) \+ (\d+) \+ (\d+) = (\d+) visible tools", text)
+    assert match is not None, "manifest.yaml must keep the Total: a + b + c = n comment"
+    core, specific, overlap, total = (int(g) for g in match.groups())
+    assert core + specific + overlap == total
+    core_yaml = _load_yaml(_PROMPTS_ROOT / "core" / "infrastructure.yaml")
+    assert core == len(core_yaml["tools"])
+    assert specific + overlap == len(_load_yaml(_MODULES_DIR / "cosmology" / "manifest.yaml")["tools"])
+    assert total == len(build_allowed_tools("cosmology"))

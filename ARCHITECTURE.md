@@ -120,9 +120,11 @@ numeric validation, citation validation, rate limits, and UI status chips.
 **Research Mode workflow**
 
 1. Research-style observational-cosmology prompts first call
-   `plan_research_program`, which turns the user question into hypotheses,
-   required probes, candidate registered datasets, model families, executable
-   level, blocking gaps, and an experiment matrix.
+   `plan_research_program`, which turns the user question into a rule-derived
+   platform checklist (keyword-templated statements from
+   `_hypotheses_from_question`, not model hypotheses), required probes,
+   candidate registered datasets, model families, executable level, blocking
+   gaps, and an experiment matrix.
 2. `run_research_matrix` executes only the registered compressed-likelihood
    cells that can run today. Config-only or external-likelihood cells are
    preserved in the matrix as gaps, not silently approximated.
@@ -486,7 +488,7 @@ This is the load-bearing trust layer. Three layers of defence + one positive inc
   - Honest path: `honest_abstention_total{agent,reason}`, `structured_abstention_emitted_total{agent}`.
   - Tool health: `empty_tool_result_total{tool}`, `empty_tool_call_total{tool}`, `sandbox_silent_failure_total{tool}`.
   - Science quality: `sanity_warning_total{tool}`, `mcmc_insufficient_sampling_total`.
-- [`app/services/workflow_checkpoint.py`](./backend/app/services/workflow_checkpoint.py) — Resumable-workflow store (32-step cap, 2 h TTL). Wiring into chat.py is a follow-up.
+- [`app/services/workflow_checkpoint.py`](./backend/app/services/workflow_checkpoint.py) — Resumable-workflow store (32-step cap, 2 h TTL), wired into the tool-execution path (`agent_runtime/tool_execution.py` records each step and injects a resume note).
 - [`app/services/provenance.py`](./backend/app/services/provenance.py) — Versioned environment manifest (Python version, platform, pinned packages + SHA-256 fingerprint, system-prompt hash) merged into every recorded activity.
 
 ## 4. Persistence
@@ -624,7 +626,7 @@ transient 502/503s.
 
 - Python sandbox is **stability-hardened**, not adversarial-grade. `seccomp` / `gVisor` / `Firecracker` are out of scope.
 - Connector cache is opt-in at the call site; migration to every connector is incremental.
-- Orchestrator still runs one tool-loop per turn; multi-agent execution is prepared but not yet the production path.
+- The orchestrator (`app/ai/orchestrator.py`) classifies intent with regexes and narrows the chat-path toolset to the matched specialists' allowlists (no specialist lists a cosmology or research-program tool; those run only through the loop's forced routes). Composite prompts run the specialists sequentially in `chat.py` with a 400-character handoff; there is no parallel multi-agent execution.
 - Opt-in research memory uses hashed embeddings, not a vector DB.
 - ADQL cache stores full result sets; the AI sees 100 rows; Python gets the rest via the cache key.
 - System prompt is ~26 k tokens under cosmology focus (`scripts/stats.sh` for the live number). Further per-module growth will require a jump-to section index.

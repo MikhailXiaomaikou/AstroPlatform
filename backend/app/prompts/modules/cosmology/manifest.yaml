@@ -7,8 +7,8 @@ prompt_file: prompt.md
 
 # Tools loaded for this module = core (via core/infrastructure.yaml)
 #                              + cosmology-specific (28)
-#                              + overlap (14, shared with N+1 modules)
-# Total: 18 + 28 + 14 = 60 visible tools.
+#                              + overlap (15, shared with N+1 modules)
+# Total: 18 + 28 + 15 = 61 visible tools (test_module_manifest pins this).
 tools:
   # ── cosmology-specific (28) ──
   - assess_bao_bin_anomaly
@@ -47,7 +47,7 @@ tools:
   # accepts arxiv_id and internally runs LLM extraction + +/- 1% cell verification.
   # classify_literature_relevance / verify_research_facts moved to overlap (2026-05-20):
   # the literature anti-fabrication layer is focus-agnostic and will be reused by N+1 modules.
-  # -- overlap (14) -- shared with future active modules --
+  # -- overlap (15) -- shared with future active modules --
   - analyze_cross_wavelength
   - analyze_spectrum
   - analyze_spectrum_pro
