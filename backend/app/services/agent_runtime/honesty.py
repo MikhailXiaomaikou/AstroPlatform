@@ -169,6 +169,8 @@ _SUBCLAUSE_BREAK_RE = re.compile(
     re.IGNORECASE,
 )
 _DIGIT_RE = re.compile(r"\d")
+# What joins a value to its uncertainty: "67.36 +/- 0.42", "67.36 ± 0.42".
+_UNCERTAINTY_BRIDGE_RE = re.compile(r"\s*(?:\u00b1|\+/-|\+-)\s*")
 # "Another number" for the interval-cue trim: a digit, or a spelled number
 # word.  Only the words that can carry a coverage level are listed, so an
 # ordinary "one" or "two" in prose does not cut a cue short.
@@ -879,8 +881,13 @@ def nonpublication_posterior_refusal() -> str:
 # guard also accepts ("the median is 3") say nothing about what the number
 # measures.
 _NAMED_PARAMETER_ASSIGNMENT_BEFORE_RE = re.compile(
-    r"\b(?:H0|H_0|H₀|omegam|omega_m|Omega_m|Omega_k|omega_k|sigma8|S8"
-    r"|w0|wa|mnu|hubble)\b"
+    # Every parameter `claim_validator` recognises, not a subset: an
+    # intermediate draft writing "n_s = 1.2" left the whole claim visible
+    # because n_s was missing here while the final validator blocks it
+    # (Codex review 2026-09-03).
+    r"\b(?P<parameter>H0|H_0|H₀|hubble|omegam|omega_m|Omega_m|Omega_b|omega_b"
+    r"|Omega_k|omega_k|Omega_L|omega_lambda|sigma8|sigma_8|S8|S_8"
+    r"|w0|w_0|wa|w_a|mnu|m_nu|sum\s*m_?nu|n_s|ns|A_s|tau|r_d|rd)\b"
     r"(?:[^\n;]{0,28}?[=:~≈]\s*"
     r"|(?P<copula_gap>[^\n;]{0,28}?)"
     r"\b(?:is|was|are|were|of|at|equals?|sits\s+at|comes\s+out\s+at)\s+)$",
@@ -888,10 +895,49 @@ _NAMED_PARAMETER_ASSIGNMENT_BEFORE_RE = re.compile(
 )
 
 
+_PARAMETER_ALIASES = {
+    "h_0": "h0", "h₀": "h0", "hubble": "h0",
+    "omega_m": "omegam", "omegam": "omegam",
+    "omega_b": "omegab", "omega_k": "omegak", "omega_l": "omegalambda",
+    "sigma_8": "sigma8", "s_8": "s8", "w_0": "w0", "w_a": "wa",
+    "m_nu": "mnu", "sum m_nu": "mnu", "sum mnu": "mnu",
+    "ns": "n_s", "a_s": "a_s", "r_d": "rd",
+}
+
+
+def _canonical_parameter(name: str) -> str:
+    key = " ".join(str(name or "").strip().lower().split())
+    return _PARAMETER_ALIASES.get(key, key)
+
+
+def _claimable_values_by_parameter(tool_results: Any) -> dict[str, set[float]]:
+    """Claimable current-turn values, bucketed by the parameter they measure.
+
+    A flat set let one quantity ground another: a result carrying only
+    ``omegam=0.3153`` made an invented ``sigma8 = 0.315`` look supported
+    inside the 1% tolerance, while the final ``validate_claims`` path uses
+    parameter-specific buckets and rejects it (Codex review 2026-09-03).
+    """
+    entries = tool_results if isinstance(tool_results, list) else [tool_results]
+    buckets: dict[str, set[float]] = {}
+    for entry in entries or []:
+        tool, result = _entry_tool_and_result(entry)
+        if not result or not _claimable_result(tool, result):
+            continue
+        for container_key in _POSTERIOR_KEYS:
+            container = result.get(container_key)
+            if container is None:
+                continue
+            for parameter, _stat, value in _named_numbers(container):
+                if parameter:
+                    buckets.setdefault(_canonical_parameter(parameter), set()).add(value)
+    return buckets
+
+
 def _unsupported_parameter_claim(
-    text: str, token: _Token, claimable: set[float]
+    text: str, token: _Token, by_parameter: dict[str, set[float]]
 ) -> bool:
-    """A labelled parameter value that no claimable current-turn result backs."""
+    """A labelled parameter value that no claimable result for THAT parameter backs."""
     if token.little_h:
         return False
     if token.is_percent and _is_interval_idiom(text, token):
@@ -904,9 +950,10 @@ def _unsupported_parameter_claim(
     gap = match.group("copula_gap")
     if gap is not None and _INTERVAL_WORDING_RE.search(gap):
         return False
+    supported = by_parameter.get(_canonical_parameter(match.group("parameter")), set())
     return not any(
         math.isclose(token.value, value, rel_tol=0.01, abs_tol=1e-12)
-        for value in claimable
+        for value in supported
     )
 
 
@@ -973,18 +1020,33 @@ def redact_gated_values(
         return source, 0
     unsupported = _unsupported_untrusted_values(messages, tool_results)
     withheld_all, withheld_h0 = _withheld_universes(tool_results)
-    claimable = _claimable_current_values(tool_results)
+    by_parameter = _claimable_values_by_parameter(tool_results)
 
     # A little-h token carries value*100 (``h = 0.677`` -> 67.7) while the span
     # it owns covers the little-h digits, so redacting the span the flagged
     # token owns blanks the right characters.
-    spans = sorted(
-        (token.start, token.end)
-        for token in _reply_number_spans(source)
-        if _echo_token_flagged(token.value, unsupported)
-        or _withheld_token_flagged(source, token, withheld_all, withheld_h0)
-        or _unsupported_parameter_claim(source, token, claimable)
-    )
+    # An uncertainty rides on the value it qualifies.  Blanking only the
+    # median left "H0 = [withheld] +/- 9.87" on the wire, still an invented
+    # number the final validator blocks as cosmology_h0_uncertainty (Codex
+    # review 2026-09-03).  A token joined to a flagged one by +/- inherits
+    # its decision.
+    flagged: list[tuple[int, int]] = []
+    previous_flagged_end: int | None = None
+    for token in _reply_number_spans(source):
+        hit = (
+            _echo_token_flagged(token.value, unsupported)
+            or _withheld_token_flagged(source, token, withheld_all, withheld_h0)
+            or _unsupported_parameter_claim(source, token, by_parameter)
+        )
+        if not hit and previous_flagged_end is not None:
+            bridge = source[previous_flagged_end:token.start]
+            hit = bool(_UNCERTAINTY_BRIDGE_RE.fullmatch(bridge))
+        if hit:
+            flagged.append((token.start, token.end))
+            previous_flagged_end = token.end
+        elif token.start > (previous_flagged_end or 0):
+            previous_flagged_end = None
+    spans = sorted(flagged)
     if not spans:
         return source, 0
     merged: list[list[int]] = []

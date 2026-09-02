@@ -258,3 +258,41 @@ def test_redact_event_for_wire_covers_details_and_fails_closed():
     failed = redact_event_for_wire(evt, broken_redact)
     assert "71.43" not in json.dumps(failed, default=str)
     assert failed["gate"] == "untrusted_evidence_echo"  # routing fields survive
+
+
+def test_numeric_claim_leaves_are_decided_with_their_claim_text() -> None:
+    """A bare "123.456" carries no label for the redactor to decide on.
+
+    The numeric-leaf branch called the redactor on the rendered number alone,
+    which has no parameter label, no pasted source and no withheld statistic
+    in it, so ``details.claims[*].value`` still shipped the rejected number
+    while its ``raw`` sibling was blanked (Codex review 2026-09-03).
+    """
+    from app.observability.gate_events import redact_event_for_wire
+    from app.services.agent_runtime.honesty import redact_gated_values
+
+    listed = [{
+        "tool": "list_cosmology_datasets",
+        "result": {"success": True, "publication_ready": True,
+                   "datasets": [{"key": "desi_dr2_bao"}]},
+    }]
+
+    def _redact(text: str):
+        return redact_gated_values(text, [], listed)
+
+    event = {
+        "details": {"claims": [{"raw": "H0 = 123.456 km/s/Mpc", "value": 123.456}]},
+        "draft_preview": "H0 = 123.456 km/s/Mpc",
+        "final_preview": "",
+    }
+    wire = redact_event_for_wire(event, _redact)
+    claim = wire["details"]["claims"][0]
+    assert "123.456" not in str(claim["raw"])
+    assert claim["value"] != 123.456
+    assert "123.456" not in str(wire["draft_preview"])
+    # A number with no claim context around it is left alone.
+    plain = redact_event_for_wire(
+        {"details": {"iteration": 7, "universe_size": 12}, "draft_preview": "", "final_preview": ""},
+        _redact,
+    )
+    assert plain["details"] == {"iteration": 7, "universe_size": 12}

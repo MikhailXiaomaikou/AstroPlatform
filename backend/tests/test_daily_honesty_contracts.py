@@ -2156,3 +2156,66 @@ def test_draft_redaction_blanks_an_invented_parameter_value() -> None:
     ):
         untouched, count = redact_gated_values(text, [], listed)
         assert count == 0 and untouched == text, text
+
+
+def _claimable(parameter: str, median: float, std: float = 0.4) -> list[dict]:
+    return [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {"success": True, "publication_ready": True,
+                   "chain_tier": "publication",
+                   "parameters": {parameter: {"median": median, "std": std}}},
+    }]
+
+
+_LISTED_ONLY = [{
+    "tool": "list_cosmology_datasets",
+    "result": {"success": True, "publication_ready": True,
+               "datasets": [{"key": "desi_dr2_bao"}]},
+}]
+
+
+def test_one_parameter_cannot_ground_another_in_a_draft() -> None:
+    """A flat claimable set let omegam=0.3153 support an invented sigma8=0.315.
+
+    The final ``validate_claims`` path uses parameter-specific buckets and
+    rejects it; the draft channel compared against one flat set inside the 1%
+    tolerance (Codex review 2026-09-03).
+    """
+    from app.services.agent_runtime.honesty import redact_gated_values
+
+    omegam = _claimable("omegam", 0.3153, 0.007)
+    redacted, count = redact_gated_values("Draft: sigma8 = 0.315 from the refit.", [], omegam)
+    assert count == 1 and "0.315" not in redacted
+    # The parameter that DID produce the value still grounds it.
+    survives, count = redact_gated_values("Draft: omegam = 0.3153 from the chain.", [], omegam)
+    assert count == 0 and survives.endswith("omegam = 0.3153 from the chain.")
+
+
+def test_draft_redaction_covers_every_validated_parameter_and_its_uncertainty() -> None:
+    """n_s was missing from the label list, and an uncertainty rode along free.
+
+    ``n_s = 1.2`` left the whole claim visible, and blanking only the median
+    left "H0 = [withheld] +/- 9.87" on the wire -- an invented number the
+    final validator blocks as cosmology_h0_uncertainty (Codex review
+    2026-09-03).
+    """
+    from app.services.agent_runtime.honesty import redact_gated_values
+
+    redacted, count = redact_gated_values("Draft: n_s = 1.2 from the refit.", [], _LISTED_ONLY)
+    assert count == 1 and "1.2" not in redacted
+
+    for text in ("Draft: H0 = 73.24 ± 9.87 km/s/Mpc.", "Draft: H0 = 73.24 +/- 9.87 km/s/Mpc."):
+        redacted, count = redact_gated_values(text, [], _LISTED_ONLY)
+        assert count == 2, text
+        assert "73.24" not in redacted and "9.87" not in redacted, text
+
+    # A supported pair survives, and an unrelated number after the value is
+    # not swept up with it.
+    survives, count = redact_gated_values(
+        "Draft: H0 = 67.36 ± 0.42 km/s/Mpc.", [], _claimable("H0", 67.36, 0.42)
+    )
+    assert count == 0
+    partial, count = redact_gated_values(
+        "Draft: H0 = 73.24 km/s/Mpc, at redshift 0.51.", [], _LISTED_ONLY
+    )
+    assert count == 1 and "0.51" in partial

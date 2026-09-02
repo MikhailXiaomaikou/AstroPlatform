@@ -138,15 +138,35 @@ def build_gate_event(
 
 _WIRE_TEXT_FIELDS = ("draft_preview", "final_preview")
 _WIRE_REDACTION_FAILED = "[withheld: redaction unavailable]"
+_WIRE_REDACTED_NUMBER = "[withheld]"
 
 
-def _redact_tree(node: Any, redact: Callable[[str], tuple[str, int]]) -> Any:
+# Keys whose sibling text carries the claim a numeric leaf belongs to.  A
+# bare "123.456" has no parameter label, no pasted source and no withheld
+# statistic in it, so the redactor cannot decide it on its own and returned
+# it unchanged while the sibling `raw` was blanked (Codex review
+# 2026-09-03).  The number is decided WITH its context instead.
+_CLAIM_CONTEXT_KEYS = ("raw", "text", "snippet", "sentence", "claim", "label")
+_CLAIM_VALUE_KEYS = ("value", "values", "number", "numbers")
+
+
+def _redact_tree(
+    node: Any,
+    redact: Callable[[str], tuple[str, int]],
+    context: str = "",
+) -> Any:
     if isinstance(node, str):
         return redact(node)[0]
     if isinstance(node, dict):
-        return {k: _redact_tree(v, redact) for k, v in node.items()}
+        # A claim record's own text is the context for its numeric leaves.
+        own = " ".join(
+            str(node[key]) for key in _CLAIM_CONTEXT_KEYS
+            if isinstance(node.get(key), str)
+        )
+        nested = f"{context} {own}".strip() if own else context
+        return {k: _redact_tree(v, redact, nested) for k, v in node.items()}
     if isinstance(node, (list, tuple)):
-        return [_redact_tree(v, redact) for v in node]
+        return [_redact_tree(v, redact, context) for v in node]
     if isinstance(node, (int, float)) and not isinstance(node, bool):
         # A blocking gate reports the offending claim as BOTH a raw snippet
         # and a parsed number (claim_validator.Claim.value), so redacting only
@@ -155,8 +175,15 @@ def _redact_tree(node: Any, redact: Callable[[str], tuple[str, int]]) -> Any:
         # hit on a bare numeric token, and a leaf it does not touch is left as
         # the original number, not stringified.
         rendered = repr(node)
-        redacted = redact(rendered)[0]
-        return node if redacted == rendered else redacted
+        if redact(rendered)[0] != rendered:
+            return _WIRE_REDACTED_NUMBER
+        if context:
+            # Decide the number inside its own claim text: "H0 = 123.456"
+            # carries the label the bare leaf lacks.
+            probe = f"{context} {rendered}"
+            if redact(probe)[0] != probe:
+                return _WIRE_REDACTED_NUMBER
+        return node
     return node
 
 
