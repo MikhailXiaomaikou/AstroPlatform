@@ -2482,3 +2482,39 @@ def test_the_hedge_pattern_stays_linear_with_a_parenthetical() -> None:
         _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(probe)
         timings.append(time.perf_counter() - started)
     assert timings[-1] < 1.0
+
+
+def test_predicate_hedges_and_coordinated_predicates_survive() -> None:
+    """Three more false kills from the narrowing and the clause split.
+
+    ``Our forecast is that X`` is the same predicate shape as ``our
+    hypothesis is that X``; the Chinese ``我们的假设是 X`` had no equivalent
+    at all after the bare 假设 alternative was narrowed; and treating every
+    ``and`` as a clause boundary detached a coordinated predicate from its
+    own modal -- ``may weaken and ultimately be resolved`` lost the ``may``
+    (Codex review 2026-09-03).
+
+    ``and``/``yet`` now split only when a new SUBJECT follows, which is what
+    separates "and our hypothesis is that X" from "and ultimately be
+    resolved".
+    """
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    hedged = [
+        "Our forecast is that the Hubble tension is resolved after recalibration.",
+        "我们的假设是局部空洞解决哈勃张力。",
+        "The Hubble tension may weaken and ultimately be resolved by a local void.",
+        "The calibration is confirmed and our hypothesis is that a local void "
+        "resolves the Hubble tension.",
+    ]
+    for sentence in hedged:
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+    asserted = [
+        "The forecast is now confirmed: the Hubble tension is resolved by a local void.",
+        "假设：已被证实，哈勃张力被局部空洞解决。",
+        "哈勃张力被本地空洞解决。",
+        "The Hubble tension is resolved by a local void.",
+    ]
+    for sentence in asserted:
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence

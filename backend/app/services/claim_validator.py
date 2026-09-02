@@ -3639,7 +3639,8 @@ _NONASSERTIVE_COSMOLOGY_CONTEXT_RE = re.compile(
     # the washing hole: "Our hypothesis is confirmed: X" carries a
     # confirmed assertion, which cancels the hedge and keeps it a
     # violation.  The verb form "we hypothesise that" stays NOT exempt.
-    r"hypothes[ei]s\s+(?:is|are|was|were)\s+that|"
+    r"(?:hypothes[ei]s|forecasts?|predictions?|conjectures?)"
+    r"\s+(?:is|are|was|were)\s+that|"
     r"not\s+ruled\s+out|consistent\s+with\s+zero|does\s+not\s+evolve|"
     r"(?:is|are|remains?)\s+unresolved|(?:is|are)\s+not\s+(?:resolved|detected))\b",
     re.I,
@@ -3648,6 +3649,10 @@ _ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE = re.compile(
     r"(?:没有|并无|无)(?:统计显著|显著)?证据|证据不足|无法(?:得出|断定|证明)|"
     r"不能(?:得出|断定|证明)|尚未|未能|是否|可能|或许|"
     r"^\s*假设[:：]|值得(?:检验|验证)的假设|预测[^。；;.!！？\n]{0,20}将|"
+    # The Chinese predicate form, counterpart of "our hypothesis is that X".
+    # Narrowing the bare 假设 alternative left ordinary hypothetical prose
+    # with no hedge at all (Codex review 2026-09-03).
+    r"(?:假设|猜想|预测)是|"
     r"仍未解决|没有解决|未(?:探测|检测)到|与零一致|不随时间演化|未被排除"
 )
 # Sentence-initial "Hypothesis:" (optionally bold or as a list item) marks the
@@ -3957,7 +3962,13 @@ def _validated_conclusion_attestations(tool_results: Any) -> dict[str, dict[str,
 # cancelled the hedge on the second (Codex review 2026-09-03).
 _CONCLUSION_CLAUSE_BREAK_RE = re.compile(
     r"[,;:\u2014\uff0c\uff1b\uff1a]"
-    r"|\b(?:and|but|while|whereas|although|though|however|so\s+that|yet)\b",
+    r"|\b(?:but|while|whereas|although|though|however|so\s+that)\b"
+    # "and"/"yet" split a sentence into propositions only when a new SUBJECT
+    # follows.  Treating every "and" as a boundary detached a coordinated
+    # predicate from its own modal -- "may weaken and ultimately be resolved"
+    # lost the "may" (Codex review 2026-09-03).
+    r"|\b(?:and|yet)\b(?=\s+(?:the|a|an|our|its|their|his|her|this|that|these|"
+    r"those|it|we|they|he|she|there|no)\b)",
     re.IGNORECASE,
 )
 # A comma pair with no coordinating word between them is a parenthetical, not
