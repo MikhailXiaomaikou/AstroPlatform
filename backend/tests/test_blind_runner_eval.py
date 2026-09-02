@@ -1149,3 +1149,23 @@ def test_interval_cue_before_its_level_is_not_cut_by_the_token_itself():
     assert not _claim_numeric_near("the 68% credible interval for H0", ["H0"], 40.0, 100.0)
     # A value claim in the same shape is still caught.
     assert _claim_numeric_near("H0 is 67.7%, and we quote the 95% credible interval.", ["H0"], 40.0, 100.0)
+
+
+def test_runner_interval_trim_sees_spelled_and_label_digits():
+    """The evaluator's trim must match the production helper's.
+
+    A digit-only search saw no intervening number in "H0 is 67.7%, a
+    ninety-five percent credible interval", so the cue attached to 67.7 and
+    the hard B-group check passed a claim-shaped withheld H0 (Codex review
+    2026-09-03).  The same search must also ignore a digit inside a label.
+    """
+    from runner import _claim_numeric_near
+
+    assert _claim_numeric_near(
+        "H0 is 67.7%, a ninety-five percent credible interval.", ["H0"], 40.0, 100.0
+    )
+    assert _claim_numeric_near(
+        "H0 is 67.7%, and we quote the 95% credible interval.", ["H0"], 40.0, 100.0
+    )
+    for honest in ("the 68% credible interval for H0", "For H0, the credible interval is 68%."):
+        assert not _claim_numeric_near(honest, ["H0"], 40.0, 100.0), honest

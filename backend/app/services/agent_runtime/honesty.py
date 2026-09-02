@@ -104,6 +104,13 @@ _INTERVAL_WORDING_RE = re.compile(
 # earlier form split every period and cut dotted abbreviations in half before
 # the interval cue could be recognised (review 2026-09-03).
 _CLAUSE_BREAK_RE = re.compile(r"[;!?\n]|\.(?=\s|$)")
+# Finer than a clause: what separates one predicate from the next inside a
+# sentence.  Used only to decide which words sit in a parameter label's own
+# sub-clause.
+_SUBCLAUSE_BREAK_RE = re.compile(
+    r"[;!?\n,]|\.(?=\s|$)|\b(?:but|while|whereas|although|though|however|yet)\b",
+    re.IGNORECASE,
+)
 _DIGIT_RE = re.compile(r"\d")
 # "Another number" for the interval-cue trim: a digit, or a spelled number
 # word.  Only the words that can carry a coverage level are listed, so an
@@ -248,6 +255,11 @@ def _untrusted_user_values(messages: list[dict]) -> set[float]:
         text = str(message.get("content") or "")
         if not _UNTRUSTED_EVIDENCE_RE.search(text):
             continue
+        # The pasted evidence gets the same power-of-ten rewrite the reply
+        # gets: "h = 6.77 × 10^-1" captured only 6.77 and recorded 677, so a
+        # reply saying "H0 = 67.7" produced no echo hit (Codex review
+        # 2026-09-03).
+        text = _normalized_reply_with_map(text)[0]
         for match in _DIRECT_PARAMETER_RE.finditer(text):
             values.add(float(match.group("value")))
         # The pasted evidence may itself be in little-h units.  Only the
@@ -563,7 +575,11 @@ def _parameter_assignment_before(before: str) -> bool:
     # H0 value (Codex review 2026-09-03).  Only the words between the start
     # of the clause and the label are inspected, so "H0's credible interval
     # is 68%" is still covered by the gap check above.
-    head = _CLAUSE_BREAK_RE.split(before[: match.start()])[-1]
+    # Only the words in the label's OWN sub-clause count.  Splitting on
+    # sentence punctuation alone let "The credible interval is withheld, but
+    # the result is 68%" disable a clear value assignment (Codex review
+    # 2026-09-03), so commas and coordinators end the head as well.
+    head = _SUBCLAUSE_BREAK_RE.split(before[: match.start()])[-1]
     return not _INTERVAL_WORDING_RE.search(head)
 
 

@@ -329,7 +329,15 @@ _INTERVAL_IDIOM_RE = re.compile(
 )
 
 
-_ANY_DIGIT_RE = re.compile(r"\d")
+# "Another number" for the cue trim: a digit that is not part of a label
+# (the "0" of H0 is not a number), or a spelled coverage level.  Mirrors the
+# production helper; a digit-only search let "H0 is 67.7%, a ninety-five
+# percent credible interval" read as the idiom (Codex review 2026-09-03).
+_ANY_DIGIT_RE = re.compile(
+    r"(?<![A-Za-z_])\d|\b(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|"
+    r"sixty[-\s]eight|ninety[-\s]five|ninety[-\s]nine)\b",
+    re.IGNORECASE,
+)
 
 
 def _percent_is_interval_idiom(text: str, token_start: int, token_end: int) -> bool:
