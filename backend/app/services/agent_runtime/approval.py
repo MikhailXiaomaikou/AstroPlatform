@@ -25,6 +25,7 @@ import re
 
 from app.services.agent_runtime.honesty import (
     _claimable_current_values,
+    _is_interval_idiom,
     _reply_number_spans,
 )
 
@@ -57,6 +58,38 @@ _APPROVAL_LINE_RE = re.compile(
 _MARKER = "NOT APPROVED - "
 
 
+def _states_a_claimable_value(line: str, claimable: set[float]) -> bool:
+    """True when this line states a number a claimable result produced.
+
+    Every token is read, little-h included: "h = 0.6736" is the standard
+    equivalent of H0 = 67.36 and the converted token is the one that matches.
+    A coverage level is NOT such a number: "Draft claim: the 68% credible
+    interval remains to be calculated" was stamped NOT APPROVED because 68
+    fell within 1% of a claimable 67.36 (Codex review 2026-09-03).
+    """
+    return any(
+        any(
+            math.isclose(token.value, value, rel_tol=0.01, abs_tol=1e-12)
+            for value in claimable
+        )
+        for token in _reply_number_spans(line)
+        if not (token.is_percent and _is_interval_idiom(line, token))
+    )
+
+
+def _neighbour_states_claim(
+    states_claim: list[bool], lines: list[str], index: int
+) -> bool:
+    """True when the nearest non-blank line on either side states the claim."""
+    for step in (-1, 1):
+        cursor = index + step
+        while 0 <= cursor < len(lines) and not lines[cursor].strip():
+            cursor += step
+        if 0 <= cursor < len(lines) and states_claim[cursor]:
+            return True
+    return False
+
+
 def mark_unapproved_claims(
     reply: str,
     tool_results: object,
@@ -78,22 +111,18 @@ def mark_unapproved_claims(
     if not claimable:
         return text, 0
 
+    lines = text.splitlines(keepends=True)
+    states_claim = [_states_a_claimable_value(line, claimable) for line in lines]
     marked = 0
     out: list[str] = []
-    for line in text.splitlines(keepends=True):
+    for index, line in enumerate(lines):
         match = _APPROVAL_LINE_RE.match(line)
         if match and not line.lstrip().startswith(_MARKER):
-            # Every token, little-h included: "APPROVED by reviewer:
-            # h = 0.6736" is the standard equivalent of H0 = 67.36 and the
-            # line was shipping unmarked because `_reply_number_tokens` drops
-            # the converted token (Codex review 2026-09-03).
-            if any(
-                any(
-                    math.isclose(token.value, value, rel_tol=0.01, abs_tol=1e-12)
-                    for value in claimable
-                )
-                for token in _reply_number_spans(line)
-            ):
+            # The verdict may stand on its own line, with the result on the
+            # line above or below it -- "H0 = 67.36 km/s/Mpc." then "APPROVED
+            # by human reviewer." -- which is the same stamp on the same
+            # number and was shipping unmarked (Codex review 2026-09-03).
+            if states_claim[index] or _neighbour_states_claim(states_claim, lines, index):
                 prefix = match.group("prefix")
                 line = prefix + _MARKER + line[len(prefix):]
                 marked += 1

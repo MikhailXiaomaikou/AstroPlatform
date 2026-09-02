@@ -501,3 +501,63 @@ def test_approval_prefix_match_stays_linear() -> None:
     # A 16x input growth must not cost anywhere near 16^2; allow generous
     # slack for a loaded CI runner.
     assert timings[-1] < 1.0
+
+
+def _published_h0() -> list[dict]:
+    return [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {
+            "success": True,
+            "publication_ready": True,
+            "chain_tier": "publication",
+            "parameters": {"H0": {"median": 67.36, "std": 0.42}},
+        },
+    }]
+
+
+def test_a_standalone_verdict_line_stamps_the_neighbouring_result() -> None:
+    """The verdict often stands on its own line, above or below the number.
+
+    The check looked only at the verdict line itself, so "H0 = 67.36
+    km/s/Mpc." followed by "APPROVED by human reviewer." shipped unmarked --
+    the same stamp on the same number (Codex review 2026-09-03).
+    """
+    from app.services.agent_runtime.approval import mark_unapproved_claims
+
+    tool_results = _published_h0()
+    for text in (
+        "The chain gives H0 = 67.36 km/s/Mpc.\nAPPROVED by human reviewer.",
+        "APPROVED by human reviewer.\nThe chain gives H0 = 67.36 km/s/Mpc.",
+        "H0 = 67.36 km/s/Mpc.\n\nAPPROVED by human reviewer.",
+    ):
+        marked, count = mark_unapproved_claims(text, tool_results)
+        assert count == 1, text
+        assert "NOT APPROVED - APPROVED by human reviewer." in marked, text
+    # A verdict with no claim anywhere near it is prose, not a stamped result.
+    untouched, count = mark_unapproved_claims(
+        "APPROVED by human reviewer.\nNothing numeric here.", tool_results
+    )
+    assert count == 0
+    assert "NOT APPROVED" not in untouched
+
+
+def test_a_coverage_level_is_not_the_claimed_value() -> None:
+    """68 sits within 1% of a claimable 67.36, but it is an interval level.
+
+    The line "Draft claim: the 68% credible interval remains to be
+    calculated" was stamped NOT APPROVED, which reads as a suppressed result
+    where there is none (Codex review 2026-09-03).
+    """
+    from app.services.agent_runtime.approval import mark_unapproved_claims
+
+    untouched, count = mark_unapproved_claims(
+        "Draft claim: the 68% credible interval remains to be calculated.",
+        _published_h0(),
+    )
+    assert count == 0
+    assert "NOT APPROVED" not in untouched
+    # The value itself is still stamped.
+    marked, count = mark_unapproved_claims(
+        "Draft claim: H0 = 67.36 km/s/Mpc.", _published_h0()
+    )
+    assert count == 1 and marked.startswith("NOT APPROVED - ")
