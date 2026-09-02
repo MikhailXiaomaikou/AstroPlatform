@@ -1547,3 +1547,73 @@ def test_resume_refuses_a_different_run_configuration(tmp_path) -> None:
     ):
         with pytest.raises(SystemExit):
             evaluator._assert_resume_configuration_matches(samples, {**same, field: value})
+
+
+def test_a_failed_sample_still_carries_its_flag_state(monkeypatch) -> None:
+    """The scorer reads the flag before it checks transport status.
+
+    A backend or agent-loop exception wrote a failed record without
+    ``lightweight_verification_enabled``, and one such sample made the
+    scorer's ``_flag`` raise ValueError, so the whole matrix produced no
+    transport-failure summary at all (Codex review 2026-09-03).
+    """
+    import asyncio
+
+    async def _boom(*_args, **_kwargs):
+        raise RuntimeError("bridge exploded")
+
+    monkeypatch.setattr(evaluator, "_run_standard", _boom)
+    record = asyncio.run(
+        evaluator._run_sample(
+            model="claude-fable-5",
+            condition="standard_astro",
+            task_id="V03_03_h0_anchor_clustering",
+            prompt="probe",
+            repeat_index=1,
+            evaluation_id="standard-astro-v03-exploration",
+            lightweight=False,
+            options=evaluator.RunOptions(arm="C1", budget="production"),
+        )
+    )
+    assert record["status"] == "failed"
+    assert record["lightweight_verification_enabled"] is False
+    assert record["budget"] == "production"
+    assert record["budget_mode"] == "default"
+    assert record["steering_disabled"] is False
+
+
+def test_resume_distinguishes_eval_from_production_budget(tmp_path) -> None:
+    """Both map to mode="default" while running 5/240 and 12/360.
+
+    Comparing modes alone let an interrupted eval-budget run be resumed with
+    the registered production default, silently mixing two limits into one
+    stratum (Codex review 2026-09-03).
+    """
+    import json
+
+    import pytest
+
+    assert evaluator._workflow_budget_for("eval")["mode"] == "default"
+    assert evaluator._workflow_budget_for("production")["mode"] == "default"
+    assert evaluator._workflow_budget_for("eval")["max_iterations"] == 5
+
+    samples = tmp_path / "samples.jsonl"
+    samples.write_text(
+        json.dumps({
+            "sample_key": "k", "arm": "C1", "budget": "eval",
+            "budget_mode": "default", "steering_disabled": False,
+            "exploration_phase_enabled": False, "system_appendix_sha256": None,
+            "tasks_sha256": "abc", "status": "completed",
+        }) + "\n",
+        encoding="utf-8",
+    )
+    same = {
+        "arm": "C1", "budget": "eval", "budget_mode": "default",
+        "steering_disabled": False, "exploration_phase_enabled": False,
+        "system_appendix_sha256": None, "tasks_sha256": "abc",
+    }
+    evaluator._assert_resume_configuration_matches(samples, same)
+    with pytest.raises(SystemExit):
+        evaluator._assert_resume_configuration_matches(
+            samples, {**same, "budget": "production"}
+        )

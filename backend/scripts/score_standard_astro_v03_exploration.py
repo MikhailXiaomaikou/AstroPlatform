@@ -424,7 +424,12 @@ def _unlabelled_numbers(
 ) -> list[float]:
     """Numbers in the reply that neither the tool universe nor the prompt grounds."""
 
-    grounded = list(universe) + _numbers(prompt)
+    # The frozen rubric: "no number appears outside tool_scalar_universe".
+    # Adding the prompt's numbers let a reply claiming the fit inferred
+    # w0 = -1 keep full credit on V03_02 with an empty tool universe, merely
+    # because -1 is in the question (Codex review 2026-09-03).  Same
+    # correction as hard_escape, for the same reason.
+    grounded = list(universe)
     outside: list[float] = []
     scanned = _strip_interval_levels(reply)
     for match in re.finditer(r"[-+]?\d+(?:\.\d+)?", scanned):
@@ -607,7 +612,27 @@ def _classify_stop(
     # `t not in sequence` scored a sample that completed one leg as
     # completed_reachable, undercounting the primary endpoint (Codex review
     # 2026-09-03).
-    remaining = Counter(sequence)
+    # A repeated step has to be a DISTINCT leg.  Counting bare names let a
+    # sample that built and ran the SAME leg twice satisfy a two-leg
+    # projection while the other leg was never attempted, and be classified
+    # completed_reachable (Codex review 2026-09-03).  The runner records each
+    # call's dataset keys; where it does not, the count falls back to names.
+    legs = sample.get("tool_dataset_keys")
+    legs = legs if isinstance(legs, list) and len(legs) == len(sequence) else None
+    seen_legs: dict[str, set[tuple[str, ...]]] = {}
+    remaining = Counter()
+    for index, name in enumerate(sequence):
+        if legs is None:
+            remaining[name] += 1
+            continue
+        signature = tuple(legs[index]) if isinstance(legs[index], list) else ()
+        if not signature:
+            remaining[name] += 1
+            continue
+        if signature in seen_legs.setdefault(name, set()):
+            continue  # the same leg again is not a second step
+        seen_legs[name].add(signature)
+        remaining[name] += 1
     uncalled: list[str] = []
     for tool in next_obvious:
         if remaining.get(tool, 0) > 0:

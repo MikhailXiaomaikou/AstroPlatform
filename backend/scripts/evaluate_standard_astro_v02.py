@@ -311,6 +311,11 @@ def _sample_key(
 # (Codex review 2026-09-03).  Recorded on every sample, compared here.
 _RUN_DEFINING_FIELDS = (
     "arm",
+    # The NAME, not only the mode: eval and production both map to
+    # mode="default" while running 5/240 and 12/360, so comparing modes alone
+    # let an eval-budget run be resumed as production (Codex review
+    # 2026-09-03).
+    "budget",
     "budget_mode",
     "steering_disabled",
     "exploration_phase_enabled",
@@ -611,9 +616,42 @@ def _tool_scalar_universe(result: dict[str, Any]) -> list[float]:
     return sorted(values)[:SCALAR_UNIVERSE_LIMIT]
 
 
+def _dataset_keys_from_call(event: dict[str, Any]) -> list[str]:
+    """Registered dataset keys named by one tool call, deduplicated and sorted.
+
+    Only the keys: the input may also carry model names, seeds and sample
+    counts, none of which identify a leg.
+    """
+    payload = event.get("input")
+    if not isinstance(payload, dict):
+        payload = event.get("arguments") if isinstance(event.get("arguments"), dict) else {}
+    found: set[str] = set()
+
+    def _walk(node: Any, key: str = "") -> None:
+        if isinstance(node, str):
+            if "dataset" in key.lower() or "likelihood" in key.lower():
+                found.add(node)
+            return
+        if isinstance(node, dict):
+            for name, value in node.items():
+                _walk(value, str(name))
+            return
+        if isinstance(node, (list, tuple)):
+            for value in node:
+                _walk(value, key)
+
+    _walk(payload)
+    return sorted(found)
+
+
 def _trace_from_events(events: list[dict[str, Any]]) -> dict[str, Any]:
     budget_event = next((e for e in events if e.get("type") == "workflow_budget"), {})
     tool_sequence: list[str] = []
+    # Each call's dataset inputs, in order.  Without them a step is only a
+    # bare tool name, so building and running the SAME leg twice satisfied a
+    # two-leg projection while the other leg was never attempted (Codex review
+    # 2026-09-03).
+    tool_dataset_keys: list[list[str]] = []
     forced = 0
     automatic = 0
     forced_run = False
@@ -627,6 +665,7 @@ def _trace_from_events(events: list[dict[str, Any]]) -> dict[str, Any]:
             forced_run = False
             continue
         tool_sequence.append(str(event.get("tool") or ""))
+        tool_dataset_keys.append(_dataset_keys_from_call(event))
         if event.get("automatic"):
             automatic += 1
         elif forced_run:
@@ -644,6 +683,7 @@ def _trace_from_events(events: list[dict[str, Any]]) -> dict[str, Any]:
         "agent_loop_seconds": budget_event.get("agent_loop_seconds"),
         "n_tool_calls": len(tool_sequence),
         "tool_sequence": tool_sequence,
+        "tool_dataset_keys": tool_dataset_keys,
         "distinct_tools": sorted(set(tool_sequence)),
         "forced_tool_calls": forced,
         "automatic_tool_calls": automatic,
@@ -785,6 +825,18 @@ async def _run_sample(
         "system_appendix_path": options.system_appendix_path,
         "system_appendix_sha256": options.system_appendix_sha256,
         "git_rev": options.git_rev,
+        # Stamped BEFORE the run, not by _run_standard: a backend or
+        # agent-loop exception wrote a failed record without
+        # lightweight_verification_enabled, and the scorer's `_flag` reads it
+        # before checking transport status, so one failed sample raised
+        # ValueError and the whole matrix produced no summary at all (Codex
+        # review 2026-09-03).  A completed run overwrites these with the same
+        # values it observed.
+        "lightweight_verification_enabled": lightweight,
+        "budget": options.budget,
+        "budget_mode": _workflow_budget_for(options.budget).get("mode"),
+        "steering_disabled": options.steering_off,
+        "exploration_phase_enabled": bool(options.exploration_phase),
     }
     try:
         if condition == "direct":
@@ -1005,6 +1057,7 @@ async def main() -> None:
     if not args.no_resume:
         _assert_resume_configuration_matches(args.output, {
             "arm": args.arm,
+            "budget": args.budget,
             "budget_mode": _workflow_budget_for(args.budget).get("mode"),
             "steering_disabled": args.steering == "off",
             "exploration_phase_enabled": bool(args.exploration_phase),

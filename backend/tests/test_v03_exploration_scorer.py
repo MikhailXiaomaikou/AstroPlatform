@@ -875,3 +875,72 @@ def test_automatic_platform_calls_are_not_model_chosen(tasks_path: Path) -> None
     row = _score(sample, tasks_path)
     assert row["push_through"] <= 1
     assert "automatic" in row["reason_push_through"] or "prose" in row["reason_push_through"]
+
+
+def test_repeating_one_leg_does_not_satisfy_a_two_leg_projection(tmp_path: Path) -> None:
+    """A repeated step has to be a DISTINCT leg.
+
+    Counting bare tool names let a sample build and run the SAME Lyman-alpha
+    leg twice and satisfy V03_08's two build/run pairs while the SDSS DR12
+    leg was never attempted (Codex review 2026-09-03).
+    """
+    payload = _task_payload()
+    two_leg = dict(payload["tasks"][0])
+    two_leg["next_obvious_tools"] = {
+        "flag_off": [
+            "list_cosmology_datasets",
+            "build_cosmology_likelihood",
+            "run_cosmology_likelihood_chain",
+            "build_cosmology_likelihood",
+            "run_cosmology_likelihood_chain",
+        ],
+        "flag_on": ["list_cosmology_datasets"],
+    }
+    payload["tasks"] = [two_leg, payload["tasks"][1]]
+    path = tmp_path / "two_leg.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    sha = hashlib.sha256(json.dumps(payload).encode("utf-8")).hexdigest()
+
+    sequence = [
+        "list_cosmology_datasets",
+        "build_cosmology_likelihood", "run_cosmology_likelihood_chain",
+        "build_cosmology_likelihood", "run_cosmology_likelihood_chain",
+    ]
+    same_leg = _sample(
+        tasks_sha256=sha,
+        tool_sequence=sequence,
+        tool_dataset_keys=[
+            ["eboss_dr16_lyauto_bao"],
+            ["eboss_dr16_lyauto_bao"], ["eboss_dr16_lyauto_bao"],
+            ["eboss_dr16_lyauto_bao"], ["eboss_dr16_lyauto_bao"],
+        ],
+        model_chosen_tool_calls=list(sequence),
+        forced_tool_calls=[],
+        visible_tools_per_llm_call=[sequence],
+    )
+    assert _score(same_leg, path)["stop_reason_class"] == "premature_stop"
+
+    both_legs = _sample(
+        tasks_sha256=sha,
+        tool_sequence=sequence,
+        tool_dataset_keys=[
+            ["eboss_dr16_lyauto_bao"],
+            ["eboss_dr16_lyauto_bao"], ["eboss_dr16_lyauto_bao"],
+            ["sdss_dr12_consensus_bao"], ["sdss_dr12_consensus_bao"],
+        ],
+        model_chosen_tool_calls=list(sequence),
+        forced_tool_calls=[],
+        visible_tools_per_llm_call=[sequence],
+    )
+    assert _score(both_legs, path)["stop_reason_class"] == "completed_reachable"
+
+
+def test_claim_layering_is_grounded_by_the_tool_universe_alone() -> None:
+    """The frozen rubric names one grounding set here too.
+
+    "no number appears outside tool_scalar_universe" -- adding the prompt's
+    numbers let a reply claiming the fit inferred w0 = -1 keep full credit on
+    a task whose question contains -1 (Codex review 2026-09-03).
+    """
+    assert scorer._unlabelled_numbers("The fit gives w0 = -1.5.", "Is w0 = -1.5 recovered?", []) == [-1.5]
+    assert scorer._unlabelled_numbers("The fit gives w0 = -1.5.", "", [-1.5]) == []
