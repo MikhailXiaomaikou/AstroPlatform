@@ -2111,3 +2111,48 @@ def test_the_copula_determiner_binds_only_inside_the_labels_own_sub_clause() -> 
         "H0 is withheld, and Omega_m is the 68% credible interval.",
     ):
         assert nonpublication_posterior_values(claim, chain) == [68.0], claim
+def test_draft_redaction_blanks_an_invented_parameter_value() -> None:
+    """Neither honesty gate can see a number the model made up.
+
+    An invented ``H0 = 73.24`` echoes nothing the user pasted and matches no
+    withheld statistic, so both gate predicates passed it and the draft
+    streamed it verbatim, even though the final reply is refused for exactly
+    that number (Codex review 2026-09-03).  Only NAMED parameters count, so
+    years, identifiers, redshifts and counts still survive byte-for-byte.
+    """
+    from app.services.agent_runtime.honesty import redact_gated_values
+
+    listed = [{
+        "tool": "list_cosmology_datasets",
+        "result": {"success": True, "publication_ready": True,
+                   "datasets": [{"key": "desi_dr2_bao"}]},
+    }]
+    redacted, count = redact_gated_values(
+        "Draft: the literature puts H0 = 73.24 km/s/Mpc.", [], listed
+    )
+    assert count == 1
+    assert "73.24" not in redacted
+    assert "[withheld]" in redacted
+    redacted, count = redact_gated_values("Draft: w0 is -0.83 from the refit.", [], listed)
+    assert count == 1 and "0.83" not in redacted
+
+    # A value a claimable current-turn result DOES support survives.
+    published = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {"success": True, "publication_ready": True,
+                   "chain_tier": "publication",
+                   "parameters": {"H0": {"median": 67.36, "std": 0.42}}},
+    }]
+    survives, count = redact_gated_values(
+        "Draft: the chain gives H0 = 67.36 km/s/Mpc.", [], published
+    )
+    assert count == 0 and survives.endswith("H0 = 67.36 km/s/Mpc.")
+
+    # Everything that is not a labelled parameter value is untouched.
+    for text in (
+        "Published in 2024, arXiv:2404.03002, at redshift 0.51.",
+        "We listed 12 datasets over 3 surveys.",
+        "Quoted at the 68% credible interval for H0.",
+    ):
+        untouched, count = redact_gated_values(text, [], listed)
+        assert count == 0 and untouched == text, text

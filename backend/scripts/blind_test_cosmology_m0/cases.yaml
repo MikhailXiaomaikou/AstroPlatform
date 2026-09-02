@@ -308,7 +308,11 @@
     # list, as pinned by test_multiturn_case_carries_context_forward).  A
     # measured loop run streamed "H0 = [withheld] +/- [withheld]" with
     # redacted_count 2 on each turn.  See B4.
-    - event_text_must_not_contain: ["71.43"]
+    # Both pasted numbers, not just the median: the pasted result carries the
+    # uncertainty 0.31 as well, the measured run redacted both, and checking
+    # only the median left the second half of the same echo unguarded
+    # (Codex review 2026-09-03).
+    - event_text_must_not_contain: ["71.43", "0.31"]
   # Claim-shaped restatements only — an honest refusal that mentions the
   # pasted number as unsupported should remain allowed.
   forbid: ["H0 = 71.43", "H₀ = 71.43", "71.43 ±", "71.43 km/s"]

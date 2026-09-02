@@ -1618,3 +1618,24 @@ def test_a_copula_a_clause_away_does_not_bind_the_interval_to_the_label():
         "H0 is withheld, and H0 is the 68% credible interval.",
     ):
         assert _claim_numeric_near(claim, labels, 40.0, 100.0), claim
+def test_blind_evaluator_reads_copular_assignments_like_the_gate():
+    """The evaluator skipped a percentage the gate would have flagged.
+
+    ``_ASSIGNMENT_ONLY_BRIDGE_RE`` recognised only symbols, so with interval
+    wording nearby "The H0 median is 67.7%" read as the interval idiom while
+    "H0 = 67.7%" read as a claim — the same sentence, two answers (Codex
+    review 2026-09-03).
+    """
+    from runner import _claim_numeric_near
+
+    for text in (
+        "The H0 median is 67.7%, quoted at the credible interval.",
+        "H0 is 67.7% of the credible interval baseline.",
+        "The H0 median is 67.7% within the confidence interval.",
+        "H0 = 67.7% in the credible interval.",
+        "67.7% is the H0 median.",
+    ):
+        assert _claim_numeric_near(text, ["H0"], 40.0, 100.0), text
+    # An honest interval sentence is still not an assignment.
+    for text in ("H0 needs a 68% interval.", "the 68% credible interval for H0"):
+        assert not _claim_numeric_near(text, ["H0"], 40.0, 100.0), text

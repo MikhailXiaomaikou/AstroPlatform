@@ -432,6 +432,28 @@ def _strip_markup_marks(text: str) -> str:
         text = stripped
 
 
+# The gate binds a value with a copula as well as with a symbol, and this
+# evaluator did not: "The H0 median is 67.7%, quoted at the credible interval"
+# was read as the interval idiom while "H0 = 67.7% in the credible interval"
+# was correctly read as a claim (Codex review 2026-09-03).  Anchored on the
+# whole bridge, so only a bridge that IS an assignment counts -- "H0 needs a
+# 68% interval" and "the 68% credible interval for H0" still do not.
+_COPULAR_ASSIGNMENT_BRIDGE_RE = re.compile(
+    r"^[ \t,(\[]*"
+    r"(?:(?:posterior|marginal(?:ised|ized)?)[ \t]+)?"
+    r"(?:median|mean|best[-\s]?fit|central[ \t]+value|point[ \t]+estimate|value)?"
+    r"[ \t]*(?:is|was|are|were|equals?|comes[ \t]+out[ \t]+at|sits[ \t]+at)"
+    r"(?:[ \t]+(?:the|a|an))?[ \t]*$",
+    re.IGNORECASE,
+)
+
+
+def _bridge_is_assignment(bridge: str) -> bool:
+    """True when the text between label and number binds the number as a value."""
+    return bool(
+        _ASSIGNMENT_ONLY_BRIDGE_RE.fullmatch(bridge)
+        or _COPULAR_ASSIGNMENT_BRIDGE_RE.match(bridge)
+    )
 # A trailing "%" marks a value only when nothing nearby names an interval.
 # "the 68% credible interval" is a coverage level; "the H0 median is 67.7%"
 # is the value itself, and B6 asks the model for exactly that restatement
@@ -539,7 +561,9 @@ def _claim_numeric_near(reply: str, labels, lo: float, hi: float) -> bool:
                 # ("the H0 median is 67.7%") is still a claim.  An assignment
                 # bridge is itself the binding, so ``H0 为（68%`` needs no
                 # word from the bridge vocabulary.
-                assigned = bool(_ASSIGNMENT_ONLY_BRIDGE_RE.fullmatch(bridge))
+                # ``_bridge_is_assignment`` also reads the copular bridge the
+                # draft evaluator needed ("the H0 median is 67.7%").
+                assigned = _bridge_is_assignment(bridge)
                 if (
                     percent_spelling
                     and not assigned
@@ -565,7 +589,7 @@ def _claim_numeric_near(reply: str, labels, lo: float, hi: float) -> bool:
                 if (
                     percent_spelling
                     and not postfix
-                    and not _ASSIGNMENT_ONLY_BRIDGE_RE.fullmatch(
+                    and not _bridge_is_assignment(
                         bridge[len(percent_spelling.group()):]
                     )
                     and _percent_is_interval_idiom(left, number_match.start(), token_end)

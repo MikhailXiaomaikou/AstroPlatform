@@ -870,6 +870,46 @@ def nonpublication_posterior_refusal() -> str:
     )
 
 
+# A number the model binds to a NAMED cosmology parameter is a result claim.
+# The two honesty gates cannot see one the model invented outright -- it
+# echoes nothing the user pasted and matches no withheld statistic -- so a
+# draft that wrote "H0 = 73.24" while the turn had only run
+# `list_cosmology_datasets` streamed it unredacted (Codex review 2026-09-03).
+# Only named parameters count here: the unlabelled subjects the assignment
+# guard also accepts ("the median is 3") say nothing about what the number
+# measures.
+_NAMED_PARAMETER_ASSIGNMENT_BEFORE_RE = re.compile(
+    r"\b(?:H0|H_0|H₀|omegam|omega_m|Omega_m|Omega_k|omega_k|sigma8|S8"
+    r"|w0|wa|mnu|hubble)\b"
+    r"(?:[^\n;]{0,28}?[=:~≈]\s*"
+    r"|(?P<copula_gap>[^\n;]{0,28}?)"
+    r"\b(?:is|was|are|were|of|at|equals?|sits\s+at|comes\s+out\s+at)\s+)$",
+    re.IGNORECASE,
+)
+
+
+def _unsupported_parameter_claim(
+    text: str, token: _Token, claimable: set[float]
+) -> bool:
+    """A labelled parameter value that no claimable current-turn result backs."""
+    if token.little_h:
+        return False
+    if token.is_percent and _is_interval_idiom(text, token):
+        return False
+    match = _NAMED_PARAMETER_ASSIGNMENT_BEFORE_RE.search(
+        text[max(0, token.start - 48):token.start]
+    )
+    if match is None:
+        return False
+    gap = match.group("copula_gap")
+    if gap is not None and _INTERVAL_WORDING_RE.search(gap):
+        return False
+    return not any(
+        math.isclose(token.value, value, rel_tol=0.01, abs_tol=1e-12)
+        for value in claimable
+    )
+
+
 def redact_gated_values(
     reply: str,
     messages: list[dict],
@@ -900,6 +940,14 @@ def redact_gated_values(
     itself only scans non-little-h tokens, but ``h = 0.7143`` restates a
     rejected 71.43 and must not stream.
 
+    A third rule covers what neither gate can see: a number the model bound to
+    a NAMED cosmology parameter that no claimable current-turn result backs.
+    An invented ``H0 = 73.24`` echoes nothing and matches no withheld
+    statistic, so both gate predicates passed it through (Codex review
+    2026-09-03).  The final reply is refused for such a number; the draft now
+    blanks it.  Only named parameters count, so a year, an identifier or an
+    unlabelled count is still untouched.
+
     Used on everything the loop sends out through ``on_event`` (2026-09-02
     review H5, corrected 2026-09-03): the intermediate ``agent_text`` drafts,
     and the ``draft_preview`` / ``final_preview`` / ``details`` of every
@@ -925,8 +973,7 @@ def redact_gated_values(
         return source, 0
     unsupported = _unsupported_untrusted_values(messages, tool_results)
     withheld_all, withheld_h0 = _withheld_universes(tool_results)
-    if not unsupported and not withheld_all:
-        return source, 0
+    claimable = _claimable_current_values(tool_results)
 
     # A little-h token carries value*100 (``h = 0.677`` -> 67.7) while the span
     # it owns covers the little-h digits, so redacting the span the flagged
@@ -936,6 +983,7 @@ def redact_gated_values(
         for token in _reply_number_spans(source)
         if _echo_token_flagged(token.value, unsupported)
         or _withheld_token_flagged(source, token, withheld_all, withheld_h0)
+        or _unsupported_parameter_claim(source, token, claimable)
     )
     if not spans:
         return source, 0
