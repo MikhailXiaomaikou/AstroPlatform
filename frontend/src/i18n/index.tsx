@@ -744,6 +744,8 @@ const translations: Record<string, Record<Lang, string>> = {
   "chat.validation.badge_refusal":       { en: "Request refused", zh: "已拒绝不当请求", fr: "Demande refusée", es: "Solicitud rechazada" },
   "chat.validation.badge_abstention":    { en: "Needs more evidence", zh: "缺少必要证据", fr: "Preuves supplémentaires requises", es: "Se necesitan más pruebas" },
   "chat.validation.numeric_gate":        { en: "Numeric claims", zh: "数值声明", fr: "Affirmations numériques", es: "Afirmaciones numéricas" },
+  "chat.validation.approval_state":      { en: "Human approval", zh: "人类批准", fr: "Approbation humaine", es: "Aprobación humana" },
+  "chat.validation.approval_none":       { en: "none — no reviewer record backs this reply", zh: "无 —— 没有审阅记录支持本回复", fr: "aucune — aucun avis de relecteur n'appuie cette réponse", es: "ninguna — ningún registro de revisor respalda esta respuesta" },
   "chat.validation.citation_gate":       { en: "Citations", zh: "文献引用", fr: "Citations", es: "Citas" },
   "chat.validation.state_passed":        { en: "checked against this turn's tool outputs", zh: "已对照本轮工具输出检查", fr: "vérifié par rapport aux sorties d'outils de ce tour", es: "verificado contra las salidas de herramientas de este turno" },
   "chat.validation.state_regenerated":   { en: "intervened — reply was rewritten before it passed", zh: "闸门介入——回复经重写后才通过", fr: "intervention — la réponse a été réécrite avant de passer", es: "intervención — la respuesta fue reescrita antes de pasar" },

@@ -1111,6 +1111,10 @@ export interface ValidationSummary {
   blocked?: boolean;
   limited?: boolean;
   response_disposition?: "full" | "limited" | "abstention" | "refusal" | "hard_block" | string;
+  // Chat cannot reach the human-review lane, so the backend always reports
+  // "none" here. Rendered explicitly so a reader never infers the absence of
+  // an approval from the absence of a field.
+  approval_state?: "none" | string;
   task_kind?: "deterministic_source_check" | "research_exploration" | "full_research" | "general" | string;
   earliest_limiting_stage?: string | null;
   missing_dependencies?: string[];

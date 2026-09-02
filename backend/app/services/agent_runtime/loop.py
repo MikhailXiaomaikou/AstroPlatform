@@ -48,6 +48,10 @@ from app.services.agent_runtime.line_relation import (
     _table_extraction_arxiv_ids,
     _verified_line_relation_seed_candidates,
 )
+from app.services.agent_runtime.approval import (
+    APPROVAL_STATE_NONE,
+    mark_unapproved_claims,
+)
 from app.services.agent_runtime.honesty import (
     nonpublication_posterior_refusal,
     nonpublication_posterior_values,
@@ -332,6 +336,10 @@ def _derive_validation_summary(
     )
     summary: dict[str, Any] = {
         "schema_version": 2,
+        # Chat cannot reach the review lane, so this is always "none" here.
+        # It is emitted anyway so a reader never has to infer the absence of
+        # an approval from the absence of a field.
+        "approval_state": APPROVAL_STATE_NONE,
         "numeric_gate": numeric_state,
         "citation_gate": citation_state,
         "regen_count": int(fabrication_stats.get("regenerations", 0) or 0),
@@ -3925,6 +3933,26 @@ async def _run_agent_loop(
             final=clean_reply,
         )
         logger.exception("Scientific-conclusion final gate failed closed")
+
+    # Approval language that no stored review backs. Chat has no approval
+    # state (the ClaimAuditReview lane is behind default-off flags and is not
+    # reachable here), so a line opening with "Draft claim" / "APPROVED by"
+    # and carrying a tool-matched number gets an explicit NOT APPROVED prefix
+    # rather than shipping with a governance stamp the platform never issued.
+    _approval_draft = clean_reply
+    clean_reply, _approval_marked = mark_unapproved_claims(
+        clean_reply, all_tool_results
+    )
+    if _approval_marked:
+        fabrication_stats["limited"] = True
+        await _gate_event(
+            "approval_marker",
+            "annotated_limited",
+            reason="no_bound_claim_audit_review",
+            details={"marked_lines": _approval_marked},
+            draft=_approval_draft,
+            final=clean_reply,
+        )
 
     # M7: telemetry so the UI can surface "hit iteration cap" to the user
     # (previously silent — a 13-step workflow just got truncated with no

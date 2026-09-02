@@ -124,6 +124,12 @@ export function ValidationBadge({
                   <strong>{t("chat.validation.disposition")}:</strong>{" "}
                   {summary.response_disposition || "full"}
                 </div>
+                <div>
+                  <strong>{t("chat.validation.approval_state")}:</strong>{" "}
+                  {summary.approval_state === "none" || !summary.approval_state
+                    ? t("chat.validation.approval_none")
+                    : summary.approval_state}
+                </div>
                 {summary.earliest_limiting_stage && (
                   <div>
                     <strong>{t("chat.validation.limiting_stage")}:</strong>{" "}
