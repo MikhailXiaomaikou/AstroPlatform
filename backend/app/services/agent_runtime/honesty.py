@@ -454,11 +454,15 @@ def nonpublication_posterior_values(reply: str, tool_results: Any) -> list[float
     """Return non-publication posterior numbers that escaped into prose.
 
     Matching stays at ``rel_tol=0.01`` for every withheld statistic.  Two
-    token classes are compared against narrower sets rather than the whole
-    withheld universe: a little-h token (``h = 0.732``) is checked against
-    withheld H0 values only, and a percent token (``the 68% interval``) is
-    checked against withheld percentage-valued keys only — unless a parameter
-    assignment precedes it (``H0 = 67.7%``), which keeps it a value claim.
+    token classes escape that comparison, and only these two.  A little-h
+    token (``h = 0.732``) is compared against the withheld H0 values alone,
+    so it cannot collide with an unrelated statistic that happens to sit near
+    the same number.  A percent token is skipped only when it reads as
+    interval wording in its own clause (``the 68% credible interval``); a
+    percent token carrying a parameter assignment (``H0 = 67.7%``), or
+    standing anywhere else, is checked against the full withheld universe
+    like any other number.  There is no percentage-keyed sub-universe and no
+    exemption by token class.
     """
 
     entries = tool_results if isinstance(tool_results, list) else [tool_results]
