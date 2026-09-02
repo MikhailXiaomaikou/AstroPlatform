@@ -2336,3 +2336,45 @@ def test_a_denial_of_another_topic_does_not_wash_a_confirmed_conclusion() -> Non
     ]
     for sentence in preserved:
         assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+
+def test_narrowing_did_not_take_ordinary_hedges_with_it() -> None:
+    """Two exemptions that main had and the H9 narrowing dropped.
+
+    ``Our hypothesis is that X`` is ordinary hedged prose; only the bare noun
+    beside a confirmation was meant to stop washing.  And ``the data do not
+    resolve the Hubble tension`` is a denial the hedge vocabulary already
+    recognised, but the denial vocabulary did not, so scoping the denial to
+    the conclusion's clause turned it into a strong conclusion whenever
+    anything else in the sentence was confirmed (Codex review 2026-09-03).
+
+    Both are restored here WITHOUT reopening the washing hole: the
+    confirmation rule still cancels a hedge, so every washed sentence below
+    stays a violation.
+    """
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    exempt = [
+        "Our hypothesis is that a local void resolves the Hubble tension.",
+        "Although the calibration is confirmed, the data do not resolve the "
+        "Hubble tension.",
+        "The data do not resolve the Hubble tension.",
+        "This is a hypothesis worth testing: a local void resolves the Hubble tension.",
+        "Although the calibration is confirmed, there is no evidence the "
+        "Hubble tension is resolved.",
+    ]
+    for sentence in exempt:
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+    violations = [
+        # The verb form is deliberately not exempt (2026-09-02 user decision).
+        "We hypothesise that a local void resolves the Hubble tension.",
+        "Our hypothesis is confirmed: the Hubble tension is resolved by a local void.",
+        "The forecast is now confirmed: the Hubble tension is resolved by a local void.",
+        "Although there is no evidence for spatial curvature, our forecast is "
+        "confirmed: the Hubble tension is resolved by a local void.",
+        "The model forecasts that a local void resolves the Hubble tension.",
+        "The Hubble tension is resolved by a local void.",
+    ]
+    for sentence in violations:
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence

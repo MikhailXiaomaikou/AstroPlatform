@@ -3627,6 +3627,13 @@ _NONASSERTIVE_COSMOLOGY_CONTEXT_RE = re.compile(
     # sentence-initial "Hypothesis:" label is handled by
     # _HYPOTHESIS_LABEL_RE in _strong_conclusion_from_sentence.
     r"a\s+hypothesis\s+worth\s+testing|forecast\s+that|"
+    # "Our hypothesis is that X" is ordinary hedged prose that main
+    # exempted; the narrowing above dropped the predicate form by
+    # accident (Codex review 2026-09-03).  Restoring it cannot reopen
+    # the washing hole: "Our hypothesis is confirmed: X" carries a
+    # confirmed assertion, which cancels the hedge and keeps it a
+    # violation.  The verb form "we hypothesise that" stays NOT exempt.
+    r"hypothes[ei]s\s+(?:is|are|was|were)\s+that|"
     r"not\s+ruled\s+out|consistent\s+with\s+zero|does\s+not\s+evolve|"
     r"(?:is|are|remains?)\s+unresolved|(?:is|are)\s+not\s+(?:resolved|detected))\b",
     re.I,
@@ -3666,8 +3673,14 @@ _EXPLICIT_DENIAL_RE = re.compile(
     r"\bno\s+(?:statistically\s+significant\s+)?evidence\b"
     r"|\binsufficient\s+evidence\b"
     r"|\bcan(?:not|'t)\s+conclude\b"
-    r"|\bdo(?:es)?\s+not\s+(?:show|support|establish|favou?r|indicate)\b"
-    r"|\bfailed?\s+to\s+(?:show|establish|detect)\b"
+    # The resolve-family verbs were missing here while
+    # _NONASSERTIVE_COSMOLOGY_CONTEXT_RE already treated them as a hedge, so
+    # reading the denial in the conclusion's clause turned "the data do not
+    # resolve the Hubble tension" into a strong conclusion whenever anything
+    # else in the sentence was confirmed (Codex review 2026-09-03).
+    r"|\bdo(?:es)?\s+not\s+(?:show|support|establish|favou?r|indicate"
+    r"|resolve|alleviate|eliminate|remove)\b"
+    r"|\bfailed?\s+to\s+(?:show|establish|detect|resolve|alleviate)\b"
     r"|没有(?:统计显著|显著)?证据|证据不足|无法(?:得出|断定|证明)",
     re.I,
 )
