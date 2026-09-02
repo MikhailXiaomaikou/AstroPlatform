@@ -79,9 +79,9 @@ asdf-wcs-schemas==0.5.0 \
     --hash=sha256:7050c7dfd252f2aa9c32e4fe3711c1823336d923f631816f8f3e9f27c95491f7 \
     --hash=sha256:af7bdda46c20195b97272d8d3fdc7d9286beb143dbd69503f59c5ee1fe1559b5
     # via gwcs
-asteval==0.9.33 \
-    --hash=sha256:94981701f4d252c88aa5e821121b1aabef73a003da138fc6405169c9e675d24d \
-    --hash=sha256:aae3a0308575a545c8cecc43a6632219e6a90963a56380c74632cf54311e43bf
+asteval==1.0.10 \
+    --hash=sha256:46a4ed13cc2e4a29a21418f89dedd57db70d98eb96db0fb4c441d4edb2f5afed \
+    --hash=sha256:8d805fa8084aa12204715f799430f0012a0db38b42e997f9f11a9637ad59855f
     # via -r requirements.txt
 astropy==7.2.2 \
     --hash=sha256:0b0a168ec6b4fa50344b61b0b2f372695f601bdf0ea627b27ec23d9543ef5206 \
