@@ -561,3 +561,38 @@ def test_a_coverage_level_is_not_the_claimed_value() -> None:
         "Draft claim: H0 = 67.36 km/s/Mpc.", _published_h0()
     )
     assert count == 1 and marked.startswith("NOT APPROVED - ")
+
+
+def test_the_platforms_own_approval_vocabulary_is_recognised() -> None:
+    """The review lane stores the verdict as review_status / decision APPROVED.
+
+    ``services/union3_research_loop.py`` writes ``review_status ==
+    "APPROVED"`` and ``decision == "APPROVED"``, so "Review status:
+    APPROVED" and "Decision: APPROVED" are the natural renderings and were
+    shipping unmarked while "APPROVED by reviewer" was caught (Codex review
+    2026-09-03).
+    """
+    from app.services.agent_runtime.approval import mark_unapproved_claims
+
+    tool_results = _published_h0()
+    for text in (
+        "Review status: APPROVED — H0 = 67.36 km/s/Mpc",
+        "Decision: APPROVED. H0 = 67.36 km/s/Mpc",
+        "APPROVED — H0 = 67.36 km/s/Mpc",
+        "review_status: APPROVED\nH0 = 67.36 km/s/Mpc",
+    ):
+        marked, count = mark_unapproved_claims(text, tool_results)
+        assert count == 1, text
+        assert marked.lstrip().startswith("NOT APPROVED - "), text
+
+    # A bare "Approved" in ordinary prose is not a verdict: the word has to
+    # be followed by a separator, or by the reviewer wording.
+    untouched, count = mark_unapproved_claims(
+        "Approved datasets were listed; H0 = 67.36 came from the chain.", tool_results
+    )
+    assert count == 0 and "NOT APPROVED" not in untouched
+    # And a verdict with no claim near it is still left alone.
+    untouched, count = mark_unapproved_claims(
+        "Review status: APPROVED — nothing numeric here.", tool_results
+    )
+    assert count == 0

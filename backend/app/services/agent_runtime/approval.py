@@ -53,7 +53,17 @@ _APPROVAL_LINE_RE = re.compile(
     r"(?im)^(?P<prefix>[ \t]*"
     r"(?:[-*>#][ \t]*|[0-9]{1,3}[.)][ \t]*){0,8}"
     r"(?:\*\*)?)"
-    r"(?=(?:draft[ \t]+claim|approved[ \t]+by|reviewer[ \t]+approved)\b)"
+    # The platform's OWN vocabulary counts too.  The review lane stores the
+    # verdict as review_status == "APPROVED" / decision == "APPROVED"
+    # (services/union3_research_loop.py), so "Review status: APPROVED" and
+    # "Decision: APPROVED" are the natural renderings and were shipping
+    # unmarked (Codex review 2026-09-03).  A bare "APPROVED" counts only when
+    # a separator follows it, so ordinary prose beginning with the word is
+    # left alone.
+    r"(?=(?:draft[ \t]+claim\b|approved[ \t]+by\b|reviewer[ \t]+approved\b"
+    r"|(?:review[ \t_-]*)?status[ \t]*:[ \t]*approved\b"
+    r"|decision[ \t]*:[ \t]*approved\b"
+    r"|approved[ \t]*[:\u2014-]))"
 )
 _MARKER = "NOT APPROVED - "
 
