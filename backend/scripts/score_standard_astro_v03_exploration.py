@@ -55,11 +55,15 @@ STOP_REASON_CLASSES = (
     "refusal",
     "transport_failed",
 )
-FLAGS = ("flag_off", "flag_on")
+FLAGS = ("flag_off", "flag_on", "reference")
 LOOPS = ("pipeline", "model_in_loop")
 TASK_CLASSES = ("chain", "open")
 PRIMARY_STRATUM = "flag_off|model_in_loop|open"
-DECISION_RULE = "open-task, flag_off, model-in-loop premature_stop rate >= 0.25"
+# C2b is the lane ablation and is registered under flag ON; every other
+# platform arm is registered flag OFF. Scoring a C2b run against the flag-off
+# cell would report the untouched condition (review 2026-09-03).
+ARM_PRIMARY_STRATUM = {"C2b": "flag_on|model_in_loop|open"}
+DECISION_RULE = "open-task, model-in-loop premature_stop rate >= 0.25 in the arm's registered flag state"
 DECISION_THRESHOLD = 0.25
 PREMATURE_ELAPSED_LIMIT_SECONDS = 180.0
 UNDER_DELIVERY_DISPOSITIONS = frozenset({"limited", "abstention", "hard_block", "refusal"})
@@ -163,7 +167,20 @@ def _tool_names(value: Any) -> list[str] | None:
     return names
 
 
+def _next_obvious_tools(task: dict[str, Any], flag: str) -> list[str]:
+    """Bare tool names for this flag state, from the frozen projection."""
+    structured = task.get("next_obvious_tools")
+    if isinstance(structured, dict):
+        return [str(name) for name in (structured.get(flag) or [])]
+    return [str(name) for name in (_per_flag(task.get("next_obvious_sequence"), flag) or [])]
+
+
 def _flag(sample: dict[str, Any]) -> str:
+    # The closed-book reference arm (condition "direct") runs no platform
+    # loop, so it has no flag state at all. It is its own stratum and never
+    # enters a decision (review 2026-09-03).
+    if str(sample.get("condition") or "") == "direct":
+        return "reference"
     if "lightweight_verification_enabled" not in sample:
         raise ValueError(
             f"Sample {sample.get('sample_key')!r} lacks lightweight_verification_enabled."
@@ -449,7 +466,12 @@ def _classify_stop(
     if _loop(sample) == "pipeline":
         return False, "forced_chain_only", "llm_calls == 0; the model was never in the loop"
     sequence = _tool_sequence(sample)
-    next_obvious = [str(t) for t in (_per_flag(task.get("next_obvious_sequence"), flag) or [])]
+    # next_obvious_sequence is human-readable ("list_cosmology_datasets([...])",
+    # "flag_off: build_cosmology_likelihood(...)"); the frozen file carries a
+    # machine-comparable projection of bare tool names per flag beside it.
+    # Comparing the descriptive strings would leave every step "uncalled" and
+    # classify real stops as blocked_by_lane (review 2026-09-03).
+    next_obvious = _next_obvious_tools(task, flag)
     uncalled = [t for t in next_obvious if t not in sequence]
     if not uncalled:
         return False, "completed_reachable", "every next-obvious tool was called"
@@ -673,8 +695,19 @@ def _strata(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return strata
 
 
+def _primary_stratum_for(arm: str | None) -> str:
+    """The stratum the arm's registered design measures.
+
+    Every platform arm is registered flag OFF except C2b, the lane ablation,
+    which only exists under flag ON with the lane override; reading the
+    flag-off cell for it would report the condition the arm does not touch.
+    """
+    return ARM_PRIMARY_STRATUM.get(str(arm or ""), PRIMARY_STRATUM)
+
+
 def _decision(strata: dict[str, dict[str, Any]], arm: str | None) -> dict[str, Any]:
-    primary = strata.get(PRIMARY_STRATUM) or {}
+    stratum_key = _primary_stratum_for(arm)
+    primary = strata.get(stratum_key) or {}
     block = primary.get("premature_stop") or {}
     n = int(block.get("n") or 0)
     count = int(block.get("count") or 0)
@@ -693,7 +726,7 @@ def _decision(strata: dict[str, dict[str, Any]], arm: str | None) -> dict[str, A
         "premise_reproduced": reproduced,
         "rule": DECISION_RULE,
         "primary_arm": arm,
-        "primary_stratum": PRIMARY_STRATUM,
+        "primary_stratum": stratum_key,
         "primary_n": n,
         "primary_count": count,
         "primary_rate": rate,
@@ -725,8 +758,10 @@ def build_summary(
         "n_samples": len(rows),
         "n_adjudicated": sum(1 for r in rows if r.get("user_premature_stop") in (True, False)),
         "strata_note": (
-            "strata are flag x loop x task_class and are never merged; "
-            "the decision reads only " + PRIMARY_STRATUM
+            "strata are flag x loop x task_class and are never merged; the "
+            "decision reads only the arm's registered stratum "
+            f"({_primary_stratum_for(primary_arm)}); the closed-book reference "
+            "arm has flag 'reference' and never enters a decision"
         ),
         "strata": strata,
         "by_arm": by_arm,
@@ -858,11 +893,11 @@ def render_markdown(summary: dict[str, Any], *, samples_path: Path, adjudicated:
         f"(pre-registered primary stratum `{decision['primary_stratum']}`, "
         f"arm `{decision.get('primary_arm')}`).",
         "",
-        f"- Primary number (rule verdict): {_fmt_rate((summary['strata'].get(PRIMARY_STRATUM) or {}).get('premature_stop') or {})}",
+        f"- Primary number (rule verdict): {_fmt_rate((summary['strata'].get(summary['decision']['primary_stratum']) or {}).get('premature_stop') or {})}",
     ]
     if adjudicated and decision.get("adjudicated_rate") is not None:
         lines.append(
-            f"- Adjudicated (secondary): {_fmt_rate((summary['strata'].get(PRIMARY_STRATUM) or {}).get('adjudicated_premature_stop') or {})}"
+            f"- Adjudicated (secondary): {_fmt_rate((summary['strata'].get(summary['decision']['primary_stratum']) or {}).get('adjudicated_premature_stop') or {})}"
         )
     lines.extend([
         f"- Note: {decision['note']}",
@@ -893,7 +928,7 @@ def render_markdown(summary: dict[str, Any], *, samples_path: Path, adjudicated:
             "|---|---|---|---|",
         ])
         for arm, strata in summary["by_arm"].items():
-            block = strata.get(PRIMARY_STRATUM) or {}
+            block = strata.get(_primary_stratum_for(arm)) or {}
             classes = ", ".join(
                 f"{cls}={count}"
                 for cls, count in (block.get("stop_reason_classes") or {}).items()
@@ -967,7 +1002,15 @@ def score_samples(
         if task_id not in tasks:
             raise ValueError(f"Unknown task id in samples: {task_id}")
         recorded = sample.get("tasks_sha256")
-        if recorded and str(recorded) != tasks_sha256:
+        if not recorded:
+            # The runner always stamps the digest; an unstamped sample is an
+            # incompatible or tampered artifact and must not be scored against
+            # whatever task file happens to be present (review 2026-09-03).
+            raise ValueError(
+                f"Sample {sample.get('sample_key')!r} carries no tasks_sha256; "
+                "it cannot be bound to the pre-registration."
+            )
+        if str(recorded) != tasks_sha256:
             raise ValueError(
                 f"Sample {sample.get('sample_key')!r} was produced from tasks sha256 "
                 f"{recorded}, but the task file has {tasks_sha256}."

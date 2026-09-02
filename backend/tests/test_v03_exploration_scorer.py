@@ -66,6 +66,14 @@ def tasks_path(tmp_path: Path) -> Path:
     return path
 
 
+def _fixture_sha() -> str:
+    import hashlib
+
+    return hashlib.sha256(
+        json.dumps(_task_payload()).encode("utf-8")
+    ).hexdigest()
+
+
 def _sample(**overrides: Any) -> dict[str, Any]:
     sequence = overrides.pop("tool_sequence", ["list_cosmology_datasets"])
     sample: dict[str, Any] = {
@@ -97,6 +105,9 @@ def _sample(**overrides: Any) -> dict[str, Any]:
         "tools": [{"tool": name, "status": "OK", "publication_ready": True} for name in sequence],
         "validation_summary": {"response_disposition": "full", "interventions": []},
         "transport_status": "completed",
+        # The runner always stamps the digest of the frozen task file; a
+        # sample without it is refused (review 2026-09-03).
+        "tasks_sha256": _fixture_sha(),
     }
     sample.update(overrides)
     return sample
@@ -444,7 +455,8 @@ def test_strata_emitted_separately_without_blended_headline(tasks_path: Path) ->
 def test_decision_reads_only_the_primary_stratum(tasks_path: Path) -> None:
     rows = _matrix_rows(tasks_path)
     decision = scorer.build_summary(rows, tasks_sha256="abc", primary_arm=None)["decision"]
-    assert decision["rule"] == "open-task, flag_off, model-in-loop premature_stop rate >= 0.25"
+    assert decision["rule"] == scorer.DECISION_RULE
+    assert decision["primary_stratum"] == "flag_off|model_in_loop|open"
     assert decision["primary_n"] == 4
     assert decision["premise_reproduced"] is True
     # Only flag_on rows: the primary stratum is empty and the verdict is undetermined.
@@ -554,3 +566,54 @@ def test_cli_end_to_end_with_adjudication(tmp_path: Path, tasks_path: Path, monk
         scored = {r["sample_key"]: r for r in csv.DictReader(handle)}
     assert scored["escape|0"]["user_premature_stop"] == "False"
     assert scored["escape|0"]["premature_stop"] == "True"
+
+
+def test_sample_without_a_task_digest_is_refused(tasks_path: Path) -> None:
+    """An unstamped sample cannot be bound to the pre-registration, so it must
+    fail exactly like a mismatched digest rather than being scored against
+    whatever task file happens to be present."""
+    tasks, sha = scorer._read_tasks(tasks_path)
+    unstamped = _sample()
+    unstamped.pop("tasks_sha256")
+    with pytest.raises(ValueError, match="no tasks_sha256"):
+        scorer.score_samples([unstamped], tasks, sha)
+
+
+def test_closed_book_reference_arm_scores_and_never_decides(tasks_path: Path) -> None:
+    """C0 runs the `direct` condition, which has no flag state at all: it must
+    land in its own stratum instead of raising, and must not drive a decision."""
+    tasks, sha = scorer._read_tasks(tasks_path)
+    reference = _sample(condition="direct", arm="C0")
+    reference.pop("lightweight_verification_enabled")
+    rows = scorer.score_samples([reference], tasks, sha)
+    assert rows[0]["stratum"].startswith("reference|")
+    summary = scorer.build_summary(rows, tasks_sha256=sha, primary_arm="C0")
+    assert summary["decision"]["primary_n"] == 0
+    assert summary["decision"]["premise_reproduced"] is None
+
+
+def test_lane_ablation_reads_its_registered_flag_on_stratum() -> None:
+    assert scorer._primary_stratum_for("C2b") == "flag_on|model_in_loop|open"
+    assert scorer._primary_stratum_for("C1") == "flag_off|model_in_loop|open"
+    assert scorer._primary_stratum_for(None) == "flag_off|model_in_loop|open"
+
+
+def test_next_obvious_tools_projection_is_used_for_comparison(tasks_path: Path) -> None:
+    """The frozen file writes steps descriptively ("list_cosmology_datasets([...])");
+    the scorer must compare the bare-name projection or every open-task stop
+    would be misread as blocked_by_lane."""
+    tasks, _sha = scorer._read_tasks(tasks_path)
+    task = dict(tasks[OPEN_TASK])
+    task["next_obvious_sequence"] = {
+        "flag_off": ["list_cosmology_datasets([a, b])", "flag_off: build_cosmology_likelihood(lcdm, [...])"],
+        "flag_on": ["compare_luminosity_distances(comparison_mode=h0_anchors)"],
+    }
+    task["next_obvious_tools"] = {
+        "flag_off": ["list_cosmology_datasets", "build_cosmology_likelihood"],
+        "flag_on": ["compare_luminosity_distances"],
+    }
+    assert scorer._next_obvious_tools(task, "flag_off") == [
+        "list_cosmology_datasets",
+        "build_cosmology_likelihood",
+    ]
+    assert scorer._next_obvious_tools(task, "flag_on") == ["compare_luminosity_distances"]

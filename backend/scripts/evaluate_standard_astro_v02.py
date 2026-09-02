@@ -84,11 +84,22 @@ ARM_PRESETS: dict[str, dict[str, Any]] = {
         "lightweight": "both",
     },
 }
-ARM_PRESETS["C2a"] = {**ARM_PRESETS["C1"], "system_appendix_required": True}
-ARM_PRESETS["C2b"] = {**ARM_PRESETS["C1"], "lane_override": True}
-ARM_PRESETS["C2c"] = {**ARM_PRESETS["C1"], "budget": "long"}
-ARM_PRESETS["C2d"] = {**ARM_PRESETS["C1"], "steering": "off"}
-ARM_PRESETS["C2_exploration"] = {**ARM_PRESETS["C1"], "exploration_phase": True}
+# Each ablation arm carries the flag state (and, for C2c, the task class) the
+# pre-registration assigns it; inheriting C1's "both" would run cells the
+# frozen design does not contain (review 2026-09-03). C2b is the lane
+# ablation and only exists under flag ON; the rest are flag OFF.
+ARM_PRESETS["C2a"] = {**ARM_PRESETS["C1"], "lightweight": "off", "system_appendix_required": True}
+ARM_PRESETS["C2b"] = {**ARM_PRESETS["C1"], "lightweight": "on", "lane_override": True}
+ARM_PRESETS["C2c"] = {
+    **ARM_PRESETS["C1"],
+    "lightweight": "off",
+    "budget": "long",
+    "task_class": "open",
+}
+ARM_PRESETS["C2d"] = {**ARM_PRESETS["C1"], "lightweight": "off", "steering": "off"}
+ARM_PRESETS["C2_exploration"] = {
+    **ARM_PRESETS["C1"], "lightweight": "off", "exploration_phase": True
+}
 
 # Status messages the loop emits immediately before a forced (non-model)
 # tool call. A run of ``tool_call`` events that directly follows one of these
@@ -844,6 +855,18 @@ async def main() -> None:
         if unknown:
             parser.error(f"Unknown task ids: {sorted(unknown)}")
         tasks = [task for task in tasks if task["id"] in requested]
+    elif ARM_PRESETS.get(args.arm or "", {}).get("task_class"):
+        # C2c (long budget) is registered for the open tasks only; running the
+        # statically routed chain tasks under it would spend hours on cells the
+        # frozen design does not contain. An explicit --task-ids still wins.
+        wanted = str(ARM_PRESETS[args.arm]["task_class"])
+        selected = [t for t in tasks if str(t.get("task_class") or "") == wanted]
+        if not selected:
+            parser.error(
+                f"Arm {args.arm} is registered for task_class {wanted!r}, "
+                "but the task file has no such task."
+            )
+        tasks = selected
     expanded_tasks = _expand_variants(tasks)
     completed = set() if args.no_resume else _completed_keys(args.output)
     _install_llm_call_counter()
