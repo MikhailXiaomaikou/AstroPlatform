@@ -2263,3 +2263,48 @@ def test_a_nested_publication_ready_result_grounds_its_values() -> None:
     # A value that record does NOT carry is still blanked.
     redacted, count = redact_gated_values("Draft: H0 = 73.24 km/s/Mpc.", [], nested)
     assert count == 1 and "73.24" not in redacted
+
+
+def test_approximation_words_bind_a_value_too() -> None:
+    """``H0 about 73.24`` is a measurement claim the final validator blocks.
+
+    The bridge list held symbols and copulas but no approximation word, so
+    the invented value streamed unredacted (Codex review 2026-09-03).
+    """
+    from app.services.agent_runtime.honesty import redact_gated_values
+
+    for text in (
+        "Draft: H0 about 73.24 km/s/Mpc.",
+        "Draft: H0 near 73.24 km/s/Mpc.",
+        "Draft: H0 approximately 73.24 km/s/Mpc.",
+    ):
+        redacted, count = redact_gated_values(text, [], _LISTED_ONLY)
+        assert count == 1, text
+        assert "73.24" not in redacted, text
+
+
+def test_an_uncertainty_is_checked_even_when_its_value_is_supported() -> None:
+    """``H0 = 67.36 ± 9.87`` against a record whose std is 0.42.
+
+    The uncertainty only inherited the central token's decision, so a
+    supported median carried an invented uncertainty through untouched
+    (Codex review 2026-09-03).  It is checked against that parameter's own
+    spread values now.
+    """
+    from app.services.agent_runtime.honesty import redact_gated_values
+
+    published = _claimable("H0", 67.36, 0.42)
+    redacted, count = redact_gated_values(
+        "Draft: H0 = 67.36 ± 9.87 km/s/Mpc.", [], published
+    )
+    assert count == 1
+    assert "67.36" in redacted and "9.87" not in redacted
+    # The record's own pair still survives, and an invented pair still goes.
+    survives, count = redact_gated_values(
+        "Draft: H0 = 67.36 ± 0.42 km/s/Mpc.", [], published
+    )
+    assert count == 0
+    redacted, count = redact_gated_values(
+        "Draft: H0 = 73.24 ± 9.87 km/s/Mpc.", [], _LISTED_ONLY
+    )
+    assert count == 2

@@ -890,7 +890,11 @@ _NAMED_PARAMETER_ASSIGNMENT_BEFORE_RE = re.compile(
     r"|w0|w_0|wa|w_a|mnu|m_nu|sum\s*m_?nu|n_s|ns|A_s|tau|r_d|rd)\b"
     r"(?:[^\n;]{0,28}?[=:~≈]\s*"
     r"|(?P<copula_gap>[^\n;]{0,28}?)"
-    r"\b(?:is|was|are|were|of|at|equals?|sits\s+at|comes\s+out\s+at)\s+)$",
+    # An approximation word binds a value as surely as "=" does, and the final
+    # validator recognises these: "H0 about 73.24" and "H0 near 73.24"
+    # streamed unredacted (Codex review 2026-09-03).
+    r"\b(?:is|was|are|were|of|at|equals?|sits\s+at|comes\s+out\s+at"
+    r"|about|around|near|approximately|roughly|circa|close\s+to)\s+)$",
     re.IGNORECASE,
 )
 
@@ -923,7 +927,23 @@ def _is_central_estimate(stat: str) -> bool:
     return str(stat or "").strip().lower() in _CENTRAL_ESTIMATE_STATS
 
 
-def _claimable_values_by_parameter(tool_results: Any) -> dict[str, set[float]]:
+# Statistics that ARE the parameter's uncertainty.  An uncertainty written
+# after a SUPPORTED central value is still a claim of its own: "H0 = 67.36 ±
+# 9.87" passed untouched because the follower only inherited the central
+# token's decision (Codex review 2026-09-03).
+_SPREAD_STATS = frozenset({
+    "std", "stddev", "std_dev", "sigma", "error", "err", "uncertainty",
+    "uncertainty_plus", "uncertainty_minus", "sd", "scatter", "rms",
+})
+
+
+def _is_spread(stat: str) -> bool:
+    return str(stat or "").strip().lower() in _SPREAD_STATS
+
+
+def _claimable_values_by_parameter(
+    tool_results: Any,
+) -> tuple[dict[str, set[float]], dict[str, set[float]]]:
     """Claimable current-turn values, bucketed by the parameter they measure.
 
     A flat set let one quantity ground another: a result carrying only
@@ -933,6 +953,7 @@ def _claimable_values_by_parameter(tool_results: Any) -> dict[str, set[float]]:
     """
     entries = tool_results if isinstance(tool_results, list) else [tool_results]
     buckets: dict[str, set[float]] = {}
+    spreads: dict[str, set[float]] = {}
     for entry in entries or []:
         tool, result = _entry_tool_and_result(entry)
         if not result or not _claimable_result(tool, result):
@@ -956,9 +977,22 @@ def _claimable_values_by_parameter(tool_results: Any) -> dict[str, set[float]]:
                     # H0 record into one bucket let its own std, 0.42, support
                     # an invented central estimate "H0 = 0.42", which
                     # validate_claims rejects (Codex review 2026-09-03).
-                    if parameter and _is_central_estimate(stat):
-                        buckets.setdefault(_canonical_parameter(parameter), set()).add(value)
-    return buckets
+                    if not parameter:
+                        continue
+                    name = _canonical_parameter(parameter)
+                    if _is_central_estimate(stat):
+                        buckets.setdefault(name, set()).add(value)
+                    elif _is_spread(stat):
+                        spreads.setdefault(name, set()).add(value)
+    return buckets, spreads
+
+
+def _assigned_parameter(text: str, token: _Token) -> str | None:
+    """The named parameter this token is bound to, if any."""
+    match = _NAMED_PARAMETER_ASSIGNMENT_BEFORE_RE.search(
+        text[max(0, token.start - 48):token.start]
+    )
+    return _canonical_parameter(match.group("parameter")) if match else None
 
 
 def _unsupported_parameter_claim(
@@ -1047,7 +1081,7 @@ def redact_gated_values(
         return source, 0
     unsupported = _unsupported_untrusted_values(messages, tool_results)
     withheld_all, withheld_h0 = _withheld_universes(tool_results)
-    by_parameter = _claimable_values_by_parameter(tool_results)
+    by_parameter, spread_by_parameter = _claimable_values_by_parameter(tool_results)
 
     # A little-h token carries value*100 (``h = 0.677`` -> 67.7) while the span
     # it owns covers the little-h digits, so redacting the span the flagged
@@ -1058,21 +1092,34 @@ def redact_gated_values(
     # review 2026-09-03).  A token joined to a flagged one by +/- inherits
     # its decision.
     flagged: list[tuple[int, int]] = []
-    previous_flagged_end: int | None = None
+    previous_end: int | None = None
+    previous_parameter: str | None = None
+    previous_hit = False
     for token in _reply_number_spans(source):
+        parameter = _assigned_parameter(source, token)
         hit = (
             _echo_token_flagged(token.value, unsupported)
             or _withheld_token_flagged(source, token, withheld_all, withheld_h0)
             or _unsupported_parameter_claim(source, token, by_parameter)
         )
-        if not hit and previous_flagged_end is not None:
-            bridge = source[previous_flagged_end:token.start]
-            hit = bool(_UNCERTAINTY_BRIDGE_RE.fullmatch(bridge))
+        if not hit and previous_end is not None:
+            bridge = source[previous_end:token.start]
+            if _UNCERTAINTY_BRIDGE_RE.fullmatch(bridge):
+                # An uncertainty is a claim of its own.  Inheriting only the
+                # central token's decision let "H0 = 67.36 +/- 9.87" pass
+                # whole when 67.36 was supported (Codex review 2026-09-03).
+                # It is checked against that parameter's own spread values.
+                supported = spread_by_parameter.get(previous_parameter or "", set())
+                hit = previous_hit or not any(
+                    math.isclose(token.value, value, rel_tol=0.01, abs_tol=1e-12)
+                    for value in supported
+                )
         if hit:
             flagged.append((token.start, token.end))
-            previous_flagged_end = token.end
-        elif token.start > (previous_flagged_end or 0):
-            previous_flagged_end = None
+        previous_end = token.end
+        previous_hit = hit
+        if parameter:
+            previous_parameter = parameter
     spans = sorted(flagged)
     if not spans:
         return source, 0
