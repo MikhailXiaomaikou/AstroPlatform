@@ -2569,3 +2569,79 @@ def test_an_adverb_in_the_auxiliary_and_a_shared_modal() -> None:
     ]
     for sentence in hedged:
         assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+
+def test_a_coordinator_a_subject_bound_anchor_and_a_confirmed_denial() -> None:
+    """Four more false kills, each from reading the wrong clause (Codex review
+    2026-09-03).
+
+    PRRT_kwDORoeoE86etYLJ: ", and after repeated checks," starts with a
+    coordinating word, so it opens a new proposition rather than an aside;
+    reading it as a parenthetical reverted the clause to the sentence start,
+    where an unrelated confirmation cancelled "may be resolved".
+
+    PRRT_kwDORoeoE86etYLM: the dark-energy anchor was the LAST evolution word
+    in the sentence, which belonged to "galaxy formation evolves" in the
+    unrelated second clause, so the conclusion's own clause lost its "may".
+    The anchor now follows its subject, which also closes the mirror image:
+    a hedge in the OTHER clause no longer washes an asserted evolution.
+
+    PRRT_kwDORoeoE86eypXC: a confirmed forecast in an earlier clause cancelled
+    "our hypothesis is that" across a "while".  A prefix confirmation cancels
+    only when it introduces the conclusion clause: the prefix ends with a
+    colon or dash, or no coordinating word stands between the two.
+
+    PRRT_kwDORoeoE86eypXG: "confirmed not to resolve" is a negative result,
+    and so are "shown not to" and "found not to"; without them in the denial
+    pattern the confirmation was read as confirming the resolution.
+    """
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    hedged = [
+        "The calibration is confirmed, and after repeated checks, the Hubble "
+        "tension may be resolved by a local void.",
+        "Dark energy may evolve with time, while galaxy formation evolves nonlinearly.",
+        "Our dark-energy forecast is confirmed, while our hypothesis is that a "
+        "local void may resolve the Hubble tension.",
+        "Our hypothesis is confirmed not to resolve the Hubble tension.",
+        # Confirming a premise still leaves the predicate hedge standing.
+        "The calibration is confirmed, while our hypothesis is that a local "
+        "void resolves the Hubble tension.",
+        # The anchor follows its subject in either clause order.
+        "Galaxy formation evolves nonlinearly, while dark energy may evolve with time.",
+        # The denial is a denial without a hypothesis noun in front of it.
+        "The void model is shown not to resolve the Hubble tension.",
+    ]
+    for sentence in hedged:
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+    asserted = [
+        # 1: the same coordinator around an assertion; a real aside (no
+        # coordinating word) still reverts the clause to the confirmation.
+        "The calibration is confirmed, and after repeated checks, the Hubble "
+        "tension is resolved by a local void.",
+        "Our hypothesis is confirmed, after repeated checks, the Hubble tension "
+        "is resolved by a local void.",
+        "The Hubble tension is, after repeated checks, resolved by a local void.",
+        # 2: a hedge on the unrelated clause does not reach the dark-energy one.
+        "Dark energy evolves with time, while galaxy formation may evolve nonlinearly.",
+        "Galaxy formation may evolve nonlinearly, while dark energy evolves with time.",
+        "Galaxy formation evolves nonlinearly, and dark energy evolves with time.",
+        # 3: a confirmation that INTRODUCES the clause still cancels its hedge.
+        "Our hypothesis is confirmed: the Hubble tension is resolved by a local void.",
+        "The forecast is now confirmed: the Hubble tension is resolved by a local void.",
+        "假设：已被证实，哈勃张力被局部空洞解决。",
+        "Our hypothesis has now been confirmed: the Hubble tension is resolved "
+        "by a local void.",
+        "Our hypothesis is confirmed: a local void may resolve the Hubble tension.",
+        "Our hypothesis is confirmed, a local void may resolve the Hubble tension.",
+        "Our dark-energy forecast is confirmed, while the Hubble tension is "
+        "resolved by a local void.",
+        # 4: a confirmation OF the resolution is still a conclusion.
+        "Our hypothesis is confirmed to resolve the Hubble tension.",
+        "Our hypothesis is confirmed: a local void is shown to resolve the Hubble tension.",
+        "The void model is confirmed not to be ruled out and the Hubble tension "
+        "is resolved by a local void.",
+    ]
+    for sentence in asserted:
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence

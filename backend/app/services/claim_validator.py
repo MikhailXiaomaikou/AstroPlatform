@@ -3645,6 +3645,11 @@ _NONASSERTIVE_COSMOLOGY_CONTEXT_RE = re.compile(
     # them here would have been a relaxation the PR body denied (audit
     # 2026-09-03).  The predicate form is a strict subset of the bare word.
     r"(?:hypothesis|forecast)\s+(?:is|was)\s+that|"
+    # "confirmed / shown / found not to resolve" is a negative result, the
+    # counterpart of _EXPLICIT_DENIAL_RE's alternative (Codex review
+    # 2026-09-03, PRRT_kwDORoeoE86eypXG).
+    r"(?:confirmed|shown|found)\s+not\s+to\s+(?:resolve|alleviate|eliminate|"
+    r"remove|settle|evolve|vary|show|support|establish|favou?r|indicate|detect)|"
     r"not\s+ruled\s+out|consistent\s+with\s+zero|does\s+not\s+evolve|"
     r"(?:is|are|remains?)\s+unresolved|(?:is|are)\s+not\s+(?:resolved|detected))\b",
     re.I,
@@ -3698,6 +3703,14 @@ _EXPLICIT_DENIAL_RE = re.compile(
     r"|\bdo(?:es)?\s+not\s+(?:show|support|establish|favou?r|indicate"
     r"|resolve|alleviate|eliminate|remove)\b"
     r"|\bfailed?\s+to\s+(?:show|establish|detect|resolve|alleviate)\b"
+    # "Our hypothesis is confirmed not to resolve the Hubble tension" is a
+    # negative result: what is confirmed is the denial.  Without this
+    # alternative the confirmation cancelled the hedge and the negative
+    # result was reported as the opposite conclusion (Codex review
+    # 2026-09-03, PRRT_kwDORoeoE86eypXG).  Mirrored in
+    # _NONASSERTIVE_COSMOLOGY_CONTEXT_RE, as every explicit denial is.
+    r"|\b(?:confirmed|shown|found)\s+not\s+to\s+(?:resolve|alleviate|eliminate"
+    r"|remove|settle|evolve|vary|show|support|establish|favou?r|indicate|detect)\b"
     r"|没有(?:统计显著|显著)?证据|证据不足|无法(?:得出|断定|证明)",
     re.I,
 )
@@ -3992,8 +4005,19 @@ _BARE_INFINITIVE_RE = re.compile(
     re.IGNORECASE,
 )
 _MODAL_RE = re.compile(r"\b(?:may|might|could|would|should|can|will)\b", re.IGNORECASE)
+# A comma pair whose content STARTS with a coordinating word is not a
+# parenthetical either: ", and after repeated checks," in "The calibration is
+# confirmed, and after repeated checks, the Hubble tension may be resolved"
+# opens a new proposition.  Reading it as an aside reverted the clause to the
+# sentence start, where the unrelated confirmation cancelled the hedge (Codex
+# review 2026-09-03, PRRT_kwDORoeoE86etYLJ).  The same word list decides, in
+# _prefix_confirmation_introduces_the_clause, whether a confirmation in an
+# earlier clause introduces the conclusion or merely sits beside it.
+_COORDINATING_WORDS = r"(?:and|but|while|whereas|although|though|yet|so)"
+_COORDINATING_WORD_RE = re.compile(rf"\b{_COORDINATING_WORDS}\b", re.IGNORECASE)
 _PARENTHETICAL_RE = re.compile(
-    r",[^,;:\n]{0,60},$"
+    rf",(?!\s*{_COORDINATING_WORDS}\b)[^,;:\n]{{0,60}},$",
+    re.IGNORECASE,
 )
 
 
@@ -4027,24 +4051,42 @@ def _clause_around(sentence: str, start: int, end: int) -> str:
 
 
 def _dark_energy_evolution_anchor(sentence: str) -> int | None:
-    """Character offset just past the last evolution word in ``sentence``.
+    """Character offset just past the evolution word the claim is built on.
 
     ``_dark_energy_evolution_claim`` is a token scan that returns a bool, so
-    the conclusion has no span to take a clause from.  The last evolution or
-    variation word is where the assertion lands, which is the anchor the
-    clause is built around.
+    the conclusion has no span to take a clause from.  The anchor is the
+    first evolution or variation word AFTER a "dark energy" / "equation of
+    state" subject, within the gap the detector pairs across: that is the
+    word the subject's own clause asserts.  Taking the LAST such word in the
+    sentence anchored "Dark energy may evolve with time, while galaxy
+    formation evolves nonlinearly" in the unrelated second clause, and the
+    conclusion lost its own "may" (Codex review 2026-09-03,
+    PRRT_kwDORoeoE86etYLM).  When no evolution word follows a subject (the
+    "evolving dark energy" order, or the w_a path, which has no subject
+    phrase) the last one in the sentence remains the anchor, as before.
     """
     records = _scientific_word_tokens(sentence)
+    tokens = [token for token, _, _ in records]
     words = {
         "evolve", "evolves", "evolved", "evolving", "dynamical",
         "vary", "varies", "varied", "variation",
         "timevarying", "timedependent", "varying", "dependent",
         "wa", "nonzero",
     }
+    subject_ends: list[int] = []
+    for index in range(len(tokens)):
+        if tokens[index : index + 2] == ["dark", "energy"]:
+            subject_ends.append(records[index + 1][2])
+        elif tokens[index : index + 3] == ["equation", "of", "state"]:
+            subject_ends.append(records[index + 2][2])
     end: int | None = None
-    for token, _start, stop in records:
-        if token in words:
-            end = stop
+    for token, start, stop in records:
+        if token not in words:
+            continue
+        # The same 120-character gap _dark_energy_evolution_claim pairs across.
+        if any(0 <= start - subject_end <= 120 for subject_end in subject_ends):
+            return stop
+        end = stop
     return end
 
 
@@ -4178,9 +4220,9 @@ def _clause_hedges_the_conclusion(sentence: str, conclusion_end: int | None) -> 
         )
         clause = sentence[clause_start:clause_end]
     prefix = sentence[:clause_start]
-    confirmed = bool(_CONFIRMED_ASSERTION_RE.search(clause)) or bool(
-        _CONFIRMED_HYPOTHESIS_RE.search(prefix)
-    )
+    confirmed = bool(
+        _CONFIRMED_ASSERTION_RE.search(clause)
+    ) or _prefix_confirmation_introduces_the_clause(prefix)
     if confirmed and not _EXPLICIT_DENIAL_RE.search(clause):
         return False
     if _HYPOTHESIS_LABEL_RE.search(sentence):
@@ -4204,6 +4246,25 @@ def _clause_hedges_the_conclusion(sentence: str, conclusion_end: int | None) -> 
             or _ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(prefix)
         )
     return False
+
+
+def _prefix_confirmation_introduces_the_clause(prefix: str) -> bool:
+    """True when a confirmed hypothesis in ``prefix`` introduces the clause after it.
+
+    "Our hypothesis is confirmed: X" and "假设：已被证实，X" confirm X itself.
+    "Our dark-energy forecast is confirmed, while our hypothesis is that X"
+    confirms one proposition and hedges another, and the coordinating word is
+    what says so; searching the whole prefix cancelled the hedge on X (Codex
+    review 2026-09-03, PRRT_kwDORoeoE86eypXC).  A confirmation introduces the
+    clause when the prefix ends with a colon or dash, or when no coordinating
+    word stands between the confirmation and the clause.
+    """
+    match = _CONFIRMED_HYPOTHESIS_RE.search(prefix)
+    if match is None:
+        return False
+    if prefix.rstrip().endswith((":", "\uff1a", "\u2014")):
+        return True
+    return _COORDINATING_WORD_RE.search(prefix, match.end()) is None
 
 
 def _attestation_matches_claim(
