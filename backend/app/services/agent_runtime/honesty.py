@@ -1096,21 +1096,36 @@ def redact_gated_values(
     previous_parameter: str | None = None
     previous_hit = False
     for token in _reply_number_spans(source):
-        parameter = _assigned_parameter(source, token)
+        # The parameter this token belongs to: its own label, or -- when it
+        # is the uncertainty of the token before it -- that token's.  Set on
+        # EVERY iteration.  It used to be set only when a label was found and
+        # never cleared, so a draft with no cosmology parameter in it had
+        # every "A +/- B" blanked (the lookup fell through to an empty set),
+        # and a draft that named H0 once checked every later, unrelated
+        # "12 +/- 3" against H0's spreads (audit 2026-09-03).
+        bridge = source[previous_end:token.start] if previous_end is not None else ""
+        follows_uncertainty_bridge = bool(
+            previous_end is not None and _UNCERTAINTY_BRIDGE_RE.fullmatch(bridge)
+        )
+        own_parameter = _assigned_parameter(source, token)
+        parameter = previous_parameter if follows_uncertainty_bridge else own_parameter
         hit = (
             _echo_token_flagged(token.value, unsupported)
             or _withheld_token_flagged(source, token, withheld_all, withheld_h0)
             or _unsupported_parameter_claim(source, token, by_parameter)
         )
-        if not hit and previous_end is not None:
-            bridge = source[previous_end:token.start]
-            if _UNCERTAINTY_BRIDGE_RE.fullmatch(bridge):
-                # An uncertainty is a claim of its own.  Inheriting only the
-                # central token's decision let "H0 = 67.36 +/- 9.87" pass
-                # whole when 67.36 was supported (Codex review 2026-09-03).
-                # It is checked against that parameter's own spread values.
-                supported = spread_by_parameter.get(previous_parameter or "", set())
-                hit = previous_hit or not any(
+        if not hit and follows_uncertainty_bridge:
+            # An uncertainty is a claim of its own.  Inheriting only the
+            # central token's decision let "H0 = 67.36 +/- 9.87" pass whole
+            # when 67.36 was supported (Codex review 2026-09-03).  It is
+            # checked against that parameter's own spread values -- but only
+            # when there IS a parameter: "the slope is 0.80 +/- 0.05" names
+            # none, and is not a cosmology claim at all.
+            if previous_hit:
+                hit = True
+            elif parameter is not None:
+                supported = spread_by_parameter.get(parameter, set())
+                hit = not any(
                     math.isclose(token.value, value, rel_tol=0.01, abs_tol=1e-12)
                     for value in supported
                 )
@@ -1118,8 +1133,7 @@ def redact_gated_values(
             flagged.append((token.start, token.end))
         previous_end = token.end
         previous_hit = hit
-        if parameter:
-            previous_parameter = parameter
+        previous_parameter = parameter
     spans = sorted(flagged)
     if not spans:
         return source, 0

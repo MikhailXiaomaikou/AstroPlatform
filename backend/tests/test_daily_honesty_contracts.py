@@ -2308,3 +2308,34 @@ def test_an_uncertainty_is_checked_even_when_its_value_is_supported() -> None:
         "Draft: H0 = 73.24 ± 9.87 km/s/Mpc.", [], _LISTED_ONLY
     )
     assert count == 2
+
+
+def test_an_uncertainty_with_no_parameter_is_not_a_cosmology_claim() -> None:
+    """The parameter a token belongs to is decided per token, not carried.
+
+    It was set only when a label was found and never cleared, so a draft
+    that named no cosmology parameter at all had every ``A ± B`` blanked --
+    the spread lookup fell through to an empty set -- and a draft that named
+    H0 once checked every later, unrelated ``12 ± 3`` against H0's spreads
+    (audit 2026-09-03).  Over-hiding is the safe direction, but it degrades
+    exactly the channel this PR exists to make readable.
+    """
+    from app.services.agent_runtime.honesty import redact_gated_values
+
+    untouched, count = redact_gated_values(
+        "Draft: the slope is 0.80 ± 0.05 over the sample.", [], _LISTED_ONLY
+    )
+    assert count == 0 and untouched.endswith("0.80 ± 0.05 over the sample.")
+
+    published = _claimable("H0", 67.36, 0.42)
+    untouched, count = redact_gated_values(
+        "Draft: H0 = 67.36 km/s/Mpc; later, 12 ± 3 samples were kept.", [], published
+    )
+    assert count == 0 and "12 ± 3" in untouched
+
+    # The uncertainty of a labelled value is still checked against that
+    # parameter's own spreads, and a +/- chain stays attached to its head.
+    redacted, count = redact_gated_values("Draft: H0 = 67.36 ± 9.87 km/s/Mpc.", [], published)
+    assert count == 1 and "9.87" not in redacted and "67.36" in redacted
+    redacted, count = redact_gated_values("Draft: H0 = 67.36 ± 9.87 ± 0.5 km/s/Mpc.", [], published)
+    assert count == 2
