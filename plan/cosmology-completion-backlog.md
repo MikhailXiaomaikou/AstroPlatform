@@ -42,6 +42,9 @@
 - [ ] **cobaya 外部 envelope 补 fit_statistics**(optional, medium, 2026-06-12 审查发现):_runner_success 已补 chain_tier(本轮),但无 fit_statistics(chi2/aic/bic 需从 cobaya 样本表新增管道)——外部路径的链进不了 model_comparisons 配对(诚实缺席非错误);补上后 ok_*/_mnu 的模型对比才能经外部路径产出。
 - [ ] **loader 失败记录缓存毒化统一化**(optional, medium):bao/fsbao/cc/cc_full_cov/rsd 5 个 loader 仍缓存 unverified 回退记录至重启(union3/MGS 已免疫);方向 fail-safe(只挡发表不出错数),按 union3 模式统一。
 
+- [ ] **研究报告 "Platform checklist (rule-derived)" 标签可被 caller_supplied_unverified 回退路径下伪造的 plan_research_program 记录取得**(2026-09-03 Codex 第八轮 e0I6l,已复现:无服务端记录时,调用方在 tool_results 里自带 success 的 plan 记录经 `_trusted_tool_results` 以 `caller_supplied_unverified` 身份进入 `export_research_report`,报告仍标 rule-derived;整份报告已带 unverified 横幅,故为标签矛盾而非数值逃逸;main 上同样存在,非 #70 引入)。修法方向:把来源标签传进 helper,只有服务端记录 / 直接库调用配得上 rule-derived,回退路径改标 "caller-supplied, unverified"。
+- [ ] **Failed Attempts 合并了矩阵结果里回显的 `research_plan.capability_gap_matrix`**(2026-09-03 Codex 第八轮 e0I6u,已复现:`_report_capability_gap_rows` 同时遍历 effective plan 与每个工具结果的嵌套 plan,模型给 `run_research_matrix` 传另一份 plan 时其伪造 gap 会回流进报告;输入是已认证的工具结果列表,危害限于报告的失败尝试段)。修法方向:plan 派生的 gap 只取 effective plan,工具结果只保留其自身独立产出的 `capability_gap_matrix`,不再读嵌套 `research_plan`。
+
 ## P4 — 文档/记录修缮
 (暂空 — 2026-06-13 全部完成,见已完成段)
 
