@@ -3645,11 +3645,13 @@ _NONASSERTIVE_COSMOLOGY_CONTEXT_RE = re.compile(
     # them here would have been a relaxation the PR body denied (audit
     # 2026-09-03).  The predicate form is a strict subset of the bare word.
     r"(?:hypothesis|forecast)\s+(?:is|was)\s+that|"
-    # "confirmed / shown / found not to resolve" is a negative result, the
-    # counterpart of _EXPLICIT_DENIAL_RE's alternative (Codex review
-    # 2026-09-03, PRRT_kwDORoeoE86eypXG).
-    r"(?:confirmed|shown|found)\s+not\s+to\s+(?:resolve|alleviate|eliminate|"
-    r"remove|settle|evolve|vary|show|support|establish|favou?r|indicate|detect)|"
+    # "confirmed / shown / found not to <verb>" is deliberately NOT a hedge.
+    # Round seven (PRRT_kwDORoeoE86eypXG) read it as a negative result, and
+    # every relaxation found afterwards -- "confirmed not to resolve the S8
+    # tension yet resolves the Hubble tension" and thirty more -- came from
+    # that one alternative, so it was withdrawn (2026-09-03) and the phrase
+    # is read exactly as origin/main reads it.  A user-signed relaxation may
+    # reinstate it; do not add it back as a fix.
     r"not\s+ruled\s+out|consistent\s+with\s+zero|does\s+not\s+evolve|"
     r"(?:is|are|remains?)\s+unresolved|(?:is|are)\s+not\s+(?:resolved|detected))\b",
     re.I,
@@ -3703,14 +3705,10 @@ _EXPLICIT_DENIAL_RE = re.compile(
     r"|\bdo(?:es)?\s+not\s+(?:show|support|establish|favou?r|indicate"
     r"|resolve|alleviate|eliminate|remove)\b"
     r"|\bfailed?\s+to\s+(?:show|establish|detect|resolve|alleviate)\b"
-    # "Our hypothesis is confirmed not to resolve the Hubble tension" is a
-    # negative result: what is confirmed is the denial.  Without this
-    # alternative the confirmation cancelled the hedge and the negative
-    # result was reported as the opposite conclusion (Codex review
-    # 2026-09-03, PRRT_kwDORoeoE86eypXG).  Mirrored in
-    # _NONASSERTIVE_COSMOLOGY_CONTEXT_RE, as every explicit denial is.
-    r"|\b(?:confirmed|shown|found)\s+not\s+to\s+(?:resolve|alleviate|eliminate"
-    r"|remove|settle|evolve|vary|show|support|establish|favou?r|indicate|detect)\b"
+    # "confirmed / shown / found not to <verb>" is deliberately absent here
+    # too: see the note in _NONASSERTIVE_COSMOLOGY_CONTEXT_RE (withdrawn
+    # 2026-09-03).  "Our hypothesis is confirmed not to resolve the Hubble
+    # tension" is caught, as on main.
     r"|没有(?:统计显著|显著)?证据|证据不足|无法(?:得出|断定|证明)",
     re.I,
 )
@@ -3998,12 +3996,19 @@ _CONCLUSION_CLAUSE_BREAK_RE = re.compile(
 # a clause boundary: "The Hubble tension may, after recalibration, be resolved
 # by a local void" was reduced to " be resolved by a local void" and lost its
 # own hedge (Codex review 2026-09-03).
-# A clause whose verb is a bare infinitive has no finite verb of its own, so
-# its modal (if any) came from the clause before it.
+# A conjunct whose verb is a bare infinitive -- be / get / become plus its
+# complement, or a bare stem such as "persist" -- has no finite verb of its
+# own, so its modal (if any) came from a conjunct before it
+# (``_conjunct_inherits_a_modal``).  "been" is not a bare infinitive ("has
+# been resolved" is finite), and a stem after "to" is a marked infinitive.
 _BARE_INFINITIVE_RE = re.compile(
-    r"\b(?:be|been|become|remain|persist|weaken|strengthen|evolve|resolve)\s+\w",
+    r"(?<!\bto\s)\b(?:(?:be|get|become)\s+\w"
+    r"|(?:remain|persist|weaken|strengthen|evolve|resolve)\b)",
     re.IGNORECASE,
 )
+# The Chinese counterpart: a conjunct that 而 / 并 / 且 continues.  Chinese
+# marks the continuation on the connective, not on the verb.
+_ZH_CONTINUED_CONJUNCT_RE = re.compile(r"^\s*(?:而|并|且)")
 _MODAL_RE = re.compile(r"\b(?:may|might|could|would|should|can|will)\b", re.IGNORECASE)
 # A comma pair whose content STARTS with a coordinating word is not a
 # parenthetical either: ", and after repeated checks," in "The calibration is
@@ -4019,6 +4024,9 @@ _PARENTHETICAL_RE = re.compile(
     rf",(?!\s*{_COORDINATING_WORDS}\b)[^,;:\n]{{0,60}},$",
     re.IGNORECASE,
 )
+# What the clause split leaves behind that carries no proposition: an empty
+# piece after a comma, or a coordinating word on its own.
+_BARE_CONJUNCT_RE = re.compile(rf"\s*{_COORDINATING_WORDS}?\s*", re.IGNORECASE)
 
 
 def _clause_bounds(sentence: str, start: int, end: int) -> tuple[int, int]:
@@ -4048,6 +4056,61 @@ def _clause_around(sentence: str, start: int, end: int) -> str:
     """The clause of ``sentence`` that contains the span ``start:end``."""
     left, right = _clause_bounds(sentence, start, end)
     return sentence[left:right]
+
+
+def _conjunct_inherits_a_modal(sentence: str, clause: str, clause_start: int) -> bool:
+    """True when ``clause`` has no finite verb and a conjunct before it has a modal.
+
+    "The Hubble tension may weaken, and the remaining discrepancy be resolved
+    by a local void" is one hedged prediction: "be resolved" is a bare
+    infinitive and "may" scopes over both conjuncts.  The clause split left
+    the second conjunct with no modal of its own, and reading only the piece
+    just before it (" and") lost the hedge; origin/main exempts the sentence
+    (Codex review 2026-09-03, round seven).
+
+    A conjunct whose verb is a bare infinitive (``_BARE_INFINITIVE_RE`` with
+    no finite modal) -- or, in Chinese, one that 而 / 并 / 且 continues --
+    inherits the modal of the nearest earlier conjunct that has one, walking
+    back across consecutive such conjuncts and the empty pieces the split
+    leaves behind.  The walk stops at the first conjunct with a finite verb
+    and reads it exactly as it would be read in its own clause: only a MODAL
+    hedge is inherited (a negation does not reach across a clause break),
+    and not one that a confirmation cancelled.  A conjunct with a finite
+    verb of its own inherits nothing: "..., and a local void resolves it"
+    stands alone.
+    """
+
+    def _has_no_finite_verb(text: str) -> bool:
+        return bool(
+            (_BARE_INFINITIVE_RE.search(text) and not _MODAL_RE.search(text))
+            or _ZH_CONTINUED_CONJUNCT_RE.match(text)
+        )
+
+    if not _has_no_finite_verb(clause):
+        return False
+    prefix = sentence[:clause_start]
+    pieces: list[tuple[int, str]] = []
+    start = 0
+    for mark in _CONCLUSION_CLAUSE_BREAK_RE.finditer(prefix):
+        pieces.append((start, prefix[start : mark.start()]))
+        start = mark.end()
+    pieces.append((start, prefix[start:]))
+    for piece_start, piece in reversed(pieces):
+        if _BARE_CONJUNCT_RE.fullmatch(piece) or _has_no_finite_verb(piece):
+            continue
+        confirmed = _CONFIRMED_ASSERTION_RE.search(piece) is not None or (
+            _prefix_confirmation_introduces_the_clause(sentence[:piece_start])
+        )
+        if confirmed:
+            return False
+        return any(
+            _MODAL_RE.match(match.group(0)) is not None
+            for match in _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.finditer(piece)
+        ) or any(
+            match.group(0) in ("可能", "或许")
+            for match in _ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE.finditer(piece)
+        )
+    return False
 
 
 def _dark_energy_evolution_anchor(sentence: str) -> int | None:
@@ -4229,17 +4292,14 @@ def _clause_hedges_the_conclusion(sentence: str, conclusion_end: int | None) -> 
         return True
     if _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(clause) or _ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(clause):
         return True
-    # One modal can scope two coordinated clauses: "The Hubble tension may
-    # weaken and the remaining discrepancy be resolved by a local void" leaves
-    # the second clause with a BARE infinitive and no modal of its own, so its
-    # hedge lives in the clause before it (Codex review 2026-09-03).  Only a
-    # bare infinitive triggers the lookback, so "... and the Hubble tension IS
-    # resolved" still stands on its own.
-    if _BARE_INFINITIVE_RE.search(clause) and not _MODAL_RE.search(clause):
-        previous = sentence[:clause_start]
-        previous_clause = _CONCLUSION_CLAUSE_BREAK_RE.split(previous)[-1] if previous else ""
-        if _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(previous_clause):
-            return True
+    # One modal can scope two coordinated conjuncts: "The Hubble tension may
+    # weaken, and the remaining discrepancy be resolved by a local void"
+    # leaves the second with a BARE infinitive and no modal of its own, so
+    # its hedge lives in a conjunct before it (Codex review 2026-09-03).
+    # Only a conjunct with no finite verb inherits, so "... and the Hubble
+    # tension IS resolved" still stands on its own.
+    if _conjunct_inherits_a_modal(sentence, clause, clause_start):
+        return True
     if prefix.rstrip().endswith((":", "\uff1a")) and not _CONFIRMED_ASSERTION_RE.search(prefix):
         return bool(
             _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(prefix)

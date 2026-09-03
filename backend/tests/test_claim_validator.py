@@ -2591,9 +2591,13 @@ def test_a_coordinator_a_subject_bound_anchor_and_a_confirmed_denial() -> None:
     only when it introduces the conclusion clause: the prefix ends with a
     colon or dash, or no coordinating word stands between the two.
 
-    PRRT_kwDORoeoE86eypXG: "confirmed not to resolve" is a negative result,
-    and so are "shown not to" and "found not to"; without them in the denial
-    pattern the confirmation was read as confirming the resolution.
+    PRRT_kwDORoeoE86eypXG asked for "confirmed / shown / found not to
+    resolve" to be read as a negative result.  That exemption was withdrawn
+    (2026-09-03, round eleven): every relaxation found after it -- "confirmed
+    not to resolve the S8 tension yet resolves the Hubble tension" and thirty
+    more -- was downstream of it, so the phrase is now read exactly as
+    origin/main reads it: no hedge.  The two sentences it used to exempt are
+    asserted below, as on main; a user-signed relaxation may reinstate them.
     """
     from app.services.claim_validator import _strong_conclusion_from_sentence
 
@@ -2603,14 +2607,11 @@ def test_a_coordinator_a_subject_bound_anchor_and_a_confirmed_denial() -> None:
         "Dark energy may evolve with time, while galaxy formation evolves nonlinearly.",
         "Our dark-energy forecast is confirmed, while our hypothesis is that a "
         "local void may resolve the Hubble tension.",
-        "Our hypothesis is confirmed not to resolve the Hubble tension.",
         # Confirming a premise still leaves the predicate hedge standing.
         "The calibration is confirmed, while our hypothesis is that a local "
         "void resolves the Hubble tension.",
         # The anchor follows its subject in either clause order.
         "Galaxy formation evolves nonlinearly, while dark energy may evolve with time.",
-        # The denial is a denial without a hypothesis noun in front of it.
-        "The void model is shown not to resolve the Hubble tension.",
     ]
     for sentence in hedged:
         assert _strong_conclusion_from_sentence(sentence) is None, sentence
@@ -2637,11 +2638,146 @@ def test_a_coordinator_a_subject_bound_anchor_and_a_confirmed_denial() -> None:
         "Our hypothesis is confirmed, a local void may resolve the Hubble tension.",
         "Our dark-energy forecast is confirmed, while the Hubble tension is "
         "resolved by a local void.",
-        # 4: a confirmation OF the resolution is still a conclusion.
+        # 4: "confirmed / shown / found not to" is not a hedge (main parity;
+        # the round-seven exemption was withdrawn), and a confirmation OF the
+        # resolution is still a conclusion.
+        "Our hypothesis is confirmed not to resolve the Hubble tension.",
+        "The void model is shown not to resolve the Hubble tension.",
         "Our hypothesis is confirmed to resolve the Hubble tension.",
         "Our hypothesis is confirmed: a local void is shown to resolve the Hubble tension.",
         "The void model is confirmed not to be ruled out and the Hubble tension "
         "is resolved by a local void.",
+    ]
+    for sentence in asserted:
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+
+def test_a_confirmed_denial_is_read_as_main_reads_it() -> None:
+    """"confirmed / shown / found not to <verb>" is not a hedge.
+
+    Round seven read it as a negative result (PRRT_kwDORoeoE86eypXG).  Every
+    relaxation found since -- "The void model is confirmed not to resolve
+    the S8 tension yet resolves the Hubble tension", "... because it
+    resolves ...", "A void model confirmed not to resolve the S8 tension
+    still resolves ...", "Dark energy is confirmed not to evolve at low
+    redshift yet evolves at high redshift", an emphasised verb, a verbless
+    conclusion after the denial -- came from that one exemption, so it is
+    withdrawn and the phrase is read exactly as origin/main (3a7e6e4) reads
+    it.  The four negative-result sentences the PR body had disclosed as
+    exempt are caught again, as on main; a user-signed relaxation may
+    reinstate them later.  The denial forms main already had are untouched.
+
+    Known and disclosed, not pinned: "The void model is confirmed not to
+    resolve the S8 tension yet may resolve the Hubble tension" is caught
+    (main exempts it), because the confirmation in the clause cancels the
+    modal and only the withdrawn alternative used to restore it.  Reading
+    "confirmed not to" as a denial again is the exemption this test
+    withdraws, so that sentence waits for a user-signed decision.
+    """
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    asserted = [
+        # The four disclosed negative-result sentences, caught as on main.
+        "The void model is shown not to resolve the Hubble tension.",
+        "The void model is found not to alleviate the Hubble tension.",
+        "The void model is confirmed not to resolve the Hubble tension.",
+        "The data are confirmed not to favour spatial curvature.",
+        # The relaxations the exemption let through.
+        "The void model is confirmed not to resolve the S8 tension yet resolves "
+        "the Hubble tension.",
+        "The void model is confirmed not to resolve the S8 tension because it "
+        "resolves the Hubble tension instead.",
+        "A void model confirmed not to resolve the S8 tension still resolves the "
+        "Hubble tension.",
+        "Dark energy is confirmed not to evolve at low redshift yet evolves at "
+        "high redshift.",
+        "The void model is confirmed not to resolve the S8 tension yet "
+        "**resolves** the Hubble tension.",
+        "The void model is shown not to resolve the Hubble tension, which is "
+        "instead resolved by a local void.",
+        "The Hubble tension is resolved by a model confirmed not to resolve the "
+        "S8 tension.",
+        "The void model is confirmed not to resolve the S8 tension nor the "
+        "Hubble tension.",
+    ]
+    for sentence in asserted:
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+    # The denial forms main already had still hedge.
+    hedged = [
+        "The data do not resolve the Hubble tension.",
+        "The void model failed to resolve the Hubble tension.",
+        "There is no evidence that the Hubble tension is resolved by a local void.",
+        "The void model does not show that the Hubble tension is resolved.",
+    ]
+    for sentence in hedged:
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+
+def test_a_bare_infinitive_conjunct_inherits_the_modal_before_it() -> None:
+    """A conjunct with no finite verb takes its modal from the conjunct before.
+
+    "The Hubble tension may weaken, and the remaining discrepancy be resolved
+    by a local void" is one hedged prediction: "be resolved" is a bare
+    infinitive and "may" scopes over both conjuncts.  Splitting the sentence
+    at the comma left the second conjunct with no modal of its own, and the
+    lookback saw only " and", so an honest hedge was refused while
+    origin/main exempts it (Codex review 2026-09-03, round seven).
+
+    A conjunct whose verb is a bare infinitive -- be / get / become plus its
+    complement, or a bare stem such as "persist" -- inherits the modal of
+    the nearest earlier conjunct that has one, walking back across
+    consecutive bare-infinitive conjuncts.  A conjunct with a finite verb
+    inherits nothing, so "..., and a local void resolves it" stays caught:
+    main exempts it only because it reads whole sentences, and keeping it
+    caught is a tightening.  Only a modal is inherited, and a modal that a
+    confirmation cancelled is not.  A Chinese conjunct that 而 / 并 / 且
+    continues inherits 可能 the same way; a bare fullwidth comma does not.
+    """
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    hedged = [
+        "The Hubble tension may weaken, and the remaining discrepancy be "
+        "resolved by a local void.",
+        "The Hubble tension might weaken, or the remaining discrepancy be "
+        "resolved by a local void.",
+        "The Hubble tension may weaken, but the remaining discrepancy be "
+        "resolved by a local void.",
+        "The Hubble tension may weaken, and then be resolved by a local void.",
+        "The Hubble tension might weaken, and the remaining discrepancy get "
+        "resolved by a local void.",
+        "The Hubble tension could weaken, the S8 tension persist, and the "
+        "remaining discrepancy be resolved by a local void.",
+        "The Hubble tension might weaken, and, in fact, the remaining "
+        "discrepancy be resolved by a local void.",
+        "The Hubble tension may weaken and the remaining discrepancy be "
+        "resolved by a local void.",
+        "哈勃张力可能减弱，而剩余差异则被局部空洞解决。",
+    ]
+    for sentence in hedged:
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+    asserted = [
+        # A finite verb in the conjunct: nothing is inherited.
+        "The Hubble tension may weaken, and a local void resolves it.",
+        "The Hubble tension may weaken, and the remaining discrepancy is "
+        "resolved by a local void.",
+        "The Hubble tension may weaken, and the remaining discrepancy has been "
+        "resolved by a local void.",
+        "The Hubble tension may weaken, and the remaining discrepancy is to be "
+        "resolved by a local void.",
+        "The Hubble tension could weaken, the S8 tension persists, and the "
+        "remaining discrepancy is resolved by a local void.",
+        # The walk back stops at the first conjunct with a finite verb; one
+        # with no modal, or with a cancelled one, gives nothing.
+        "The calibration is confirmed, the S8 tension persist, and the Hubble "
+        "tension be resolved by a local void.",
+        "The calibration is confirmed, and we require that the Hubble tension "
+        "be resolved by a local void.",
+        "Our hypothesis is confirmed: the Hubble tension may weaken, and the "
+        "remaining discrepancy be resolved by a local void.",
+        # A Chinese comma with no connective is a clause of its own.
+        "哈勃张力可能减弱，剩余的差异被局部空洞解决。",
     ]
     for sentence in asserted:
         assert _strong_conclusion_from_sentence(sentence) is not None, sentence
