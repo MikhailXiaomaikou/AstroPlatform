@@ -1,14 +1,15 @@
 export const meta = {
   name: 'adversarial-review',
   description: 'Multi-lens adversarial review of a git range; every finding independently verified before it reaches the user',
-  whenToUse: 'Before committing science-critical or anti-fabrication changes. args: {range: "HEAD~1..HEAD" | "origin/main..HEAD", focus?: "extra reviewer guidance", lenses?: [["key","description"], ...]}. Findings come back split into confirmed / uncertain / refuted-with-pinnable-reasons.',
+  whenToUse: 'Before committing science-critical or anti-fabrication changes. args: {range: "HEAD~1..HEAD" | "origin/main..HEAD", repo?: "<absolute worktree path, default primary checkout>", focus?: "extra reviewer guidance", lenses?: [["key","description"], ...]}. Findings come back split into confirmed / uncertain / refuted-with-pinnable-reasons.',
   phases: [
     { title: 'Review', detail: 'independent finders, one lens each' },
     { title: 'Verify', detail: 'one skeptic per finding tries to refute it' },
   ],
 }
 
-const REPO = '/Users/chenkexuan/Projects/astro-platform'
+// Override with args.repo when reviewing a worktree other than the primary checkout.
+const REPO = (args && args.repo) || '/Users/chenkexuan/Projects/astro-platform'
 const range = (args && args.range) || 'origin/main..HEAD'
 const focus = (args && args.focus) || ''
 

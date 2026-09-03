@@ -1,11 +1,21 @@
 ---
 name: cosmology-smoke
-description: Run a cosmology science-regression smoke check. Verifies ΛCDM BAO+CMB recovers H0≈67.4, wCDM BAO+CMB recovers w≈-1, three-tier chain_tier triggers correctly (publication/exploratory/blocked), and distance_modulus_model stays within 1e-3 mag of astropy. Use after any change to backend/app/services/cosmology_*.py or backend/app/services/cosmology_likelihoods.py to confirm no science regression.
+description: Run a cosmology science-regression smoke check. Verifies ΛCDM BAO+CMB recovers H0≈67.4, wCDM BAO+CMB recovers w≈-1, three-tier chain_tier triggers correctly (publication/exploratory/blocked), and distance_modulus_model stays within 1e-3 mag of astropy. Use after any change to backend/app/services/cosmology_*.py or any module of the backend/app/services/cosmology_likelihoods/ package to confirm no science regression.
 ---
 
 # Cosmology science-regression smoke
 
 This skill runs four cheap science checks against the cosmology stack. Total wall-clock: ~30-60s.
+
+> **Known state as of 2026-09-02 (measured on `main` @ 3a7e6e4, not a regression of your change):**
+> checks 3 and 4 pass. Check 1 recovers H0 = 67.69 but lands in tier `exploratory`, not
+> `publication` — the publication gate now lists `compressed_or_approximate_likelihood` and
+> `literature_typed_input` as blocking reasons, so a compressed BAO+Planck chain can no longer
+> reach `publication` by design. Check 2 (wCDM on the same datasets) returns `chain_tier=blocked`
+> with importance-sampler ESS = 2 and the `parameters` block redacted, so it reports
+> `pass=false`. Until the anchors are re-decided with the user (which tier check 1 should
+> expect; which dataset/sampler combination gives a healthy wCDM chain), treat checks 1-2 as
+> **informational** and checks 3-4 as the real gates. Do not "fix" this by loosening the gate.
 
 ## Checks
 
@@ -28,7 +38,9 @@ For z ∈ {0.1, 0.5, 1.0, 2.3} and the 3 models (flat_lcdm, flat_wcdm, flat_w0wa
 ## Run
 
 ```bash
-cd /Users/chenkexuan/Projects/astro-platform/backend && ./venv/bin/python3 - <<'PY'
+REPO="$(git rev-parse --show-toplevel 2>/dev/null || echo /Users/chenkexuan/Projects/astro-platform)"
+# backend/venv is untracked and lives only in the primary checkout; run it from this worktree's backend/ so `app` is the code under test.
+cd "$REPO/backend" && /Users/chenkexuan/Projects/astro-platform/backend/venv/bin/python3 - <<'PY'
 import numpy as np, json
 from app.services.cosmology_likelihoods import run_likelihood_chain
 from app.services.cosmology_mcmc import distance_modulus_model
@@ -48,11 +60,12 @@ results["lcdm_h0_anchor"] = {
 
 # Check 2: wCDM BAO+CMB
 r2 = run_likelihood_chain(model="wcdm", dataset_keys=["desi_dr1_bao", "planck2018_compressed"], n_samples=4000, random_seed=42)
-w = r2["parameters"].get("w", {}).get("median")
+w = (r2.get("parameters") or {}).get("w", {}).get("median")  # blocked chains redact parameters
 results["wcdm_w_near_minus_one"] = {
     "pass": w is not None and -1.5 < w < -0.5,
     "w_median": w,
     "tier": r2["chain_tier"],
+    "status": r2.get("__tool_status__"),
 }
 
 # Check 3: chain_tier triggers
@@ -94,8 +107,8 @@ PY
 
 ## Interpretation
 
-- All four `pass=true` → safe to push.
-- `lcdm_h0_anchor.pass=false` → check `_flat_de_distances_at_z` or `_desi_dr1_bao_predictions` for regressions.
-- `wcdm_w_near_minus_one.pass=false` → check w prior bounds or `_desi_dr1_bao_predictions` w extraction.
+- All four `pass=true` → safe to push. (See the known-state note at the top: as of 2026-09-02 checks 1-2 are informational until re-anchored.)
+- `lcdm_h0_anchor.pass=false` → check `_flat_de_distances_at_z` or `_bao_predictions` in `cosmology_likelihoods/bao.py` for regressions.
+- `wcdm_w_near_minus_one.pass=false` → check w prior bounds or the w handling in `_bao_predictions` (`cosmology_likelihoods/bao.py`).
 - `chain_tier_blocked_inline.pass=false` → check `CLAIMABLE_INPUT_ORIGINS` filter in `fit_cosmology_emcee`.
 - `distmod_precision_mag.pass=false` → check Gauss-Legendre node order in `distance_modulus_model`; should not regress past 32.
