@@ -1227,3 +1227,106 @@ def test_a_spelled_level_keeps_its_percent_flag() -> None:
     ) == []
     # A spelled value with a real unit is still a value.
     assert nonpublication_posterior_values("H0 came out at sixty-eight km/s/Mpc.", chain) == [68.0]
+
+
+def test_an_approximation_word_keeps_the_spelled_claim_context() -> None:
+    """``The exploratory median is approximately sixty-eight`` states a value.
+
+    The copula had to end right before the spelled number, so an
+    approximation word in between hid the claim context and the withheld
+    posterior passed (Codex review 2026-09-03, PRRT_kwDORoeoE86etS0V).  A
+    count with no subject in front of it is still not a value.
+    """
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    chain = _exploratory_chain(68.0)
+    for claim in (
+        "The exploratory median is approximately sixty-eight.",
+        "H0 is about sixty-eight.",
+        "The Hubble constant comes out at roughly sixty-eight.",
+        "The result was close to sixty-eight.",
+    ):
+        assert nonpublication_posterior_values(claim, chain) == [68.0], claim
+    assert nonpublication_posterior_values("sixty-eight samples were retained.", chain) == []
+    assert nonpublication_posterior_values(
+        "approximately sixty-eight samples were retained.", chain
+    ) == []
+
+
+def test_the_previous_percentages_own_cue_does_not_exempt_the_next() -> None:
+    """A cue glued to the earlier percentage describes that one.
+
+    Cutting the cue window at the previous number left "% credible interval
+    is withheld, but " in front of the token, so "The 95% credible interval
+    is withheld, but 68% for H0 is the exploratory result" borrowed the 95's
+    cue and the withheld 68 passed (Codex review 2026-09-03,
+    PRRT_kwDORoeoE86etS0Y).
+    """
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    chain = _exploratory_chain(68.0)
+    for claim in (
+        "The 95% credible interval is withheld, but 68% for H0 is the exploratory result.",
+        "The 95 percent credible interval is withheld, but 68% for H0 is the exploratory result.",
+        # A spelled level and a dotted abbreviation carry their own cue too.
+        "At ninety-five percent C.L., 68% for H0 is the exploratory result.",
+        "At 95% C.L., 68% for H0 is the exploratory result.",
+    ):
+        assert nonpublication_posterior_values(claim, chain) == [68.0], claim
+    # The idiom keeps its own cue in every position it is written.
+    for honest in (
+        "Quoted at the 68% credible interval.",
+        "For H0, the credible interval is 68%.",
+        "The credible interval for H0 is 68%.",
+        "The 95% and 68% credible intervals are both withheld.",
+    ):
+        assert nonpublication_posterior_values(honest, chain) == [], honest
+
+
+def test_a_reverse_copula_binds_the_percentage_as_a_value() -> None:
+    """``68% is the H0 median`` assigns the value AFTER the token.
+
+    Only the text before a token was inspected for an assignment, so the
+    later "credible interval withheld" exempted a value the sentence had
+    just stated (Codex review 2026-09-03, PRRT_kwDORoeoE86eyq3R, filed on
+    #68; the gate lives here).
+    """
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    chain = _exploratory_chain(68.0)
+    for claim in (
+        "68% is the H0 median, with its credible interval withheld.",
+        "68% was the exploratory result, and the credible interval is withheld.",
+        "68 percent is our posterior median; the confidence interval is withheld.",
+    ):
+        assert nonpublication_posterior_values(claim, chain) == [68.0], claim
+    # A percentage that IS the interval level keeps the exemption.
+    for honest in (
+        "68% is the credible interval level quoted for H0.",
+        "The 68% credible interval covers H0.",
+    ):
+        assert nonpublication_posterior_values(honest, chain) == [], honest
+
+
+def test_only_a_recognised_glued_unit_follows_a_number() -> None:
+    """``comet 67P`` is a name, not 67.
+
+    The trailing lookahead admitted any letter after the digits so that
+    ``73.2km/s/Mpc`` tokenizes, which also read "67P" as 67 and replaced a
+    whole reply when a withheld H0 sat near it (Codex review 2026-09-03,
+    PRRT_kwDORoeoE86eyrId, filed on #69; the tokenizer lives here).  Only a
+    recognised unit may be glued to the number.
+    """
+    from app.services.agent_runtime.honesty import (
+        _reply_number_tokens,
+        nonpublication_posterior_values,
+    )
+
+    assert nonpublication_posterior_values(
+        "We compared with comet 67P for scale.", _exploratory_chain(67.36)
+    ) == []
+    assert _reply_number_tokens("comet 67P and 2024YR4") == []
+    # The glued units that motivated the lookahead still tokenize.
+    assert _reply_number_tokens("73.2km/s/Mpc, 147.1Mpc, 13.8Gyr, 2.7eV, 3sigma, 5σ") == [
+        73.2, 147.1, 13.8, 2.7, 3.0, 5.0
+    ]

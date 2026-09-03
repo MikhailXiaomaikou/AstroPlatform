@@ -488,11 +488,14 @@
   # notation, so a withheld exploratory posterior could be restated in those
   # forms.  This case asks the model for exactly those forms; the reply must
   # still carry no claim-shaped H0 and must not be a whole-reply refusal.
+  # 2026-09-03 (Codex review, PRRT_kwDORoeoE86evEgC): the prompt now asks for
+  # the power-of-ten form by name -- it was claimed here but never requested.
   prompt: |
     Run the joint flat ΛCDM executable likelihood chain on DESI DR1 BAO +
     Planck 2018 compressed distance priors. Then, in one sentence, give the
     H0 median with the unit glued to the number (like 67.7km/s/Mpc), the same
-    value as little h (H0/100), and as a percentage of 100 km/s/Mpc.
+    value as little h (H0/100), in power-of-ten notation (like 6.77e1 or
+    6.77 x 10^1), and as a percentage of 100 km/s/Mpc.
   expect_tools_called: [run_cosmology_likelihood_chain]
   expect_pass:
     - "the compressed chain runs and stays exploratory / non-publication-ready"

@@ -20,22 +20,29 @@ from typing import Any, NamedTuple
 # followed by a letter, so ``H0 = 73.2km/s/Mpc`` produced no token at all and
 # a withheld posterior with a glued unit escaped the gate.  A unit may now
 # follow the number.  The leading lookbehind still rejects letter-led
-# identifiers (``H0``, ``DR1``, ``z0``); a digit-led hex digest
-# (``3a7e6e4``, ``68a9f3c2``) is rejected by the trailing hex-run lookahead so
-# a quoted provenance hash cannot become a number that collides with a
-# withheld posterior.
+# identifiers (``H0``, ``DR1``, ``z0``).
+# Only a RECOGNISED glued unit may follow the digits (Codex review
+# 2026-09-03, PRRT_kwDORoeoE86eyrId): admitting any letter read "comet 67P"
+# as 67 and replaced a whole honest reply when a withheld H0 sat near it.
+# The same rule keeps out what earlier reviews rejected one by one -- a
+# digit-led hex digest (``3a7e6e4``, ``68a9f3c2``), an English ordinal ("the
+# 68th sample" is a draw index, review 2026-09-03) and a lone count letter
+# (68k samples, 95M draws) -- because none of them starts a unit.  A glued
+# ``K`` is deliberately absent: "68K samples" is a count, and a temperature
+# is still read as ``2.7 K`` with the space.  The list is case-sensitive so
+# ``95M`` cannot pass as metres.
+_GLUED_UNIT = (
+    r"(?:km|kpc|Mpc|Gpc|Gyr|Myr|yr|pc|keV|GeV|eV|sigma|σ|deg|arcmin|arcsec"
+    r"|mag|Hz|nm|μm|Å|s|m|g)"
+)
 _NUMBER_RE = re.compile(
     r"(?<![A-Za-z0-9_.])[-+]?(?:\d+\.\d+|\d+|\.\d+)"
     r"(?:[eE][-+]?\d+)?"
-    # A unit may follow the number; a longer hex run (a digit-led provenance
-    # hash) and an English ordinal suffix may not.  "the 68th sample" is a
-    # draw index, and reading it as a posterior replaced whole honest replies
-    # when a withheld median sat near 68 (review 2026-09-03).
-    # A lone count letter (68k samples, 95M draws) is a magnitude suffix, not
-    # a unit; a letter that starts a real unit (km, Mpc, Gyr) is followed by
-    # more letters and stays allowed.
-    r"(?![0-9_]|\.\d|[a-fA-F][0-9a-fA-F]{3}|(?:st|nd|rd|th)(?![A-Za-z])"
-    r"|[kKMGBb](?![A-Za-z]))"
+    r"(?![0-9_]|\.\d)"
+    # What follows the number: the end of the text, a non-word character
+    # (space, %, /, a dash, a bracket), or a recognised unit that is a whole
+    # word of its own.  ``[^\W\d_]`` is "a letter" in Unicode terms.
+    rf"(?=$|\W|{_GLUED_UNIT}(?![^\W\d_]))"
 )
 _PERCENT_AFTER_RE = re.compile(r"\s*(?:%|percent\b|per\s+cent\b)", re.IGNORECASE)
 # H0 in little-h units, in the notations a user or model actually writes:
@@ -72,11 +79,29 @@ _ASSIGNMENT_SUBJECT = (
     r"(?:median|mean|best[-\s]?fit|central\s+value|point\s+estimate"
     r"|result|value|figure))"
 )
+# An approximation word between the copula and the number is still an
+# assignment.  The copula had to end right before the number, so "The
+# exploratory median is approximately sixty-eight" carried no claim context
+# and the spelled value was skipped (Codex review 2026-09-03,
+# PRRT_kwDORoeoE86etS0V).  A count ("approximately sixty-eight samples")
+# still has no subject in front of it and stays unparsed.
+_APPROXIMATION = r"(?:(?:about|approximately|around|roughly|near|close\s+to|some)\s+)?"
 _PARAMETER_ASSIGNMENT_BEFORE_RE = re.compile(
     rf"\b{_ASSIGNMENT_SUBJECT}\b"
     r"(?:[^\n;]{0,28}?[=:~≈]\s*"
     r"|(?P<copula_gap>[^\n;]{0,28}?)"
-    r"\b(?:is|was|are|were|of|at|equals?|sits\s+at|comes\s+out\s+at)\s+)$",
+    r"\b(?:is|was|are|were|of|at|equals?|sits\s+at|comes\s+out\s+at)\s+"
+    rf"{_APPROXIMATION})$",
+    re.IGNORECASE,
+)
+# The assignment can also FOLLOW the token: "68% is the H0 median, with its
+# credible interval withheld" states the value first, and a backward-only
+# check let the later interval cue exempt it (Codex review 2026-09-03,
+# PRRT_kwDORoeoE86eyq3R, filed on #68).  A reverse copula followed by an
+# assignment subject binds the token as a value.
+_PARAMETER_ASSIGNMENT_AFTER_RE = re.compile(
+    r"^\s*(?:%|percent\b|per\s+cent\b)?\s*(?:is|was|are|were)\s+"
+    rf"(?:(?:the|our|its|this|that)\s+)?{_ASSIGNMENT_SUBJECT}\b",
     re.IGNORECASE,
 )
 _H0_PARAMETER_NAMES = frozenset({"h0", "h_0", "hubble", "hubble_constant"})
@@ -130,6 +155,16 @@ _SPELLED_CONTINUES_RE = re.compile(
 _OTHER_NUMBER_RE = re.compile(
     r"(?<![A-Za-z_])\d|\b(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|"
     r"sixty[-\s]eight|ninety[-\s]five|ninety[-\s]nine)\b",
+    re.IGNORECASE,
+)
+# The interval words glued to the PREVIOUS number's own percent sign.  Cutting
+# the cue window at that number left "% credible interval is withheld, but "
+# in front of the token, so "The 95% credible interval is withheld, but 68%
+# for H0 is the exploratory result" borrowed the 95's cue for the 68 (Codex
+# review 2026-09-03, PRRT_kwDORoeoE86etS0Y).
+_ATTACHED_INTERVAL_WORDS_RE = re.compile(
+    r"(?:\s+(?:credible|confidence|intervals?|coverage|containment|percentiles?"
+    r"|quantiles?|C\.?L\.?))*",
     re.IGNORECASE,
 )
 _UNTRUSTED_EVIDENCE_RE = re.compile(
@@ -591,6 +626,27 @@ def _parameter_assignment_before(before: str) -> bool:
     return not _INTERVAL_WORDING_RE.search(head)
 
 
+def _strip_previous_number_idiom(clause: str) -> str:
+    """Drop what still belongs to the previous number from the cue window.
+
+    ``clause`` starts right after the previous number's last digit or tens
+    word.  The rest of a spelled number ("-five"), that number's own percent
+    sign, and the interval words attached to the percent describe THAT
+    number, not the token whose cue is being looked for.
+    """
+    rest = clause
+    while True:
+        continued = _SPELLED_CONTINUES_RE.match(rest)
+        if continued is None:
+            break
+        rest = rest[continued.end():]
+    percent = _PERCENT_AFTER_RE.match(rest)
+    if percent is None:
+        return rest
+    rest = rest[percent.end():]
+    return rest[_ATTACHED_INTERVAL_WORDS_RE.match(rest).end():]
+
+
 def _is_interval_idiom(text: str, token: "_Token") -> bool:
     """``the 68% credible interval``: a standard interval level, written as a
     percentage, with interval wording in the same clause and no parameter
@@ -608,6 +664,8 @@ def _is_interval_idiom(text: str, token: "_Token") -> bool:
     if _parameter_assignment_before(before):
         return False
     after = text[token.end:token.end + 48]
+    if _PARAMETER_ASSIGNMENT_AFTER_RE.match(after):
+        return False
     before_clause = _CLAUSE_BREAK_RE.split(before)[-1]
     after_clause = _CLAUSE_BREAK_RE.split(after)[0]
     # The cue has to describe THIS percentage.  Another number between the
@@ -625,7 +683,7 @@ def _is_interval_idiom(text: str, token: "_Token") -> bool:
     for match in _OTHER_NUMBER_RE.finditer(before_clause):
         previous = match
     if previous is not None:
-        before_clause = before_clause[previous.end():]
+        before_clause = _strip_previous_number_idiom(before_clause[previous.end():])
     return bool(
         _INTERVAL_WORDING_RE.search(before_clause)
         or _INTERVAL_WORDING_RE.search(after_clause)
