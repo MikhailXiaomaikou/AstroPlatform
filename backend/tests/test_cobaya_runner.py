@@ -817,3 +817,129 @@ def test_single_external_chain_is_preliminary_and_has_no_verdict() -> None:
     assert cmp["preferred"] == "undetermined"
     assert cmp["__do_not_claim__"] is True
     assert CobayaRunError("x", error_class="custom").error_class == "custom"
+
+
+# ---------------------------------------------------------------------------
+# 8. __message_to_model__ follows chain_tier (Codex review 2026-09-03,
+#    thread PRRT_kwDORoeoE86eta7A)
+# ---------------------------------------------------------------------------
+
+
+def _external_payload(
+    *,
+    diagnostics: dict,
+    data_verification: dict | None,
+    with_adequacy: bool,
+) -> dict:
+    """Build a _runner_success envelope on a hash-bound LCDM/DESI selection.
+
+    Mirrors test_off_anchor_abstain.test_external_cobaya_runner_applies_off_anchor_gate:
+    lcdm on desi_dr1_bao with an omegam summary, four converged chains, a
+    verified hash and an attested model-adequacy manifest is the one recipe
+    that reaches chain_tier="publication" on this path.
+    """
+    from app.services.cosmology_likelihoods.verification import (
+        PUBLICATION_REQUIRED_ADEQUACY_CHECKS,
+        build_model_adequacy_attestation,
+        build_model_adequacy_subject,
+    )
+
+    entries = [get_cosmology_dataset("desi_dr1_bao")]
+    summaries = {"omegam": {"median": 0.30}}
+    adequacy = None
+    if with_adequacy:
+        subject = build_model_adequacy_subject(
+            model="lcdm",
+            dataset_keys=[entry.key for entry in entries],
+            random_seed=42,
+            summaries=summaries,
+            diagnostics=diagnostics,
+            data_verification=data_verification,
+        )
+        adequacy = build_model_adequacy_attestation(
+            subject=subject,
+            evidence_by_check={
+                name: {"artifact_id": f"test:{name}"}
+                for name in PUBLICATION_REQUIRED_ADEQUACY_CHECKS
+            },
+        )
+    return _runner_success(
+        model_key="lcdm",
+        entries=entries,
+        seed=42,
+        sampler="mcmc",
+        summaries=summaries,
+        diagnostics=diagnostics,
+        chain_meta={},
+        stdout_tail="",
+        data_verification=data_verification,
+        model_adequacy=adequacy,
+    )
+
+
+def test_external_message_to_model_follows_chain_tier() -> None:
+    """The tool-card message must follow the tier computed a few lines above it.
+
+    ``_runner_success`` computes ``chain_tier`` as publication / exploratory /
+    blocked, but its ``__message_to_model__`` told the model to "say the run is
+    exploratory" for every tier -- so a chain blocked by unverified inputs or
+    missing diagnostics reached the user as merely exploratory (Codex review
+    2026-09-03, thread PRRT_kwDORoeoE86eta7A).  Measured on the pre-fix code:
+    all three blocked constructions below returned chain_tier="blocked" with a
+    message containing "say the run is exploratory".
+    """
+    good_diag = {
+        "overall_status": "ok",
+        "n_chains": 4,
+        "n_independent_chains": 4,
+        "per_parameter": {"omegam": {"rhat": 1.001, "ess_bulk": 1200.0}},
+    }
+    verified = {"hash_verified": True, "files_sha256": {}, "mismatches": []}
+
+    publication = _external_payload(
+        diagnostics=good_diag, data_verification=verified, with_adequacy=True
+    )
+    assert publication["chain_tier"] == "publication"
+    pub_msg = publication["__message_to_model__"]
+    assert "publication" in pub_msg
+    assert "exploratory" not in pub_msg.lower()
+    assert "blocked" not in pub_msg.lower()
+
+    exploratory = _external_payload(
+        diagnostics=good_diag, data_verification=verified, with_adequacy=False
+    )
+    assert exploratory["chain_tier"] == "exploratory"
+    exp_msg = exploratory["__message_to_model__"]
+    assert "say the run is exploratory" in exp_msg
+    assert "stay in this tool card" in exp_msg
+    assert "blocked" not in exp_msg.lower()
+
+    blocked_cases = {
+        "unverified_hash": dict(diagnostics=good_diag, data_verification=None),
+        "diagnostics_unavailable": dict(
+            diagnostics={"overall_status": "diagnostics_unavailable", "n_chains": 4},
+            data_verification=verified,
+        ),
+        "no_chains": dict(
+            diagnostics={"overall_status": "no_chains", "n_chains": 0},
+            data_verification=verified,
+        ),
+    }
+    expected_cause = {
+        "unverified_hash": "not hash-verified",
+        "diagnostics_unavailable": "diagnostics are unavailable",
+        "no_chains": "produced no chains",
+    }
+    for label, kwargs in blocked_cases.items():
+        result = _external_payload(with_adequacy=False, **kwargs)
+        assert result["chain_tier"] == "blocked", label
+        msg = result["__message_to_model__"]
+        assert "blocked" in msg.lower(), (label, msg)
+        assert "exploratory" not in msg.lower(), (label, msg)
+        # The stated cause is read off the run, not a generic diagnosis.
+        assert expected_cause[label] in msg, (label, msg)
+        # Nothing from a blocked chain may be quoted or described as a result,
+        # and the unblocking conditions are named (prompt.md blocked bullet).
+        assert "Do NOT report" in msg, (label, msg)
+        assert "hash-verified" in msg and "diagnostics" in msg, (label, msg)
+        assert "four independent chains" in msg, (label, msg)
