@@ -392,3 +392,60 @@ def test_tool_payloads_do_not_invite_preliminary_numbers() -> None:
     assert "stay in this tool card" in runner_text
     assert "described as " not in rotation_text.split("__message_to_model__")[1][:400]
     assert "stays in this tool card" in rotation_text
+
+
+def test_step3_exploratory_row_is_reason_aware() -> None:
+    """Step 3's auto-iterate table must not burn a retry on causes no longer
+    chain can fix.
+
+    The old single row, ``chain_tier="exploratory" (ESS in 100-400) -> retry
+    with n_steps x 3``, contradicted the chain_tier reference: a chain is
+    exploratory for ANY demotion short of a block.  ``verification.py``
+    (``_assess_publication_gate``) and ``sampling.py`` build the reason list
+    from an off-anchor frontier parameter, a compressed or approximate
+    likelihood, a failed prior-dominance screen, too few independent chains,
+    an ESS below the publication threshold, or an ESS estimate that failed
+    outright -- and only the ESS entries respond to a bigger sample budget
+    (Codex review 2026-09-03).
+    """
+    from pathlib import Path
+
+    from app.api.chat import SYSTEM_PROMPT as prompt
+    from app.services.cosmology_likelihoods import sampling
+    from app.services.cosmology_likelihoods.verification import _assess_publication_gate
+
+    step3 = prompt.split("### Step 3")[1].split("### Step 4")[0]
+    assert '`chain_tier="exploratory"` (ESS in 100–400)' not in step3
+    assert "to push into publication tier" not in step3
+
+    # Reason codes the shared gate emits for every in-process chain
+    # (n_independent_chains is hard-coded to 0 there, per_parameter is None).
+    gate = _assess_publication_gate(
+        cov_fidelity="full",
+        likelihood_is_compressed_or_approximate=True,
+        n_independent_chains=0,
+        per_parameter=None,
+        critical_parameters=["H0", "omegam"],
+    )
+    for code in (
+        "compressed_or_approximate_likelihood",
+        "fewer_than_four_independent_chains",
+    ):
+        assert code in gate["reasons"], code
+        assert code in step3, code
+
+    # Reason codes and warning phrases the in-process runner appends itself.
+    sampling_source = Path(sampling.__file__).read_text(encoding="utf-8")
+    for grounded in (
+        "off_anchor_frontier",
+        "prior_dominance_screen_failed",
+        "below the publication threshold",
+        "effective-sample-size estimate unavailable",
+    ):
+        assert grounded in sampling_source, grounded
+        assert grounded in step3, grounded
+
+    # The structural reasons are named as ones a retry cannot fix, and the
+    # sampler-budget knob named is the one the tool actually exposes.
+    assert "No retry helps" in step3
+    assert "n_samples" in step3
