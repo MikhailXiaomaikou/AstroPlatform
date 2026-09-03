@@ -169,8 +169,6 @@ _SUBCLAUSE_BREAK_RE = re.compile(
     re.IGNORECASE,
 )
 _DIGIT_RE = re.compile(r"\d")
-# What joins a value to its uncertainty: "67.36 +/- 0.42", "67.36 ± 0.42".
-_UNCERTAINTY_BRIDGE_RE = re.compile(r"\s*(?:\u00b1|\+/-|\+-)\s*")
 # "Another number" for the interval-cue trim: a digit, or a spelled number
 # word.  Only the words that can carry a coverage level are listed, so an
 # ordinary "one" or "two" in prose does not cut a cue short.
@@ -914,108 +912,12 @@ def _canonical_parameter(name: str) -> str:
     return _PARAMETER_ALIASES.get(key, key)
 
 
-# Statistics that ARE the parameter's value.  A spread (std, sigma, error,
-# an interval edge) is a different quantity and must not ground a bare
-# assignment like "H0 = 0.42".
-_CENTRAL_ESTIMATE_STATS = frozenset({
-    "median", "mean", "value", "best_fit", "bestfit", "map", "mode",
-    "central", "central_value", "point_estimate", "estimate", "",
-})
-
-
-def _is_central_estimate(stat: str) -> bool:
-    return str(stat or "").strip().lower() in _CENTRAL_ESTIMATE_STATS
-
-
-# Statistics that ARE the parameter's uncertainty.  An uncertainty written
-# after a SUPPORTED central value is still a claim of its own: "H0 = 67.36 ±
-# 9.87" passed untouched because the follower only inherited the central
-# token's decision (Codex review 2026-09-03).
-_SPREAD_STATS = frozenset({
-    "std", "stddev", "std_dev", "sigma", "error", "err", "uncertainty",
-    "uncertainty_plus", "uncertainty_minus", "sd", "scatter", "rms",
-})
-
-
-def _is_spread(stat: str) -> bool:
-    return str(stat or "").strip().lower() in _SPREAD_STATS
-
-
-def _claimable_values_by_parameter(
-    tool_results: Any,
-) -> tuple[dict[str, set[float]], dict[str, set[float]]]:
-    """Claimable current-turn values, bucketed by the parameter they measure.
-
-    A flat set let one quantity ground another: a result carrying only
-    ``omegam=0.3153`` made an invented ``sigma8 = 0.315`` look supported
-    inside the 1% tolerance, while the final ``validate_claims`` path uses
-    parameter-specific buckets and rejects it (Codex review 2026-09-03).
-    """
-    entries = tool_results if isinstance(tool_results, list) else [tool_results]
-    buckets: dict[str, set[float]] = {}
-    spreads: dict[str, set[float]] = {}
-    for entry in entries or []:
-        tool, result = _entry_tool_and_result(entry)
-        if not result or not _claimable_result(tool, result):
-            continue
-        # `_claimable_result` accepts a publication-ready payload nested under
-        # `result` (get_cosmology_run_status), so the scan has to look there
-        # too: a nested posterior_summary supported the value in
-        # validate_claims while this replaced it with [withheld] (Codex review
-        # 2026-09-03).
-        payloads = [result]
-        nested = result.get("result")
-        if isinstance(nested, dict):
-            payloads.append(nested)
-        for payload in payloads:
-            for container_key in _POSTERIOR_KEYS:
-                container = payload.get(container_key)
-                if container is None:
-                    continue
-                for parameter, stat, value in _named_numbers(container):
-                    # The statistic TYPE matters.  Dropping every leaf of an
-                    # H0 record into one bucket let its own std, 0.42, support
-                    # an invented central estimate "H0 = 0.42", which
-                    # validate_claims rejects (Codex review 2026-09-03).
-                    if not parameter:
-                        continue
-                    name = _canonical_parameter(parameter)
-                    if _is_central_estimate(stat):
-                        buckets.setdefault(name, set()).add(value)
-                    elif _is_spread(stat):
-                        spreads.setdefault(name, set()).add(value)
-    return buckets, spreads
-
-
 def _assigned_parameter(text: str, token: _Token) -> str | None:
     """The named parameter this token is bound to, if any."""
     match = _NAMED_PARAMETER_ASSIGNMENT_BEFORE_RE.search(
         text[max(0, token.start - 48):token.start]
     )
     return _canonical_parameter(match.group("parameter")) if match else None
-
-
-def _unsupported_parameter_claim(
-    text: str, token: _Token, by_parameter: dict[str, set[float]]
-) -> bool:
-    """A labelled parameter value that no claimable result for THAT parameter backs."""
-    if token.little_h:
-        return False
-    if token.is_percent and _is_interval_idiom(text, token):
-        return False
-    match = _NAMED_PARAMETER_ASSIGNMENT_BEFORE_RE.search(
-        text[max(0, token.start - 48):token.start]
-    )
-    if match is None:
-        return False
-    gap = match.group("copula_gap")
-    if gap is not None and _INTERVAL_WORDING_RE.search(gap):
-        return False
-    supported = by_parameter.get(_canonical_parameter(match.group("parameter")), set())
-    return not any(
-        math.isclose(token.value, value, rel_tol=0.01, abs_tol=1e-12)
-        for value in supported
-    )
 
 
 def _uncited_value_spans(source: str, uncited: list) -> set[tuple[int, int]]:
