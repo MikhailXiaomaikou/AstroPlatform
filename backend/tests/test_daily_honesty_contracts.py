@@ -1149,8 +1149,13 @@ def test_redaction_leaves_years_and_identifiers_alone(monkeypatch) -> None:
 
     streamed = _agent_text_events(events)
     assert len(streamed) == 2
-    assert streamed[1]["content"] == identifier_prose
-    assert streamed[1]["redacted_count"] == 0
+    # Years and identifiers survive.  The requested redshift does not: no tool
+    # echoed 0.677, and the final validator refuses a reply that states it
+    # (its docstring records this as a deliberate specificity cost), so the
+    # draft -- graded by that same validator -- withholds it too.
+    assert identifier_prose.count("0.677") == 1
+    assert streamed[1]["content"] == identifier_prose.replace("0.677", "[withheld]")
+    assert streamed[1]["redacted_count"] == 1
 
 
 def test_redaction_mirrors_the_gate_for_in_band_collisions(monkeypatch) -> None:
@@ -2148,14 +2153,18 @@ def test_draft_redaction_blanks_an_invented_parameter_value() -> None:
     )
     assert count == 0 and survives.endswith("H0 = 67.36 km/s/Mpc.")
 
-    # Everything that is not a labelled parameter value is untouched.
+    # What the validator does not treat as a claim is untouched.
     for text in (
-        "Published in 2024, arXiv:2404.03002, at redshift 0.51.",
+        "Published in 2024, arXiv:2404.03002.",
         "We listed 12 datasets over 3 surveys.",
         "Quoted at the 68% credible interval for H0.",
     ):
         untouched, count = redact_gated_values(text, [], listed)
         assert count == 0 and untouched == text, text
+    # A requested redshift no tool echoed IS a claim the final gate refuses,
+    # so the draft withholds it for the same reason.
+    redacted, count = redact_gated_values("Published in 2024, at redshift 0.51.", [], listed)
+    assert count == 1 and "2024" in redacted and "0.51" not in redacted
 
 
 def _claimable(parameter: str, median: float, std: float = 0.4) -> list[dict]:
@@ -2218,7 +2227,8 @@ def test_draft_redaction_covers_every_validated_parameter_and_its_uncertainty() 
     partial, count = redact_gated_values(
         "Draft: H0 = 73.24 km/s/Mpc, at redshift 0.51.", [], _LISTED_ONLY
     )
-    assert count == 1 and "0.51" in partial
+    # Both are claims the final gate refuses against this tool set.
+    assert count == 2 and "0.51" not in partial and "73.24" not in partial
 
 
 def test_a_spread_does_not_ground_a_central_estimate() -> None:
@@ -2339,3 +2349,42 @@ def test_an_uncertainty_with_no_parameter_is_not_a_cosmology_claim() -> None:
     assert count == 1 and "9.87" not in redacted and "67.36" in redacted
     redacted, count = redact_gated_values("Draft: H0 = 67.36 ± 9.87 ± 0.5 km/s/Mpc.", [], published)
     assert count == 2
+
+
+def test_the_draft_channel_mirrors_the_final_validator() -> None:
+    """Rule 3 of the draft redactor is ``claim_validator.validate_claims``.
+
+    Six escapes found across the 2026-09-03 review rounds were all the same
+    defect: the draft carried its own grammar of what a parameter claim is,
+    and it was weaker than the final validator's.  The draft now asks the
+    validator directly, so every one of these is withheld before it streams:
+    the 0.1% strict tolerance below ten universe values, an echoed
+    model-authored input, TeX ``\\pm``, the ``H_{0}`` / ``Ωₘ`` aliases, and a
+    claim outside the cosmology parameter list (an age in Gyr).
+    """
+    from app.services.agent_runtime.honesty import redact_gated_values
+
+    published = _claimable("H0", 67.36, 0.42)
+    echoed = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "input": {"prior_h0": 70.0},
+        "result": {"success": True, "publication_ready": True,
+                   "chain_tier": "publication",
+                   "parameters": {"H0": {"median": 70.0, "std": 0.5}}},
+    }]
+    withheld = [
+        ("Draft: H0 = 67.5 km/s/Mpc.", published, "67.5"),
+        ("Draft: H0 = 70.0 km/s/Mpc from the chain.", echoed, "70.0"),
+        ("Draft: H0 = 67.36 \\pm 9.87 km/s/Mpc.", published, "9.87"),
+        ("Draft: H_{0} = 73.24 km/s/Mpc.", _LISTED_ONLY, "73.24"),
+        ("Draft: Ωₘ = 0.315 from the refit.", _LISTED_ONLY, "0.315"),
+        ("Draft: the age is 13.8 Gyr from the fit.", _LISTED_ONLY, "13.8"),
+        ("Draft: H0 = 0.42 km/s/Mpc.", published, "0.42"),
+    ]
+    for text, tool_results, value in withheld:
+        redacted, count = redact_gated_values(text, [], tool_results)
+        assert count >= 1 and value not in redacted, text
+    # And what the validator grounds, the draft keeps -- value and pair alike.
+    for text in ("Draft: H0 = 67.36 km/s/Mpc.", "Draft: H0 = 67.36 ± 0.42 km/s/Mpc."):
+        kept, count = redact_gated_values(text, [], published)
+        assert count == 0 and kept == text, text

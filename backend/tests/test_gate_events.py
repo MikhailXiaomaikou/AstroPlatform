@@ -216,10 +216,13 @@ def test_zero_data_block_emits_one_gate_event(monkeypatch, tmp_path):
         assert "0.31" not in wire, evt
     assert "[withheld]" in zero_data_sse[0]["draft_preview"]
 
-    # Documented scope boundary: the redactor blanks gated values only, so
-    # the model's own invented figures survive in the preview.  They are not
-    # withheld evidence — the reply that would have carried them is blocked.
-    assert "776" in zero_data_sse[0]["draft_preview"]
+    # The wire copy is graded by the SAME validator that blocked the reply:
+    # the invented star count and parallax the zero-data gate refused are
+    # withheld on the wire as well, and kept only in the local triage sink.
+    # (An earlier revision documented the opposite as a "scope boundary" --
+    # the draft redactor then had its own, weaker grammar.)
+    assert "776" not in zero_data_sse[0]["draft_preview"]
+    assert "776" in zero_data_jsonl[0]["draft_preview"]
 
 
 def test_redact_event_for_wire_covers_details_and_fails_closed():

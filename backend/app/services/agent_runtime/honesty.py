@@ -1018,6 +1018,33 @@ def _unsupported_parameter_claim(
     )
 
 
+def _uncited_value_spans(source: str, uncited: list) -> set[tuple[int, int]]:
+    """The spans to blank for the validator's uncited claims.
+
+    A ``Claim`` span covers the whole phrase ("H0 = 67.5 km/s/Mpc"); only the
+    number inside it is withheld, so the reader still sees WHAT was withheld.
+    The number is the token inside the claim span whose value the claim
+    carries (a little-h token carries value*100, so its literal is compared
+    too).  If no such token can be located the whole claim span is blanked --
+    failing closed rather than streaming a value the final gate refuses.
+    """
+    tokens = _reply_number_spans(source)
+    spans: set[tuple[int, int]] = set()
+    for claim in uncited:
+        start, end, value = int(claim.start), int(claim.end), float(claim.value)
+        inside = [t for t in tokens if t.start >= start and t.end <= end]
+        matched = [
+            t for t in inside
+            if math.isclose(t.value, value, rel_tol=1e-9, abs_tol=1e-12)
+            or (t.little_h and math.isclose(t.value / 100.0, value, rel_tol=1e-9, abs_tol=1e-12))
+        ]
+        if matched:
+            spans.update((t.start, t.end) for t in matched)
+        else:
+            spans.add((start, end))
+    return spans
+
+
 def redact_gated_values(
     reply: str,
     messages: list[dict],
@@ -1048,13 +1075,16 @@ def redact_gated_values(
     itself only scans non-little-h tokens, but ``h = 0.7143`` restates a
     rejected 71.43 and must not stream.
 
-    A third rule covers what neither gate can see: a number the model bound to
-    a NAMED cosmology parameter that no claimable current-turn result backs.
-    An invented ``H0 = 73.24`` echoes nothing and matches no withheld
-    statistic, so both gate predicates passed it through (Codex review
-    2026-09-03).  The final reply is refused for such a number; the draft now
-    blanks it.  Only named parameters count, so a year, an identifier or an
-    unlabelled count is still untouched.
+    A third rule covers what neither gate can see: a claim the FINAL
+    validator would refuse.  The draft asks ``claim_validator.validate_claims``
+    directly -- the same call ``loop.py`` makes on the final reply -- and
+    blanks the value of every uncited claim.  That is the whole of rule 3: no
+    private label list, bridge list, tolerance or bucket lives here any more,
+    so the draft boundary cannot be weaker than the final one (the review
+    rounds of 2026-09-03 found five such gaps in the private grammar).  A
+    number the validator does not treat as a claim -- a year, an arXiv id, a
+    count -- is untouched; a requested redshift no tool echoed is a claim the
+    final gate refuses, and is withheld here for the same reason.
 
     Used on everything the loop sends out through ``on_event`` (2026-09-02
     review H5, corrected 2026-09-03): the intermediate ``agent_text`` drafts,
@@ -1081,59 +1111,26 @@ def redact_gated_values(
         return source, 0
     unsupported = _unsupported_untrusted_values(messages, tool_results)
     withheld_all, withheld_h0 = _withheld_universes(tool_results)
-    by_parameter, spread_by_parameter = _claimable_values_by_parameter(tool_results)
+    # Rule 3 IS the final gate.  The draft used to carry its own grammar of
+    # "what is a parameter claim" -- a label list, a bridge list, per-parameter
+    # buckets, a +/- rule -- and every review round found a spelling the final
+    # validator knew and the draft did not (TeX \pm, H_{0}, an age in Gyr, a
+    # 0.1% strict tolerance, an echoed model input).  Two grammars for one
+    # boundary is a standing invitation to that drift, so the draft now asks
+    # `claim_validator.validate_claims` -- the same call, with the same
+    # defaults, that `loop.py` makes on the final reply -- and blanks the value
+    # of every claim it reports uncited.  Whatever the final gate would refuse
+    # the draft withholds, and nothing else.
+    from app.services.claim_validator import validate_claims
 
-    # A little-h token carries value*100 (``h = 0.677`` -> 67.7) while the span
-    # it owns covers the little-h digits, so redacting the span the flagged
-    # token owns blanks the right characters.
-    # An uncertainty rides on the value it qualifies.  Blanking only the
-    # median left "H0 = [withheld] +/- 9.87" on the wire, still an invented
-    # number the final validator blocks as cosmology_h0_uncertainty (Codex
-    # review 2026-09-03).  A token joined to a flagged one by +/- inherits
-    # its decision.
-    flagged: list[tuple[int, int]] = []
-    previous_end: int | None = None
-    previous_parameter: str | None = None
-    previous_hit = False
+    uncited_spans = _uncited_value_spans(source, validate_claims(source, tool_results).uncited)
+    flagged: set[tuple[int, int]] = set(uncited_spans)
     for token in _reply_number_spans(source):
-        # The parameter this token belongs to: its own label, or -- when it
-        # is the uncertainty of the token before it -- that token's.  Set on
-        # EVERY iteration.  It used to be set only when a label was found and
-        # never cleared, so a draft with no cosmology parameter in it had
-        # every "A +/- B" blanked (the lookup fell through to an empty set),
-        # and a draft that named H0 once checked every later, unrelated
-        # "12 +/- 3" against H0's spreads (audit 2026-09-03).
-        bridge = source[previous_end:token.start] if previous_end is not None else ""
-        follows_uncertainty_bridge = bool(
-            previous_end is not None and _UNCERTAINTY_BRIDGE_RE.fullmatch(bridge)
-        )
-        own_parameter = _assigned_parameter(source, token)
-        parameter = previous_parameter if follows_uncertainty_bridge else own_parameter
-        hit = (
+        if (
             _echo_token_flagged(token.value, unsupported)
             or _withheld_token_flagged(source, token, withheld_all, withheld_h0)
-            or _unsupported_parameter_claim(source, token, by_parameter)
-        )
-        if not hit and follows_uncertainty_bridge:
-            # An uncertainty is a claim of its own.  Inheriting only the
-            # central token's decision let "H0 = 67.36 +/- 9.87" pass whole
-            # when 67.36 was supported (Codex review 2026-09-03).  It is
-            # checked against that parameter's own spread values -- but only
-            # when there IS a parameter: "the slope is 0.80 +/- 0.05" names
-            # none, and is not a cosmology claim at all.
-            if previous_hit:
-                hit = True
-            elif parameter is not None:
-                supported = spread_by_parameter.get(parameter, set())
-                hit = not any(
-                    math.isclose(token.value, value, rel_tol=0.01, abs_tol=1e-12)
-                    for value in supported
-                )
-        if hit:
-            flagged.append((token.start, token.end))
-        previous_end = token.end
-        previous_hit = hit
-        previous_parameter = parameter
+        ):
+            flagged.add((token.start, token.end))
     spans = sorted(flagged)
     if not spans:
         return source, 0
