@@ -125,12 +125,27 @@ _REPORT_NO_VERDICT_STATUSES: frozenset[str] = frozenset(
 # the vocabularies above matched and the attempt vanished from the report
 # (Codex review 2026-09-03).  These are direct results, not matrix cells, so
 # the cell walk does not see them either.
+#
+# Every word here is one a non-runnable producer actually emits (grep the
+# producer before adding one): "CONFIG_READY" is what
+# `build_cosmology_likelihood` and the robustness config matrix return
+# (`cosmology_likelihoods/config_builder.py`, execution_status="not_run"),
+# and "CMB_ROTATION_SCOPE_GAP" is the CMB-rotation runner's blocked envelope
+# (`cmb_rotation_likelihoods._blocked`).  The vocabulary had listed
+# "CONFIG_ONLY", which no direct producer emits, so a config-only build and a
+# scope-gap refusal both still vanished (Codex review 2026-09-03,
+# PRRT_kwDORoeoE86etMHc).  A generic "publication_ready=False and
+# __do_not_claim__=True" rule was rejected for this: the research/robustness/
+# dark-energy matrix AGGREGATES and `build_evidence_graph` carry exactly that
+# envelope while holding publication-ready cells or a correct verdict.
 _REPORT_NOT_RUN_STATUSES: frozenset[str] = frozenset({
     "NO_COMPRESSED_LIKELIHOOD",
     "EXTERNAL_COBAYA_NOT_RUN",
     "NOT_RUN",
     "NOT_EXECUTED",
     "CONFIG_ONLY",
+    "CONFIG_READY",
+    "CMB_ROTATION_SCOPE_GAP",
     "SKIPPED",
 })
 
@@ -1196,15 +1211,24 @@ def export_research_report(
     * the paper draft's fact status, question, datasets, matrix rows, findings,
       blocked cells, blocking gaps and references.
     """
-    plan = research_plan or {}
     graph = evidence_graph or {}
     tool_results = tool_results or []
+    trusted_plan = _trusted_research_plan(tool_results)
+    # ONE effective plan for every plan read below -- in this function and in
+    # the helpers it hands `plan` to.  `_trusted_tool_results` authenticates
+    # the tool-result LIST, not the `research_plan` argument, so whenever a
+    # successful plan_research_program record exists it IS the plan, whole:
+    # the argument contributes nothing, not even a field the record lacks.
+    # Choosing between the two per field let the argument's research question
+    # and capability gaps into a report that already had a server record
+    # (Codex review 2026-09-03, PRRT_kwDORoeoE86etMHh).  Without a record the
+    # argument is the only plan there is (direct library callers).
+    plan = trusted_plan if trusted_plan else (research_plan or {})
     # Both the title and the plan text are caller-supplied; `_report_safe_text`
     # keeps them from opening report sections of their own.
     report_title = _report_safe_text(
         title or plan.get("research_question") or "", "Standard Astro research report"
     )
-    trusted_plan = _trusted_research_plan(tool_results)
     datasets = _report_datasets(tool_results)
     citations = _report_citations(tool_results)
     manifest = _report_reproducibility_manifest(tool_results)
@@ -1239,13 +1263,7 @@ def export_research_report(
     # 3. Research Plan
     plan_lines = body["Research Plan"]
     plan_lines.append("### Planned Tests")
-    # Same rule as the probes below: `_trusted_tool_results` authenticates
-    # the tool-result LIST, not this argument, so an omitted or altered
-    # `research_plan` could make the report claim a different experiment
-    # matrix -- or none at all (Codex review 2026-09-03).
-    proposed = trusted_plan.get("proposed_experiment_matrix") if trusted_plan else None
-    if not isinstance(proposed, list):
-        proposed = plan.get("proposed_experiment_matrix")
+    proposed = plan.get("proposed_experiment_matrix")
     proposed_cells = [cell for cell in proposed if isinstance(cell, dict)] if isinstance(proposed, list) else []
     if proposed_cells:
         for cell in proposed_cells:
@@ -1267,17 +1285,14 @@ def export_research_report(
     #
     # But `research_plan` is an ARGUMENT: an LLM can hand in a checklist it
     # wrote itself, and stamping that with "rule-derived" would launder authored
-    # text as platform provenance.  Only a checklist matching a trusted
-    # `plan_research_program` record in `tool_results` gets the platform label.
+    # text as platform provenance.  `plan` is the trusted record whenever one
+    # exists (top of this function), so the platform label is earned exactly
+    # when the checklist came from that record.
     checklist = plan.get("hypotheses")
     checklist_items = [
         _report_safe_text(entry) for entry in checklist if entry
     ] if isinstance(checklist, list) else []
-    trusted_checklist_raw = trusted_plan.get("hypotheses")
-    trusted_checklist = [
-        _report_safe_text(entry) for entry in trusted_checklist_raw if entry
-    ] if isinstance(trusted_checklist_raw, list) else []
-    checklist_is_platform_derived = bool(checklist_items) and checklist_items == trusted_checklist
+    checklist_is_platform_derived = bool(trusted_plan) and bool(checklist_items)
     plan_lines.extend([
         "",
         "### Platform checklist (rule-derived)"
@@ -1292,21 +1307,12 @@ def export_research_report(
         plan_lines.append(
             "- No checklist was supplied, and no plan_research_program record backs this report."
         )
-    # The server-side plan record wins over the caller's argument wherever it
-    # exists.  `_trusted_tool_results` authenticates the tool-result LIST, not
-    # the `research_plan` argument, so a turn that already ran
-    # plan_research_program could still have arbitrary probes and model
-    # families rendered into an audit report (Codex review 2026-09-03).
     plan_lines.extend(["", "### Required probes"])
-    probes = trusted_plan.get("required_probes") if trusted_plan else None
-    if not isinstance(probes, list):
-        probes = plan.get("required_probes")
+    probes = plan.get("required_probes")
     probe_items = [_report_safe_text(entry) for entry in probes if entry] if isinstance(probes, list) else []
     plan_lines.append("- " + (", ".join(probe_items) if probe_items else "not recorded"))
     plan_lines.extend(["", "### Model families"])
-    models = trusted_plan.get("model_families") if trusted_plan else None
-    if not isinstance(models, list):
-        models = plan.get("model_families")
+    models = plan.get("model_families")
     model_items = [_report_safe_text(entry) for entry in models if entry] if isinstance(models, list) else []
     plan_lines.append("- " + (", ".join(model_items) if model_items else "not recorded"))
 
@@ -1490,9 +1496,7 @@ def export_research_report(
     else:
         uncertainty_lines.append("- No publication-gate threshold record was present in the supplied tool results.")
     uncertainty_lines.extend(["", "### Blocking gaps"])
-    gaps = trusted_plan.get("blocking_gaps") if trusted_plan else None
-    if not isinstance(gaps, list):
-        gaps = plan.get("blocking_gaps")
+    gaps = plan.get("blocking_gaps")
     gap_items = [_report_safe_text(gap) for gap in gaps if gap] if isinstance(gaps, list) else []
     if gap_items:
         uncertainty_lines.extend(f"- {gap}" for gap in gap_items)
@@ -1707,7 +1711,8 @@ def _report_failed_attempts(
 
     1. tool results whose own status word is in a failure vocabulary
        (``_REPORT_FAILED_TOOL_STATUSES`` / ``_REPORT_ERROR_TOOL_STATUSES`` /
-       ``_REPORT_NO_VERDICT_STATUSES``), or that report ``success=false`` or a
+       ``_REPORT_NO_VERDICT_STATUSES`` / ``_REPORT_NOT_RUN_STATUSES``), that
+       carry ``chain_tier="blocked"``, or that report ``success=false`` or a
        non-empty ``error``;
     2. every research-matrix cell that is not publication-ready, rendered as
        ``label: execution_level; reasons=...; datasets_not_run=...`` from the
@@ -1744,14 +1749,25 @@ def _report_failed_attempts(
             | _REPORT_NO_VERDICT_STATUSES
             | _REPORT_NOT_RUN_STATUSES
         )
+        # `chain_tier="blocked"` is the three-tier runners' own word for an
+        # attempt that produced no usable evidence, whatever status word sits
+        # beside it: the blocked tier of `run_cosmology_mcmc` says
+        # analysis_status="PARTIAL", which no status vocabulary can list
+        # without sweeping in every partial-but-usable result (Codex review
+        # 2026-09-03, PRRT_kwDORoeoE86etMHc).  No producer pairs the blocked
+        # tier with publication_ready=True, and `result_provenance` only ever
+        # demotes a tainted result INTO it, so the signal is safe to read.
+        blocked_tier = str(result.get("chain_tier") or "").strip().lower() == "blocked"
         error = str(result.get("error") or "")
-        if failed_statuses or result.get("success") is False or error:
+        if failed_statuses or blocked_tier or result.get("success") is False or error:
             bits = ["tool " + _report_safe_text(_tool_name_from_entry(item), "unknown tool")]
             shown = sorted(failed_statuses) if failed_statuses else sorted(statuses)
             bits.append(
                 "status="
                 + (", ".join(_report_safe_text(word) for word in shown) or "not recorded")
             )
+            if blocked_tier:
+                bits.append("chain_tier=blocked")
             if result.get("error_class"):
                 bits.append("error_class=" + _report_safe_text(result["error_class"]))
             if error:

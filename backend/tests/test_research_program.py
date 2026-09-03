@@ -1874,13 +1874,17 @@ def test_checklist_claims_platform_provenance_only_with_a_trusted_plan_record() 
 
     # No plan_research_program record at all -> no platform provenance claimed.
     assert checklist_label(export_research_report(research_plan=platform_plan)["markdown"]) == untrusted
-    # A trusted record is present, but the checklist does not match it.
-    assert checklist_label(
-        export_research_report(
-            research_plan=forged_plan, tool_results=[_trusted_plan_record(platform_plan)]
-        )["markdown"]
-    ) == untrusted
-    # Only the matching case may claim the platform derived it.
+    # A trusted record is present and the argument's checklist differs from
+    # it: the report renders the RECORD's checklist under the platform label,
+    # and the forged argument contributes nothing at all (Codex thread
+    # PRRT_kwDORoeoE86etMHh: the argument may not supply any field once a
+    # server record exists).
+    forged_markdown = export_research_report(
+        research_plan=forged_plan, tool_results=[_trusted_plan_record(platform_plan)]
+    )["markdown"]
+    assert checklist_label(forged_markdown) == trusted
+    assert "A hypothesis the model wrote for itself." not in forged_markdown
+    # The matching case claims the platform derived it.
     assert checklist_label(
         export_research_report(
             research_plan=platform_plan, tool_results=[_trusted_plan_record(platform_plan)]
@@ -2458,3 +2462,171 @@ def test_a_structured_non_run_is_a_recorded_attempt() -> None:
         assert "run_cosmology_likelihood_chain" in section, status
         assert status in section, status
         assert "No failed tool result" not in section, status
+
+
+def test_config_only_and_scope_gap_non_runs_are_recorded_attempts() -> None:
+    """Every non-run status a producer actually emits reaches Failed Attempts.
+
+    Codex thread PRRT_kwDORoeoE86etMHc: the vocabulary listed "CONFIG_ONLY",
+    which no direct producer emits, while `build_cosmology_likelihood`
+    returns analysis_status="CONFIG_READY" (config_builder.py) and the
+    CMB-rotation runner returns "CMB_ROTATION_SCOPE_GAP"
+    (cmb_rotation_likelihoods._blocked) -- both success=True, PARTIAL,
+    publication_ready=False, __do_not_claim__=True, no error -- so the
+    section said no unusable attempt was recorded.  The blocked tier of
+    `run_cosmology_mcmc` (analysis_status="PARTIAL", chain_tier="blocked")
+    is the same bug through a status word no vocabulary can list; the
+    runners' own `chain_tier="blocked"` names it instead.
+    """
+    from app.services.research_program import export_research_report
+
+    def failed_section(report: dict) -> str:
+        return report["markdown"].split("## Failed Attempts")[1].split("\n## ")[0]
+
+    cases = (
+        ("build_cosmology_likelihood", "CONFIG_READY", {"execution_status": "not_run"}),
+        ("run_cmb_rotation_likelihood", "CMB_ROTATION_SCOPE_GAP", {"chain_tier": "blocked"}),
+        ("run_cosmology_mcmc", "PARTIAL", {"chain_tier": "blocked"}),
+    )
+    for tool, status, extra in cases:
+        section = failed_section(export_research_report(
+            research_plan={"research_question": "probe"},
+            tool_results=[{
+                "tool": tool,
+                "result": {
+                    "success": True,
+                    "__tool_status__": "PARTIAL",
+                    "analysis_status": status,
+                    "publication_ready": False,
+                    "__do_not_claim__": True,
+                    **extra,
+                },
+            }],
+        ))
+        assert f"tool {tool}" in section, status
+        assert status in section, status
+        if extra.get("chain_tier") == "blocked":
+            assert "chain_tier=blocked" in section, status
+        assert "No failed tool result" not in section, status
+
+    # The generic "publication_ready=False and __do_not_claim__=True" rule was
+    # rejected on purpose: these carry that envelope and are NOT failed
+    # attempts -- a matrix aggregate holding a publication-ready cell, and an
+    # evidence graph that correctly reported an unsupported claim.
+    usable = [
+        {
+            "tool": "run_research_matrix",
+            "result": {
+                "success": True,
+                "__tool_status__": "PARTIAL",
+                "analysis_status": "RESEARCH_MATRIX_DIAGNOSTIC",
+                "publication_ready": False,
+                "__do_not_claim__": True,
+                "matrix": [{
+                    "label": "ready_cell",
+                    "model": "lcdm",
+                    "dataset_keys": ["desi_dr2_bao"],
+                    "publication_ready": True,
+                    "result": {"parameters": {"H0": {"median": 67.4}}},
+                }],
+            },
+        },
+        {
+            "tool": "build_evidence_graph",
+            "result": {
+                "success": True,
+                "__tool_status__": "PARTIAL",
+                "analysis_status": "EVIDENCE_GRAPH_READY",
+                "publication_ready": False,
+                "__do_not_claim__": True,
+            },
+        },
+    ]
+    section = failed_section(
+        export_research_report(research_plan={"research_question": "probe"}, tool_results=usable)
+    )
+    assert "tool run_research_matrix" not in section
+    assert "tool build_evidence_graph" not in section
+    assert "No failed tool result" in section
+
+
+def test_the_caller_plan_argument_contributes_nothing_when_a_server_record_exists() -> None:
+    """One effective plan: the server record when present, else the argument.
+
+    Codex thread PRRT_kwDORoeoE86etMHh: `export_research_report` still read
+    the research question and the capability-gap collection (which feeds
+    Failed Attempts) from the caller's `research_plan` argument even when a
+    successful `plan_research_program` record was in `tool_results`, so a
+    fabricated argument leaked into the report title, Section 1, Failed
+    Attempts and the paper draft's Introduction.  Every plan read now goes
+    through the record whenever one exists -- including fields the record
+    does not carry, which the argument may not fill in.
+    """
+    from app.services.research_program import export_research_report
+
+    def record(plan: dict) -> dict:
+        return {"tool": "plan_research_program", "result": {"success": True, "research_plan": plan}}
+
+    def outputs(report: dict) -> tuple[str, str]:
+        return report["markdown"], report["paper_draft_markdown"]
+
+    # 1. The thread's own probe, verbatim.
+    markdown, draft = outputs(export_research_report(
+        research_plan={
+            "research_question": "FABRICATED",
+            "capability_gap_matrix": [
+                {"component": "FABRICATED_GAP", "status": "missing", "category": "x", "details": "fake"}
+            ],
+        },
+        tool_results=[record({
+            "research_question": "REGISTERED",
+            "capability_gap_matrix": [
+                {"component": "REGISTERED_GAP", "status": "missing", "category": "x", "details": "real"}
+            ],
+        })],
+    ))
+    assert "FABRICATED" not in markdown and "FABRICATED" not in draft
+    assert "REGISTERED" in markdown and "REGISTERED" in draft
+    assert markdown.startswith("# REGISTERED\n")
+    assert "capability REGISTERED_GAP" in markdown
+
+    # 2. Every plan field the report reads, all at once.
+    def plan(tag: str) -> dict:
+        return {
+            "research_question": f"{tag}_QUESTION",
+            "hypotheses": [f"{tag}_HYPOTHESIS"],
+            "required_probes": [f"{tag}_PROBE"],
+            "model_families": [f"{tag}_MODEL"],
+            "proposed_experiment_matrix": [
+                {"label": f"{tag}_CELL", "dataset_keys": [f"{tag}_DATASET"], "model": f"{tag}_MODEL"}
+            ],
+            "blocking_gaps": [f"{tag}_BLOCKING_GAP"],
+            "capability_gap_matrix": [{
+                "component": f"{tag}_COMPONENT",
+                "status": "missing",
+                "category": f"{tag}_CATEGORY",
+                "details": f"{tag}_DETAILS",
+            }],
+        }
+
+    markdown, draft = outputs(export_research_report(
+        research_plan=plan("FABRICATED"), tool_results=[record(plan("REGISTERED"))]
+    ))
+    assert "FABRICATED" not in markdown and "FABRICATED" not in draft
+    for field in (
+        "REGISTERED_QUESTION", "REGISTERED_HYPOTHESIS", "REGISTERED_PROBE", "REGISTERED_MODEL",
+        "REGISTERED_CELL", "REGISTERED_DATASET", "REGISTERED_BLOCKING_GAP", "REGISTERED_COMPONENT",
+    ):
+        assert field in markdown, field
+    assert "REGISTERED_QUESTION" in draft and "REGISTERED_BLOCKING_GAP" in draft
+
+    # 3. A record that LACKS a field does not let the argument fill it in.
+    markdown, draft = outputs(export_research_report(
+        research_plan=plan("FABRICATED"), tool_results=[record({"research_question": "REGISTERED_QUESTION"})]
+    ))
+    assert "FABRICATED" not in markdown and "FABRICATED" not in draft
+    assert "REGISTERED_QUESTION" in markdown
+
+    # 4. Without a record the argument is the only plan there is.
+    markdown, draft = outputs(export_research_report(research_plan=plan("ARGUMENT")))
+    assert "ARGUMENT_QUESTION" in markdown and "ARGUMENT_QUESTION" in draft
