@@ -24,9 +24,12 @@ import math
 import re
 
 from app.services.agent_runtime.honesty import (
+    _assigned_parameter,
     _claimable_current_values,
     _is_interval_idiom,
+    _parameter_assignment_before,
     _reply_number_spans,
+    _Token,
 )
 
 APPROVAL_STATE_NONE = "none"
@@ -55,7 +58,9 @@ _APPROVAL_LINE_RE = re.compile(
     # left "[x]" in front of the lookahead and shipped unmarked (Codex review
     # 2026-09-03).  It consumes a fixed three-or-four character token, so it
     # adds no new way to split a whitespace run.
-    r"(?:[-*>#][ \t]*|[0-9]{1,3}[.)][ \t]*|\[[ \txX]?\][ \t]*){0,8}"
+    # A table-cell delimiter is a marker too: "| APPROVED by reviewer: ... |"
+    # shipped unmarked (Codex review 2026-09-03, PRRT_kwDORoeoE86evFte).
+    r"(?:[-*>#|][ \t]*|[0-9]{1,3}[.)][ \t]*|\[[ \txX]?\][ \t]*){0,8}"
     # A bold span can wrap the verdict WORD alone: "**APPROVED** by
     # reviewer: ..." consumed the opening ** and then the closing ** stopped
     # the lookahead from matching (Codex review 2026-09-03).  The emphasis
@@ -71,14 +76,24 @@ _APPROVAL_LINE_RE = re.compile(
     r"(?=(?:draft[ \t]*(?:\*\*|__|\*)?[ \t]+claim\b"
     r"|approved(?:\*\*|__|\*)?[ \t]+by\b"
     r"|reviewer(?:\*\*|__|\*)?[ \t]+approved\b"
-    r"|(?:review[ \t_-]*)?status[ \t]*:[ \t]*(?:\*\*|__|\*)?approved\b"
-    r"|decision[ \t]*:[ \t]*(?:\*\*|__|\*)?approved\b"
+    # Paired emphasis may wrap the LABEL as well as the verdict word:
+    # "**Review status:** APPROVED" closes the bold after the colon and
+    # "**Review status**: APPROVED" before it, and both shipped unmarked
+    # because the colon had to follow "status" directly (Codex review
+    # 2026-09-03, PRRT_kwDORoeoE86ethcM).
+    r"|(?:review[ \t_-]*)?status(?:\*\*|__|\*)?[ \t]*:(?:\*\*|__|\*)?[ \t]*"
+    r"(?:\*\*|__|\*)?approved\b"
+    r"|decision(?:\*\*|__|\*)?[ \t]*:(?:\*\*|__|\*)?[ \t]*"
+    r"(?:\*\*|__|\*)?approved\b"
     r"|approved(?:\*\*|__|\*)?[ \t]*[:\u2014-]))"
 )
 _MARKER = "NOT APPROVED - "
 
 
-_FENCE_RE = re.compile(r"^[ \t]{0,3}(?:```|~~~)")
+_FENCE_RE = re.compile(r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})")
+# Four spaces, or a tab within the first three columns, open a Markdown
+# indented code block.
+_INDENTED_CODE_RE = re.compile(r"^(?: {4}|[ ]{0,3}\t)")
 
 
 def _fenced_lines(lines: list[str]) -> list[bool]:
@@ -87,26 +102,91 @@ def _fenced_lines(lines: list[str]) -> list[bool]:
     A reply that TELLS the user not to write an approval line quotes one
     inside a fence, and rewriting that example marked an otherwise clean
     response as limited (Codex review 2026-09-03).
+
+    A fence closes only on a run of the SAME character at least as long as
+    the one that opened it (CommonMark).  Toggling on any fence line let the
+    inner backtick fence of a ``~~~~markdown`` example close the outer tilde
+    fence, and the quoted verdict was stamped (Codex review 2026-09-03,
+    PRRT_kwDORoeoE86etNOq).
     """
-    inside = False
+    opener = ""
     flags: list[bool] = []
     for line in lines:
-        if _FENCE_RE.match(line):
-            flags.append(True)
-            inside = not inside
+        match = _FENCE_RE.match(line)
+        if match is None:
+            flags.append(bool(opener))
             continue
-        flags.append(inside)
+        fence = match.group("fence")
+        if not opener:
+            opener = fence
+        elif fence[0] == opener[0] and len(fence) >= len(opener):
+            opener = ""
+        flags.append(True)
     return flags
 
 
+def _indented_code_lines(lines: list[str], fenced: list[bool]) -> list[bool]:
+    """Which lines are Markdown indented code: four spaces or a tab.
+
+    The prefix consumed arbitrary leading whitespace, so an example quoted
+    the indented way was rewritten like prose (Codex review 2026-09-03,
+    PRRT_kwDORoeoE86ethcV).  An indented code block cannot interrupt a
+    paragraph, so an indented line directly under a prose line is a lazy
+    continuation of that paragraph and is still read: it renders as prose,
+    and a stamp in it is a stamp.
+    """
+    flags: list[bool] = []
+    block_may_open = True  # start of text, or after a blank or fence line
+    for index, line in enumerate(lines):
+        if fenced[index] or not line.strip():
+            flags.append(False)
+            block_may_open = True
+        elif block_may_open and _INDENTED_CODE_RE.match(line):
+            flags.append(True)
+        else:
+            flags.append(False)
+            block_may_open = False
+    return flags
+
+
+# The H0 anchor that compare_luminosity_distances reports is stated as "the
+# anchor is 67.36"; honesty's subject grammar has no word for it, so the
+# label is bound here with the same symbol-or-copula rule.
+_ANCHOR_ASSIGNMENT_BEFORE_RE = re.compile(
+    r"\banchor\b[^\n;]{0,28}?(?:[=:~≈]|\b(?:is|was|of|at|equals?)\b)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _bound_to_a_parameter(line: str, token: _Token) -> bool:
+    """True when the token is the VALUE of a named parameter or statistic.
+
+    ``H0 = 67.36``, ``H0 is 67.36`` and ``h = 0.6736`` bind; ``67 galaxies``
+    does not.  The rules are honesty's own per-token ones: the named
+    parameter assignment, the little-h token, and the unlabelled statistic
+    subject ("the median is 67.36").
+    """
+    if token.little_h or _assigned_parameter(line, token) is not None:
+        return True
+    before = line[max(0, token.start - 48):token.start]
+    return _parameter_assignment_before(before) or bool(
+        _ANCHOR_ASSIGNMENT_BEFORE_RE.search(before)
+    )
+
+
 def _states_a_claimable_value(line: str, claimable: set[float]) -> bool:
-    """True when this line states a number a claimable result produced.
+    """True when this line binds a claimable result's value to a parameter.
 
     Every token is read, little-h included: "h = 0.6736" is the standard
     equivalent of H0 = 67.36 and the converted token is the one that matches.
     A coverage level is NOT such a number: "Draft claim: the 68% credible
     interval remains to be calculated" was stamped NOT APPROVED because 68
     fell within 1% of a claimable 67.36 (Codex review 2026-09-03).
+    Nor is a number that is merely NEAR the result: "Draft claim: 67
+    galaxies pass the cut" was stamped because a galaxy count fell within 1%
+    of a claimable 67.36.  Only a value assigned to a parameter -- "H0 =
+    67.36", "H0 is 67.36", "h = 0.6736" -- states the claim (Codex review
+    2026-09-03, PRRT_kwDORoeoE86ethcQ).
     """
     return any(
         any(
@@ -114,7 +194,8 @@ def _states_a_claimable_value(line: str, claimable: set[float]) -> bool:
             for value in claimable
         )
         for token in _reply_number_spans(line)
-        if not (token.is_percent and _is_interval_idiom(line, token))
+        if _bound_to_a_parameter(line, token)
+        and not (token.is_percent and _is_interval_idiom(line, token))
     )
 
 
@@ -155,10 +236,14 @@ def mark_unapproved_claims(
     lines = text.splitlines(keepends=True)
     states_claim = [_states_a_claimable_value(line, claimable) for line in lines]
     fenced = _fenced_lines(lines)
+    indented = _indented_code_lines(lines, fenced)
     marked = 0
     out: list[str] = []
     for index, line in enumerate(lines):
-        match = None if fenced[index] else _APPROVAL_LINE_RE.match(line)
+        match = (
+            None if fenced[index] or indented[index]
+            else _APPROVAL_LINE_RE.match(line)
+        )
         if match and not line.lstrip().startswith(_MARKER):
             # The verdict may stand on its own line, with the result on the
             # line above or below it -- "H0 = 67.36 km/s/Mpc." then "APPROVED

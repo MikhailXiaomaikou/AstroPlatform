@@ -40,4 +40,31 @@ describe("ValidationBadge approval state", () => {
     });
     expect(screen.getByText(/no reviewer record backs this reply/i)).toBeTruthy();
   });
+
+  // PRRT_kwDORoeoE86ethcX (Codex review 2026-09-03, PR #69): the workflow-
+  // timeout fallback ships a schema-v1 summary that carries approval_state,
+  // and the row was gated on schema_version >= 2, so the one reply path with
+  // the least review work behind it was the one the badge stayed silent on.
+  it("renders the approval row on a schema-v1 timeout fallback that carries approval_state", () => {
+    renderBadge({
+      schema_version: 1,
+      numeric_gate: "not_run",
+      citation_gate: "not_run",
+      blocked: false,
+      reason: "workflow_timeout_tool_grounded_fallback",
+      approval_state: "none",
+    });
+    expect(screen.getByText(/Human approval/i)).toBeTruthy();
+    expect(screen.getByText(/no reviewer record backs this reply/i)).toBeTruthy();
+  });
+
+  it("stays silent on a schema-v1 summary that never had the field", () => {
+    renderBadge({
+      schema_version: 1,
+      numeric_gate: "passed",
+      citation_gate: "passed",
+      blocked: false,
+    });
+    expect(screen.queryByText(/Human approval/i)).toBeNull();
+  });
 });

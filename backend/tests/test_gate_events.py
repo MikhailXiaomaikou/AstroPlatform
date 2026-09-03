@@ -299,3 +299,127 @@ def test_numeric_claim_leaves_are_decided_with_their_claim_text() -> None:
         _redact,
     )
     assert plain["details"] == {"iteration": 7, "universe_size": 12}
+
+
+# ---------- the merged multi-specialist reply reports through the same sinks ----------
+
+
+def test_merged_reply_approval_marker_emits_a_gate_event(monkeypatch, tmp_path):
+    """PRRT_kwDORoeoE86evFtk (Codex review 2026-09-03, PR #69).
+
+    The multi-specialist merge ran ``mark_unapproved_claims`` and recorded
+    the intervention in its validation summary, but never emitted the
+    structured gate event the single-agent loop's ``_gate_event`` sends to
+    the on_event stream, the JSONL triage sink and the gate_event_total
+    counter -- so a stamped merged reply was invisible to false-kill triage.
+    """
+    from types import SimpleNamespace
+
+    from app.config import settings
+    from app.observability.metrics import get_registry
+
+    target = tmp_path / "gate_events.jsonl"
+    monkeypatch.setattr(settings, "gate_events_jsonl_path", str(target))
+
+    tool_results = [{
+        "tool": "compare_luminosity_distances",
+        "result": {
+            "success": True,
+            "publication_ready": True,
+            "comparison_mode": "h0_anchors",
+            "anchors": {"planck18": {"H0": 67.36, "sigma": 0.54}},
+        },
+    }]
+
+    async def fake_loop(**_kwargs):
+        return {
+            "reply": "Specialist reply with no approval language.",
+            "actions": [],
+            "tool_results": tool_results,
+            "hit_deadline": False,
+            "hit_iteration_cap": False,
+            "validation_summary": {
+                "schema_version": 2,
+                "approval_state": "none",
+                "numeric_gate": "passed",
+                "citation_gate": "passed",
+                "regen_count": 0,
+                "blocked": False,
+                "limited": False,
+                "response_disposition": "full",
+                "task_kind": "general",
+                "earliest_limiting_stage": None,
+                "missing_dependencies": [],
+                "safe_fallback": None,
+                "interventions": [],
+            },
+        }
+
+    async def fake_handoff(source, target_agent, _reply):
+        return SimpleNamespace(
+            source_agent=source,
+            target_agent=target_agent,
+            context_summary="Anchor comparison completed.",
+            instruction="Review the anchor comparison.",
+        )
+
+    async def fake_merge(_agent_results):
+        return "APPROVED by reviewer: H0 = 67.36 km/s/Mpc."
+
+    monkeypatch.setattr(chat_mod, "_run_agent_loop", fake_loop)
+    monkeypatch.setattr(
+        chat_mod.orchestrator,
+        "get_agent_runtime",
+        lambda _name, _context: {"system_prompt": "specialist", "tool_names": []},
+    )
+    monkeypatch.setattr(chat_mod.orchestrator, "summarize_handoff", fake_handoff)
+    monkeypatch.setattr(chat_mod.orchestrator, "merge_responses", fake_merge)
+
+    collected: list[dict] = []
+
+    async def collector(evt: dict) -> None:
+        collected.append(dict(evt))
+
+    counter_key = (("action", "annotated_limited"), ("gate", "approval_marker"))
+
+    def _counter() -> float:
+        counters = get_registry().snapshot()["counters"]
+        return float(counters.get("gate_event_total", {}).get(counter_key, 0.0))
+
+    before = _counter()
+    result = asyncio.run(chat_mod._run_orchestrated_chat(
+        runtime={
+            "agent_names": ["analyst", "reviewer"],
+            "base_system": "test multi-agent system",
+            "toolset": [],
+        },
+        messages=[{"role": "user", "content": "Summarise the H0 anchor."}],
+        provider_api_keys={},
+        python_session_id="approval-merge-gate-event-test",
+        on_event=collector,
+    ))
+    assert result["reply"].startswith("NOT APPROVED - ")
+
+    # The on_event stream: exactly one approval_marker gate event, with the
+    # same routing metadata the loop's event carries.
+    sse_events = [
+        e for e in collected
+        if e.get("type") == GATE_EVENT_TYPE and e.get("gate") == "approval_marker"
+    ]
+    assert len(sse_events) == 1, collected
+    evt = sse_events[0]
+    assert evt["action"] == "annotated_limited"
+    assert evt["reason"] == "no_bound_claim_audit_review"
+    assert evt["agent"] == "merged_orchestrator"
+    assert evt["details"]["marked_lines"] == 1
+    assert evt["python_session_id"] == "approval-merge-gate-event-test"
+    assert "compare_luminosity_distances" in evt["tools_run"]
+    assert evt["final_preview"].startswith("NOT APPROVED - ")
+
+    # The local JSONL triage sink saw the same intervention...
+    jsonl_events = [json.loads(line) for line in target.read_text().splitlines()]
+    assert [
+        (e["gate"], e["action"]) for e in jsonl_events if e["gate"] == "approval_marker"
+    ] == [("approval_marker", "annotated_limited")]
+    # ...and the counter moved by one.
+    assert _counter() == before + 1.0

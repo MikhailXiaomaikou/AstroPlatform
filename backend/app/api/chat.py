@@ -1189,6 +1189,11 @@ async def chat_message_stream(
             timeout_summary = _tool_grounded_timeout_summary(timeout_tool_results, timeout_s)
             timeout_validation_summary = {
                 "schema_version": 1,
+                # Chat has no approval state; this path says so as well, or
+                # the badge cannot state it for the one reply with the least
+                # review work behind it (Codex review 2026-09-03,
+                # PRRT_kwDORoeoE86ethcX).
+                "approval_state": APPROVAL_STATE_NONE,
                 "numeric_gate": "not_run",
                 "citation_gate": "not_run",
                 "blocked": False,
@@ -1854,6 +1859,57 @@ async def _run_orchestrated_chat(
                     exc,
                 )
 
+    async def _merged_gate_event(
+        gate: str,
+        action: str,
+        *,
+        reason: str = "",
+        details: dict | None = None,
+        draft: str = "",
+        final: str = "",
+    ) -> None:
+        # The merged reply's counterpart of the loop's ``_gate_event``: the
+        # same three sinks (local JSONL, gate_event_total counter, redacted
+        # SSE copy) built from the same observability helpers.  The loop's
+        # emitter is a closure over its own turn state, so the composition
+        # is repeated here rather than imported.  Must never affect the
+        # reply; everything is wrapped.  (Codex review 2026-09-03,
+        # PRRT_kwDORoeoE86evFtk: the merged approval marker recorded its
+        # intervention in the summary but emitted no gate event.)
+        try:
+            from app.observability.gate_events import (
+                append_gate_event_jsonl,
+                build_gate_event,
+                redact_event_for_wire,
+            )
+            from app.observability.metrics import record_counter
+            from app.services.agent_runtime.honesty import redact_gated_values
+
+            evt = build_gate_event(
+                gate=gate,
+                action=action,
+                reason=reason,
+                agent="merged_orchestrator",
+                details=dict(details or {}),
+                tools_run=[
+                    str(r.get("tool")) for r in merged_tool_results
+                    if isinstance(r, dict) and r.get("tool")
+                ],
+                draft=draft,
+                final=final,
+                chat_session_id=str(chat_session_id) if chat_session_id else None,
+                python_session_id=str(python_session_id) if python_session_id else None,
+            )
+            append_gate_event_jsonl(evt)
+            record_counter("gate_event_total", 1.0, gate=gate, action=action)
+
+            def _redact_for_wire(text: str) -> tuple[str, int]:
+                return redact_gated_values(text, messages, merged_tool_results)
+
+            await _emit_merged_event(redact_event_for_wire(evt, _redact_for_wire))
+        except Exception as exc:
+            logger.debug("merged gate_event emission failed: %s", exc)
+
     if merged_reply.strip():
         try:
             from app.services.claim_validator import (
@@ -2372,6 +2428,14 @@ async def _run_orchestrated_chat(
             "marked_lines": _merged_approval_marked,
             "draft_changed": _merged_approval_draft != merged_reply,
         })
+        await _merged_gate_event(
+            "approval_marker",
+            "annotated_limited",
+            reason="no_bound_claim_audit_review",
+            details={"marked_lines": _merged_approval_marked},
+            draft=_merged_approval_draft,
+            final=merged_reply,
+        )
 
     # Assemble the merged validation summary.  Top-level states describe the
     # SHIPPED merged prose (validated above against the union of tool

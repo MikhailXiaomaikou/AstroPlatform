@@ -662,3 +662,128 @@ def test_emphasis_around_the_verdict_word_is_recognised() -> None:
     ):
         untouched, count = mark_unapproved_claims(clean, tool_results)
         assert count == 0, clean
+
+
+# ---------- Codex review 2026-09-03, PR #69 second round ----------
+
+
+def test_a_backtick_fence_inside_a_tilde_fence_does_not_close_it() -> None:
+    """PRRT_kwDORoeoE86etNOq: a fence closes only on its own kind.
+
+    ``_fenced_lines`` toggled on ANY fence line, so the inner backtick fence
+    of a ``~~~~markdown`` example closed the outer tilde fence and the quoted
+    verdict was stamped (count 1, want 0).  A fence closes only on a run of
+    the same character at least as long as the opener (CommonMark).
+    """
+    for text in (
+        "~~~~markdown\n```\nAPPROVED by reviewer: H0 = 67.36\n```\n~~~~",
+        # A shorter run of the same character does not close it either.
+        "````\n```\nAPPROVED by reviewer: H0 = 67.36\n```\n````",
+    ):
+        untouched, count = mark_unapproved_claims(text, _published_h0())
+        assert count == 0, text
+        assert untouched == text, text
+    # A verdict after the outer fence really closes is still stamped.
+    marked, count = mark_unapproved_claims(
+        "~~~~\n```\n~~~~\nAPPROVED by reviewer: H0 = 67.36", _published_h0()
+    )
+    assert count == 1 and "NOT APPROVED - " in marked
+
+
+def test_emphasis_around_the_status_label_is_recognised() -> None:
+    """PRRT_kwDORoeoE86ethcM: ``**Review status:** APPROVED``.
+
+    The status alternative demanded the colon straight after "status", so
+    the closing ``**`` of a bold label blocked it and the line shipped
+    unmarked (count 0, want 1).  Paired emphasis is accepted around the
+    label as well as around the verdict word.
+    """
+    for text in (
+        "**Review status:** APPROVED — H0 = 67.36",
+        "**Review status**: APPROVED — H0 = 67.36",
+        "**Decision:** APPROVED. H0 = 67.36 km/s/Mpc",
+        "__Decision__: APPROVED — H0 = 67.36",
+        "**Review status:** **APPROVED** — H0 = 67.36",
+    ):
+        marked, count = mark_unapproved_claims(text, _published_h0())
+        assert count == 1, text
+        assert "NOT APPROVED - " in marked, text
+
+
+def test_a_number_not_bound_to_a_parameter_is_not_a_claim() -> None:
+    """PRRT_kwDORoeoE86ethcQ: ``Draft claim: 67 galaxies pass the cut.``
+
+    The 1% comparison bound ANY number on the line to the H0 result, so a
+    galaxy count within 1% of 67.36 was stamped (count 1, want 0).  A line
+    states the claim only when its number is assigned to a parameter --
+    ``H0 = 67.36``, ``H0 is 67.36``, ``h = 0.6736`` -- and that value
+    matches a claimable result.
+    """
+    for clean in (
+        "Draft claim: 67 galaxies pass the cut.",
+        "APPROVED by reviewer: 67 of the fields were inspected.",
+        "The cut keeps 67 galaxies.\nAPPROVED by human reviewer.",
+    ):
+        untouched, count = mark_unapproved_claims(clean, _published_h0())
+        assert count == 0, clean
+        assert untouched == clean, clean
+    for bound in (
+        "APPROVED by reviewer: h = 0.6736",
+        "APPROVED by reviewer: H0 = 67.36 km/s/Mpc",
+        "APPROVED by reviewer: H0 is 67.36",
+        "Draft claim: the median is 67.36",
+        "The chain gives H0 = 67.36 km/s/Mpc.\nAPPROVED by human reviewer.",
+    ):
+        marked, count = mark_unapproved_claims(bound, _published_h0())
+        assert count == 1, bound
+        assert "NOT APPROVED - " in marked, bound
+
+
+def test_an_indented_code_block_is_skipped_like_a_fence() -> None:
+    """PRRT_kwDORoeoE86ethcV: four spaces or a tab open an indented code block.
+
+    The prefix consumed arbitrary leading whitespace, so an example quoted
+    the indented Markdown way was rewritten (count 1, want 0).  An indented
+    block cannot interrupt a paragraph (CommonMark), so an indented line
+    directly under a prose line is a lazy continuation that renders as that
+    paragraph, and is still read.
+    """
+    for code in (
+        "    APPROVED by reviewer: H0 = 67.36",
+        "\tAPPROVED by reviewer: H0 = 67.36",
+        "Never write:\n\n    APPROVED by reviewer: H0 = 67.36\n\nUse the card.",
+        "Never write:\n\n    Draft claim: H0 = 67.36\n    APPROVED by reviewer.",
+    ):
+        untouched, count = mark_unapproved_claims(code, _published_h0())
+        assert count == 0, code
+        assert untouched == code, code
+    # Up to three spaces is ordinary indentation: still a verdict line.
+    marked, count = mark_unapproved_claims(
+        "   APPROVED by reviewer: H0 = 67.36", _published_h0()
+    )
+    assert count == 1 and marked.startswith("   NOT APPROVED - ")
+    # Directly under prose the indented line renders as that paragraph, so
+    # the stamp on the number is still a stamp.
+    marked, count = mark_unapproved_claims(
+        "The chain gives H0 = 67.36 km/s/Mpc.\n    APPROVED by human reviewer.",
+        _published_h0(),
+    )
+    assert count == 1 and "NOT APPROVED - APPROVED by human reviewer." in marked
+
+
+def test_a_table_cell_delimiter_is_a_structural_prefix() -> None:
+    """PRRT_kwDORoeoE86evFte: ``| APPROVED by reviewer: H0 = 67.36 |``.
+
+    A verdict written as the first cell of a Markdown table row shipped
+    unmarked (count 0, want 1) because ``|`` was not a prefix marker.
+    """
+    for text in (
+        "| APPROVED by reviewer: H0 = 67.36 |",
+        "|Draft claim: H0 = 67.36|",
+        "| **Decision:** APPROVED | H0 = 67.36 |",
+    ):
+        marked, count = mark_unapproved_claims(text, _published_h0())
+        assert count == 1, text
+        # The marker lands inside the cell, after the delimiter.
+        assert marked.startswith("|"), text
+        assert marked.index(_MARKER) >= 1, text

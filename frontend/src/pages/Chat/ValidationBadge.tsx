@@ -73,6 +73,12 @@ export function ValidationBadge({
   const interventions = (summary?.interventions ?? []).filter(
     (item) => item && typeof item === "object",
   );
+  const schemaV2 = (summary?.schema_version ?? 0) >= 2;
+  // The approval row is keyed on the field, not on the schema version: the
+  // workflow-timeout fallback ships a schema-v1 summary that carries
+  // approval_state, and it was the one reply the badge stayed silent on
+  // (Codex review 2026-09-03, PRRT_kwDORoeoE86ethcX).
+  const showApproval = schemaV2 || summary?.approval_state != null;
 
   return (
     <div
@@ -114,7 +120,7 @@ export function ValidationBadge({
               label={t("chat.validation.numeric_gate")}
               state={summary.numeric_gate}
             />
-            {summary.schema_version && summary.schema_version >= 2 && (
+            {schemaV2 && (
               <>
                 <div>
                   <strong>{t("chat.validation.task_kind")}:</strong>{" "}
@@ -124,12 +130,18 @@ export function ValidationBadge({
                   <strong>{t("chat.validation.disposition")}:</strong>{" "}
                   {summary.response_disposition || "full"}
                 </div>
-                <div>
-                  <strong>{t("chat.validation.approval_state")}:</strong>{" "}
-                  {summary.approval_state === "none" || !summary.approval_state
-                    ? t("chat.validation.approval_none")
-                    : summary.approval_state}
-                </div>
+              </>
+            )}
+            {showApproval && (
+              <div>
+                <strong>{t("chat.validation.approval_state")}:</strong>{" "}
+                {summary.approval_state === "none" || !summary.approval_state
+                  ? t("chat.validation.approval_none")
+                  : summary.approval_state}
+              </div>
+            )}
+            {schemaV2 && (
+              <>
                 {summary.earliest_limiting_stage && (
                   <div>
                     <strong>{t("chat.validation.limiting_stage")}:</strong>{" "}
