@@ -78,13 +78,13 @@ A first chain rarely passes the publication bar. When it doesn't:
 | Symptom | Auto-action (do NOT ask the user first) |
 |---|---|
 | `chain_tier="exploratory"` — read WHY off this run first (`publication_gate.reasons`, `warnings`, `prior_dominance_screen`); several reasons usually apply at once | Act per reason (rows below). An in-process `run_cosmology_likelihood_chain` always carries the independent-chains code, so no retry lifts it to publication tier: after at most one retry, report the remaining reasons in words (Step 5) and stop |
-| … ESS below the publication threshold (warning `ESS=… below the publication threshold`) | Retry once with `n_samples × 3` when `sampler` is `bao_gaussian_importance` — the tool's only sampler-budget knob (no `n_steps` / `n_walkers` exist there); from the default it triples the importance-proposal draws. If `sampler` is `compressed_emcee` / `sn_emcee` the chain length is fixed, so do not retry — name the ESS reason in words |
+| … ESS below the publication threshold (warning `ESS=… below publication threshold 400` in `warnings`, or `… is below the publication threshold of 400` in `__exploratory_warning__`) | Retry once with `n_samples × 3` when `sampler` is `bao_gaussian_importance` — the tool's only sampler-budget knob (no `n_steps` / `n_walkers` exist there); from the default it triples the importance-proposal draws. If `sampler` is `compressed_emcee` / `sn_emcee` the chain length is fixed, so do not retry — name the ESS reason in words |
 | … ESS estimate failed outright (warning `effective-sample-size estimate unavailable`; convergence unverified) | Retry once with a different `random_seed` (no run-length knob exists on this tool); if it fails again, stop and report convergence as unverified |
 | … `off_anchor_frontier` (w / w0 / wa with no reproduced published anchor) | No retry helps. Say the missing piece is a reproduced published anchor for this exact model + dataset combination — do not invent one |
 | … `compressed_or_approximate_likelihood` / `literature_typed_input` | No retry helps. Say the likelihood is compressed or approximate and the result stays exploratory |
 | … `prior_dominance_screen_failed` (see `prior_dominance_screen.flagged_parameters`) | Do not just rerun. If you passed `priors`, rerun once without them (`priors` can only tighten within the default bounds; no wider setting exists). If the flag persists, report the flagged parameters and that a separately attested prior-sensitivity study is required — no retry supplies it |
 | … `fewer_than_four_independent_chains` (with `importance_samples_are_not_independent_chains`, `flattened_coupled_emcee_ensemble` or `analytic_draws_are_not_independent_chains`), or R-hat AT OR ABOVE its threshold on the external Cobaya path | No retry helps: the in-process runner never supplies four independent chains and exposes no chain-count or run-length knob (`n_walkers` is fixed). Say so in words; only the external Cobaya CMB path counts real chains |
-| `chain_tier="blocked"` + ESS < 100 | Retry with `n_steps × 5` AND tighter prior on a degenerate param |
+| `chain_tier="blocked"` + ESS < 100 | Retry once with `n_samples × 5` (this tool's only sampler-budget knob; `n_steps` / `n_walkers` belong to `fit_cosmology_mcmc`, which never reaches publication tier) AND a tighter prior on a degenerate param |
 | `chain_tier="blocked"` + inline rows | State the `manual_attestation` field shape and ask for the source paper bibcode |
 | `data_origin="unavailable"` | Switch to a registered dataset that covers the same probe |
 | EMPTY rows from `run_adql` | Broaden cone radius 2× and retry once |
@@ -173,7 +173,7 @@ Good narration looks like:
 > breaks the H0 · r_d degeneracy. Running the combined chain now..."
 
 > "ESS=87 is below the exploratory floor — the wCDM prior is wider than
-> the data can constrain. Retrying with n_steps × 5."
+> the data can constrain. Retrying with n_samples × 5."
 
 > "This result lists one requested dataset under `datasets_not_run`, so I am
 > not interpreting the joint posterior. I will report the executable subset
