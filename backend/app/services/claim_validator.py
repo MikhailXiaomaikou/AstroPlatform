@@ -3639,8 +3639,12 @@ _NONASSERTIVE_COSMOLOGY_CONTEXT_RE = re.compile(
     # the washing hole: "Our hypothesis is confirmed: X" carries a
     # confirmed assertion, which cancels the hedge and keeps it a
     # violation.  The verb form "we hypothesise that" stays NOT exempt.
-    r"(?:hypothes[ei]s|forecasts?|predictions?|conjectures?)"
-    r"\s+(?:is|are|was|were)\s+that|"
+    # Singular nouns only, and only the two main already exempted as bare
+    # words: main's `\bhypothesis\b|\bforecast\b` never matched
+    # "hypotheses", "forecasts", "prediction" or "conjecture", so admitting
+    # them here would have been a relaxation the PR body denied (audit
+    # 2026-09-03).  The predicate form is a strict subset of the bare word.
+    r"(?:hypothesis|forecast)\s+(?:is|was)\s+that|"
     r"not\s+ruled\s+out|consistent\s+with\s+zero|does\s+not\s+evolve|"
     r"(?:is|are|remains?)\s+unresolved|(?:is|are)\s+not\s+(?:resolved|detected))\b",
     re.I,
@@ -3652,7 +3656,9 @@ _ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE = re.compile(
     # The Chinese predicate form, counterpart of "our hypothesis is that X".
     # Narrowing the bare 假设 alternative left ordinary hypothetical prose
     # with no hedge at all (Codex review 2026-09-03).
-    r"(?:假设|猜想|预测)是|"
+    # 猜想 was never exempt on main; 假设/预测 were exempt as bare words, so
+    # the predicate form is a strict subset of what main allowed.
+    r"(?:假设|预测)是|"
     r"仍未解决|没有解决|未(?:探测|检测)到|与零一致|不随时间演化|未被排除"
 )
 # Sentence-initial "Hypothesis:" (optionally bold or as a list item) marks the

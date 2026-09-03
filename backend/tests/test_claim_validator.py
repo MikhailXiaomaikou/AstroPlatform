@@ -2193,8 +2193,25 @@ def test_hypothesis_narrowing_is_a_strict_subset_of_the_old_exemption() -> None:
     for sentence in (
         "The model forecasts that the Hubble tension is resolved once calibration improves.",
         "预计新的标定将解决哈勃张力。",
+        # The predicate form admits only the two nouns main exempted as bare
+        # words, in the singular.  "conjecture", "prediction" and 猜想 were
+        # never exempt on main and an earlier revision of this branch quietly
+        # admitted them (audit 2026-09-03); plurals were never exempt either.
+        "Our conjecture is that a local void resolves the Hubble tension.",
+        "Our prediction is that a local void resolves the Hubble tension.",
+        "我们的猜想是局部空洞解决哈勃张力。",
+        "Our hypotheses are that a local void resolves the Hubble tension.",
+        "Our forecasts are that the Hubble tension is resolved after recalibration.",
     ):
         assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+    # And the forms that DO survive are exactly the bare-noun ones main had.
+    for sentence in (
+        "Our hypothesis is that a local void resolves the Hubble tension.",
+        "Our forecast is that the Hubble tension is resolved after recalibration.",
+        "我们的假设是局部空洞解决哈勃张力。",
+        "我们的预测是局部空洞解决哈勃张力。",
+    ):
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
 
 
 def test_hypothesis_label_regex_is_linear_on_a_pathological_prefix() -> None:
