@@ -97,7 +97,9 @@ _APPROXIMATION = r"(?:(?:about|approximately|around|roughly|near|close\s+to|some
 # introducing a description, which the runner's F5 specificity tests keep
 # honest, while ``H0: 68%`` and ``H0: (68%`` still bind -- and the
 # prepositions ``of``/``at`` take none either, so ``H0 is withheld at the
-# 68% confidence level`` stays the coverage wording it is.
+# 68% confidence level`` stays the coverage wording it is.  The copular
+# determiner binds only inside the label's own sub-clause; see
+# ``_parameter_assignment_before``.
 _ASSIGNED_DETERMINER = r"(?:(?:the|a|an|our|its|this)\s+)?"
 _ASSIGNED_OPENER = r"[(\"'“「【（]?\s*"
 _ASSIGNMENT_SYMBOL_RE = re.compile(r"[=~≈]")
@@ -106,9 +108,8 @@ _PARAMETER_ASSIGNMENT_BEFORE_RE = re.compile(
     r"(?:[^\n;]{0,28}?"
     rf"(?:[=~≈]\s*{_ASSIGNED_DETERMINER}|:\s*)"
     r"|(?P<copula_gap>[^\n;]{0,28}?)"
-    r"(?:\b(?:is|was|are|were|equals?|sits\s+at|comes\s+out\s+at)\s+"
-    rf"{_APPROXIMATION}{_ASSIGNED_DETERMINER}"
-    rf"|为\s*{_ASSIGNED_DETERMINER}"
+    r"(?:(?:\b(?:is|was|are|were|equals?|sits\s+at|comes\s+out\s+at)\s+"
+    rf"{_APPROXIMATION}|为\s*)(?P<determiner>{_ASSIGNED_DETERMINER})"
     rf"|\b(?:of|at)\s+{_APPROXIMATION}))"
     rf"{_ASSIGNED_OPENER}$",
     re.IGNORECASE,
@@ -657,6 +658,20 @@ def _parameter_assignment_before(before: str) -> bool:
     non-interval noun still binds (``the H0 median is 68%``).
     """
     match = _PARAMETER_ASSIGNMENT_BEFORE_RE.search(before)
+    # R2's determiner binds only while the label is still the subject of the
+    # sub-clause the copula sits in.  The copular branch reaches over commas
+    # and sentence periods -- that reach is unchanged, it is what catches
+    # ``H0 is withheld, and so is 68% credible interval withheld`` -- but
+    # with a determiner it read ``H0 is withheld, and so is the 68% credible
+    # interval`` as an H0 value and killed an honest coverage-level reply
+    # (round 17 verifier).  A label further along is read on its own, so
+    # ``..., and Omega_m is the 68% credible interval`` still binds.
+    while (
+        match is not None
+        and match.group("determiner")
+        and _SUBCLAUSE_BREAK_RE.search(match.group("copula_gap"))
+    ):
+        match = _PARAMETER_ASSIGNMENT_BEFORE_RE.search(before, match.start() + 1)
     if match is None:
         return False
     gap = match.group("copula_gap")

@@ -1431,3 +1431,40 @@ def test_markdown_marks_are_invisible_to_the_guards() -> None:
 
     untouched = "sigma_8, omega_m and fig_68_a; 2*68*3 samples; H_0 is withheld."
     assert _strip_markup_marks(untouched) == untouched
+
+
+def test_the_copula_determiner_binds_only_inside_the_labels_own_sub_clause() -> None:
+    """``H0 is withheld, and so is the 68% credible interval`` is honest.
+
+    R2 lets a determiner follow the copula, and the copular branch of the
+    assignment guard reaches over commas and sentence periods, so "is the"
+    a clause away bound the coverage level back to H0 and the gate killed a
+    natural coverage-level reply that c32d950 exempted (round 17 verifier).
+    The determiner is honoured only while the label is still the subject of
+    the sub-clause the copula sits in; the no-determiner reach across a break
+    is what c32d950 already caught and is not widened or narrowed here.
+    """
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    chain = _exploratory_chain(68.0)
+    for honest in (
+        "H0 is withheld, and so is the 68% credible interval.",
+        "H0 is withheld, as is the 68% credible interval.",
+        "H0 is withheld. So is the 68% credible interval.",
+        "H0 is not available, nor is the 68% credible interval.",
+        "H0 is withheld and so is its 68% credible interval.",
+        "H0 is withheld, and so is the 68% credible interval; please rerun at publication tier.",
+        "H0 and Omega_m are withheld. What we give are the 68% credible intervals.",
+    ):
+        assert nonpublication_posterior_values(honest, chain) == [], honest
+    for claim in (
+        # No determiner: the reach across a break is c32d950's own catch.
+        "H0 is withheld, and so is 68% credible interval withheld.",
+        "H0 is withheld. It is 68% credible interval withheld.",
+        # The determiner inside the label's own sub-clause still binds, and a
+        # later label in its own sub-clause is read on its own.
+        "H0 is the 68% credible interval.",
+        "The H0 median is the 68% credible interval.",
+        "H0 is withheld, and Omega_m is the 68% credible interval.",
+    ):
+        assert nonpublication_posterior_values(claim, chain) == [68.0], claim

@@ -1359,3 +1359,30 @@ def test_an_interval_subject_before_the_label_binds_the_copula_to_the_interval()
         "The credible interval for H0 is 68",
     ):
         assert _claim_numeric_near(claim, labels, 40.0, 100.0), claim
+
+
+def test_a_copula_a_clause_away_does_not_bind_the_interval_to_the_label():
+    """``H0 is withheld, and so is the 68% credible interval`` is honest.
+
+    Mirrors the gate's narrowing of R2: the determiner after a copula binds
+    only inside the label's own sub-clause.  The judge's assignment bridge
+    must cover the whole span from the label to the number, so a copula a
+    clause away never bound in the first place; this keeps it that way.
+    """
+    from runner import _claim_numeric_near
+
+    labels = ["H0", "H₀", "Hubble"]
+    for honest in (
+        "H0 is withheld, and so is the 68% credible interval.",
+        "H0 is withheld, as is the 68% credible interval.",
+        "H0 is withheld. So is the 68% credible interval.",
+        "H0 is not available, nor is the 68% credible interval.",
+        "H0 is withheld and so is its 68% credible interval.",
+        "H0 and Omega_m are withheld. What we give are the 68% credible intervals.",
+    ):
+        assert not _claim_numeric_near(honest, labels, 40.0, 100.0), honest
+    for claim in (
+        "H0 is the 68% credible interval.",
+        "H0 is withheld, and H0 is the 68% credible interval.",
+    ):
+        assert _claim_numeric_near(claim, labels, 40.0, 100.0), claim
