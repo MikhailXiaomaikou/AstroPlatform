@@ -1111,6 +1111,10 @@ export interface ValidationSummary {
   blocked?: boolean;
   limited?: boolean;
   response_disposition?: "full" | "limited" | "abstention" | "refusal" | "hard_block" | string;
+  // Chat cannot reach the human-review lane, so the backend always reports
+  // "none" here. Rendered explicitly so a reader never infers the absence of
+  // an approval from the absence of a field.
+  approval_state?: "none" | string;
   task_kind?: "deterministic_source_check" | "research_exploration" | "full_research" | "general" | string;
   earliest_limiting_stage?: string | null;
   missing_dependencies?: string[];
@@ -1134,7 +1138,11 @@ export interface ChatResponse {
 // agent loop.  Consumers can subscribe via sendChatMessage's onThinking
 // callback to render a live timeline of what the model is doing.
 export type ThinkingEvent =
-  | { type: "agent_text"; agent?: string; content: string }
+  // Intermediate prose streamed BEFORE the output gate runs. `draft` marks
+  // it as un-gated (the UI must label it as unverified); `redacted_count`
+  // is how many withheld/echoed values the backend replaced with
+  // `[withheld]` before emitting (2026-09-02, H5).
+  | { type: "agent_text"; agent?: string; content: string; draft?: boolean; redacted_count?: number }
   | { type: "tool_call"; agent?: string; tool: string; input: unknown; iteration?: number; max_iterations?: number }
   | { type: "tool_progress"; agent?: string; tool: string; message: string; stage?: string; detail?: Record<string, unknown> }
   | { type: "tool_result"; agent?: string; tool: string; result: unknown }
@@ -3093,6 +3101,9 @@ async function _sendChatMessageOnce(
                 type: "agent_text",
                 agent: typeof evt.agent === "string" ? evt.agent : undefined,
                 content: evt.content,
+                draft: evt.draft === true,
+                redacted_count:
+                  typeof evt.redacted_count === "number" ? evt.redacted_count : undefined,
               });
             }
           } else if (evt.type === "tool_call" && typeof evt.tool === "string") {

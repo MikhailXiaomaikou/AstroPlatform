@@ -45,6 +45,8 @@ from app.services.agent_session_state import update_session_status as _update_ch
 # _execute_tool_calls / _filter_tools_by_research_focus /
 # _ASTRO_RESEARCH_FOCUS through THIS module at call time (see
 # app/services/agent_runtime/loop.py shims).
+from app.services.agent_runtime.approval import APPROVAL_STATE_NONE
+from app.services.agent_runtime.approval import mark_unapproved_claims
 from app.services.agent_runtime.runtime_config import _DEFAULT_WORKFLOW_BUDGET  # noqa: F401
 from app.services.agent_runtime.runtime_config import _LONG_WORKFLOW_BUDGET  # noqa: F401
 from app.services.agent_runtime.runtime_config import _workflow_budget_config  # noqa: F401
@@ -1016,14 +1018,27 @@ async def chat_message_stream(
             # Cloudflare free-tier idle timers (~30-100s) can't kill the
             # connection.
             event_queue: asyncio.Queue[dict] = asyncio.Queue()
-            # R7: capture a compact audit trail of every thinking-stream
-            # event so we can persist it to ChatSession.audit_log.  Raw
-            # tool_result payloads may be huge; we store a shallow preview
-            # in the audit log, keeping the full result in the actions list.
+            # Compact copy of every thinking-stream event, kept for the
+            # duration of this request only.
+            #
+            # Corrected 2026-09-03 (adversarial review): the original R7 note
+            # here said this list is persisted to ChatSession.audit_log, and
+            # that claim was reused downstream to argue the streamed drafts
+            # were durable.  It is not true.  `audit_trail` is request-local
+            # and has exactly one consumer — `_tool_results_from_stream_audit`
+            # in the workflow-timeout fallback below — while
+            # ChatSession.audit_log holds server-owned HMAC-signed evidence
+            # records (app/services/server_evidence.py) and the
+            # client-supplied field is ignored on save.  Streamed events are
+            # still gated before they leave the process, but the reason is
+            # that they are visible live and land in the blind runner's
+            # case_<id>.json, not that a database row keeps them.  Raw
+            # tool_result payloads may be huge; only a shallow preview is
+            # kept, with the full result staying in the actions list.
             audit_trail: list[dict] = []
 
             async def _emit(evt: dict) -> None:
-                # R7 — persist a capped copy of the event for post-hoc audit.
+                # Keep a capped copy for the timeout fallback (see above).
                 try:
                     audit_entry = dict(evt)
                     if audit_entry.get("type") == "tool_result":
@@ -1174,6 +1189,11 @@ async def chat_message_stream(
             timeout_summary = _tool_grounded_timeout_summary(timeout_tool_results, timeout_s)
             timeout_validation_summary = {
                 "schema_version": 1,
+                # Chat has no approval state; this path says so as well, or
+                # the badge cannot state it for the one reply with the least
+                # review work behind it (Codex review 2026-09-03,
+                # PRRT_kwDORoeoE86ethcX).
+                "approval_state": APPROVAL_STATE_NONE,
                 "numeric_gate": "not_run",
                 "citation_gate": "not_run",
                 "blocked": False,
@@ -1733,6 +1753,7 @@ async def _run_orchestrated_chat(
                 )
         abstention_validation_summary: dict[str, Any] = {
             "schema_version": 2,
+            "approval_state": APPROVAL_STATE_NONE,
             "numeric_gate": "not_run",
             "citation_gate": "not_run",
             "regen_count": 0,
@@ -1837,6 +1858,57 @@ async def _run_orchestrated_chat(
                     event.get("type"),
                     exc,
                 )
+
+    async def _merged_gate_event(
+        gate: str,
+        action: str,
+        *,
+        reason: str = "",
+        details: dict | None = None,
+        draft: str = "",
+        final: str = "",
+    ) -> None:
+        # The merged reply's counterpart of the loop's ``_gate_event``: the
+        # same three sinks (local JSONL, gate_event_total counter, redacted
+        # SSE copy) built from the same observability helpers.  The loop's
+        # emitter is a closure over its own turn state, so the composition
+        # is repeated here rather than imported.  Must never affect the
+        # reply; everything is wrapped.  (Codex review 2026-09-03,
+        # PRRT_kwDORoeoE86evFtk: the merged approval marker recorded its
+        # intervention in the summary but emitted no gate event.)
+        try:
+            from app.observability.gate_events import (
+                append_gate_event_jsonl,
+                build_gate_event,
+                redact_event_for_wire,
+            )
+            from app.observability.metrics import record_counter
+            from app.services.agent_runtime.honesty import redact_gated_values
+
+            evt = build_gate_event(
+                gate=gate,
+                action=action,
+                reason=reason,
+                agent="merged_orchestrator",
+                details=dict(details or {}),
+                tools_run=[
+                    str(r.get("tool")) for r in merged_tool_results
+                    if isinstance(r, dict) and r.get("tool")
+                ],
+                draft=draft,
+                final=final,
+                chat_session_id=str(chat_session_id) if chat_session_id else None,
+                python_session_id=str(python_session_id) if python_session_id else None,
+            )
+            append_gate_event_jsonl(evt)
+            record_counter("gate_event_total", 1.0, gate=gate, action=action)
+
+            def _redact_for_wire(text: str) -> tuple[str, int]:
+                return redact_gated_values(text, messages, merged_tool_results)
+
+            await _emit_merged_event(redact_event_for_wire(evt, _redact_for_wire))
+        except Exception as exc:
+            logger.debug("merged gate_event emission failed: %s", exc)
 
     if merged_reply.strip():
         try:
@@ -2335,6 +2407,36 @@ async def _run_orchestrated_chat(
         })
         logger.exception("Merged scientific-conclusion gate failed closed")
 
+    # Approval language that no stored review backs, applied to the MERGED
+    # prose.  The per-specialist marker in the agent loop does not cover this
+    # text: merge_responses writes a new public reply, and the merged boundary
+    # only re-runs the numeric, citation and scientific-conclusion gates — all
+    # of which pass a line like "APPROVED by reviewer: H0 = 67.36" because the
+    # number really did come from a claimable tool result.  Same gate event and
+    # same limited flag as the loop, so the badge cannot differ between a
+    # single-specialist and a multi-specialist turn.
+    _merged_approval_draft = merged_reply
+    merged_reply, _merged_approval_marked = mark_unapproved_claims(
+        merged_reply, merged_tool_results
+    )
+    if _merged_approval_marked:
+        _merged_limited = True
+        _merged_gate_interventions.append({
+            "gate": "approval_marker",
+            "action": "annotated_limited",
+            "reason": "no_bound_claim_audit_review",
+            "marked_lines": _merged_approval_marked,
+            "draft_changed": _merged_approval_draft != merged_reply,
+        })
+        await _merged_gate_event(
+            "approval_marker",
+            "annotated_limited",
+            reason="no_bound_claim_audit_review",
+            details={"marked_lines": _merged_approval_marked},
+            draft=_merged_approval_draft,
+            final=merged_reply,
+        )
+
     # Assemble the merged validation summary.  Top-level states describe the
     # SHIPPED merged prose (validated above against the union of tool
     # results); per-agent interventions are folded in so a member reply
@@ -2418,6 +2520,10 @@ async def _run_orchestrated_chat(
     )
     merged_validation_summary: dict = {
         "schema_version": 2,
+        # Merging does not create an approval either: no chat path can read or
+        # write a ClaimAuditReview row, so the merged badge states "none"
+        # rather than leaving the reader to infer it from a missing field.
+        "approval_state": APPROVAL_STATE_NONE,
         "numeric_gate": _merged_numeric_state,
         "citation_gate": _merged_citation_state,
         "regen_count": sum(

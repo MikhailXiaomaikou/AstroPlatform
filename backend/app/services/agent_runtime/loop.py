@@ -48,9 +48,14 @@ from app.services.agent_runtime.line_relation import (
     _table_extraction_arxiv_ids,
     _verified_line_relation_seed_candidates,
 )
+from app.services.agent_runtime.approval import (
+    APPROVAL_STATE_NONE,
+    mark_unapproved_claims,
+)
 from app.services.agent_runtime.honesty import (
     nonpublication_posterior_refusal,
     nonpublication_posterior_values,
+    redact_gated_values,
     untrusted_evidence_echo_values,
     untrusted_evidence_refusal,
 )
@@ -331,6 +336,10 @@ def _derive_validation_summary(
     )
     summary: dict[str, Any] = {
         "schema_version": 2,
+        # Chat cannot reach the review lane, so this is always "none" here.
+        # It is emitted anyway so a reader never has to infer the absence of
+        # an approval from the absence of a field.
+        "approval_state": APPROVAL_STATE_NONE,
         "numeric_gate": numeric_state,
         "citation_gate": citation_state,
         "regen_count": int(fabrication_stats.get("regenerations", 0) or 0),
@@ -411,6 +420,10 @@ def _not_run_validation_summary(
     full_research_gap = task_kind == "full_research"
     return {
         "schema_version": 2,
+        # Same reason as _derive_validation_summary: an absent field must never
+        # be the only thing telling a reader there is no approval.  An
+        # early-return path has done even less review work, not more.
+        "approval_state": APPROVAL_STATE_NONE,
         "numeric_gate": "not_run",
         "citation_gate": "not_run",
         "regen_count": 0,
@@ -454,12 +467,21 @@ async def _run_agent_loop(
 
     When `on_event` is provided, intermediate thinking-process events are
     emitted so the SSE endpoint can stream them to the UI in real time:
-    - {"type": "agent_text", "agent": <name>, "content": <str>}  — LLM text
-      produced between tool calls (the model's "thinking out loud").
+    - {"type": "agent_text", "agent": <name>, "content": <str>, "draft": True,
+      "not_claimable": True, "redacted_count": <int>} — LLM text produced
+      between tool calls (the model's "thinking out loud").  It is emitted
+      only for a turn that also calls tools, and only after the honesty gates
+      have blanked out every value they would withhold from the final reply
+      (2026-09-02 review H5).  The final text-only turn is NOT streamed here:
+      it reaches the caller through the gated `text` frame instead.
     - {"type": "tool_call", "agent": <name>, "tool": <name>, "input": <dict>}
       — fires before each tool starts executing.
     - {"type": "tool_result", "agent": <name>, "tool": <name>, "result": <dict>}
       — fires when each tool completes.
+    - {"type": "gate_event", ...} — one record per gate intervention.  The
+      copy emitted here is redacted (2026-09-03 review); the unredacted copy
+      with the full pre-gate draft goes only to the local, gitignored JSONL
+      triage sink.  See app/observability/gate_events.py.
     """
     # 2026-05-28: normalise public provider names to canonical backend ids.
     # The blind-test runners pass --provider anthropic / deepseek / openai,
@@ -632,6 +654,9 @@ async def _run_agent_loop(
     # of shipping a dangling partial sentence to the UI.
     last_stop_reason: str | None = None
     for _iteration in range(max_iterations):
+        # Draft prose written alongside this turn's tool calls, held until
+        # those results exist so it can be redacted against them.
+        pending_draft_text: str | None = None
         if _time.monotonic() > _loop_deadline:
             hit_deadline = True
             # B1: do NOT ship accumulated LLM prose here. This early return
@@ -1792,12 +1817,38 @@ async def _run_agent_loop(
                 })
             else:
                 text_parts.append(text)
-                if structured_abstention_reply is None:
-                    await _emit({
-                        "type": "agent_text",
-                        "agent": agent_name,
-                        "content": text,
-                    })
+                # 2026-09-02 review H5: only intermediate prose is streamed,
+                # and only after the honesty gates have blanked the values
+                # they would withhold.  Blind case B2 streamed an exploratory
+                # posterior and the untrusted user value before any gate ran.
+                #
+                # Where a streamed event ends up (2026-09-03: the earlier
+                # "chat.py persists every event into the audit trail" note was
+                # wrong and is corrected here).  chat.py's `audit_trail` is a
+                # request-local list read only by the workflow-timeout
+                # fallback; it is NOT written to ChatSession.audit_log, which
+                # now holds server-owned HMAC-signed evidence records
+                # (app/services/server_evidence.py).  The browser copy is
+                # transient too — chatStorage.serializeStored drops the
+                # `_thinking` steps.  What IS durable is the blind runner's
+                # recorded event list, dumped verbatim into case_<id>.json.
+                # So this channel leaks live to whoever is watching and
+                # permanently into the blind-test artifact — both reasons
+                # enough to gate it, neither of them the database.
+                #
+                # The final text-only turn (no tool calls) is never streamed
+                # here: the gated `text` frame at the end of the loop carries
+                # it.
+                #
+                # The draft is HELD here rather than emitted, because the
+                # results it has to be redacted against are the ones this
+                # same turn is about to request: prose that anticipates a
+                # value the pending tool then returns as non-publication-
+                # ready would have streamed before that result existed
+                # (Codex review 2026-09-03).  It is emitted after the
+                # executed results join `all_tool_results`, below.
+                if tool_calls_in_turn and structured_abstention_reply is None:
+                    pending_draft_text = text
         if tool_calls_in_turn and abstention_text_in_prose:
             break
         if not tool_calls_in_turn:
@@ -2168,6 +2219,24 @@ async def _run_agent_loop(
                     "live": True,
                     "tool_call_id": tc["id"],
                 })
+        # The held draft (above) is redacted only now, against a
+        # `all_tool_results` that already carries this turn's results, and
+        # emitted after them.  Emitting it earlier would have meant grading
+        # the prose against an evidence set that did not yet contain the very
+        # tool the prose was anticipating.
+        if pending_draft_text is not None:
+            redacted_text, redacted_count = redact_gated_values(
+                pending_draft_text, messages, all_tool_results
+            )
+            pending_draft_text = None
+            await _emit({
+                "type": "agent_text",
+                "agent": agent_name,
+                "content": redacted_text,
+                "draft": True,
+                "not_claimable": True,
+                "redacted_count": redacted_count,
+            })
         working_messages.append({"role": "user", "content": tool_result_blocks})
         # Claude uses "tool_use", OpenAI uses "tool_calls" as stop reason
         if (
@@ -2455,6 +2524,7 @@ async def _run_agent_loop(
                 append_gate_event_jsonl,
                 build_gate_event,
                 claims_to_dicts,
+                redact_event_for_wire,
                 violations_to_dicts,
             )
             from app.observability.metrics import record_counter
@@ -2481,9 +2551,26 @@ async def _run_agent_loop(
                 chat_session_id=str(chat_session_id) if chat_session_id else None,
                 python_session_id=str(python_session_id) if python_session_id else None,
             )
+            # 2026-09-03 review BLOCKER: the two sinks get different text.
+            #
+            # `evt` quotes the pre-gate draft, i.e. exactly the values the
+            # gate above just withheld.  The JSONL sink keeps it in full —
+            # it is gitignored, machine-local, and reading the observed
+            # evidence verbatim is how a false kill gets diagnosed (the
+            # 9f2667e class of bug this module was built for).  The copy
+            # handed to `_emit` leaves the process (chat.py SSE -> browser;
+            # the blind runner's recorded `events` -> `case_<id>.json` on
+            # disk), so it goes through the same redactor the streamed
+            # `agent_text` drafts use.  Without this split, redacting
+            # agent_text moved the leak one event type over rather than
+            # closing it.
             append_gate_event_jsonl(evt)
             record_counter("gate_event_total", 1.0, gate=gate, action=action)
-            await _emit(evt)
+
+            def _redact_for_wire(text: str) -> tuple[str, int]:
+                return redact_gated_values(text, messages, all_tool_results)
+
+            await _emit(redact_event_for_wire(evt, _redact_for_wire))
         except Exception as exc:
             logger.debug("gate_event emission failed: %s", exc)
     # The tool-inventory bypass exists so describing the real tool schema
@@ -3850,6 +3937,26 @@ async def _run_agent_loop(
             final=clean_reply,
         )
         logger.exception("Scientific-conclusion final gate failed closed")
+
+    # Approval language that no stored review backs. Chat has no approval
+    # state (the ClaimAuditReview lane is behind default-off flags and is not
+    # reachable here), so a line opening with "Draft claim" / "APPROVED by"
+    # and carrying a tool-matched number gets an explicit NOT APPROVED prefix
+    # rather than shipping with a governance stamp the platform never issued.
+    _approval_draft = clean_reply
+    clean_reply, _approval_marked = mark_unapproved_claims(
+        clean_reply, all_tool_results
+    )
+    if _approval_marked:
+        fabrication_stats["limited"] = True
+        await _gate_event(
+            "approval_marker",
+            "annotated_limited",
+            reason="no_bound_claim_audit_review",
+            details={"marked_lines": _approval_marked},
+            draft=_approval_draft,
+            final=clean_reply,
+        )
 
     # M7: telemetry so the UI can surface "hit iteration cap" to the user
     # (previously silent — a 13-step workflow just got truncated with no

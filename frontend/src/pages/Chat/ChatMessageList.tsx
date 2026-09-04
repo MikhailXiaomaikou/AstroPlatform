@@ -80,7 +80,36 @@ export function ChatMessageList({
                         {msg._thinking.map((step, i) => (
                           <li key={i} style={{ padding: "3px 0", borderLeft: "2px solid #ccc", paddingLeft: 8, marginBottom: 2 }}>
                             {step.kind === "agent_text" && (
-                              <span>💭 {step.text}</span>
+                              <span>
+                                💭{" "}
+                                {/* H5 (2026-09-02): agent_text is streamed
+                                    before the output gate runs, so it is
+                                    labelled as an unverified draft rather
+                                    than reading as a settled answer. */}
+                                {step.draft && (
+                                  <em
+                                    className="chat-thinking-draft-label"
+                                    style={{ color: "#92400e", marginRight: 4 }}
+                                  >
+                                    {t("chat.thinking.draft_label")}
+                                  </em>
+                                )}
+                                {/* 2026-09-03 review: the backend also sends
+                                    how many values its honesty gates blanked
+                                    out of this draft. It was parsed and then
+                                    dropped; a bare "[withheld]" in the prose
+                                    does not say how much was removed, so the
+                                    count is shown next to the draft label. */}
+                                {typeof step.redactedCount === "number" && step.redactedCount > 0 && (
+                                  <em
+                                    className="chat-thinking-redacted-count"
+                                    style={{ color: "#92400e", marginRight: 4 }}
+                                  >
+                                    · {step.redactedCount} {t("chat.thinking.redacted_suffix")}
+                                  </em>
+                                )}
+                                {step.text}
+                              </span>
                             )}
                             {step.kind === "status" && (
                               <span>

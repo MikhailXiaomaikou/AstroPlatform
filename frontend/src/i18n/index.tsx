@@ -728,6 +728,11 @@ const translations: Record<string, Record<Lang, string>> = {
   "error.stream_drop_no_bytes": { en: "AI reply interrupted — the response stream was closed before any content arrived (likely an upstream proxy timeout or a network problem). Please retry; if it recurs, ask a shorter question or try again later.", zh: "AI 回复中断 — 响应流在收到任何内容前被关闭（可能是上游代理超时或网络问题）。请重试；若反复出现，改用更简短的问题或稍后再试。", fr: "Réponse IA interrompue — le flux a été fermé avant l'arrivée de tout contenu (probablement un délai d'attente du proxy en amont ou un problème réseau). Réessayez ; si cela se reproduit, posez une question plus courte ou réessayez plus tard.", es: "Respuesta de IA interrumpida — el flujo se cerró antes de que llegara contenido (probablemente un tiempo de espera del proxy o un problema de red). Reintente; si se repite, use una pregunta más corta o pruebe más tarde." },
   "chat.new_chat_hint": { en: "👉 Use the button below to start a new chat (this clears the current session history):", zh: "👉 点下方按钮开始新聊天（会清空当前会话的历史）：", fr: "👉 Utilisez le bouton ci-dessous pour démarrer une nouvelle discussion (cela efface l'historique de la session en cours) :", es: "👉 Use el botón de abajo para iniciar un chat nuevo (esto borra el historial de la sesión actual):" },
 
+  // Thinking timeline: intermediate prose is streamed before the output
+  // gate runs, so it is labelled as an unverified draft (2026-09-02, H5).
+  "chat.thinking.draft_label": { en: "draft · unverified", zh: "草稿 · 未验证", fr: "brouillon · non vérifié", es: "borrador · sin verificar" },
+  "chat.thinking.redacted_suffix": { en: "value(s) withheld", zh: "个数值被扣留", fr: "valeur(s) retenue(s)", es: "valor(es) retenido(s)" },
+
   // Per-reply validation badge (2026-07-03 honesty surfacing). Wording is
   // deliberately understated: "passed" = checked against this turn's tool
   // data, never "guaranteed correct".
@@ -739,6 +744,8 @@ const translations: Record<string, Record<Lang, string>> = {
   "chat.validation.badge_refusal":       { en: "Request refused", zh: "已拒绝不当请求", fr: "Demande refusée", es: "Solicitud rechazada" },
   "chat.validation.badge_abstention":    { en: "Needs more evidence", zh: "缺少必要证据", fr: "Preuves supplémentaires requises", es: "Se necesitan más pruebas" },
   "chat.validation.numeric_gate":        { en: "Numeric claims", zh: "数值声明", fr: "Affirmations numériques", es: "Afirmaciones numéricas" },
+  "chat.validation.approval_state":      { en: "Human approval", zh: "人类批准", fr: "Approbation humaine", es: "Aprobación humana" },
+  "chat.validation.approval_none":       { en: "none — no reviewer record backs this reply", zh: "无 —— 没有审阅记录支持本回复", fr: "aucune — aucun avis de relecteur n'appuie cette réponse", es: "ninguna — ningún registro de revisor respalda esta respuesta" },
   "chat.validation.citation_gate":       { en: "Citations", zh: "文献引用", fr: "Citations", es: "Citas" },
   "chat.validation.state_passed":        { en: "checked against this turn's tool outputs", zh: "已对照本轮工具输出检查", fr: "vérifié par rapport aux sorties d'outils de ce tour", es: "verificado contra las salidas de herramientas de este turno" },
   "chat.validation.state_regenerated":   { en: "intervened — reply was rewritten before it passed", zh: "闸门介入——回复经重写后才通过", fr: "intervention — la réponse a été réécrite avant de passer", es: "intervención — la respuesta fue reescrita antes de pasar" },

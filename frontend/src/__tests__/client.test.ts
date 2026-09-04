@@ -549,6 +549,83 @@ describe("Auth helper functions", () => {
     vi.unstubAllGlobals();
   });
 
+  it("sendChatMessage forwards agent_text draft flags to onThinking", async () => {
+    // H5 (2026-09-02): intermediate prose is streamed BEFORE the output gate
+    // runs and is persisted into the audit trail, so the backend marks it
+    // `draft` (plus how many withheld values it redacted). The client must
+    // carry both through or the UI cannot label the prose as unverified.
+    const { sendChatMessage } = await import("../api/client");
+
+    const sseBody = [
+      'data: {"type":"agent_text","content":"Chain finished: H0 = [withheld].","draft":true,"redacted_count":2}\n\n',
+      'data: {"type":"text","content":"H0 is not claimable from this run."}\n\n',
+      'data: {"type":"done"}\n\n',
+    ].join("");
+
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(sseBody));
+        controller.close();
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({ ok: true, body: stream }));
+
+    const events: import("../api/client").ThinkingEvent[] = [];
+    const result = await sendChatMessage(
+      [{ role: "user", content: "run the chain" }],
+      undefined,
+      (evt) => events.push(evt),
+    );
+
+    const drafts = events.filter((e) => e.type === "agent_text");
+    expect(drafts).toHaveLength(1);
+    const draft = drafts[0] as Extract<
+      import("../api/client").ThinkingEvent,
+      { type: "agent_text" }
+    >;
+    expect(draft.draft).toBe(true);
+    expect(draft.redacted_count).toBe(2);
+    expect(draft.content).toBe("Chain finished: H0 = [withheld].");
+    // The gated reply still arrives through the canonical `text` frame.
+    expect(result.reply).toBe("H0 is not claimable from this run.");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("sendChatMessage defaults agent_text draft to false when the backend omits it", async () => {
+    const { sendChatMessage } = await import("../api/client");
+
+    const sseBody = [
+      'data: {"type":"agent_text","content":"Looking at the tables."}\n\n',
+      'data: {"type":"text","content":"Done."}\n\n',
+    ].join("");
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(sseBody));
+        controller.close();
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({ ok: true, body: stream }));
+
+    const events: import("../api/client").ThinkingEvent[] = [];
+    await sendChatMessage(
+      [{ role: "user", content: "hello" }],
+      undefined,
+      (evt) => events.push(evt),
+    );
+
+    const draft = events.find((e) => e.type === "agent_text") as Extract<
+      import("../api/client").ThinkingEvent,
+      { type: "agent_text" }
+    >;
+    expect(draft.draft).toBe(false);
+    expect(draft.redacted_count).toBeUndefined();
+
+    vi.unstubAllGlobals();
+  });
+
   it("getPreferredAiModelProfile defaults by provider and rejects cross-provider storage", async () => {
     store["astro_ai_provider"] = "deepseek";
     store["astro_ai_model_profile"] = "openai:gpt-5.5";

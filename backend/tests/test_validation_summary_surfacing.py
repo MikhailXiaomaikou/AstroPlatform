@@ -670,3 +670,70 @@ def test_record_tool_provenance_activity_ignores_envelope_free_results():
     te._record_tool_provenance_activity("run_adql", "not-a-dict")
     te._record_tool_provenance_activity("run_adql", {"reproducibility": {"run_id": ""}})
     assert len(prov._provenance_records) == before
+
+
+# ---------- 5. the workflow-timeout fallback is a validation summary too ----------
+
+
+async def test_workflow_timeout_fallback_summary_reports_an_approval_state(
+    app_client, monkeypatch
+):
+    """PRRT_kwDORoeoE86ethcX (Codex review 2026-09-03, PR #69).
+
+    The stream endpoint's workflow-timeout path builds a schema-v1 summary
+    for its tool-grounded fallback reply and persisted it WITHOUT
+    ``approval_state``, so the one reply path with the least review work
+    behind it was the one the badge could not state an approval for.
+    """
+    captured: list[dict] = []
+
+    async def fake_build_runtime(req, user, db):
+        return {"agent_names": ["orchestrator"], "toolset": [], "system": "test system"}
+
+    async def fake_run_orchestrated_chat(**kwargs):
+        # One tool result reaches the stream before the budget runs out, so
+        # the fallback has something to ground its summary on.
+        await kwargs["on_event"]({
+            "type": "tool_result",
+            "tool": "list_cosmology_datasets",
+            "tool_call_id": "call-1",
+            "input": {},
+            "result": {"datasets": ["desi_dr2_bao"], "count": 1},
+        })
+        raise asyncio.TimeoutError()
+
+    async def fake_append_server_evidence(**kwargs):
+        captured.append(kwargs)
+        return True
+
+    monkeypatch.setattr("app.api.chat._build_runtime", fake_build_runtime)
+    monkeypatch.setattr("app.api.chat._run_orchestrated_chat", fake_run_orchestrated_chat)
+    monkeypatch.setattr(
+        "app.services.server_evidence.append_server_evidence",
+        fake_append_server_evidence,
+    )
+
+    resp = await app_client.post(
+        "/api/chat/message/stream",
+        json={
+            "messages": [{"role": "user", "content": "hello"}],
+            "context": {
+                "api_provider": "local",
+                "model_profile": "local:openai-cli",
+                "python_session_id": "validation-summary-timeout-test",
+                "current_session_id": None,
+            },
+        },
+    )
+    assert resp.status_code == 200
+    frames = [
+        json.loads(line[len("data: "):])
+        for line in resp.text.splitlines()
+        if line.startswith("data: ") and line[len("data: "):].strip()
+    ]
+    assert [f for f in frames if f.get("type") == "text"], frames
+    assert captured, "the timeout fallback persisted no validation summary"
+    summary = captured[-1]["validation_summary"]
+    assert summary["schema_version"] == 1
+    assert summary["reason"] == "workflow_timeout_tool_grounded_fallback"
+    assert summary["approval_state"] == "none"
