@@ -13,12 +13,190 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any
+from typing import Any, NamedTuple
 
 
+# 2026-09-02 (review H8): the trailing lookahead used to reject a number
+# followed by a letter, so ``H0 = 73.2km/s/Mpc`` produced no token at all and
+# a withheld posterior with a glued unit escaped the gate.  A unit may now
+# follow the number.  The leading lookbehind still rejects letter-led
+# identifiers (``H0``, ``DR1``, ``z0``).
+# Only a RECOGNISED glued unit may follow the digits (Codex review
+# 2026-09-03, PRRT_kwDORoeoE86eyrId): admitting any letter read "comet 67P"
+# as 67 and replaced a whole honest reply when a withheld H0 sat near it.
+# The same rule keeps out what earlier reviews rejected one by one -- a
+# digit-led hex digest (``3a7e6e4``, ``68a9f3c2``), an English ordinal ("the
+# 68th sample" is a draw index, review 2026-09-03) and a lone count letter
+# (68k samples, 95M draws) -- because none of them starts a unit.  A glued
+# ``K`` is deliberately absent: "68K samples" is a count, and a temperature
+# is still read as ``2.7 K`` with the space.  The list is case-sensitive so
+# ``95M`` cannot pass as metres.
+_GLUED_UNIT = (
+    r"(?:km|kpc|Mpc|Gpc|Gyr|Myr|yr|pc|keV|GeV|eV|sigma|σ|deg|arcmin|arcsec"
+    r"|mag|Hz|nm|μm|Å|s|m|g)"
+)
 _NUMBER_RE = re.compile(
     r"(?<![A-Za-z0-9_.])[-+]?(?:\d+\.\d+|\d+|\.\d+)"
-    r"(?:[eE][-+]?\d+)?(?![A-Za-z0-9_]|\.\d)"
+    r"(?:[eE][-+]?\d+)?"
+    r"(?![0-9_]|\.\d)"
+    # What follows the number: the end of the text, a non-word character
+    # (space, %, /, a dash, a bracket), or a recognised unit that is a whole
+    # word of its own.  ``[^\W\d_]`` is "a letter" in Unicode terms.
+    rf"(?=$|\W|{_GLUED_UNIT}(?![^\W\d_]))"
+)
+_PERCENT_AFTER_RE = re.compile(r"\s*(?:%|percent\b|per\s+cent\b)", re.IGNORECASE)
+# H0 in little-h units, in the notations a user or model actually writes:
+# ``h = 0.732``, ``h ≈ .683``, ``h0 = 0.677``, ``H0/100 = 0.677``,
+# ``little-h value of 0.677``.  Compared only against withheld H0.
+# The value accepts the same numeric grammar as the ordinary tokenizer, not
+# just "0.677"/".677": an equivalent "h = 6.77e-1" produced a plain 0.677
+# token with no x100 conversion, so the withheld H0 was never matched (Codex
+# review 2026-09-03).  The sci-notation rewrite runs before this scan, so the
+# superscript form arrives here as "6.77e-1".
+_LITTLE_H_RE = re.compile(
+    r"(?<![A-Za-z0-9_])(?:H0\s*/\s*100|little[-\s]h(?:\s+value)?|h0|h)"
+    r"\s*(?:[=≈:~]|is|of|at)\s*"
+    r"((?:\d+\.\d+|\d+|\.\d+)(?:[eE][-+]?\d+)?)",
+    re.IGNORECASE,
+)
+# A parameter label bound to the token keeps it a value claim whatever
+# follows: ``H0 = 68%`` and ``the H0 median is 68%`` are never interval
+# idioms.  The binding is a symbol OR a copula, because a model states a
+# value both ways and the symbol-only form let "the H0 median is 68%, with
+# the credible interval withheld" pass as coverage (review 2026-09-03).
+# The subject a value can be assigned TO: a named parameter, or an unlabeled
+# posterior statistic.  "The posterior median is 68%, with the credible
+# interval withheld" names no parameter, so the named-only pattern let the
+# later interval word exempt a withheld value that the sentence had just
+# stated (Codex review 2026-09-03).  ``H_0`` is the conventional spelling and
+# was missing from the parameter list for the same reason.
+_ASSIGNMENT_SUBJECT = (
+    r"(?:H0|H_0|H₀|omegam|omega_m|Omega_m|sigma8|S8|w0|wa|hubble"
+    r"|(?:posterior\s+|marginal(?:ised|ized)?\s+|exploratory\s+|fitted\s+)?"
+    # "result" and a bare "value" are the plainest way to state a number and
+    # were missing, so "The result is 68%, with the credible interval
+    # withheld" was exempted by the later cue (Codex review 2026-09-03).
+    r"(?:median|mean|best[-\s]?fit|central\s+value|point\s+estimate"
+    r"|result|value|figure))"
+)
+# An approximation word between the copula and the number is still an
+# assignment.  The copula had to end right before the number, so "The
+# exploratory median is approximately sixty-eight" carried no claim context
+# and the spelled value was skipped (Codex review 2026-09-03,
+# PRRT_kwDORoeoE86etS0V).  A count ("approximately sixty-eight samples")
+# still has no subject in front of it and stays unparsed.
+_APPROXIMATION = r"(?:(?:about|approximately|around|roughly|near|close\s+to|some)\s+)?"
+# A determiner or an opening bracket/quote after the copula or symbol does
+# not break the assignment: ``H0 = the 68% credible interval``, ``H0 is (68%
+# credible interval withheld)`` and ``H0 为（68% …）`` state the value with one
+# word or mark in front of it, and the guard used to require the number to
+# follow the copula directly (round 17, R2; origin/main catches all of them).
+# ``为`` is the copula of the Chinese notation a bilingual reply writes and
+# takes no surrounding whitespace.  Two deliberate limits: the colon takes no
+# determiner -- ``H0: the 68% credible interval is withheld`` is a label
+# introducing a description, which the runner's F5 specificity tests keep
+# honest, while ``H0: 68%`` and ``H0: (68%`` still bind -- and the
+# prepositions ``of``/``at`` take none either, so ``H0 is withheld at the
+# 68% confidence level`` stays the coverage wording it is.  The copular
+# determiner binds only inside the label's own sub-clause; see
+# ``_parameter_assignment_before``.
+_ASSIGNED_DETERMINER = r"(?:(?:the|a|an|our|its|this)\s+)?"
+_ASSIGNED_OPENER = r"[(\"'“「【（]?\s*"
+_ASSIGNMENT_SYMBOL_RE = re.compile(r"[=~≈]")
+_PARAMETER_ASSIGNMENT_BEFORE_RE = re.compile(
+    rf"\b{_ASSIGNMENT_SUBJECT}\b"
+    r"(?:[^\n;]{0,28}?"
+    rf"(?:[=~≈]\s*{_ASSIGNED_DETERMINER}|:\s*)"
+    r"|(?P<copula_gap>[^\n;]{0,28}?)"
+    r"(?:(?:\b(?:is|was|are|were|equals?|sits\s+at|comes\s+out\s+at)\s+"
+    rf"{_APPROXIMATION}|为\s*)(?P<determiner>{_ASSIGNED_DETERMINER})"
+    rf"|\b(?:of|at)\s+{_APPROXIMATION}))"
+    rf"{_ASSIGNED_OPENER}$",
+    re.IGNORECASE,
+)
+# The assignment can also FOLLOW the token: "68% is the H0 median, with its
+# credible interval withheld" states the value first, and a backward-only
+# check let the later interval cue exempt it (Codex review 2026-09-03,
+# PRRT_kwDORoeoE86eyq3R, filed on #68).  A reverse copula followed by an
+# assignment subject binds the token as a value.
+_PARAMETER_ASSIGNMENT_AFTER_RE = re.compile(
+    r"^\s*(?:%|percent\b|per\s+cent\b)?\s*(?:is|was|are|were)\s+"
+    rf"(?:(?:the|our|its|this|that)\s+)?{_ASSIGNMENT_SUBJECT}\b",
+    re.IGNORECASE,
+)
+# The label can also follow the token as a POSTFIX: ``68% for H0, with the
+# credible interval withheld`` binds the number to the parameter through the
+# preposition directly after the percent sign, and the interval cue later in
+# the clause exempted it (round 17, R1).  ``the 68% credible interval for H0``
+# is not this shape -- its preposition follows "interval", not the percent
+# sign -- and stays the signed coverage wording.
+_PARAMETER_POSTFIX_LABEL_RE = re.compile(
+    r"^\s*(?:%|percent\b|per\s+cent\b)?\s+(?:for|of|on)\s+"
+    rf"(?:(?:the|a|an|our|its)\s+)?{_ASSIGNMENT_SUBJECT}\b",
+    re.IGNORECASE,
+)
+_H0_PARAMETER_NAMES = frozenset({"h0", "h_0", "hubble", "hubble_constant"})
+# The only percent exemption is the credible/confidence-interval idiom itself:
+# a token on a standard interval level, followed by ``%``/``percent``, with
+# interval wording in the same clause (``the 68% credible interval``).  Every
+# other percent token stays in the withheld universe, so ``67.7 percent for
+# H0`` or ``H0 is 67.7% of 100 km/s/Mpc`` is still a withheld restatement
+# (adversarial review 2026-09-02: a token-class exemption was a relaxation).
+# Matched EXACTLY (see _is_interval_idiom): a reply that writes a level not on
+# this list is writing a number, not naming an interval.  Rounded 1-sigma /
+# 2-sigma spellings (68.3, 95.4) are deliberately absent: they collide with
+# Planck-like H0 medians, and the asymmetric risk is resolved the way this
+# project always resolves it — an honest reply can say "68%" or "1 sigma",
+# a leak cannot be taken back.
+_INTERVAL_LEVELS = (68.0, 68.27, 90.0, 95.0, 95.45, 99.0, 99.7)
+_INTERVAL_WORDING_RE = re.compile(
+    r"\b(?:interval|credible|confidence|C\.?L\.?|coverage|containment|"
+    r"percentile|quantile)\b",
+    re.IGNORECASE,
+)
+# A clause ends at ; ! ? newline, or at a period that ends a sentence — one
+# followed by whitespace or the end of the text.  A period inside "C.L." (a
+# letter follows immediately) or inside a decimal is not a boundary; the
+# earlier form split every period and cut dotted abbreviations in half before
+# the interval cue could be recognised (review 2026-09-03).
+_CLAUSE_BREAK_RE = re.compile(r"[;!?\n]|\.(?=\s|$)")
+# Finer than a clause: what separates one predicate from the next inside a
+# sentence.  Used only to decide which words sit in a parameter label's own
+# sub-clause.
+_SUBCLAUSE_BREAK_RE = re.compile(
+    r"[;!?\n,]|\.(?=\s|$)"
+    r"|\b(?:and|but|while|whereas|although|though|however|yet)\b",
+    re.IGNORECASE,
+)
+_DIGIT_RE = re.compile(r"\d")
+# "Another number" for the interval-cue trim: a digit, or a spelled number
+# word.  Only the words that can carry a coverage level are listed, so an
+# ordinary "one" or "two" in prose does not cut a cue short.
+# A digit that is part of a LABEL is not another number: the "0" in H0, the
+# "8" in sigma8 and the "2" in DR2 truncated the cue window right before the
+# token, so "The credible interval for H0 is 68%" lost its own cue (Codex
+# review 2026-09-03).
+# The spelled phrase continues: another number word, or a decimal "point".
+_SPELLED_CONTINUES_RE = re.compile(
+    r"[-\s]+(?:point\b|zero|oh|one|two|three|four|five|six|seven|eight|nine|"
+    r"ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|"
+    r"nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\b",
+    re.IGNORECASE,
+)
+_OTHER_NUMBER_RE = re.compile(
+    r"(?<![A-Za-z_])\d|\b(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|"
+    r"sixty[-\s]eight|ninety[-\s]five|ninety[-\s]nine)\b",
+    re.IGNORECASE,
+)
+# The interval words glued to the PREVIOUS number's own percent sign.  Cutting
+# the cue window at that number left "% credible interval is withheld, but "
+# in front of the token, so "The 95% credible interval is withheld, but 68%
+# for H0 is the exploratory result" borrowed the 95's cue for the 68 (Codex
+# review 2026-09-03, PRRT_kwDORoeoE86etS0Y).
+_ATTACHED_INTERVAL_WORDS_RE = re.compile(
+    r"(?:\s+(?:credible|confidence|intervals?|coverage|containment|percentiles?"
+    r"|quantiles?|C\.?L\.?))*",
+    re.IGNORECASE,
 )
 _UNTRUSTED_EVIDENCE_RE = re.compile(
     r"(?:tool_results?|tool\s+transcript|previous[- ]looking|"
@@ -144,24 +322,233 @@ def _untrusted_user_values(messages: list[dict]) -> set[float]:
         text = str(message.get("content") or "")
         if not _UNTRUSTED_EVIDENCE_RE.search(text):
             continue
+        # The pasted evidence gets the same power-of-ten rewrite the reply
+        # gets: "h = 6.77 × 10^-1" captured only 6.77 and recorded 677, so a
+        # reply saying "H0 = 67.7" produced no echo hit (Codex review
+        # 2026-09-03).
+        text = _normalized_reply_with_map(text)[0]
         for match in _DIRECT_PARAMETER_RE.finditer(text):
             values.add(float(match.group("value")))
+        # The pasted evidence may itself be in little-h units.  Only the
+        # reply side was converted, so a user who pasted "h = 0.677" and a
+        # model that answered "H0 = 67.7" produced no echo hit at all -- B5
+        # bypassed by switching units between the turns (Codex review
+        # 2026-09-03).
+        for match in _LITTLE_H_RE.finditer(text):
+            try:
+                values.add(float(match.group(1)) * 100.0)
+            except ValueError:
+                continue
         for parameter in _STRUCTURED_PARAMETER_RE.finditer(text):
             for stat in _STRUCTURED_STAT_RE.finditer(parameter.group("body")):
                 values.add(float(stat.group("value")))
     return {value for value in values if math.isfinite(value)}
 
 
-def _reply_number_tokens(reply: str) -> list[float]:
-    values: list[float] = []
-    for match in _NUMBER_RE.finditer(str(reply or "")):
+# Markdown emphasis and code marks that flank a run the way CommonMark
+# emphasis does: the opener is not glued to a letter, digit, sign or decimal
+# point on its left, the closer is not glued to a letter or digit on its
+# right, and the run has no space next to either mark.  ``H0 is **68%**
+# credible interval withheld`` put two asterisks between the copula and the
+# number so no guard saw an assignment, and ``_68%_`` did not tokenize at all
+# (round 17, R3).  Identifiers (``sigma_8``, ``fig_68_a``) and arithmetic
+# (``2*68*3``) have letters or digits against the mark and are left alone.
+_MARKUP_MARK_RE = re.compile(
+    r"(?<![A-Za-z0-9.+\-−])(\*\*|__|\*|_|`)(?=\S)([^\n]+?)(?<=\S)\1(?![A-Za-z0-9])"
+)
+
+
+def _strip_markup_marks(text: str) -> str:
+    """Remove paired emphasis/code marks; nested marks peel off in turn."""
+    while True:
+        stripped = _MARKUP_MARK_RE.sub(r"\2", text)
+        if stripped == text:
+            return stripped
+        text = stripped
+
+
+class _Token(NamedTuple):
+    value: float
+    start: int
+    end: int
+    is_percent: bool
+    little_h: bool
+
+
+def _normalized_reply_with_map(reply: str) -> tuple[str, list[int]]:
+    """Rewrite power-of-ten notation as ``claim_validator`` does, keeping offsets.
+
+    Only the sci-notation rewrites are applied (``7.32×10^1`` -> ``7.32e1``);
+    code spans are NOT stripped and thousands separators are NOT collapsed,
+    so no token that the previous tokenizer produced can disappear.
+    ``bmap[i]`` maps a boundary of the returned text back to the original
+    reply.
+    """
+    from app.services.claim_validator import (
+        _SCI_BARE_POWER,
+        _SCI_SUPERSCRIPT,
+        _SUPERSCRIPT_DIGITS,
+        _apply_regex_with_map,
+        _replace_sci_mantissa_power_with_map,
+    )
+
+    # No thousands-separator rewrite here: ``(\d),(\d{3})`` would glue two
+    # comma-joined decimals (``144.9,149.3``) into one un-tokenizable run and
+    # lose both numbers, which origin/main saw (adversarial review 2026-09-02).
+    text = str(reply or "").replace("−", "-")
+    bmap = list(range(len(text) + 1))
+    text, bmap = _apply_regex_with_map(
+        text, bmap, _SCI_SUPERSCRIPT,
+        lambda m: "10^" + m.group(1).translate(_SUPERSCRIPT_DIGITS),
+    )
+    text, bmap = _replace_sci_mantissa_power_with_map(text, bmap)
+    text, bmap = _apply_regex_with_map(
+        text, bmap, _SCI_BARE_POWER, lambda m: f"1e{m.group(1)}"
+    )
+    return text, bmap
+
+
+def _reply_number_spans(reply: str) -> list[_Token]:
+    """Every number-like token in ``reply`` with its original-text span.
+
+    The power-of-ten rewrite is additive, never substitutive: tokens are read
+    from the rewritten text AND from the raw reply, then unioned.  Reading only
+    the rewritten text would consume the raw mantissa — ``67.7 × 10^3 m/s/Mpc``
+    becomes ``67.7e3`` and the withheld 67.7 disappears, which is an SI-prefix
+    restatement of the same posterior (adversarial review 2026-09-03).
+    """
+    from app.services.claim_validator import _NUMBER_WORD_TOKEN, _spelled_number_to_float
+
+    raw = str(reply or "").replace("−", "-")
+    text, bmap = _normalized_reply_with_map(reply)
+    tokens: list[_Token] = []
+    for match in _NUMBER_RE.finditer(raw):
         try:
             value = float(match.group())
         except ValueError:
             continue
-        if math.isfinite(value):
-            values.append(value)
-    return values
+        if not math.isfinite(value):
+            continue
+        tokens.append(_Token(
+            value,
+            match.start(),
+            match.end(),
+            bool(_PERCENT_AFTER_RE.match(raw[match.end():])),
+            False,
+        ))
+    for match in _NUMBER_RE.finditer(text):
+        try:
+            value = float(match.group())
+        except ValueError:
+            continue
+        if not math.isfinite(value):
+            continue
+        tokens.append(_Token(
+            value,
+            bmap[match.start()],
+            bmap[match.end()],
+            bool(_PERCENT_AFTER_RE.match(text[match.end():])),
+            False,
+        ))
+    # Three widenings over the original "<word> point <word>+" grammar, each
+    # from a measured escape (Codex review 2026-09-03):
+    #   * a leading "negative"/"minus" is part of the number.  Without it
+    #     "w0 is negative one point zero" produced +1.0 and a withheld -1.0
+    #     was never matched.
+    #   * a whole-number word with no "point" is a number too.  "The
+    #     exploratory median is sixty-eight" produced no token at all.  Only
+    #     forms that cannot be an ordinary count are accepted: a tens word
+    #     (twenty..ninety), optionally with a unit, or ANY unit word once it
+    #     carries an explicit sign.  A bare "two"/"ten" stays unparsed, so
+    #     "two tools" and "ten iterations" are still not posterior values.
+    #   * the percent flag is read after a spelled token as well, so "the
+    #     sixty-eight point zero percent credible interval" is an interval
+    #     idiom rather than a bare value.
+    sign = r"(?:(?P<sign>negative|minus)\s+)?"
+    tens = r"(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)"
+    # A spelled whole number is a value only where the sentence treats it as
+    # one.  "sixty-eight samples were retained" is a diagnostic count, and
+    # reading every tens phrase as a posterior falsely replaced an honest
+    # reply (Codex review 2026-09-03).  A decimal form ("sixty-eight point
+    # two") stays unconditional: nobody counts samples that way.
+    spelled = re.compile(
+        rf"\b{sign}(?P<number>"
+        rf"{_NUMBER_WORD_TOKEN}(?:[-\s]{_NUMBER_WORD_TOKEN})?"
+        rf"\s+point(?:\s+{_NUMBER_WORD_TOKEN})+"
+        rf")\b",
+        re.IGNORECASE,
+    )
+    spelled_whole = re.compile(
+        rf"\b{sign}(?P<number>{tens}(?:[-\s]{_NUMBER_WORD_TOKEN})?)\b"
+        rf"(?P<unit>\s*(?:%|percent\b|per\s+cent\b|km\s*/\s*s|km/s/Mpc"
+        rf"|kilometres?|kilometers?))?",
+        re.IGNORECASE,
+    )
+    signed_unit = re.compile(
+        rf"\b(?P<sign>negative|minus)\s+(?P<number>{_NUMBER_WORD_TOKEN})\b",
+        re.IGNORECASE,
+    )
+    for pattern in (spelled, spelled_whole, signed_unit):
+        for match in pattern.finditer(text):
+            value = _spelled_number_to_float(match.group("number"))
+            if value is None or not math.isfinite(value):
+                continue
+            if pattern is spelled_whole:
+                # Not a fragment of a longer spelled number: "seventy-three
+                # point two" is one number, and a lookahead in the pattern
+                # only made it backtrack to "seventy" (a spurious 70).
+                if _SPELLED_CONTINUES_RE.match(text[match.end():]):
+                    continue
+            if pattern is spelled_whole and not match.group("sign"):
+                # Claim context required: a unit or percent sign of its own,
+                # or an assignment subject in front of it.
+                before = text[max(0, match.start() - 48):match.start()]
+                if not match.group("unit") and not _parameter_assignment_before(before):
+                    continue
+            if match.group("sign"):
+                value = -value
+            # `spelled_whole` swallows a trailing "percent" as its unit
+            # group, so the flag has to be read from the match as well as
+            # from what follows it: "The sixty-eight percent credible
+            # interval is withheld" was recorded with is_percent=False and
+            # lost the interval exemption (Codex review 2026-09-03).
+            unit = match.groupdict().get("unit") or ""
+            tokens.append(_Token(
+                value,
+                bmap[match.start()],
+                bmap[match.end()],
+                bool(_PERCENT_AFTER_RE.match(text[match.end():]))
+                or bool(_PERCENT_AFTER_RE.match(unit)),
+                False,
+            ))
+    for match in _LITTLE_H_RE.finditer(text):
+        try:
+            reduced = float(match.group(1))
+        except ValueError:
+            continue
+        # Little h is a reduced value below 1.  Widening the literal grammar
+        # to the full numeric form let "H0 is 68" match the `h0` alternative
+        # and invent a 6800 token (Codex review 2026-09-03); the magnitude is
+        # what distinguishes the reduced notation from the value itself.
+        if not 0.0 < reduced < 1.0:
+            continue
+        value = reduced * 100.0
+        tokens.append(_Token(value, bmap[match.start(1)], bmap[match.end(1)], False, True))
+    # The raw and rewritten passes yield the same token wherever no rewrite
+    # applied; keep one per (value, span) so callers see a clean list.
+    seen: set[tuple[float, int, int, bool]] = set()
+    unique: list[_Token] = []
+    for token in sorted(tokens, key=lambda t: (t.start, t.end, t.value)):
+        key = (token.value, token.start, token.end, token.little_h)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(token)
+    return unique
+
+
+def _reply_number_tokens(reply: str) -> list[float]:
+    return [token.value for token in _reply_number_spans(reply) if not token.little_h]
 
 
 def untrusted_evidence_echo_values(
@@ -175,6 +562,13 @@ def untrusted_evidence_echo_values(
     produced the same number.  Exact matching is intentional: this gate closes
     the echo channel without treating ordinary request parameters (such as a
     requested redshift) as evidence claims.
+
+    Little-h tokens are scanned here, unlike in the withheld-posterior gate:
+    ``h = 0.677`` carries the value 67.7 and restates a rejected H0 in the
+    standard equivalent representation, so excluding it let the number cross
+    turns unchanged (Codex review 2026-09-03).  Because the comparison is
+    exact, including the token widens nothing it should not: the user has to
+    have supplied that very number.
     """
 
     untrusted = _untrusted_user_values(messages)
@@ -187,50 +581,235 @@ def untrusted_evidence_echo_values(
         if not any(math.isclose(value, current, rel_tol=1e-12, abs_tol=1e-12) for current in supported)
     }
     hits = {
-        token
-        for token in _reply_number_tokens(reply)
-        if any(math.isclose(token, value, rel_tol=1e-12, abs_tol=1e-12) for value in unsupported)
+        token.value
+        for token in _reply_number_spans(reply)
+        if any(
+            math.isclose(token.value, value, rel_tol=1e-12, abs_tol=1e-12)
+            for value in unsupported
+        )
     }
     return sorted(hits)
 
 
-def nonpublication_posterior_values(reply: str, tool_results: Any) -> list[float]:
-    """Return non-publication posterior numbers that escaped into prose."""
+def _named_numbers(value: Any, parameter: str = "", stat: str = "") -> Iterable[tuple[str, str, float]]:
+    """Yield ``(parameter_name, stat_key, number)`` for every finite number
+    under a posterior container.  ``parameter_name`` is the first key below
+    the container (``parameters.H0.median`` -> ``("H0", "median", ...)``)."""
+    if isinstance(value, bool):
+        return
+    if isinstance(value, (int, float)):
+        number = float(value)
+        if math.isfinite(number):
+            yield parameter, stat, number
+        return
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            yield from _named_numbers(nested, parameter or str(key), str(key))
+        return
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for nested in value:
+            yield from _named_numbers(nested, parameter, stat)
 
-    def _withheld_values(node: Any, inherited_withhold: bool = False) -> Iterable[float]:
-        if isinstance(node, Mapping):
-            withhold = inherited_withhold or (
-                node.get("publication_ready") is False
-                or node.get("__do_not_claim__") is True
-            )
-            if withhold:
-                for key in _POSTERIOR_KEYS:
-                    if key in node:
-                        yield from _finite_numbers(node[key])
-            for nested in node.values():
-                yield from _withheld_values(nested, withhold)
-        elif isinstance(node, Sequence) and not isinstance(
-            node, (str, bytes, bytearray)
-        ):
-            for nested in node:
-                yield from _withheld_values(nested, inherited_withhold)
+
+def _withheld_entries(node: Any, inherited_withhold: bool = False) -> Iterable[tuple[str, str, float]]:
+    if isinstance(node, Mapping):
+        withhold = inherited_withhold or (
+            node.get("publication_ready") is False
+            or node.get("__do_not_claim__") is True
+        )
+        if withhold:
+            for key in _POSTERIOR_KEYS:
+                if key in node:
+                    yield from _named_numbers(node[key])
+        for key, nested in node.items():
+            if key == "prior_dominance_screen":
+                # cosmology_likelihoods/sampling.py:_prior_dominance_screen —
+                # prior bounds and edge-mass fractions (0.0 / 1.0 / 0.05),
+                # never posterior statistics.  Its inner ``parameters`` map
+                # collided with the research summary's own counts ("0 ready
+                # out of 7", "1 removed") and replaced whole replies with a
+                # refusal (blind case E1, 2026-08-06).  The real posterior of
+                # the same run is still harvested from ``parameters`` /
+                # ``posterior_summary`` at the result level.
+                continue
+            yield from _withheld_entries(nested, withhold)
+    elif isinstance(node, Sequence) and not isinstance(
+        node, (str, bytes, bytearray)
+    ):
+        for nested in node:
+            yield from _withheld_entries(nested, inherited_withhold)
+
+
+def _is_h0_name(parameter: str) -> bool:
+    return parameter.replace("₀", "0").strip().lower() in _H0_PARAMETER_NAMES
+
+
+def _parameter_assignment_before(before: str) -> bool:
+    """True when the text ending at a token binds it as a parameter VALUE.
+
+    A copula only assigns to the parameter while the parameter is still the
+    subject of the clause.  In ``For H0, the credible interval is 68%`` the
+    interval noun has taken the subject over, so ``is`` assigns the coverage
+    level to the interval rather than a value to H0, and blocking that
+    sentence was a false kill (Codex review 2026-09-03).  The window is not
+    widened and no threshold moves: the copular branch simply stops binding
+    across an intervening interval subject.  An explicit symbol
+    (``H0 = 67.7%``) still binds regardless of what sits between, and a
+    non-interval noun still binds (``the H0 median is 68%``).
+    """
+    match = _PARAMETER_ASSIGNMENT_BEFORE_RE.search(before)
+    # R2's determiner binds only while the label is still the subject of the
+    # sub-clause the copula sits in.  The copular branch reaches over commas
+    # and sentence periods -- that reach is unchanged, it is what catches
+    # ``H0 is withheld, and so is 68% credible interval withheld`` -- but
+    # with a determiner it read ``H0 is withheld, and so is the 68% credible
+    # interval`` as an H0 value and killed an honest coverage-level reply
+    # (round 17 verifier).  A label further along is read on its own, so
+    # ``..., and Omega_m is the 68% credible interval`` still binds.
+    while (
+        match is not None
+        and match.group("determiner")
+        and _SUBCLAUSE_BREAK_RE.search(match.group("copula_gap"))
+    ):
+        match = _PARAMETER_ASSIGNMENT_BEFORE_RE.search(before, match.start() + 1)
+    if match is None:
+        return False
+    gap = match.group("copula_gap")
+    if gap is None:
+        return True
+    # An explicit symbol in the label's own sub-clause binds through whatever
+    # follows it: ``H0 = a credible interval of 68%`` is the value dressed as
+    # an interval, and the interval noun after the symbol must not switch
+    # the copular branch off (round 17, R2).  A comma ends the sub-clause, so
+    # ``Omega_m = 0.31, credible interval at 68%`` is not bound by that "=".
+    if _ASSIGNMENT_SYMBOL_RE.search(_SUBCLAUSE_BREAK_RE.split(gap)[-1]):
+        return True
+    if _INTERVAL_WORDING_RE.search(gap):
+        return False
+    # The interval subject can also PRECEDE the parameter label: "The
+    # credible interval for H0 is 68%" puts it before "H0", where the gap
+    # cannot see it, and the assignment then read the coverage level as an
+    # H0 value (Codex review 2026-09-03).  Only the words between the start
+    # of the clause and the label are inspected, so "H0's credible interval
+    # is 68%" is still covered by the gap check above.
+    # Only the words in the label's OWN sub-clause count.  Splitting on
+    # sentence punctuation alone let "The credible interval is withheld, but
+    # the result is 68%" disable a clear value assignment (Codex review
+    # 2026-09-03), so commas and coordinators end the head as well.
+    head = _SUBCLAUSE_BREAK_RE.split(before[: match.start()])[-1]
+    return not _INTERVAL_WORDING_RE.search(head)
+
+
+def _strip_previous_number_idiom(clause: str) -> str:
+    """Drop what still belongs to the previous number from the cue window.
+
+    ``clause`` starts right after the previous number's last digit or tens
+    word.  The rest of a spelled number ("-five"), that number's own percent
+    sign, and the interval words attached to the percent describe THAT
+    number, not the token whose cue is being looked for.
+    """
+    rest = clause
+    while True:
+        continued = _SPELLED_CONTINUES_RE.match(rest)
+        if continued is None:
+            break
+        rest = rest[continued.end():]
+    percent = _PERCENT_AFTER_RE.match(rest)
+    if percent is None:
+        return rest
+    rest = rest[percent.end():]
+    return rest[_ATTACHED_INTERVAL_WORDS_RE.match(rest).end():]
+
+
+def _is_interval_idiom(text: str, token: "_Token") -> bool:
+    """``the 68% credible interval``: a standard interval level, written as a
+    percentage, with interval wording in the same clause and no parameter
+    assignment binding it as a value."""
+    # Exact level match, not the withheld-value tolerance: at rel_tol=0.01 a
+    # median anywhere in 67.3-68.7 counted as "68", so a Planck-like H0 could
+    # be restated verbatim as "the 68.3% credible interval" and skip the gate
+    # (adversarial review 2026-09-03).
+    if not any(
+        math.isclose(token.value, level, rel_tol=0.0, abs_tol=1e-9)
+        for level in _INTERVAL_LEVELS
+    ):
+        return False
+    before = text[max(0, token.start - 48):token.start]
+    if _parameter_assignment_before(before):
+        return False
+    after = text[token.end:token.end + 48]
+    if _PARAMETER_ASSIGNMENT_AFTER_RE.match(after) or _PARAMETER_POSTFIX_LABEL_RE.match(after):
+        return False
+    before_clause = _CLAUSE_BREAK_RE.split(before)[-1]
+    after_clause = _CLAUSE_BREAK_RE.split(after)[0]
+    # The cue has to describe THIS percentage.  Another number between the
+    # token and the cue means the cue belongs to that one instead: in "68% of
+    # the reference, with a 95% credible interval" the interval is the 95's
+    # (review 2026-09-03).  Trim each window at the nearest other digit.
+    # A spelled number is an intervening number as well: without this,
+    # "68% and a ninety-five percent credible interval" let the 95's cue
+    # exempt the withheld 68 (Codex review 2026-09-03).  Reachable because
+    # the tokenizer now recognises spelled numbers.
+    other = _OTHER_NUMBER_RE.search(after_clause)
+    if other is not None:
+        after_clause = after_clause[:other.start()]
+    previous = None
+    for match in _OTHER_NUMBER_RE.finditer(before_clause):
+        previous = match
+    if previous is not None:
+        before_clause = _strip_previous_number_idiom(before_clause[previous.end():])
+    return bool(
+        _INTERVAL_WORDING_RE.search(before_clause)
+        or _INTERVAL_WORDING_RE.search(after_clause)
+    )
+
+
+def nonpublication_posterior_values(reply: str, tool_results: Any) -> list[float]:
+    """Return non-publication posterior numbers that escaped into prose.
+
+    Matching stays at ``rel_tol=0.01`` for every withheld statistic.  Two
+    token classes escape that comparison, and only these two.  A little-h
+    token (``h = 0.732``) is compared against the withheld H0 values alone,
+    so it cannot collide with an unrelated statistic that happens to sit near
+    the same number.  A percent token is skipped only when it reads as
+    interval wording in its own clause (``the 68% credible interval``); a
+    percent token carrying a parameter assignment (``H0 = 67.7%``), or
+    standing anywhere else, is checked against the full withheld universe
+    like any other number.  There is no percentage-keyed sub-universe and no
+    exemption by token class.
+    """
 
     entries = tool_results if isinstance(tool_results, list) else [tool_results]
-    withheld: set[float] = set()
+    named: set[tuple[str, str, float]] = set()
     for entry in entries or []:
         _tool, result = _entry_tool_and_result(entry)
         if result:
-            withheld.update(_withheld_values(result))
-    if not withheld:
+            named.update(_withheld_entries(result))
+    if not named:
         return []
-    hits = {
-        token
-        for token in _reply_number_tokens(reply)
-        if any(
-            math.isclose(token, value, rel_tol=0.01, abs_tol=1e-12)
-            for value in withheld
+    withheld_all = {value for _parameter, _stat, value in named}
+    withheld_h0 = {value for parameter, _stat, value in named if _is_h0_name(parameter)}
+    # Emphasis and code marks are invisible to every guard below: the
+    # stripped text is what gets tokenized and inspected, so ``**68%**`` reads
+    # exactly like ``68%`` (round 17, R3).
+    text = _strip_markup_marks(str(reply or ""))
+
+    def _near(token_value: float, universe: set[float]) -> bool:
+        return any(
+            math.isclose(token_value, value, rel_tol=0.01, abs_tol=1e-12)
+            for value in universe
         )
-    }
+
+    hits: set[float] = set()
+    for token in _reply_number_spans(text):
+        if token.little_h:
+            if _near(token.value, withheld_h0):
+                hits.add(token.value)
+            continue
+        if token.is_percent and _is_interval_idiom(text, token):
+            continue
+        if _near(token.value, withheld_all):
+            hits.add(token.value)
     return sorted(hits)
 
 
