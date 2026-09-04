@@ -86,12 +86,31 @@ _ASSIGNMENT_SUBJECT = (
 # PRRT_kwDORoeoE86etS0V).  A count ("approximately sixty-eight samples")
 # still has no subject in front of it and stays unparsed.
 _APPROXIMATION = r"(?:(?:about|approximately|around|roughly|near|close\s+to|some)\s+)?"
+# A determiner or an opening bracket/quote after the copula or symbol does
+# not break the assignment: ``H0 = the 68% credible interval``, ``H0 is (68%
+# credible interval withheld)`` and ``H0 为（68% …）`` state the value with one
+# word or mark in front of it, and the guard used to require the number to
+# follow the copula directly (round 17, R2; origin/main catches all of them).
+# ``为`` is the copula of the Chinese notation a bilingual reply writes and
+# takes no surrounding whitespace.  Two deliberate limits: the colon takes no
+# determiner -- ``H0: the 68% credible interval is withheld`` is a label
+# introducing a description, which the runner's F5 specificity tests keep
+# honest, while ``H0: 68%`` and ``H0: (68%`` still bind -- and the
+# prepositions ``of``/``at`` take none either, so ``H0 is withheld at the
+# 68% confidence level`` stays the coverage wording it is.
+_ASSIGNED_DETERMINER = r"(?:(?:the|a|an|our|its|this)\s+)?"
+_ASSIGNED_OPENER = r"[(\"'“「【（]?\s*"
+_ASSIGNMENT_SYMBOL_RE = re.compile(r"[=~≈]")
 _PARAMETER_ASSIGNMENT_BEFORE_RE = re.compile(
     rf"\b{_ASSIGNMENT_SUBJECT}\b"
-    r"(?:[^\n;]{0,28}?[=:~≈]\s*"
+    r"(?:[^\n;]{0,28}?"
+    rf"(?:[=~≈]\s*{_ASSIGNED_DETERMINER}|:\s*)"
     r"|(?P<copula_gap>[^\n;]{0,28}?)"
-    r"\b(?:is|was|are|were|of|at|equals?|sits\s+at|comes\s+out\s+at)\s+"
-    rf"{_APPROXIMATION})$",
+    r"(?:\b(?:is|was|are|were|equals?|sits\s+at|comes\s+out\s+at)\s+"
+    rf"{_APPROXIMATION}{_ASSIGNED_DETERMINER}"
+    rf"|为\s*{_ASSIGNED_DETERMINER}"
+    rf"|\b(?:of|at)\s+{_APPROXIMATION}))"
+    rf"{_ASSIGNED_OPENER}$",
     re.IGNORECASE,
 )
 # The assignment can also FOLLOW the token: "68% is the H0 median, with its
@@ -102,6 +121,17 @@ _PARAMETER_ASSIGNMENT_BEFORE_RE = re.compile(
 _PARAMETER_ASSIGNMENT_AFTER_RE = re.compile(
     r"^\s*(?:%|percent\b|per\s+cent\b)?\s*(?:is|was|are|were)\s+"
     rf"(?:(?:the|our|its|this|that)\s+)?{_ASSIGNMENT_SUBJECT}\b",
+    re.IGNORECASE,
+)
+# The label can also follow the token as a POSTFIX: ``68% for H0, with the
+# credible interval withheld`` binds the number to the parameter through the
+# preposition directly after the percent sign, and the interval cue later in
+# the clause exempted it (round 17, R1).  ``the 68% credible interval for H0``
+# is not this shape -- its preposition follows "interval", not the percent
+# sign -- and stays the signed coverage wording.
+_PARAMETER_POSTFIX_LABEL_RE = re.compile(
+    r"^\s*(?:%|percent\b|per\s+cent\b)?\s+(?:for|of|on)\s+"
+    rf"(?:(?:the|a|an|our|its)\s+)?{_ASSIGNMENT_SUBJECT}\b",
     re.IGNORECASE,
 )
 _H0_PARAMETER_NAMES = frozenset({"h0", "h_0", "hubble", "hubble_constant"})
@@ -312,6 +342,28 @@ def _untrusted_user_values(messages: list[dict]) -> set[float]:
             for stat in _STRUCTURED_STAT_RE.finditer(parameter.group("body")):
                 values.add(float(stat.group("value")))
     return {value for value in values if math.isfinite(value)}
+
+
+# Markdown emphasis and code marks that flank a run the way CommonMark
+# emphasis does: the opener is not glued to a letter, digit, sign or decimal
+# point on its left, the closer is not glued to a letter or digit on its
+# right, and the run has no space next to either mark.  ``H0 is **68%**
+# credible interval withheld`` put two asterisks between the copula and the
+# number so no guard saw an assignment, and ``_68%_`` did not tokenize at all
+# (round 17, R3).  Identifiers (``sigma_8``, ``fig_68_a``) and arithmetic
+# (``2*68*3``) have letters or digits against the mark and are left alone.
+_MARKUP_MARK_RE = re.compile(
+    r"(?<![A-Za-z0-9.+\-−])(\*\*|__|\*|_|`)(?=\S)([^\n]+?)(?<=\S)\1(?![A-Za-z0-9])"
+)
+
+
+def _strip_markup_marks(text: str) -> str:
+    """Remove paired emphasis/code marks; nested marks peel off in turn."""
+    while True:
+        stripped = _MARKUP_MARK_RE.sub(r"\2", text)
+        if stripped == text:
+            return stripped
+        text = stripped
 
 
 class _Token(NamedTuple):
@@ -610,6 +662,13 @@ def _parameter_assignment_before(before: str) -> bool:
     gap = match.group("copula_gap")
     if gap is None:
         return True
+    # An explicit symbol in the label's own sub-clause binds through whatever
+    # follows it: ``H0 = a credible interval of 68%`` is the value dressed as
+    # an interval, and the interval noun after the symbol must not switch
+    # the copular branch off (round 17, R2).  A comma ends the sub-clause, so
+    # ``Omega_m = 0.31, credible interval at 68%`` is not bound by that "=".
+    if _ASSIGNMENT_SYMBOL_RE.search(_SUBCLAUSE_BREAK_RE.split(gap)[-1]):
+        return True
     if _INTERVAL_WORDING_RE.search(gap):
         return False
     # The interval subject can also PRECEDE the parameter label: "The
@@ -664,7 +723,7 @@ def _is_interval_idiom(text: str, token: "_Token") -> bool:
     if _parameter_assignment_before(before):
         return False
     after = text[token.end:token.end + 48]
-    if _PARAMETER_ASSIGNMENT_AFTER_RE.match(after):
+    if _PARAMETER_ASSIGNMENT_AFTER_RE.match(after) or _PARAMETER_POSTFIX_LABEL_RE.match(after):
         return False
     before_clause = _CLAUSE_BREAK_RE.split(before)[-1]
     after_clause = _CLAUSE_BREAK_RE.split(after)[0]
@@ -715,7 +774,10 @@ def nonpublication_posterior_values(reply: str, tool_results: Any) -> list[float
         return []
     withheld_all = {value for _parameter, _stat, value in named}
     withheld_h0 = {value for parameter, _stat, value in named if _is_h0_name(parameter)}
-    text = str(reply or "")
+    # Emphasis and code marks are invisible to every guard below: the
+    # stripped text is what gets tokenized and inspected, so ``**68%**`` reads
+    # exactly like ``68%`` (round 17, R3).
+    text = _strip_markup_marks(str(reply or ""))
 
     def _near(token_value: float, universe: set[float]) -> bool:
         return any(

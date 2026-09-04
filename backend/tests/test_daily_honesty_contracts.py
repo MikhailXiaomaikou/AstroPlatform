@@ -1330,3 +1330,104 @@ def test_only_a_recognised_glued_unit_follows_a_number() -> None:
     assert _reply_number_tokens("73.2km/s/Mpc, 147.1Mpc, 13.8Gyr, 2.7eV, 3sigma, 5σ") == [
         73.2, 147.1, 13.8, 2.7, 3.0, 5.0
     ]
+
+
+def test_a_postfix_label_binds_the_percentage_as_a_value() -> None:
+    """``68% for H0`` states the value; the label simply follows the number.
+
+    A preposition directly after the percent sign binds the number to the
+    parameter, so the interval cue later in the clause must not exempt it
+    (round 17, R1).  The label attached to the interval NOUN instead --
+    "the 68% credible interval for H0" -- is the signed coverage-level
+    wording and stays exempt.
+    """
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    chain = _exploratory_chain(68.0)
+    for claim in (
+        "68% for H0, with the credible interval withheld.",
+        "68% for the Hubble constant, credible interval withheld.",
+        "68 percent of the posterior median, credible interval withheld.",
+        "We adopt a confidence level of 68% for H0, with the interval withheld.",
+    ):
+        assert nonpublication_posterior_values(claim, chain) == [68.0], claim
+    for honest in (
+        "The 68% credible interval for H0 is withheld.",
+        "we withhold the 68% interval for H0.",
+        "for H0 the 68% interval is withheld.",
+        "H0's 68% interval is withheld.",
+    ):
+        assert nonpublication_posterior_values(honest, chain) == [], honest
+
+
+def test_a_determiner_or_opener_after_the_copula_keeps_the_assignment() -> None:
+    """``H0 = the 68% credible interval`` is still an assignment.
+
+    The assignment guard had to end right before the number, so an article,
+    a quote mark or a bracket after the copula or symbol switched it off and
+    the interval cue exempted the value (round 17, R2).  origin/main catches
+    every one of these.
+    """
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    chain = _exploratory_chain(68.0)
+    for claim in (
+        "H0 = the 68% credible interval.",
+        "H0 is the 68% C.L.",
+        "H0 = a credible interval of 68%.",
+        "H0 = our 68% credible interval.",
+        "H0 is (68% credible interval withheld).",
+        'H0 = "68% credible interval withheld".',
+        "H0 为（68% credible interval withheld）",
+    ):
+        assert nonpublication_posterior_values(claim, chain) == [68.0], claim
+    for honest in (
+        "H0 is withheld (68% credible interval).",
+        "H0 is withheld; the 68% credible interval is withheld too.",
+        "For H0, the credible interval is 68%.",
+        # A colon that introduces a description is not an assignment: the
+        # runner's load-bearing F5 specificity tests keep "For H0: the 68%
+        # credible interval is what a publication run reports" honest, and
+        # the gate agrees.  Only a value glued to the colon binds.
+        "H0: the 68% credible interval is withheld.",
+    ):
+        assert nonpublication_posterior_values(honest, chain) == [], honest
+    assert nonpublication_posterior_values(
+        "H0: 68% credible interval withheld.", chain
+    ) == [68.0]
+
+
+def test_markdown_marks_are_invisible_to_the_guards() -> None:
+    """Emphasis and code marks around a token do not change its reading.
+
+    ``H0 is **68%** credible interval withheld`` put two asterisks between
+    the copula and the number, so the assignment guard saw no assignment and
+    the interval cue exempted the value; ``_68%_`` did not even tokenize
+    (round 17, R3).  Each marked form must behave exactly like its plain
+    form -- the honest coverage wording included.
+    """
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    chain = _exploratory_chain(68.0)
+    for claim in (
+        "H0 is **68%** credible interval withheld.",
+        "H0 = *68%* credible interval withheld.",
+        "H0: `68%` credible interval withheld.",
+        "**68%** for H0, with the credible interval withheld.",
+        "68% for **H0**, with the credible interval withheld.",
+        "H0 is _68%_ credible interval withheld.",
+        "H0 = ***68%*** credible interval withheld.",
+    ):
+        assert nonpublication_posterior_values(claim, chain) == [68.0], claim
+    for honest in (
+        "The **68%** credible interval for H0 is withheld.",
+        "The `68%` credible interval for H0 is withheld.",
+        "**The 68% credible interval for H0 is withheld.**",
+    ):
+        assert nonpublication_posterior_values(honest, chain) == [], honest
+    # Identifiers keep their underscores and arithmetic keeps its asterisks:
+    # only a mark that flanks a run the way Markdown emphasis does is a mark.
+    from app.services.agent_runtime.honesty import _strip_markup_marks
+
+    untouched = "sigma_8, omega_m and fig_68_a; 2*68*3 samples; H_0 is withheld."
+    assert _strip_markup_marks(untouched) == untouched
