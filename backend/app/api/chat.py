@@ -1016,14 +1016,27 @@ async def chat_message_stream(
             # Cloudflare free-tier idle timers (~30-100s) can't kill the
             # connection.
             event_queue: asyncio.Queue[dict] = asyncio.Queue()
-            # R7: capture a compact audit trail of every thinking-stream
-            # event so we can persist it to ChatSession.audit_log.  Raw
-            # tool_result payloads may be huge; we store a shallow preview
-            # in the audit log, keeping the full result in the actions list.
+            # Compact copy of every thinking-stream event, kept for the
+            # duration of this request only.
+            #
+            # Corrected 2026-09-03 (adversarial review): the original R7 note
+            # here said this list is persisted to ChatSession.audit_log, and
+            # that claim was reused downstream to argue the streamed drafts
+            # were durable.  It is not true.  `audit_trail` is request-local
+            # and has exactly one consumer — `_tool_results_from_stream_audit`
+            # in the workflow-timeout fallback below — while
+            # ChatSession.audit_log holds server-owned HMAC-signed evidence
+            # records (app/services/server_evidence.py) and the
+            # client-supplied field is ignored on save.  Streamed events are
+            # still gated before they leave the process, but the reason is
+            # that they are visible live and land in the blind runner's
+            # case_<id>.json, not that a database row keeps them.  Raw
+            # tool_result payloads may be huge; only a shallow preview is
+            # kept, with the full result staying in the actions list.
             audit_trail: list[dict] = []
 
             async def _emit(evt: dict) -> None:
-                # R7 — persist a capped copy of the event for post-hoc audit.
+                # Keep a capped copy for the timeout fallback (see above).
                 try:
                     audit_entry = dict(evt)
                     if audit_entry.get("type") == "tool_result":
