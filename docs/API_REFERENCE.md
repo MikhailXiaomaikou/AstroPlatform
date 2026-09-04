@@ -122,7 +122,7 @@ the paper's method or make the result publication-ready.
 |--------|----------|-------------|
 | GET | `/api/provenance/{id}/lineage` | Data lineage graph |
 | GET | `/api/provenance/{id}/export/ivoa` | IVOA ProvDM XML |
-| GET | `/api/provenance/{id}/doi-metadata` | DataCite DOI metadata |
+| GET | `/api/provenance/{id}/doi-metadata` | DataCite-ready metadata (content-addressed URN; no DOI is minted) |
 | GET | `/api/provenance/{id}/requirements.txt` | Pinned environment |
 
 Tool results also carry inline provenance. The backward-compatible top-level fields (`reproducibility`, `data_origin`, `analysis_status`, `source_urls`, `archive_ids`, `warnings`) remain, and provenance-v2 adds a nested `provenance` object with `datasets`, `field_bibcodes`, `coverage`, and copied reproducibility metadata. Generated papers and the frontend acknowledgement button read from this nested object.

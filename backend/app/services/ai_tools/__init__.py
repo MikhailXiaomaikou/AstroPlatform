@@ -1298,6 +1298,9 @@ async def _execute_tool_inner(
                 "note": "Download from this URL",
             }
         elif tool_name == "get_provenance":
+            # Not in any tool schema (unreachable by the model) but kept as a
+            # server-side surface: test_ai_provenance_is_owner_scoped pins its
+            # owner-scoping as a security property.
             from app.services.provenance import get_lineage, get_reproducibility_package, generate_doi_metadata
             action = tool_input.get("action", "lineage")
             eid = tool_input["entity_id"]

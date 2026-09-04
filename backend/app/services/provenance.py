@@ -5,6 +5,7 @@ lineage traversal, IVOA ProvDM-compatible export, and DOI metadata generation.
 """
 
 import hashlib
+import json
 import logging
 import re
 import uuid
@@ -242,16 +243,33 @@ def _xml_escape(text: str) -> str:
 def generate_doi_metadata(entity_id: str, title: str = "",
                           authors: list[str] | None = None,
                           *, owner_id: str | None = None) -> dict:
-    """Generate DataCite-compatible metadata for DOI minting."""
+    """Generate DataCite-ready metadata for a provenance lineage.
+
+    No DOI is minted or fabricated. The record carries a content-addressed
+    URN over the canonical lineage; a real DOI requires registration with
+    DataCite or Zenodo. (The previous behavior emitted a non-resolving
+    identifier under Zenodo's real 10.5281 prefix, which an
+    anti-fabrication platform must not do.)
+    """
     lineage = get_lineage(entity_id, owner_id=owner_id)
 
     now = datetime.now(timezone.utc)
+    lineage_digest = hashlib.sha256(
+        json.dumps(
+            lineage, sort_keys=True, separators=(",", ":"), default=str
+        ).encode()
+    ).hexdigest()
 
     return {
         "data": {
             "type": "dois",
             "attributes": {
-                "doi": f"10.5281/standard-astro.{entity_id[:8]}",
+                "doi": None,
+                "doi_status": "not_minted",
+                "alternateIdentifiers": [{
+                    "alternateIdentifierType": "URN",
+                    "alternateIdentifier": f"urn:sha256:{lineage_digest}",
+                }],
                 "titles": [{"title": title or f"Standard Astro Analysis {entity_id[:8]}"}],
                 "creators": [{"name": a} for a in (authors or ["Standard Astro Platform"])],
                 "publisher": "Standard Astro",
@@ -271,7 +289,7 @@ def generate_doi_metadata(entity_id: str, title: str = "",
             "n_steps": len(lineage["nodes"]),
             "steps": [n["label"] for n in lineage["nodes"]],
         },
-        "note": "This is metadata only. Actual DOI minting requires registration with DataCite or Zenodo.",
+        "note": "DataCite-ready metadata; no DOI is minted. The URN alternate identifier is a content address over the canonical lineage.",
     }
 
 
