@@ -59,3 +59,28 @@ def test_scheduled_workflow_overrides_default_pytest_deselection() -> None:
     # scheduled suites must collect their explicit node list without inheriting
     # that marker filter; the JUnit guard then enforces zero skips/failures.
     assert workflow.count("-o addopts='' ") == 2
+
+
+def test_scheduled_workflow_uses_full_clone_for_git_ancestry_tests() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(
+        (REPO_ROOT / ".github" / "workflows" / "scientific-validation.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    # tests/test_w0wa_exact_pipeline.py asks git whether the trusted DESI source
+    # base is an ancestor of HEAD (`git merge-base --is-ancestor`).  On the
+    # default depth-1 checkout that command exits 128 and the whole scheduled
+    # job goes red (every weekly run from 2026-07-26 to 2026-08-30 failed this
+    # way while PR CI, which sets fetch-depth: 0, stayed green).
+    checkouts = [
+        step
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        if str(step.get("uses", "")).startswith("actions/checkout@")
+    ]
+    assert len(checkouts) == 2
+    for step in checkouts:
+        assert step.get("with", {}).get("fetch-depth") == 0, step
