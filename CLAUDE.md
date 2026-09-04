@@ -19,6 +19,37 @@ The root `AGENTS.md` delegates here so agent instructions do not drift.
   can be named it goes to the backlog candidate pool, not into the tree.
 - Local development + GitHub Actions are primary. Render deploy is a side
   effect unless the user explicitly asks about deployment.
+- Direction review (2026-09-02): the limiter behind "the model does not
+  push its analysis" is the deterministic steering layer in
+  `backend/app/services/agent_runtime/loop.py`, the prohibition-only
+  prompt, and the exit gates — not human review. Scope stays
+  cosmology-only. "General research agent", "research environment as the
+  top-level architecture", dynamic or fused tools, and an eight-role agent
+  alliance were rejected; see the review and the execution plan under
+  Source Of Truth. Anything listed there as candidate pool needs a named
+  user before it re-enters the tree.
+- Instrument-first: no behaviour change merges while the Daily blind suite
+  or the Weekly Scientific Validation workflow is red, or while HEAD has
+  no rerun baseline
+  (`.local/standard-astro-v02-natural/rerun_<rev>_summary.json`). The one
+  exception is the change that repairs the failing instrument itself (the
+  defect a red suite is red for): it merges on focused tests plus the full
+  deterministic suite, and the suite's next scheduled run is its
+  acceptance. At session start run `gh run list --workflow=daily.yml --limit 3` and
+  `gh run list --workflow='Weekly Scientific Validation' --limit 3`; a red
+  scheduled suite is P0 before any other work, and an identical error
+  repeated across two runs is a product defect that gets an issue the
+  same day (the 2026-08-11 → 09-01 outage ran 22 times unfiled).
+- Measure before engineering behaviour: a claim about model behaviour
+  ("stops early", "too cautious") enters the backlog only with a
+  pre-registered task file, a committed sha256, and a number stratified
+  by `llm_calls` and by `LIGHTWEIGHT_VERIFICATION_ENABLED` state. The
+  exploration window (`exploration_phase_enabled`) is built only if the
+  v03 experiment reproduces `premature_stop >= 25%` on open tasks and no
+  single-mechanism arm closes it.
+- Roadmap items carry four fields: who needs it / observable pass
+  condition / time box in agent-minutes / which guardrail it touches.
+  Items without a named user go to the candidate pool, not the backlog.
 
 ## Source Of Truth
 
@@ -29,6 +60,11 @@ The root `AGENTS.md` delegates here so agent instructions do not drift.
 - Blind-test protocol: `docs/BLIND_RESEARCH_TESTING_LOG.md`
 - Backlog: `plan/cosmology-completion-backlog.md`
 - Provenance v2 guide: `plan/provenance-v2-upgrade-plan.md`
+- Direction review (2026-09-02):
+  `docs/research/STANDARD_ASTRO_REVIEW_2026-09-02.zh-CN.md`
+- Execution plan (2026-09-02): `plan/2026-09-02-execution-plan.md`
+  (supersedes the never-committed desktop draft
+  `Standard_Astro_Workflow_Optimization_Plan.md` of 2026-06-04)
 
 Prefer current code and the most specific scientific test over stale prose.
 Update stale docs rather than preserving folklore.
@@ -104,12 +140,34 @@ Science checks, from `backend/`:
 bash scripts/daily_blind.sh --module cosmology --case A2,A3
 ```
 
+Scheduled-suite status (run at session start, from the repo root):
+
+```bash
+gh run list --workflow=daily.yml --limit 3
+gh run list --workflow='Weekly Scientific Validation' --limit 3
+```
+
 Run focused tests first. Broaden when touching shared validators, auth, chat,
 tool schemas, prompts, registries, runners, or frontend result rendering.
 
 ## Editing Rules
 
 - Use `rg` / `rg --files` first.
+- Evaluation and rerun scripts (`rerun_natural_matrix.sh`,
+  `run_exploration_matrix.sh`, anything that uses the `local:claude-cli`
+  bridge) run from a clean Terminal, never inside a Claude Code session:
+  the bridge exits 1 there and the 2026-08-11 reruns lost half their
+  samples to it.
+- Every reported evaluation number states its
+  `LIGHTWEIGHT_VERIFICATION_ENABLED` state. `evaluate_standard_astro_v02.py`
+  forces it on; production default is off; the two are different routing
+  regimes and are never blended (the 90.4% figure was measured flag-on,
+  on tasks V02_03–06 only).
+- DeepSeek thinking-mode profiles need `reasoning_content` on every
+  assistant `tool_calls` message, including platform-synthesized turns.
+  Any new pre-LLM synthesized branch in `loop.py` must be covered by
+  `tests/test_deepseek_reasoning_content.py` (the 2026-08-11 Daily
+  outage).
 - Codex only: use `apply_patch` for manual edits. Other agents use their
   native edit tools.
 - Never revert user changes unless explicitly asked.
@@ -185,7 +243,9 @@ blacklist "while updating the matching test".
   hard-blocked, C2 abstention, D1 `suspicious_author_year` provenance
   violation. Groups B/C are hard CI gates. Group F is the SPECIFICITY side
   (clean runs must NOT be falsely blocked — the 9f2667e bug class); its
-  `hard: true` cases gate CI too.
+  `hard: true` cases gate CI too. F2 pins that a compressed chain is
+  withheld (`chain_tier` never reaches `publication` on that path); do not
+  "fix" a smoke check by asserting `publication`.
 - `claim_validator._CITATION_KEYS_BLACKLIST` subtree-skips citation-string
   keys (bibcode/DOI/arXiv-id/...) so scattered digits in identifiers never
   enter the claimable numeric universe. Do not remove the regression case
@@ -275,6 +335,9 @@ Every rule here traces to a real incident in past agent sessions
   and marked with an as-of date, never copied from older prose.
 - A local check that claims to mirror CI must use CI's exact flags,
   scope, and tool versions.
+- Scheduled workflows are instruments. A change to a workflow file
+  (checkout depth, provider, model, secrets) needs a guard test in the
+  `tests/test_scientific_validation_guard.py` pattern.
 
 ## Multi-Agent / Batch Work
 
@@ -312,7 +375,8 @@ Every rule here traces to a real incident in past agent sessions
   gets dropped, lead with the CI status at the start of the next turn.
 - A red daily CI run: check first whether the failing job is external
   service noise (TAP/archive timeouts) and whether a triage report
-  already tracks it, before touching code.
+  already tracks it, before touching code — and whether the same error
+  string repeats across runs: repetition means product defect, not noise.
 
 ## Autonomous / Unattended Sessions
 
