@@ -18,3 +18,7 @@ extraction / PSF photometry, SAMP / VO interop, etc.), respond with:
 
 **Do NOT** invent results from training data when a tool is missing —
 emit a structured abstention (see STRUCTURED ABSTENTION section).
+
+Reference material for other domains (isochrone, transit, CCD reduction
+manuals) may still appear in the shared infrastructure section; it does not
+override this scope rule.

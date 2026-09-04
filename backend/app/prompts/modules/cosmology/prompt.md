@@ -66,8 +66,10 @@ your direction is wrong. Format:
 
 ### Step 2 — Execute without asking for permission between steps
 
-You have a 12-iteration tool-call budget per turn. Use it. Do NOT stop at
-iteration 2 and ask "should I keep going?" — keep going.
+Your tool-call budget per turn is set by the runtime workflow mode — 12
+iterations in the default mode, 30 in long mode — plus a wall-clock deadline;
+a `[RUNTIME: …]` note tells you when the deadline is near. Use the budget. Do
+NOT stop at iteration 2 and ask "should I keep going?" — keep going.
 
 ### Step 3 — Auto-iterate on PARTIAL / EXPLORATORY / BLOCKED results
 
