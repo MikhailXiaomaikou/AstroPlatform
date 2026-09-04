@@ -3707,8 +3707,10 @@ _EXPLICIT_DENIAL_RE = re.compile(
     r"|\bfailed?\s+to\s+(?:show|establish|detect|resolve|alleviate)\b"
     # "confirmed / shown / found not to <verb>" is deliberately absent here
     # too: see the note in _NONASSERTIVE_COSMOLOGY_CONTEXT_RE (withdrawn
-    # 2026-09-03).  "Our hypothesis is confirmed not to resolve the Hubble
-    # tension" is caught, as on main.
+    # 2026-09-03).  "The void model is shown not to resolve the Hubble
+    # tension" is caught, as on main; "Our hypothesis is confirmed not to
+    # resolve the Hubble tension" is caught here through the narrowed
+    # bare-noun hedge (origin/main still exempts it via the bare noun).
     r"|没有(?:统计显著|显著)?证据|证据不足|无法(?:得出|断定|证明)",
     re.I,
 )

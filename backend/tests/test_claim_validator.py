@@ -2597,7 +2597,10 @@ def test_a_coordinator_a_subject_bound_anchor_and_a_confirmed_denial() -> None:
     not to resolve the S8 tension yet resolves the Hubble tension" and thirty
     more -- was downstream of it, so the phrase is now read exactly as
     origin/main reads it: no hedge.  The two sentences it used to exempt are
-    asserted below, as on main; a user-signed relaxation may reinstate them.
+    asserted below: "shown not to resolve" exactly as on main, and "Our
+    hypothesis is confirmed not to resolve" through the narrowed bare-noun
+    hedge (origin/main still exempts that one via the bare noun).  A
+    user-signed relaxation may reinstate them.
     """
     from app.services.claim_validator import _strong_conclusion_from_sentence
 
