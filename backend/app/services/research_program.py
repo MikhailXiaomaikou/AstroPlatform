@@ -77,9 +77,149 @@ _NON_CLAIMABLE_STATUS_TOKENS: frozenset[str] = frozenset(
     }
 )
 
+# The fixed 13 sections of the exported research report, in emission order.
+# Every section is emitted on every call -- including the ones whose builder
+# found nothing -- so a reader can tell "the platform looked and found nothing"
+# apart from "the platform never looked".
+#
+# Honest expectation: sections 2 ("Why it matters") and 9 ("Alternative
+# Explanations") are SCAFFOLDS.  The platform runs no exploration loop, so no
+# rule can derive motivation prose or a list of competing physical explanations
+# from tool output.  They stay explicit placeholders; do not fill them with
+# generated text.
+REPORT_SECTIONS: tuple[str, ...] = (
+    "Scientific Question",
+    "Why it matters",
+    "Research Plan",
+    "Data Sources",
+    "Methods",
+    "Execution Trace",
+    "Failed Attempts",
+    "Findings",
+    "Alternative Explanations",
+    "Uncertainty",
+    "Reproducibility Package",
+    "Human Review Checklist",
+    "Draft Scientific Claim",
+)
+
+# Failure vocabularies the report READS; it never widens or narrows them.
+# Mirror of the tool statuses `agent_runtime/honesty.py` refuses as evidence.
+_REPORT_FAILED_TOOL_STATUSES: frozenset[str] = frozenset(
+    {"FAILED", "EMPTY", "UNAVAILABLE", "SYNTHETIC", "SIMULATED_DEMO"}
+)
+# Mirror of the statuses `agent_runtime/summaries.py` treats as a failed turn.
+_REPORT_ERROR_TOOL_STATUSES: frozenset[str] = frozenset(
+    {"ERROR", "BLOCKED", "CANCELLED", "TIMEOUT"}
+)
+# A tool that ran, refused to certify, and said so.  `verify_research_facts`
+# returns success=True with __tool_status__="PARTIAL" when it is handed only
+# caller-supplied data, so neither vocabulary above matched and the refusal was
+# reported as "no failed attempt recorded" (Codex review 2026-09-03).  This is
+# the report's own vocabulary: an attempt that produced no verdict.
+_REPORT_NO_VERDICT_STATUSES: frozenset[str] = frozenset(
+    {"NOT_VERIFIABLE_THIS_TURN", "NOT_VERIFIABLE"}
+)
+# A runner that returned a structured NON-RUN: success=True,
+# __tool_status__="PARTIAL", publication_ready=False and no error, so none of
+# the vocabularies above matched and the attempt vanished from the report
+# (Codex review 2026-09-03).  These are direct results, not matrix cells, so
+# the cell walk does not see them either.
+#
+# Every word here is one a non-runnable producer actually emits (grep the
+# producer before adding one): "CONFIG_READY" is what
+# `build_cosmology_likelihood` and the robustness config matrix return
+# (`cosmology_likelihoods/config_builder.py`, execution_status="not_run"),
+# and "CMB_ROTATION_SCOPE_GAP" is the CMB-rotation runner's blocked envelope
+# (`cmb_rotation_likelihoods._blocked`).  The vocabulary had listed
+# "CONFIG_ONLY", which no direct producer emits, so a config-only build and a
+# scope-gap refusal both still vanished (Codex review 2026-09-03,
+# PRRT_kwDORoeoE86etMHc).  A generic "publication_ready=False and
+# __do_not_claim__=True" rule was rejected for this: the research/robustness/
+# dark-energy matrix AGGREGATES and `build_evidence_graph` carry exactly that
+# envelope while holding publication-ready cells or a correct verdict.
+_REPORT_NOT_RUN_STATUSES: frozenset[str] = frozenset({
+    "NO_COMPRESSED_LIKELIHOOD",
+    "EXTERNAL_COBAYA_NOT_RUN",
+    "NOT_RUN",
+    "NOT_EXECUTED",
+    "CONFIG_ONLY",
+    "CONFIG_READY",
+    "CMB_ROTATION_SCOPE_GAP",
+    "SKIPPED",
+})
+
+# C0 control characters minus the whitespace this module already folds away.
+_REPORT_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+# Each "#" of a markdown ATX heading marker (a run of "#" ending in a space).
+# Matching per character rather than per run lets the escape break the literal
+# "## <name>" substring, not just its position at the start of a line.
+_REPORT_ATX_HEADING_RE = re.compile(r"#(?=#* )")
+
 
 def _tool_name_from_entry(item: dict[str, Any]) -> str:
     return str(item.get("tool") or item.get("name") or "")
+
+
+def _report_safe_text(value: Any, fallback: str = "") -> str:
+    """Flatten outside-origin text so it cannot forge the report's structure.
+
+    ``research_plan`` reaches ``export_research_report`` as a caller-supplied
+    (LLM-authored) JSON blob.  Rendered verbatim, a line such as
+    ``## Draft Scientific Claim`` inside a research question, a checklist entry
+    or a blocking gap OPENS A REAL SECTION: the markdown then carries a claim
+    heading the platform never emitted, and any consumer that splits the
+    document on ``## `` attributes the forged text to a section builder.
+
+    The plan is not the only such channel.  TOOL-derived strings reach the same
+    markdown and are just as model-reachable: ``run_research_matrix`` copies a
+    caller-supplied cell ``label``/``model``/``dataset_keys`` verbatim into
+    every cell it returns, and on the cross-turn fallback path
+    (``_trusted_tool_results`` -> ``caller_supplied_unverified``) the whole
+    ``tool_results`` list is caller text.  So EVERY interpolated string that can
+    originate outside this module passes through here -- see the sweep listed
+    on ``export_research_report``.
+
+    Each such string is collapsed to a single line, stripped of control
+    characters, and has its ATX heading markers escaped.  The escape
+    is not limited to the start of the line on purpose: a consumer that splits
+    the document on the bare substring ``"## Draft Scientific Claim"`` is fooled
+    by a mid-line occurrence too, and ``## `` mid-sentence in a research
+    question is never meaningful prose.  ``#1`` and ``#tag`` (no following
+    space) are untouched.
+    """
+
+    if value is None:
+        # A missing field must reach the caller's fallback, not the literal
+        # "None": every call site passes the wording it wants for "not recorded".
+        return fallback
+    text = _REPORT_CONTROL_CHARS_RE.sub(" ", str(value))
+    text = " ".join(text.split())
+    text = _REPORT_ATX_HEADING_RE.sub(r"\\#", text)
+    if text[:1] == ">":
+        text = "\\" + text
+    return text or fallback
+
+
+def _trusted_research_plan(tool_results: list[dict[str, Any]]) -> dict[str, Any]:
+    """The plan THIS module produced, as recorded in ``tool_results``.
+
+    ``research_plan`` is an argument, so an LLM can hand in a blob it wrote
+    itself.  Only a successful ``plan_research_program`` record proves a
+    checklist came from ``_hypotheses_from_question``; without one the report
+    must not describe the field as rule-derived by the platform.
+    """
+
+    for item in reversed(tool_results):
+        if not isinstance(item, dict) or _tool_name_from_entry(item) != "plan_research_program":
+            continue
+        result = item.get("result") if isinstance(item.get("result"), dict) else item
+        if not isinstance(result, dict) or result.get("success") is not True:
+            continue
+        plan = result.get("research_plan")
+        if isinstance(plan, dict):
+            return plan
+    return {}
 
 
 def _is_scientific_evidence_meta_tool(item: dict[str, Any]) -> bool:
@@ -1032,11 +1172,63 @@ def export_research_report(
     tool_results: list[dict[str, Any]] | None = None,
     title: str | None = None,
 ) -> dict[str, Any]:
-    """Generate an auditable research report package and paper draft."""
-    plan = research_plan or {}
+    """Generate an auditable research report package and paper draft.
+
+    The markdown is a FIXED 13-section document (``REPORT_SECTIONS``).  Every
+    section is emitted, in order, on every call -- including the ones whose
+    builder found nothing -- so a reader can tell "the platform looked and found
+    nothing" apart from "the platform never looked".  Every section is built
+    deterministically from the supplied plan and tool results; no model text is
+    involved anywhere in this function.
+
+    EVERY interpolated string that can originate outside this module goes
+    through ``_report_safe_text`` (table cells through ``_md_table_cell``, which
+    calls it).  Both the plan AND the tool results are outside-origin: an LLM
+    hands in ``research_plan`` directly, ``run_research_matrix`` copies a
+    supplied cell ``label``/``model``/``dataset_keys`` verbatim into the cells it
+    returns, and on the cross-turn fallback path the whole ``tool_results`` list
+    is caller text.  The swept fields, by section:
+
+    * title, 1 research_question; 3 matrix label/model/dataset_keys, checklist,
+      probes, model families; 10 blocking gaps  (plan-derived);
+    * 4 dataset key/display_name/version/source_url and citation
+      label/year/arxiv/doi;
+    * 5 method-row tool name and model/sampler/execution_mode/claim_scope/
+      chain_tier;
+    * 6 trace tool name/status/publication_ready, and every matrix-table column
+      (label, model, datasets, status, outputs, diagnostics);
+    * 7 failed-attempt tool name/status words/error_class/error, failed-cell
+      label/execution_level/reasons/datasets_not_run/error_class/error, and
+      capability-gap component/category/status/details;
+    * 8 ready-finding cell label/model/dataset_keys, tool name, parameter names
+      and non-numeric parameter values, and the evidence graph's
+      claimable_parameters;
+    * 9 model-comparison baseline/extended/dataset_keys/preferred/caveat;
+    * 10 and 12 publication-gate reason codes and threshold values;
+    * 11 manifest tool/status/ready/run_id/seed/version;
+    * 12 fact-check status/counts and each claim's status/text/support_level;
+    * 13 claimable-finding tool name and parameter names;
+    * the paper draft's fact status, question, datasets, matrix rows, findings,
+      blocked cells, blocking gaps and references.
+    """
     graph = evidence_graph or {}
     tool_results = tool_results or []
-    report_title = title or plan.get("research_question") or "Standard Astro research report"
+    trusted_plan = _trusted_research_plan(tool_results)
+    # ONE effective plan for every plan read below -- in this function and in
+    # the helpers it hands `plan` to.  `_trusted_tool_results` authenticates
+    # the tool-result LIST, not the `research_plan` argument, so whenever a
+    # successful plan_research_program record exists it IS the plan, whole:
+    # the argument contributes nothing, not even a field the record lacks.
+    # Choosing between the two per field let the argument's research question
+    # and capability gaps into a report that already had a server record
+    # (Codex review 2026-09-03, PRRT_kwDORoeoE86etMHh).  Without a record the
+    # argument is the only plan there is (direct library callers).
+    plan = trusted_plan if trusted_plan else (research_plan or {})
+    # Both the title and the plan text are caller-supplied; `_report_safe_text`
+    # keeps them from opening report sections of their own.
+    report_title = _report_safe_text(
+        title or plan.get("research_question") or "", "Standard Astro research report"
+    )
     datasets = _report_datasets(tool_results)
     citations = _report_citations(tool_results)
     manifest = _report_reproducibility_manifest(tool_results)
@@ -1047,33 +1239,157 @@ def export_research_report(
     ready_findings = _report_ready_findings(tool_results)
     blocked_cells = _report_blocked_cells(tool_results)
     matrix_rows = _report_matrix_rows(tool_results)
-    lines = [
-        f"# {report_title}",
+    failed_attempts = _report_failed_attempts(tool_results, plan)
+    gate_reasons = _report_gate_reason_codes(tool_results)
+    method_rows = _report_method_rows(tool_results)
+    comparison_rows = _report_model_comparison_rows(tool_results)
+    thresholds = _report_gate_thresholds(tool_results)
+
+    body: dict[str, list[str]] = {name: [] for name in REPORT_SECTIONS}
+
+    # 1. Scientific Question
+    body["Scientific Question"].append(
+        _report_safe_text(plan.get("research_question"), "Not provided.")
+    )
+
+    # 2. Why it matters -- SCAFFOLD.  The platform runs no exploration loop, so
+    # there is no rule that could derive a motivation from tool output, and
+    # writing one here would be fabricated prose in an auditable document.  Keep
+    # this an explicit placeholder until such a loop exists.
+    body["Why it matters"].append(
+        "Not generated by the platform; add the motivation by hand."
+    )
+
+    # 3. Research Plan
+    plan_lines = body["Research Plan"]
+    plan_lines.append("### Planned Tests")
+    proposed = plan.get("proposed_experiment_matrix")
+    proposed_cells = [cell for cell in proposed if isinstance(cell, dict)] if isinstance(proposed, list) else []
+    if proposed_cells:
+        for cell in proposed_cells:
+            keys = ", ".join(_report_safe_text(key) for key in cell.get("dataset_keys", []) if key)
+            plan_lines.append(
+                "- {label}: {keys} ({model})".format(
+                    label=_report_safe_text(cell.get("label"), "Unnamed cell"),
+                    keys=keys,
+                    model=_report_safe_text(cell.get("model"), "unknown"),
+                )
+            )
+    else:
+        plan_lines.append("- No experiment matrix was proposed.")
+    # The JSON key stays `hypotheses` for contract stability (stored plans and
+    # external consumers read it).  Only the human-facing LABEL changes: when
+    # the platform produced the field it is a keyword template from
+    # `_hypotheses_from_question`, i.e. a rule-derived checklist, and calling it
+    # model hypotheses overstates what the platform did.
+    #
+    # But `research_plan` is an ARGUMENT: an LLM can hand in a checklist it
+    # wrote itself, and stamping that with "rule-derived" would launder authored
+    # text as platform provenance.  `plan` is the trusted record whenever one
+    # exists (top of this function), so the platform label is earned exactly
+    # when the checklist came from that record.
+    checklist = plan.get("hypotheses")
+    checklist_items = [
+        _report_safe_text(entry) for entry in checklist if entry
+    ] if isinstance(checklist, list) else []
+    checklist_is_platform_derived = bool(trusted_plan) and bool(checklist_items)
+    plan_lines.extend([
         "",
-        "## Research Question",
-        str(plan.get("research_question") or "Not provided."),
-        "",
-        "## Planned Tests",
-    ]
-    for cell in plan.get("proposed_experiment_matrix", []) if isinstance(plan.get("proposed_experiment_matrix"), list) else []:
-        lines.append(f"- {cell.get('label')}: {', '.join(cell.get('dataset_keys', []))} ({cell.get('model')})")
-    lines.extend(["", "## Executed Results"])
+        "### Platform checklist (rule-derived)"
+        if checklist_is_platform_derived
+        else "### Checklist (caller-supplied; platform provenance not verified)",
+    ])
+    if checklist_items:
+        plan_lines.extend(f"- {entry}" for entry in checklist_items)
+    elif trusted_plan:
+        plan_lines.append("- No rule-derived checklist item was produced for this question.")
+    else:
+        plan_lines.append(
+            "- No checklist was supplied, and no plan_research_program record backs this report."
+        )
+    plan_lines.extend(["", "### Required probes"])
+    probes = plan.get("required_probes")
+    probe_items = [_report_safe_text(entry) for entry in probes if entry] if isinstance(probes, list) else []
+    plan_lines.append("- " + (", ".join(probe_items) if probe_items else "not recorded"))
+    plan_lines.extend(["", "### Model families"])
+    models = plan.get("model_families")
+    model_items = [_report_safe_text(entry) for entry in models if entry] if isinstance(models, list) else []
+    plan_lines.append("- " + (", ".join(model_items) if model_items else "not recorded"))
+
+    # 4. Data Sources
+    source_lines = body["Data Sources"]
+    source_lines.append("### Datasets and Citations")
+    if datasets:
+        for dataset in datasets:
+            source_url = _report_safe_text(dataset.get("source_url"))
+            source = f" — {source_url}" if source_url else ""
+            source_lines.append(
+                "- {key}: {name} ({version}){source}".format(
+                    key=_report_safe_text(dataset.get("key"), "unnamed dataset"),
+                    name=_report_safe_text(dataset.get("display_name"), "no display name"),
+                    version=_report_safe_text(dataset.get("version"), "version not recorded"),
+                    source=source,
+                )
+            )
+    else:
+        source_lines.append("- No dataset metadata was present in the supplied tool results.")
+    source_lines.extend(["", "### Bibliography"])
+    if citations:
+        for citation in citations:
+            label = citation.get("label") or citation.get("title") or citation.get("arxiv") or citation.get("doi")
+            bits = [_report_safe_text(label, "unlabelled reference")]
+            if citation.get("year"):
+                bits.append(_report_safe_text(citation["year"]))
+            if citation.get("arxiv"):
+                bits.append("arXiv:" + _report_safe_text(citation["arxiv"]))
+            if citation.get("doi"):
+                bits.append("doi:" + _report_safe_text(citation["doi"]))
+            source_lines.append("- " + "; ".join(bits))
+    else:
+        source_lines.append("- No bibliography entries were extracted from the supplied tool results.")
+
+    # 5. Methods -- how each run was configured.  Deliberately number-free: this
+    # section describes the machinery, never what it produced.
+    method_lines = body["Methods"]
+    if method_rows:
+        method_lines.extend(f"- {row}" for row in method_rows)
+    else:
+        method_lines.append("- No sampler or claim-scope metadata was present in the supplied tool results.")
+
+    # 6. Execution Trace
+    trace_lines = body["Execution Trace"]
+    trace_lines.append("### Executed Results")
+    executed_any = False
     for item in tool_results:
+        if not isinstance(item, dict):
+            continue
         result = item.get("result") if isinstance(item.get("result"), dict) else item
         if not isinstance(result, dict):
             continue
         status = result.get("analysis_status") or result.get("__tool_status__")
         ready = result.get("publication_ready")
-        lines.append(f"- {item.get('tool') or item.get('name')}: {status}; publication_ready={ready}")
+        trace_lines.append(
+            "- {tool}: {status}; publication_ready={ready}".format(
+                tool=_report_safe_text(_tool_name_from_entry(item), "unknown tool"),
+                status=_report_safe_text(status, "not recorded"),
+                ready=_report_safe_text(ready, "not recorded"),
+            )
+        )
+        executed_any = True
+    if not executed_any:
+        trace_lines.append("- No tool result was supplied to this report.")
+    trace_lines.extend(["", "### Robustness Matrix Details"])
     if matrix_rows:
-        lines.extend(["", "## Robustness Matrix Details"])
         if fact_blocked:
-            lines.append("> Fact check BLOCKED — values below are unverified, shown for process transparency only, not as citable results.")
-            lines.append("")
-        lines.append("| Cell | Model | Datasets | Status | Key outputs | Diagnostics |")
-        lines.append("|---|---|---|---|---|---|")
+            trace_lines.append(
+                "> Fact check BLOCKED — values below are unverified, shown for process "
+                "transparency only, not as citable results."
+            )
+            trace_lines.append("")
+        trace_lines.append("| Cell | Model | Datasets | Status | Key outputs | Diagnostics |")
+        trace_lines.append("|---|---|---|---|---|---|")
         for row in matrix_rows:
-            lines.append(
+            trace_lines.append(
                 "| {label} | {model} | {datasets} | {status} | {outputs} | {diagnostics} |".format(
                     label=row["label"],
                     model=row["model"],
@@ -1083,79 +1399,181 @@ def export_research_report(
                     diagnostics=row["diagnostics"],
                 )
             )
-    lines.extend(["", "## Preliminary Findings"])
+    else:
+        trace_lines.append("- No research matrix cell was recorded in this run.")
+
+    # 7. Failed Attempts
+    failed_lines = body["Failed Attempts"]
+    if failed_attempts:
+        failed_lines.extend(f"- {entry}" for entry in failed_attempts)
+    else:
+        failed_lines.append("- No failed tool result, non-ready matrix cell, or capability gap was recorded.")
+    # Legend, not evidence: `run_research_matrix` also returns a
+    # `failure_categories` field.  That field is a STATIC taxonomy of the nine
+    # blind-test failure kinds -- identical on every run, present even when
+    # nothing failed -- so it is never read as a list of observed failures.
+    failed_lines.extend([
+        "",
+        "> Legend: the `failure_categories` field of a research matrix is a static "
+        "taxonomy of failure kinds, not a record of what failed in this run. Only "
+        "the entries above describe observed failures.",
+    ])
+
+    # 8. Findings
+    finding_lines = body["Findings"]
+    finding_lines.append("### Preliminary Findings")
     if not ready_findings:
-        lines.append("- No publication-ready or compressed-preliminary numerical result was present in the supplied tool results.")
-    elif fact_blocked:
-        lines.append(
-            "- Fact check is BLOCKED for this turn — no numerical finding is cleared for the Results section. "
-            "Values are listed under \"Needs Verification\" below and must not be cited as established results."
+        finding_lines.append(
+            "- No publication-ready or compressed-preliminary numerical result was present "
+            "in the supplied tool results."
         )
-        lines.extend(["", "## Needs Verification (fact check blocked)"])
-        for finding in ready_findings:
-            lines.append(f"- {finding}")
-        lines.append("- Resolve the blocking fact-check issues before treating any value above as a result.")
+    elif fact_blocked:
+        finding_lines.append(
+            "- Fact check is BLOCKED for this turn — no numerical finding is cleared for the "
+            "Results section. Values are listed under \"Needs Verification\" below and must "
+            "not be cited as established results."
+        )
+        # Demoted to a SUB-heading of Findings: the report has exactly 13
+        # top-level sections, so this may never be emitted at "## ".  Pinned
+        # line-exactly by
+        # test_needs_verification_and_fact_verification_are_sub_headings.
+        finding_lines.extend(["", "### Needs Verification (fact check blocked)"])
+        finding_lines.extend(f"- {finding}" for finding in ready_findings)
+        finding_lines.append(
+            "- Resolve the blocking fact-check issues before treating any value above as a result."
+        )
     else:
-        for finding in ready_findings:
-            lines.append(f"- {finding}")
-        lines.append("- All numerical findings above are compressed-likelihood preliminary unless a full external likelihood is explicitly listed.")
-    if blocked_cells:
-        lines.extend(["", "## Runnable Gaps"])
-        for cell in blocked_cells:
-            lines.append(f"- {cell}")
-    lines.extend(["", "## Datasets and Citations"])
-    if datasets:
-        for dataset in datasets:
-            source = f" — {dataset.get('source_url')}" if dataset.get("source_url") else ""
-            lines.append(f"- {dataset.get('key')}: {dataset.get('display_name')} ({dataset.get('version')}){source}")
+        finding_lines.extend(f"- {finding}" for finding in ready_findings)
+        finding_lines.append(
+            "- All numerical findings above are compressed-likelihood preliminary unless a "
+            "full external likelihood is explicitly listed."
+        )
+    claimable_parameters = graph.get("claimable_parameters") if isinstance(graph, dict) else None
+    finding_lines.extend([
+        "",
+        "### Claim Provenance",
+        "- Claimable parameters: "
+        + (
+            ", ".join(_report_safe_text(name) for name in claimable_parameters)
+            if isinstance(claimable_parameters, list) and claimable_parameters
+            else "none"
+        ),
+    ])
+
+    # 9. Alternative Explanations -- SCAFFOLD.  The platform never enumerates
+    # competing physical explanations today; the only related machine output is
+    # the model comparison, and its delta statistics come from matrix cells that
+    # are not individually claimable, so the verdict is rendered WITHOUT them.
+    alt_lines = body["Alternative Explanations"]
+    alt_lines.append("Not explored: the platform generated no alternative explanation in this run.")
+    if comparison_rows:
+        alt_lines.extend(["", "### Model comparisons (verdicts only, no delta statistics)"])
+        alt_lines.extend(f"- {row}" for row in comparison_rows)
     else:
-        lines.append("- No dataset metadata was present in the supplied tool results.")
-    if citations:
-        lines.append("")
-        lines.append("## Bibliography")
-        for citation in citations:
-            label = citation.get("label") or citation.get("title") or citation.get("arxiv") or citation.get("doi")
-            bits = [str(label)]
-            if citation.get("year"):
-                bits.append(str(citation["year"]))
-            if citation.get("arxiv"):
-                bits.append(f"arXiv:{citation['arxiv']}")
-            if citation.get("doi"):
-                bits.append(f"doi:{citation['doi']}")
-            lines.append("- " + "; ".join(bits))
-    lines.extend([
+        alt_lines.extend(["", "- No model comparison was recorded in this run."])
+
+    # 10. Uncertainty
+    uncertainty_lines = body["Uncertainty"]
+    uncertainty_lines.append("### Publication-gate reason codes")
+    if gate_reasons:
+        uncertainty_lines.extend(f"- {reason}" for reason in gate_reasons)
+    else:
+        uncertainty_lines.append("- No publication-gate reason code was recorded.")
+    uncertainty_lines.extend(["", "### Convergence thresholds"])
+    if thresholds:
+        uncertainty_lines.append(
+            "- {method} R-hat below {rhat} and {ess_method} ESS at or above {ess} on at least "
+            "{chains} independent chains.".format(
+                method=_report_safe_text(thresholds.get("rhat_method"), "rank"),
+                rhat=_report_safe_text(thresholds.get("rhat_max_exclusive"), "not recorded"),
+                ess_method=_report_safe_text(thresholds.get("ess_method"), "bulk"),
+                ess=_report_safe_text(thresholds.get("ess_min"), "not recorded"),
+                chains=_report_safe_text(
+                    thresholds.get("min_independent_chains"), "not recorded"
+                ),
+            )
+        )
+    else:
+        uncertainty_lines.append("- No publication-gate threshold record was present in the supplied tool results.")
+    uncertainty_lines.extend(["", "### Blocking gaps"])
+    gaps = plan.get("blocking_gaps")
+    gap_items = [_report_safe_text(gap) for gap in gaps if gap] if isinstance(gaps, list) else []
+    if gap_items:
+        uncertainty_lines.extend(f"- {gap}" for gap in gap_items)
+    else:
+        uncertainty_lines.append("- No blocking gap was recorded by the research planner.")
+
+    # 11. Reproducibility Package (the file list is filled in after the markdown
+    # exists, because one of the files IS the markdown).
+    repro_lines = body["Reproducibility Package"]
+    repro_lines.append("### Reproducibility Manifest")
+    repro_lines.append(f"- Tool runs recorded: {len(manifest)}")
+    for entry in manifest:
+        repro_lines.append(
+            "- {tool}: status={status}; ready={ready}; run_id={run_id}; seed={seed}; version={version}".format(
+                tool=_report_safe_text(entry.get("tool"), "unknown tool"),
+                status=_report_safe_text(entry.get("analysis_status"), "not recorded"),
+                ready=_report_safe_text(entry.get("publication_ready"), "not recorded"),
+                run_id=_report_safe_text(entry.get("run_id") or "", "not recorded"),
+                seed=_report_safe_text(entry.get("random_seed") or "", "not recorded"),
+                version=_report_safe_text(entry.get("tool_version") or "", "not recorded"),
+            )
+        )
+    repro_lines.extend([
         "",
-        "## Claim Provenance",
-        f"- Claimable parameters: {', '.join(graph.get('claimable_parameters', [])) if isinstance(graph, dict) else 'none'}",
-        "",
-        "## Fact Verification",
-        f"- Status: {fact_report.get('status', 'not_run') if fact_report else 'not_run'}",
-        f"- Verified claims: {fact_report.get('verified_claim_count', 0) if fact_report else 0}",
-        f"- Unsupported/contradicted claims: {fact_report.get('unsupported_claim_count', 0) if fact_report else 0}",
+        "### Package files",
+        "- research_report.md, paper_draft.md, references.bib, "
+        "reproducibility_manifest.json, fact_check_report.json "
+        "(each file's byte count and its source field are listed in `report_package.files`).",
+    ])
+
+    # 12. Human Review Checklist
+    review_lines = body["Human Review Checklist"]
+    if gate_reasons:
+        review_lines.extend(f"- [ ] {reason}" for reason in gate_reasons)
+    else:
+        review_lines.append("- [ ] No publication-gate reason code was raised; confirm that a gate actually ran.")
+    # Sub-heading of Human Review Checklist, never a 14th top-level section;
+    # pinned line-exactly by
+    # test_needs_verification_and_fact_verification_are_sub_headings.
+    review_lines.extend(["", "### Fact Verification"])
+    # The fact-check report is tool-derived, and on the cross-turn fallback path
+    # it is caller text: its status words and claim texts are sanitized too.
+    review_lines.extend([
+        "- Status: "
+        + _report_safe_text(fact_report.get("status") if fact_report else None, "not_run"),
+        "- Verified claims: "
+        + _report_safe_text(fact_report.get("verified_claim_count") if fact_report else None, "0"),
+        "- Unsupported/contradicted claims: "
+        + _report_safe_text(
+            fact_report.get("unsupported_claim_count") if fact_report else None, "0"
+        ),
     ])
     if isinstance(fact_report, dict) and isinstance(fact_report.get("claims"), list):
         for claim in fact_report["claims"][:8]:
             if not isinstance(claim, dict):
                 continue
-            lines.append(
-                f"- {claim.get('status')}: {claim.get('text')} "
-                f"(support={claim.get('support_level')})"
+            review_lines.append(
+                "- {status}: {text} (support={support})".format(
+                    status=_report_safe_text(claim.get("status"), "not recorded"),
+                    text=_report_safe_text(claim.get("text"), "no claim text recorded"),
+                    support=_report_safe_text(claim.get("support_level"), "not recorded"),
+                )
             )
-    lines.extend(["", "## Reproducibility Manifest", f"- Tool runs recorded: {len(manifest)}"])
-    for entry in manifest:
-        lines.append(
-            "- {tool}: status={status}; ready={ready}; run_id={run_id}; seed={seed}; version={version}".format(
-                tool=entry.get("tool"),
-                status=entry.get("analysis_status"),
-                ready=entry.get("publication_ready"),
-                run_id=entry.get("run_id") or "not recorded",
-                seed=entry.get("random_seed") or "not recorded",
-                version=entry.get("tool_version") or "not recorded",
-            )
-        )
-    lines.extend(["", "## Limitations"])
-    for gap in plan.get("blocking_gaps", []) if isinstance(plan.get("blocking_gaps"), list) else []:
-        lines.append(f"- {gap}")
+    review_lines.append(
+        "- Human approval state: none. No claim-audit review is bound to this report."
+    )
+
+    # 13. Draft Scientific Claim
+    body["Draft Scientific Claim"].extend(
+        _report_draft_claim_lines(tool_results, fact_blocked)
+    )
+
+    lines = [f"# {report_title}", ""]
+    for name in REPORT_SECTIONS:
+        lines.append(f"## {name}")
+        lines.extend(body[name] or ["- Nothing was recorded for this section."])
+        lines.append("")
     markdown = "\n".join(lines).strip() + "\n"
     paper_draft = _paper_draft_from_report_parts(
         title=str(report_title),
@@ -1168,7 +1586,8 @@ def export_research_report(
         fact_report=fact_report,
         manifest=manifest,
     )
-    return {
+    bibtex = _bibtex_from_citations(citations)
+    result = {
         "success": True,
         "__tool_status__": "COMPLETED",
         "analysis_status": "RESEARCH_REPORT_READY",
@@ -1176,23 +1595,438 @@ def export_research_report(
         "format": "markdown",
         "markdown": markdown,
         "paper_draft_markdown": paper_draft,
-        "bibtex": _bibtex_from_citations(citations),
+        "bibtex": bibtex,
         "datasets": datasets,
         "citations": citations,
         "reproducibility_manifest": manifest,
+        # Echoed so `report_package` can name the field that holds the
+        # fact_check_report.json payload.  `_latest_fact_check_report` skips
+        # this tool's own output so the echo can never become the source a
+        # later report reads its fact-check status from.
+        "fact_check_report": fact_report or {},
         "report_package": {
+            # Every file carries its real byte count and the result field that
+            # holds its content, so a caller can assemble the package without
+            # guessing which field a filename maps to.  The counts are filled in
+            # by `refresh_report_package_sizes` below, from the fields the
+            # `source_key`s name -- never typed out here, so no later mutation
+            # of a source field can leave a stale number behind.
             "files": [
-                {"path": "research_report.md", "content_type": "text/markdown", "bytes": len(markdown.encode("utf-8"))},
-                {"path": "paper_draft.md", "content_type": "text/markdown", "bytes": len(paper_draft.encode("utf-8"))},
-                {"path": "references.bib", "content_type": "text/x-bibtex"},
-                {"path": "reproducibility_manifest.json", "content_type": "application/json"},
-                {"path": "fact_check_report.json", "content_type": "application/json"},
+                {
+                    "path": "research_report.md",
+                    "content_type": "text/markdown",
+                    "source_key": "markdown",
+                },
+                {
+                    "path": "paper_draft.md",
+                    "content_type": "text/markdown",
+                    "source_key": "paper_draft_markdown",
+                },
+                {
+                    "path": "references.bib",
+                    "content_type": "text/x-bibtex",
+                    "source_key": "bibtex",
+                },
+                {
+                    "path": "reproducibility_manifest.json",
+                    "content_type": "application/json",
+                    "source_key": "reproducibility_manifest",
+                },
+                {
+                    "path": "fact_check_report.json",
+                    "content_type": "application/json",
+                    "source_key": "fact_check_report",
+                },
             ],
             "unsupported_claim_policy": "omit_from_results_or_move_to_limitations",
         },
         "word_count": len(markdown.split()),
         "__message_to_model__": "This is a report draft. It does not create new scientific evidence.",
     }
+    return refresh_report_package_sizes(result)
+
+
+# A JSON entry's byte count is only checkable against a stated serialization:
+# the caller receives the OBJECT, not the string counted here, and a different
+# separator choice writes a different number of bytes (Codex review
+# 2026-09-03).  Each entry names the serialization its count assumes.
+_REPORT_PACKAGE_JSON_SERIALIZATION = (
+    "json.dumps(obj, ensure_ascii=False, sort_keys=True), utf-8"
+)
+_REPORT_PACKAGE_TEXT_SERIALIZATION = "utf-8 text, verbatim"
+
+
+def _report_package_bytes(value: Any) -> int:
+    """Serialized size of one package file, from the result field holding it.
+
+    Markdown/BibTeX fields ship as-is.  A ``.json`` file is counted under
+    ``_REPORT_PACKAGE_JSON_SERIALIZATION``, which each package entry names, so
+    a caller can reproduce the number exactly instead of assuming it.
+    """
+
+    if isinstance(value, str):
+        return len(value.encode("utf-8"))
+    return len(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+
+
+def refresh_report_package_sizes(result: dict[str, Any]) -> dict[str, Any]:
+    """Recompute every ``report_package.files[].bytes`` from its ``source_key``.
+
+    ``bytes`` is a promise about the payload the caller will actually write out,
+    so ANY mutation of a source field after the package is assembled invalidates
+    it.  That is not hypothetical: ``ai_tools_research._stamp_evidence_source``
+    prepends the unverified-evidence banner to ``markdown`` and
+    ``paper_draft_markdown`` on the cross-turn fallback path, after this module
+    has returned, and the listed sizes were then short by the banner's length.
+    Every mutator calls this afterwards; it is idempotent and safe to re-run.
+    """
+
+    if not isinstance(result, dict):
+        return result
+    package = result.get("report_package")
+    if not isinstance(package, dict) or not isinstance(package.get("files"), list):
+        return result
+    for entry in package["files"]:
+        if not isinstance(entry, dict):
+            continue
+        source_key = entry.get("source_key")
+        if not isinstance(source_key, str) or source_key not in result:
+            continue
+        payload = result[source_key]
+        entry["bytes"] = _report_package_bytes(payload)
+        entry["serialization"] = (
+            _REPORT_PACKAGE_TEXT_SERIALIZATION
+            if isinstance(payload, str)
+            else _REPORT_PACKAGE_JSON_SERIALIZATION
+        )
+    return result
+
+
+def _report_failed_attempts(
+    tool_results: list[dict[str, Any]], plan: dict[str, Any]
+) -> list[str]:
+    """List every attempt in this run that produced no usable evidence.
+
+    Three independent sources, none of which may be dropped:
+
+    1. tool results whose own status word is in a failure vocabulary
+       (``_REPORT_FAILED_TOOL_STATUSES`` / ``_REPORT_ERROR_TOOL_STATUSES`` /
+       ``_REPORT_NO_VERDICT_STATUSES`` / ``_REPORT_NOT_RUN_STATUSES``), that
+       carry ``chain_tier="blocked"``, or that report ``success=false`` or a
+       non-empty ``error``;
+    2. every research-matrix cell that is not publication-ready, rendered as
+       ``label: execution_level; reasons=...; datasets_not_run=...`` from the
+       cell's own ``preliminary_reasons`` / ``publication_gate.reasons``;
+    3. every ``capability_gap_matrix`` row whose status is not ``available``.
+
+    Deliberately NOT a source: ``run_research_matrix``'s ``failure_categories``.
+    That is a static taxonomy list, identical on every run, and is rendered only
+    as a legend by the caller.
+    """
+
+    entries: list[str] = []
+    seen: set[str] = set()
+
+    def _add(entry: str) -> None:
+        if entry not in seen:
+            seen.add(entry)
+            entries.append(entry)
+
+    for item in tool_results:
+        if not isinstance(item, dict):
+            continue
+        result = item.get("result") if isinstance(item.get("result"), dict) else item
+        if not isinstance(result, dict):
+            continue
+        statuses = {
+            str(result.get(key) or "").strip().upper()
+            for key in ("__tool_status__", "analysis_status", "status", "data_origin")
+        }
+        statuses.discard("")
+        failed_statuses = statuses & (
+            _REPORT_FAILED_TOOL_STATUSES
+            | _REPORT_ERROR_TOOL_STATUSES
+            | _REPORT_NO_VERDICT_STATUSES
+            | _REPORT_NOT_RUN_STATUSES
+        )
+        # `chain_tier="blocked"` is the three-tier runners' own word for an
+        # attempt that produced no usable evidence, whatever status word sits
+        # beside it: the blocked tier of `run_cosmology_mcmc` says
+        # analysis_status="PARTIAL", which no status vocabulary can list
+        # without sweeping in every partial-but-usable result (Codex review
+        # 2026-09-03, PRRT_kwDORoeoE86etMHc).  No producer pairs the blocked
+        # tier with publication_ready=True, and `result_provenance` only ever
+        # demotes a tainted result INTO it, so the signal is safe to read.
+        blocked_tier = str(result.get("chain_tier") or "").strip().lower() == "blocked"
+        error = str(result.get("error") or "")
+        if failed_statuses or blocked_tier or result.get("success") is False or error:
+            bits = ["tool " + _report_safe_text(_tool_name_from_entry(item), "unknown tool")]
+            shown = sorted(failed_statuses) if failed_statuses else sorted(statuses)
+            bits.append(
+                "status="
+                + (", ".join(_report_safe_text(word) for word in shown) or "not recorded")
+            )
+            if blocked_tier:
+                bits.append("chain_tier=blocked")
+            if result.get("error_class"):
+                bits.append("error_class=" + _report_safe_text(result["error_class"]))
+            if error:
+                bits.append(f"error={_md_table_cell(error)}")
+            _add("; ".join(bits))
+        for cell in result.get("matrix", []) if isinstance(result.get("matrix"), list) else []:
+            if not isinstance(cell, dict) or cell.get("publication_ready") is True:
+                continue
+            _add(_report_failed_cell_line(cell))
+
+    for row in _report_capability_gap_rows(tool_results, plan):
+        _add(
+            "capability {component} ({category}): {status}; {details}".format(
+                component=_report_safe_text(row.get("component"), "unnamed component"),
+                category=_report_safe_text(row.get("category"), "uncategorised"),
+                status=_report_safe_text(row.get("status"), "unknown"),
+                details=_report_safe_text(
+                    row.get("details") or row.get("claim_support"), "no detail recorded"
+                ),
+            )
+        )
+    return entries
+
+
+def _report_failed_cell_line(cell: dict[str, Any]) -> str:
+    """Render one non-ready matrix cell with its own reason codes."""
+
+    cell_result = cell.get("result") if isinstance(cell.get("result"), dict) else {}
+    reasons: list[str] = []
+    for reason in cell_result.get("preliminary_reasons", []) if isinstance(cell_result.get("preliminary_reasons"), list) else []:
+        safe = _report_safe_text(reason)
+        if safe and safe not in reasons:
+            reasons.append(safe)
+    gate = cell_result.get("publication_gate") if isinstance(cell_result.get("publication_gate"), dict) else {}
+    for reason in gate.get("reasons", []) if isinstance(gate.get("reasons"), list) else []:
+        safe = _report_safe_text(reason)
+        if safe and safe not in reasons:
+            reasons.append(safe)
+    if not reasons:
+        warnings = cell.get("warnings") if isinstance(cell.get("warnings"), list) else []
+        reasons = [_md_table_cell(str(warning)) for warning in warnings[:2]] or ["not publication-ready"]
+    not_run: list[str] = []
+    # Two producers, both required.  A cell that RAN records the datasets it
+    # skipped under `result.datasets_not_run`; a config-only or context-only
+    # cell never runs at all and records them on the cell itself, as
+    # `non_executable_dataset_keys` (research_program.py, matrix construction).
+    # Reading only the nested field printed "datasets_not_run=none" for exactly
+    # the cells whose whole reason for failing was a dataset that could not be
+    # executed (Codex review 2026-09-03).
+    raw_not_run: list[Any] = []
+    for source in (cell_result.get("datasets_not_run"), cell.get("non_executable_dataset_keys")):
+        if isinstance(source, list):
+            raw_not_run.extend(source)
+    for dataset in raw_not_run:
+        raw = dataset.get("key") or dataset.get("dataset_key") or "" if isinstance(dataset, dict) else dataset
+        key = _report_safe_text(raw)
+        if key and key not in not_run:
+            not_run.append(key)
+    line = "{label}: {level}; reasons={reasons}; datasets_not_run={not_run}".format(
+        label=_report_safe_text(cell.get("label") or "", "Unnamed cell"),
+        level=_report_safe_text(cell.get("execution_level") or "", "unknown"),
+        reasons=", ".join(reasons),
+        not_run=", ".join(not_run) if not_run else "none",
+    )
+    if cell.get("error"):
+        line += "; error_class={cls}: {err}".format(
+            cls=_report_safe_text(cell.get("error_class") or "", "unknown"),
+            err=_md_table_cell(str(cell.get("error"))),
+        )
+    return line
+
+
+def _report_capability_gap_rows(
+    tool_results: list[dict[str, Any]], plan: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Every capability-gap row that is not ``available``, plan and results alike."""
+
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    sources: list[Any] = [plan.get("capability_gap_matrix")]
+    for _, result in _iter_report_result_items(tool_results):
+        sources.append(result.get("capability_gap_matrix"))
+        nested_plan = result.get("research_plan")
+        if isinstance(nested_plan, dict):
+            sources.append(nested_plan.get("capability_gap_matrix"))
+    for source in sources:
+        if not isinstance(source, list):
+            continue
+        for row in source:
+            if not isinstance(row, dict):
+                continue
+            status = str(row.get("status") or "unknown")
+            if status == "available":
+                continue
+            key = (str(row.get("component") or ""), status)
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(row)
+    return rows
+
+
+def _report_gate_reason_codes(tool_results: list[dict[str, Any]]) -> list[str]:
+    """Distinct ``publication_gate`` reason codes, in first-seen order."""
+
+    codes: list[str] = []
+    for _, result in _iter_report_result_items(tool_results):
+        gate = result.get("publication_gate") if isinstance(result.get("publication_gate"), dict) else {}
+        raw = gate.get("reasons") if isinstance(gate.get("reasons"), list) else []
+        for reason in list(raw) + (
+            result.get("preliminary_reasons", []) if isinstance(result.get("preliminary_reasons"), list) else []
+        ):
+            code = _report_safe_text(reason)
+            if code and code not in codes:
+                codes.append(code)
+    return codes
+
+
+def _report_gate_thresholds(tool_results: list[dict[str, Any]]) -> dict[str, Any]:
+    """First recorded publication-gate threshold block, if any."""
+
+    for _, result in _iter_report_result_items(tool_results):
+        gate = result.get("publication_gate") if isinstance(result.get("publication_gate"), dict) else {}
+        thresholds = gate.get("thresholds")
+        if isinstance(thresholds, dict) and thresholds:
+            return thresholds
+    return {}
+
+
+def _report_method_rows(tool_results: list[dict[str, Any]]) -> list[str]:
+    """Per-run method record: model, sampler, execution mode, claim scope.
+
+    Number-free by construction: only these four descriptive fields plus the
+    chain tier are read, never a posterior, diagnostic, or fit statistic.
+    """
+
+    rows: list[str] = []
+    for item, result in _iter_report_result_items(tool_results):
+        if isinstance(result.get("matrix"), list):
+            # The matrix aggregate itself has no sampler; its cells are listed
+            # individually by `_iter_report_result_items`.
+            continue
+        bits: list[str] = []
+        for key in ("model", "sampler", "execution_mode", "claim_scope", "chain_tier"):
+            value = result.get(key)
+            if value:
+                bits.append(f"{key}=" + _report_safe_text(value))
+        if not bits:
+            continue
+        rows.append(
+            _report_safe_text(_tool_name_from_entry(item), "tool result") + ": " + "; ".join(bits)
+        )
+    return rows
+
+
+def _report_model_comparison_rows(tool_results: list[dict[str, Any]]) -> list[str]:
+    """Model-comparison verdicts WITHOUT their delta statistics.
+
+    delta_chi2 / delta_aic / delta_bic are computed from matrix cells that are
+    not individually claimable, so the report carries only the qualitative
+    verdict, the validity flag, and the caveat attached to it.
+    """
+
+    rows: list[str] = []
+    for _, result in _iter_report_result_items(tool_results):
+        comparisons = result.get("model_comparisons")
+        if not isinstance(comparisons, list):
+            continue
+        for comparison in comparisons:
+            if not isinstance(comparison, dict):
+                continue
+            datasets = ", ".join(
+                _report_safe_text(key) for key in comparison.get("dataset_keys", []) if key
+            ) if isinstance(comparison.get("dataset_keys"), list) else ""
+            rows.append(
+                "{base} vs {ext}{data}: preferred={preferred}; comparison_valid={valid}; "
+                "verdict_caveat={caveat}".format(
+                    base=_report_safe_text(
+                        comparison.get("baseline_model") or "", "unknown baseline"
+                    ),
+                    ext=_report_safe_text(
+                        comparison.get("extended_model") or "", "unknown extended model"
+                    ),
+                    data=f" on {datasets}" if datasets else "",
+                    preferred=_report_safe_text(
+                        comparison.get("preferred") or "", "not recorded"
+                    ),
+                    valid=bool(comparison.get("comparison_valid")),
+                    caveat=_md_table_cell(str(comparison.get("verdict_caveat") or "none")),
+                )
+            )
+    return rows
+
+
+def _report_claimable_findings(tool_results: list[dict[str, Any]]) -> list[str]:
+    """Findings a draft claim may quote: DIRECT claimable results, and nothing else.
+
+    Two exclusions carry the whole guarantee, and neither may be relaxed:
+
+    * A research-matrix aggregate is skipped WHOLE, cells included.
+      ``run_research_matrix`` hard-codes ``publication_ready=False`` /
+      ``__do_not_claim__=True`` on every aggregate it returns, for the reason
+      stated at that return: a matrix is a mixed diagnostic container, so a
+      ready cell sitting next to exploratory siblings must be quoted from a
+      direct result call, never lifted out of the aggregate.
+    * A result is taken only when ``_is_claimable_result`` holds for that
+      result itself.  ``_report_ready_findings`` (section 8) keys on
+      ``publication_ready`` alone, so it also renders a SYNTHETIC or errored
+      envelope that happens to carry the flag; section 13 must not inherit
+      those numbers just because a sibling result was genuinely claimable.
+    """
+
+    findings: list[str] = []
+    for item in tool_results:
+        if not isinstance(item, dict):
+            continue
+        result = item.get("result") if isinstance(item.get("result"), dict) else item
+        if not isinstance(result, dict) or isinstance(result.get("matrix"), list):
+            continue
+        if not _is_claimable_result(result):
+            continue
+        params = result.get("parameters") if isinstance(result.get("parameters"), dict) else {}
+        param_bits = [
+            _report_safe_text(name, "unnamed parameter")
+            + "="
+            + _format_report_number(value.get("median"))
+            for name, value in params.items()
+            if isinstance(value, dict) and value.get("median") is not None
+        ]
+        if param_bits:
+            findings.append(
+                _report_safe_text(_tool_name_from_entry(item), "tool result")
+                + "; "
+                + ", ".join(param_bits)
+            )
+    return findings
+
+
+def _report_draft_claim_lines(
+    tool_results: list[dict[str, Any]],
+    fact_blocked: bool,
+) -> list[str]:
+    """Render section 13.
+
+    A draft claim quotes only the findings ``_report_claimable_findings``
+    returns, and only when the fact check is not blocked.  It is always prefixed
+    to say that no human review is bound to it; nothing in this module can
+    approve a claim.
+    """
+
+    claimable_findings = _report_claimable_findings(tool_results)
+    if not claimable_findings:
+        return ["none eligible"]
+    if fact_blocked:
+        return ["none eligible (fact check is BLOCKED for this turn)"]
+    return [
+        f"- Draft claim (NOT APPROVED - no bound review): {finding}"
+        for finding in claimable_findings
+    ]
 
 
 def _report_ready_findings(tool_results: list[dict[str, Any]]) -> list[str]:
@@ -1213,9 +2047,10 @@ def _report_ready_findings(tool_results: list[dict[str, Any]]) -> list[str]:
                     else {}
                 )
                 bits = [
-                    str(cell.get("label") or "Unnamed cell"),
-                    f"model={cell.get('model') or 'unknown'}",
-                    "datasets=" + ", ".join(str(k) for k in cell.get("dataset_keys", []) if k),
+                    _report_safe_text(cell.get("label") or "", "Unnamed cell"),
+                    "model=" + _report_safe_text(cell.get("model") or "", "unknown"),
+                    "datasets="
+                    + ", ".join(_report_safe_text(k) for k in cell.get("dataset_keys", []) if k),
                 ]
                 param_bits: list[str] = []
                 for name in ("H0", "omegam", "Omega_m", "S8", "sigma8", "w0", "wa"):
@@ -1236,10 +2071,15 @@ def _report_ready_findings(tool_results: list[dict[str, Any]]) -> list[str]:
             param_bits = []
             for name, value in params.items():
                 if isinstance(value, dict) and value.get("median") is not None:
-                    param_bits.append(f"{name}={_format_report_number(value.get('median'))}")
+                    param_bits.append(
+                        _report_safe_text(name, "unnamed parameter")
+                        + "="
+                        + _format_report_number(value.get("median"))
+                    )
             if param_bits:
                 findings.append(
-                    f"{item.get('tool') or item.get('name') or 'tool result'}; "
+                    _report_safe_text(_tool_name_from_entry(item), "tool result")
+                    + "; "
                     + ", ".join(param_bits)
                 )
     return findings
@@ -1292,7 +2132,17 @@ def _report_matrix_rows(tool_results: list[dict[str, Any]]) -> list[dict[str, st
 
 
 def _md_table_cell(text: str) -> str:
-    return text.replace("|", "\\|").replace("\n", " ")
+    """Render one tool-derived string as a markdown table cell.
+
+    Table cells carry tool output (cell labels, warnings, error text), which is
+    outside-origin text exactly like the plan strings, so the cell runs through
+    `_report_safe_text` first: flattening to one line keeps the row intact, and
+    escaping the ATX markers keeps a `## Draft Scientific Claim` inside a cell
+    from being found as a bare substring by a `## `-splitting consumer.  Only
+    the pipe escape is specific to tables.
+    """
+
+    return _report_safe_text(text).replace("|", "\\|")
 
 
 def _report_blocked_cells(tool_results: list[dict[str, Any]]) -> list[str]:
@@ -1304,10 +2154,14 @@ def _report_blocked_cells(tool_results: list[dict[str, Any]]) -> list[str]:
         for cell in result["matrix"]:
             if not isinstance(cell, dict) or cell.get("publication_ready") is True:
                 continue
-            label = str(cell.get("label") or "Unnamed cell")
-            level = str(cell.get("execution_level") or "unknown")
+            label = _report_safe_text(cell.get("label") or "", "Unnamed cell")
+            level = _report_safe_text(cell.get("execution_level") or "", "unknown")
             warnings = cell.get("warnings") if isinstance(cell.get("warnings"), list) else []
-            reason = "; ".join(str(w) for w in warnings[:2]) if warnings else "not publication-ready"
+            reason = (
+                "; ".join(_report_safe_text(w) for w in warnings[:2])
+                if warnings
+                else "not publication-ready"
+            )
             blocked.append(f"{label}: {level}; {reason}")
     return blocked
 
@@ -1316,7 +2170,10 @@ def _format_report_number(value: Any) -> str:
     try:
         number = float(value)
     except (TypeError, ValueError):
-        return str(value)
+        # A non-numeric "number" is tool-derived text taking a numeric slot;
+        # it is quoted, so it goes through the same flattening as any other
+        # outside-origin string.
+        return _report_safe_text(value, "not recorded")
     if abs(number) >= 100:
         return f"{number:.3g}"
     if abs(number) >= 1:
@@ -1337,14 +2194,26 @@ def _paper_draft_from_report_parts(
     manifest: list[dict[str, Any]],
 ) -> str:
     """Create a conservative paper draft from verified report ingredients."""
-    fact_status = str(fact_report.get("status") or "not_run") if isinstance(fact_report, dict) else "not_run"
+    fact_status = (
+        _report_safe_text(fact_report.get("status") or "", "not_run")
+        if isinstance(fact_report, dict)
+        else "not_run"
+    )
     fact_blocked = fact_status == "blocked"
     dataset_text = (
         "\n".join(
             "- "
-            + f"{dataset.get('display_name') or dataset.get('key')} "
-            + f"({dataset.get('version') or 'version not recorded'}). "
-            + (f"Source: {dataset.get('source_url')}." if dataset.get("source_url") else "")
+            + _report_safe_text(
+                dataset.get("display_name") or dataset.get("key") or "", "unnamed dataset"
+            )
+            + " ("
+            + _report_safe_text(dataset.get("version") or "", "version not recorded")
+            + "). "
+            + (
+                "Source: " + _report_safe_text(dataset.get("source_url")) + "."
+                if dataset.get("source_url")
+                else ""
+            )
             for dataset in datasets
         )
         if datasets
@@ -1368,7 +2237,11 @@ def _paper_draft_from_report_parts(
         if matrix_rows
         else "- No research matrix cells were recorded in this draft package."
     )
-    limitation_text = "\n".join(f"- {gap}" for gap in plan.get("blocking_gaps", []) if isinstance(gap, str))
+    limitation_text = "\n".join(
+        "- " + _report_safe_text(gap)
+        for gap in plan.get("blocking_gaps", [])
+        if isinstance(gap, str)
+    )
     if blocked_cells:
         limitation_text += ("\n" if limitation_text else "") + "\n".join(f"- {cell}" for cell in blocked_cells)
     if fact_blocked and ready_findings:
@@ -1381,7 +2254,15 @@ def _paper_draft_from_report_parts(
         limitation_text = "- No blocking gap was recorded by the research planner."
     reference_text = (
         "\n".join(
-            f"- {citation.get('label') or citation.get('title') or citation.get('arxiv') or citation.get('doi')}"
+            "- "
+            + _report_safe_text(
+                citation.get("label")
+                or citation.get("title")
+                or citation.get("arxiv")
+                or citation.get("doi")
+                or "",
+                "unlabelled reference",
+            )
             for citation in citations
         )
         if citations
@@ -1402,7 +2283,9 @@ def _paper_draft_from_report_parts(
         ),
         "",
         "## 1. Introduction",
-        str(plan.get("research_question") or "The research question was not recorded."),
+        _report_safe_text(
+            plan.get("research_question") or "", "The research question was not recorded."
+        ),
         "",
         "## 2. Data",
         dataset_text,
@@ -1439,12 +2322,22 @@ def _latest_fact_check_report(tool_results: list[dict[str, Any]]) -> dict[str, A
     for item in reversed(tool_results):
         if not isinstance(item, dict):
             continue
+        # Skip this tool's own earlier output: an exported report echoes the
+        # fact-check report it rendered, and a rendering must never become the
+        # source a later report reads its fact-check status from.
+        if _tool_name_from_entry(item) == "export_research_report":
+            continue
         result = item.get("result") if isinstance(item.get("result"), dict) else item
         if not isinstance(result, dict):
             continue
         if isinstance(result.get("fact_check_report"), dict):
             return result["fact_check_report"]
         if result.get("analysis_status") == "FACT_CHECK_READY":
+            return result
+        # A refusal is a verification outcome too.  Reporting it as "not_run"
+        # hid the fact that `verify_research_facts` ran and declined to certify
+        # (Codex review 2026-09-03).
+        if str(result.get("analysis_status") or "").upper() in _REPORT_NO_VERDICT_STATUSES:
             return result
     return {}
 
@@ -1681,6 +2574,17 @@ def _models_from_question(text: str) -> list[str]:
 
 
 def _hypotheses_from_question(text: str, probes: list[str], models: list[str]) -> list[str]:
+    """Build the rule-derived platform checklist for a research question.
+
+    These are keyword-template lines, not model-generated hypotheses, so every
+    human-facing LABEL for this field reads "Platform checklist (rule-derived)"
+    (report section 3, the tool description, ARCHITECTURE.md and the
+    module-boundaries doc).  The JSON key stays ``hypotheses`` for contract
+    stability: stored plans, `run_research_matrix` payloads, and any external
+    consumer already read that key, and renaming it would break them for a
+    cosmetic gain.
+    """
+
     prompt = text.lower()
     hypotheses: list[str] = []
     if "tension" in prompt or "张力" in prompt or "consistency" in prompt:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 
 def test_research_plan_routes_multiprobe_cosmology_to_dag() -> None:
     from app.services.research_program import plan_research_program
@@ -1018,7 +1020,7 @@ def test_export_research_report_gates_results_when_fact_check_blocked() -> None:
         }},
     ]
     out = export_research_report(tool_results=tool_results, title="t")
-    assert "## Needs Verification (fact check blocked)" in out["markdown"]
+    assert "### Needs Verification (fact check blocked)" in out["markdown"].split("\n")
     assert "no numerical finding is cleared" in out["markdown"]
     assert "Fact check is BLOCKED" in out["paper_draft_markdown"]
 
@@ -1486,7 +1488,12 @@ def test_export_research_report_includes_bibtex_and_manifest() -> None:
     assert result["report_package"]["files"][0]["path"] == "research_report.md"
     assert any(file["path"] == "paper_draft.md" for file in result["report_package"]["files"])
     assert any(file["path"] == "fact_check_report.json" for file in result["report_package"]["files"])
-    assert "## Fact Verification" in result["markdown"]
+    # Fixed-section labels: the datasets/bibliography and fact-verification
+    # blocks moved under their owning sections but keep their literal headings.
+    assert "## Data Sources" in result["markdown"]
+    assert "### Datasets and Citations" in result["markdown"]
+    assert "## Human Review Checklist" in result["markdown"]
+    assert "### Fact Verification" in result["markdown"].split("\n")
     assert "## 4. Results" in result["paper_draft_markdown"]
     assert "Planck 2018 compressed" in result["paper_draft_markdown"]
 
@@ -1569,3 +1576,1057 @@ def test_paper_candidate_pool_excludes_already_read_seed_papers() -> None:
 
     assert result["excluded_count"] == 1
     assert [p["arxiv_id"] for p in result["candidate_papers"]] == ["2604.10002"]
+
+
+# --- Phase 2.1: the fixed 13-section research report ------------------------
+
+
+def _thirteen_section_report_fixture() -> dict[str, object]:
+    """One plan + tool results covering every Failed Attempts source.
+
+    Contains: a FAILED tool result, an `executed_not_ready` matrix cell with a
+    `preliminary_reasons` code, a `config_only` cell, and a non-available
+    capability-gap row.  The non-ready cell carries a posterior median that must
+    never reach the markdown.
+    """
+
+    return {
+        "research_plan": {
+            "research_question": "Do BAO and SN agree on dark-energy evolution?",
+            "hypotheses": ["Check whether extended dark-energy models are supported."],
+            "required_probes": ["BAO", "SN"],
+            "model_families": ["lcdm", "w0wa_cdm"],
+            "proposed_experiment_matrix": [
+                {"label": "BAO+SN", "dataset_keys": ["desi_dr2_bao"], "model": "lcdm"}
+            ],
+            "blocking_gaps": ["Full Planck likelihood not run."],
+            "capability_gap_matrix": [
+                {
+                    "component": "likelihood:act_dr6_primary",
+                    "category": "likelihood",
+                    "status": "missing",
+                    "details": "ACT DR6 primary spectra are not registered.",
+                },
+                {
+                    "component": "dataset:desi_dr2_bao",
+                    "category": "dataset",
+                    "status": "available",
+                    "details": "registered",
+                },
+            ],
+        },
+        "tool_results": [
+            {
+                "tool": "search_literature",
+                "result": {
+                    "success": False,
+                    "__tool_status__": "FAILED",
+                    "error": "upstream archive timed out",
+                    "error_class": "TimeoutError",
+                },
+            },
+            {
+                "tool": "run_research_matrix",
+                "result": {
+                    "publication_ready": False,
+                    "__do_not_claim__": True,
+                    "analysis_status": "RESEARCH_MATRIX_DIAGNOSTIC",
+                    # Static taxonomy, NOT observed failures.
+                    "failure_categories": ["data unavailable", "hallucination"],
+                    "matrix": [
+                        {
+                            "label": "lcdm_bao_sn",
+                            "model": "lcdm",
+                            "dataset_keys": ["desi_dr2_bao", "pantheon_plus"],
+                            "publication_ready": False,
+                            "execution_level": "executed_not_ready",
+                            "result": {
+                                "preliminary_reasons": ["ess_below_threshold"],
+                                "publication_gate": {
+                                    "reasons": ["ess_below_threshold"],
+                                    "thresholds": {
+                                        "min_independent_chains": 4,
+                                        "rhat_method": "rank",
+                                        "rhat_max_exclusive": 1.01,
+                                        "ess_method": "bulk",
+                                        "ess_min": 400,
+                                    },
+                                },
+                                "sampler": "compressed_gaussian_analytic",
+                                "claim_scope": "compressed_likelihood_preliminary",
+                                "parameters": {"H0": {"median": 73.246}},
+                                "datasets_not_run": [{"key": "planck2018_compressed"}],
+                            },
+                        },
+                        {
+                            "label": "w0wa_bao_sn",
+                            "model": "w0wa_cdm",
+                            "dataset_keys": ["desi_dr2_bao"],
+                            "publication_ready": False,
+                            "execution_level": "config_only",
+                            "warnings": ["No runner is registered for this combination."],
+                            "result": {},
+                        },
+                    ],
+                    "model_comparisons": [
+                        {
+                            "baseline_model": "lcdm",
+                            "extended_model": "w0wa_cdm",
+                            "dataset_keys": ["desi_dr2_bao"],
+                            "preferred": "lcdm",
+                            "comparison_valid": False,
+                            "delta_aic": 3.771,
+                            "delta_bic": 5.912,
+                            "delta_chi2": 1.844,
+                        }
+                    ],
+                },
+            },
+        ],
+    }
+
+
+def test_export_research_report_has_thirteen_sections_in_order() -> None:
+    from app.services.research_program import REPORT_SECTIONS, export_research_report
+
+    assert len(REPORT_SECTIONS) == 13
+    assert REPORT_SECTIONS == (
+        "Scientific Question",
+        "Why it matters",
+        "Research Plan",
+        "Data Sources",
+        "Methods",
+        "Execution Trace",
+        "Failed Attempts",
+        "Findings",
+        "Alternative Explanations",
+        "Uncertainty",
+        "Reproducibility Package",
+        "Human Review Checklist",
+        "Draft Scientific Claim",
+    )
+
+    def headings(markdown: str) -> list[str]:
+        return [
+            line[3:].strip()
+            for line in markdown.split("\n")
+            if line.startswith("## ") and not line.startswith("### ")
+        ]
+
+    fixture = _thirteen_section_report_fixture()
+    assert headings(export_research_report(**fixture)["markdown"]) == list(REPORT_SECTIONS)
+    # Every section is present even with no plan and no tool results at all:
+    # "the platform looked and found nothing" must be distinguishable from
+    # "the platform never looked".
+    assert headings(export_research_report()["markdown"]) == list(REPORT_SECTIONS)
+
+
+def test_export_research_report_scaffold_sections_are_not_fabricated() -> None:
+    from app.services.research_program import export_research_report
+
+    markdown = export_research_report(**_thirteen_section_report_fixture())["markdown"]
+    # Sections 2 and 9 stay explicit placeholders until an exploration loop
+    # exists; nothing may generate their content.
+    assert "Not generated by the platform; add the motivation by hand." in markdown
+    assert "Not explored: the platform generated no alternative explanation in this run." in markdown
+
+
+def test_failed_attempts_lists_every_non_ready_cell_with_reason_code() -> None:
+    from app.services.research_program import export_research_report
+
+    markdown = export_research_report(**_thirteen_section_report_fixture())["markdown"]
+    section = markdown.split("## Failed Attempts", 1)[1].split("\n## ", 1)[0]
+
+    # 1. failed tool result
+    assert "tool search_literature" in section
+    assert "status=FAILED" in section
+    assert "error_class=TimeoutError" in section
+    # 2. executed_not_ready cell with its own reason code and unrun dataset
+    assert (
+        "lcdm_bao_sn: executed_not_ready; reasons=ess_below_threshold; "
+        "datasets_not_run=planck2018_compressed" in section
+    )
+    # 3. config_only cell
+    assert "w0wa_bao_sn: config_only;" in section
+    # 4. capability-gap row that is not available (the available one is omitted)
+    assert "capability likelihood:act_dr6_primary" in section
+    assert "dataset:desi_dr2_bao" not in section
+    # 5. the static taxonomy is a legend, never a list of observed failures
+    assert "static taxonomy" in section
+    assert "hallucination" not in section
+
+
+def test_report_withholds_non_ready_posterior_numbers() -> None:
+    from app.services.research_program import export_research_report
+
+    result = export_research_report(**_thirteen_section_report_fixture())
+    markdown = result["markdown"]
+    # posterior median of a cell that is not publication-ready
+    assert "73.246" not in markdown
+    assert "73.2" not in markdown
+    # model-comparison deltas are rendered as a verdict only
+    for delta in ("3.771", "5.912", "1.844"):
+        assert delta not in markdown
+    assert "preferred=lcdm; comparison_valid=False" in markdown
+
+
+def test_draft_claim_none_eligible_without_publication_ready() -> None:
+    from app.services.research_program import export_research_report
+
+    markdown = export_research_report(**_thirteen_section_report_fixture())["markdown"]
+    section = markdown.split("## Draft Scientific Claim", 1)[1].strip()
+    assert section == "none eligible"
+    assert "NOT APPROVED" not in markdown
+
+
+def test_draft_claim_rendered_with_not_approved_prefix_when_ready() -> None:
+    from app.services.research_program import export_research_report
+
+    markdown = export_research_report(
+        tool_results=[
+            {
+                "tool": "run_cosmology_likelihood_chain",
+                "result": {
+                    "success": True,
+                    "publication_ready": True,
+                    "analysis_status": "COMPRESSED_CHAIN_READY",
+                    "__tool_status__": "COMPLETED",
+                    "parameters": {"H0": {"median": 67.36}},
+                },
+            }
+        ],
+    )["markdown"]
+    section = markdown.split("## Draft Scientific Claim", 1)[1].strip()
+    assert section.startswith("- Draft claim (NOT APPROVED - no bound review):")
+    assert "67.36" in section
+
+
+def test_report_package_files_all_carry_bytes_and_source_key() -> None:
+    from app.services.research_program import export_research_report
+
+    result = export_research_report(**_thirteen_section_report_fixture())
+    files = result["report_package"]["files"]
+    assert [f["path"] for f in files] == [
+        "research_report.md",
+        "paper_draft.md",
+        "references.bib",
+        "reproducibility_manifest.json",
+        "fact_check_report.json",
+    ]
+    for entry in files:
+        assert isinstance(entry["bytes"], int)
+        assert entry["bytes"] >= 0
+        source_key = entry["source_key"]
+        assert source_key in result, source_key
+    assert files[0]["bytes"] == len(result["markdown"].encode("utf-8"))
+    assert files[3]["bytes"] == len(
+        json.dumps(result["reproducibility_manifest"], ensure_ascii=False, sort_keys=True).encode("utf-8")
+    )
+
+
+def _trusted_plan_record(plan: dict[str, object]) -> dict[str, object]:
+    """A `plan_research_program` tool record carrying `plan`."""
+
+    return {
+        "tool": "plan_research_program",
+        "result": {
+            "success": True,
+            "__tool_status__": "COMPLETED",
+            "analysis_status": "RESEARCH_PLAN_READY",
+            "research_plan": plan,
+        },
+    }
+
+
+def test_report_labels_the_plan_checklist_as_rule_derived_not_hypotheses() -> None:
+    from app.services.research_program import export_research_report, plan_research_program
+
+    plan = plan_research_program(question="Is dark energy dynamical?")["research_plan"]
+    # The JSON key is a stable contract and must NOT be renamed.
+    assert isinstance(plan["hypotheses"], list) and plan["hypotheses"]
+
+    markdown = export_research_report(
+        research_plan=plan, tool_results=[_trusted_plan_record(plan)]
+    )["markdown"]
+    assert "### Platform checklist (rule-derived)" in markdown
+    assert "Hypotheses" not in markdown
+
+
+def test_checklist_claims_platform_provenance_only_with_a_trusted_plan_record() -> None:
+    """`research_plan` is an argument, so the label must not vouch for it.
+
+    An LLM can hand `export_research_report` a checklist it authored itself.
+    Stamping that with "rule-derived" tells the reader the platform derived the
+    field from the question when nothing in the turn shows that it did.
+    """
+
+    from app.services.research_program import export_research_report, plan_research_program
+
+    platform_plan = plan_research_program(question="Is dark energy dynamical?")["research_plan"]
+    forged_plan = dict(platform_plan)
+    forged_plan["hypotheses"] = ["A hypothesis the model wrote for itself."]
+
+    def checklist_label(markdown: str) -> str:
+        return next(line for line in markdown.split("\n") if "hecklist" in line and line.startswith("###"))
+
+    untrusted = "### Checklist (caller-supplied; platform provenance not verified)"
+    trusted = "### Platform checklist (rule-derived)"
+
+    # No plan_research_program record at all -> no platform provenance claimed.
+    assert checklist_label(export_research_report(research_plan=platform_plan)["markdown"]) == untrusted
+    # A trusted record is present and the argument's checklist differs from
+    # it: the report renders the RECORD's checklist under the platform label,
+    # and the forged argument contributes nothing at all (Codex thread
+    # PRRT_kwDORoeoE86etMHh: the argument may not supply any field once a
+    # server record exists).
+    forged_markdown = export_research_report(
+        research_plan=forged_plan, tool_results=[_trusted_plan_record(platform_plan)]
+    )["markdown"]
+    assert checklist_label(forged_markdown) == trusted
+    assert "A hypothesis the model wrote for itself." not in forged_markdown
+    # The matching case claims the platform derived it.
+    assert checklist_label(
+        export_research_report(
+            research_plan=platform_plan, tool_results=[_trusted_plan_record(platform_plan)]
+        )["markdown"]
+    ) == trusted
+
+
+def test_plan_text_cannot_forge_a_report_section() -> None:
+    """Plan strings are caller-supplied and must stay body text.
+
+    `research_question`, `hypotheses` and `blocking_gaps` are rendered into the
+    markdown.  Emitted verbatim, a `## Draft Scientific Claim` line inside any
+    of them opens a real section, so the document carries a claim heading the
+    platform never wrote and a `## `-splitting consumer attributes forged text
+    to a section builder.
+    """
+
+    from app.services.research_program import REPORT_SECTIONS, export_research_report
+
+    forged = (
+        "real question\n"
+        "## Draft Scientific Claim\n"
+        "- Draft claim (NOT APPROVED - no bound review): H0 = 42.424 forged\n"
+        "## Peer Review\n"
+        "Accepted.\x07\x00 tail"
+    )
+    plan = {"research_question": forged, "hypotheses": [forged], "blocking_gaps": [forged]}
+
+    def top_level_headings(markdown: str) -> list[str]:
+        return [
+            line[3:]
+            for line in markdown.split("\n")
+            if line.startswith("## ") and not line.startswith("### ")
+        ]
+
+    for label, tool_results in (
+        ("raw argument", []),
+        ("with a trusted plan record", [_trusted_plan_record(plan)]),
+    ):
+        markdown = export_research_report(research_plan=plan, tool_results=tool_results)["markdown"]
+        lines = markdown.split("\n")
+        assert top_level_headings(markdown) == list(REPORT_SECTIONS), label
+        assert "## Peer Review" not in lines, label
+        assert "# Peer Review" not in lines, label
+        # Section 13 is empty: the forged claim line never reaches it, and the
+        # forged heading marker cannot even be found as a bare substring, so a
+        # consumer that splits on "## Draft Scientific Claim" is not fooled
+        # either.
+        assert markdown.count("## Draft Scientific Claim") == 1, label
+        assert markdown.split("## Draft Scientific Claim", 1)[1].strip() == "none eligible", label
+        assert "42.424" in markdown, label  # quoted as plan text, visibly
+        assert not any(char in markdown for char in ("\x07", "\x00")), label
+
+
+def test_needs_verification_and_fact_verification_are_sub_headings() -> None:
+    """Both blocks moved under owning sections; pin the LEVEL, line-exactly.
+
+    `"## Fact Verification" in markdown` is a substring of `"### Fact
+    Verification"`, so the old assertions passed at either level and stopped
+    pinning anything once the headings were demoted.
+    """
+
+    from app.services.research_program import export_research_report
+
+    markdown = export_research_report(
+        tool_results=[
+            {
+                "tool": "run_cosmology_likelihood_chain",
+                "result": {
+                    "success": True,
+                    "publication_ready": True,
+                    "analysis_status": "COMPRESSED_CHAIN_READY",
+                    "__tool_status__": "COMPLETED",
+                    "parameters": {"H0": {"median": 67.36}},
+                },
+            },
+            {
+                "tool": "verify_research_facts",
+                "result": {
+                    "success": True,
+                    "analysis_status": "FACT_CHECK_READY",
+                    "status": "blocked",
+                    "verified_claim_count": 0,
+                    "unsupported_claim_count": 1,
+                    "claims": [],
+                },
+            },
+        ],
+    )["markdown"]
+    lines = markdown.split("\n")
+    for heading in ("Fact Verification", "Needs Verification (fact check blocked)"):
+        assert f"### {heading}" in lines, heading
+        assert f"## {heading}" not in lines, heading
+
+
+def test_draft_claim_never_quotes_a_matrix_cell_or_a_non_claim_safe_result() -> None:
+    """Section 13 takes DIRECT claimable results only.
+
+    Two ways a number reached it before:
+      A. a ready cell lifted out of a `run_research_matrix` aggregate, which
+         always carries `publication_ready=False` / `__do_not_claim__=True`
+         precisely so its cells are quoted from a direct call instead;
+      B. a SYNTHETIC result that happens to carry `publication_ready`, swept in
+         because a *sibling* result was genuinely claimable.
+    """
+
+    from app.services.research_program import export_research_report
+
+    def section_13(markdown: str) -> str:
+        return markdown.split("## Draft Scientific Claim", 1)[1].strip()
+
+    aggregate = {
+        "tool": "run_research_matrix",
+        "result": {
+            "success": True,
+            "publication_ready": False,
+            "__do_not_claim__": True,
+            "analysis_status": "RESEARCH_MATRIX_DIAGNOSTIC",
+            "matrix": [
+                {
+                    "label": "inner_ready_cell",
+                    "model": "lcdm",
+                    "dataset_keys": ["desi_dr2_bao"],
+                    "publication_ready": True,
+                    "execution_level": "executed",
+                    "result": {
+                        "success": True,
+                        "publication_ready": True,
+                        "analysis_status": "COMPRESSED_CHAIN_READY",
+                        "__tool_status__": "COMPLETED",
+                        "parameters": {"H0": {"median": 71.4321}},
+                    },
+                }
+            ],
+        },
+    }
+    markdown = export_research_report(tool_results=[aggregate])["markdown"]
+    assert section_13(markdown) == "none eligible"
+    assert "71.432" not in section_13(markdown)
+    # The cell stays VISIBLE as a preliminary finding — withheld from claims,
+    # not hidden from the reader.
+    assert "71.432" in markdown
+
+    claimable = {
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {
+            "success": True,
+            "publication_ready": True,
+            "analysis_status": "COMPRESSED_CHAIN_READY",
+            "__tool_status__": "COMPLETED",
+            "parameters": {"H0": {"median": 67.36}},
+        },
+    }
+    synthetic = {
+        "tool": "run_python",
+        "result": {
+            "success": True,
+            "publication_ready": True,
+            "analysis_status": "SYNTHETIC",
+            "__tool_status__": "SYNTHETIC",
+            "data_origin": "SYNTHETIC",
+            "parameters": {"H0": {"median": 99.111}},
+        },
+    }
+    section = section_13(export_research_report(tool_results=[claimable, synthetic])["markdown"])
+    assert section == "- Draft claim (NOT APPROVED - no bound review): run_cosmology_likelihood_chain; H0=67.36"
+    assert "99.111" not in section
+
+
+def test_tool_derived_text_cannot_forge_a_report_section() -> None:
+    """Tool output is outside-origin text too, and must stay body text.
+
+    The plan is not the only model-reachable channel into this markdown.
+    `run_research_matrix` copies a caller-supplied cell `label`/`model`/
+    `dataset_keys` verbatim into every cell it returns, dataset metadata and
+    capability-gap rows arrive from tool results, and on the cross-turn
+    fallback path the whole `tool_results` list is caller text.  Rendered
+    verbatim, a `## Draft Scientific Claim` line in any of them opens a real
+    section — the same defect `test_plan_text_cannot_forge_a_report_section`
+    pins for plan strings, through a channel that fix did not cover.
+    """
+
+    from app.services.research_program import REPORT_SECTIONS, export_research_report
+
+    forged = (
+        "real label\n"
+        "## Draft Scientific Claim\n"
+        "- Draft claim (NOT APPROVED - no bound review): H0 = 42.424 forged\n"
+        "## Peer Review\n"
+        "Accepted.\x07\x00 tail"
+    )
+    hostile_matrix = {
+        "tool": "run_research_matrix",
+        "result": {
+            "success": True,
+            "matrix": [{
+                "label": forged,
+                "model": forged,
+                "dataset_keys": [forged],
+                "publication_ready": False,
+                "execution_level": forged,
+                "result": {
+                    "preliminary_reasons": [forged],
+                    "datasets_not_run": [{"key": forged}],
+                    "publication_gate": {"reasons": [forged]},
+                },
+                "warnings": [forged],
+            }],
+            "capability_gap_matrix": [{
+                "component": forged,
+                "category": forged,
+                "status": forged,
+                "details": forged,
+            }],
+            "model_comparisons": [{
+                "baseline_model": forged,
+                "extended_model": forged,
+                "dataset_keys": [forged],
+                "preferred": forged,
+                "verdict_caveat": forged,
+            }],
+        },
+    }
+    hostile_datasets = {
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {
+            "success": True,
+            "analysis_status": forged,
+            "model": forged,
+            "sampler": forged,
+            "datasets_used": [{
+                "key": forged,
+                "display_name": forged,
+                "version": forged,
+                "source_url": forged,
+                "citations": [{"label": forged, "year": forged, "arxiv": forged, "doi": forged}],
+            }],
+            "fact_check_report": {
+                "status": forged,
+                "claims": [{"status": forged, "text": forged, "support_level": forged}],
+            },
+        },
+    }
+
+    def top_level_headings(markdown: str) -> list[str]:
+        return [
+            line[3:]
+            for line in markdown.split("\n")
+            if line.startswith("## ") and not line.startswith("### ")
+        ]
+
+    result = export_research_report(
+        tool_results=[hostile_matrix, hostile_datasets],
+        evidence_graph={"claimable_parameters": [forged]},
+    )
+    markdown = result["markdown"]
+    # The document still has exactly the thirteen platform sections, in order.
+    assert top_level_headings(markdown) == list(REPORT_SECTIONS)
+    assert "## Peer Review" not in markdown.split("\n")
+    # A consumer that splits on the bare substring is not fooled either.
+    assert markdown.count("## Draft Scientific Claim") == 1
+    assert markdown.split("## Draft Scientific Claim", 1)[1].strip() == "none eligible"
+    assert "42.424" in markdown  # quoted as tool text, visibly
+    assert not any(char in markdown for char in ("\x07", "\x00"))
+    # The paper draft renders the same hostile strings and keeps its own headings.
+    draft = result["paper_draft_markdown"]
+    assert "## Peer Review" not in draft.split("\n")
+    assert "## Draft Scientific Claim" not in draft
+
+
+def test_each_hostile_channel_alone_keeps_thirteen_headings() -> None:
+    """Each named channel is pinned on its own, so a partial fix cannot pass."""
+
+    from app.services.research_program import REPORT_SECTIONS, export_research_report
+
+    forged = "x\n## Draft Scientific Claim\nforged\n## Peer Review\nAccepted."
+    channels = {
+        "matrix cell label": {
+            "tool": "run_research_matrix",
+            "result": {"success": True, "matrix": [{
+                "label": forged, "model": "lcdm", "dataset_keys": ["desi_dr2_bao"],
+                "publication_ready": False, "execution_level": "config_only",
+            }]},
+        },
+        "dataset key": {
+            "tool": "run_cosmology_likelihood_chain",
+            "result": {"success": True, "datasets_used": [{"key": forged}]},
+        },
+        "capability gap row": {
+            "tool": "plan_research_program",
+            "result": {"success": True, "capability_gap_matrix": [{
+                "component": forged, "category": forged,
+                "status": "missing", "details": forged,
+            }]},
+        },
+    }
+    for label, record in channels.items():
+        markdown = export_research_report(tool_results=[record])["markdown"]
+        headings = [
+            line[3:]
+            for line in markdown.split("\n")
+            if line.startswith("## ") and not line.startswith("### ")
+        ]
+        assert headings == list(REPORT_SECTIONS), label
+        assert len(headings) == 13, label
+        assert markdown.count("## Draft Scientific Claim") == 1, label
+
+
+def test_report_package_sizes_match_their_source_fields() -> None:
+    """Every listed size is the byte length of the field its source_key names."""
+
+    from app.services.research_program import export_research_report
+
+    result = export_research_report(**_thirteen_section_report_fixture())
+    for entry in result["report_package"]["files"]:
+        value = result[entry["source_key"]]
+        expected = (
+            len(value.encode("utf-8"))
+            if isinstance(value, str)
+            else len(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+        )
+        assert entry["bytes"] == expected, entry["path"]
+
+
+def test_failed_cell_line_lists_datasets_a_config_only_cell_never_ran() -> None:
+    """A cell that never ran records its datasets on the cell, not the result.
+
+    The line read only ``result.datasets_not_run``, which config-only and
+    context-only cells do not have, so the report printed
+    ``datasets_not_run=none`` for exactly the cells whose reason for failing
+    was an unexecutable dataset (Codex review 2026-09-03).
+    """
+    from app.services.research_program import export_research_report
+
+    report = export_research_report(
+        research_plan={"research_question": "probe"},
+        tool_results=[{
+            "tool": "run_research_matrix",
+            "result": {"matrix": [{
+                "label": "LCDM x context-only",
+                "model": "lcdm",
+                "publication_ready": False,
+                "execution_level": "config_only",
+                "non_executable_dataset_keys": [
+                    "planck2018_compressed", "act_dr6_lensing",
+                ],
+                "warnings": ["not numerically run"],
+            }]},
+        }],
+    )
+    section = report["markdown"].split("## Failed Attempts")[1].split("\n## ")[0]
+    assert "datasets_not_run=planck2018_compressed, act_dr6_lensing" in section
+    assert "datasets_not_run=none" not in section
+
+
+def test_a_refused_verification_is_reported_as_an_attempt() -> None:
+    """``verify_research_facts`` refusing to certify is an outcome, not silence.
+
+    Its refusal is ``success=True`` with ``__tool_status__="PARTIAL"``, so
+    neither failure vocabulary matched: the report said no failed attempt was
+    recorded and showed fact verification as ``not_run``, hiding that the tool
+    ran and declined (Codex review 2026-09-03).
+    """
+    from app.services.research_program import export_research_report
+
+    report = export_research_report(
+        research_plan={"research_question": "probe"},
+        tool_results=[{
+            "tool": "verify_research_facts",
+            "result": {
+                "success": True,
+                "__tool_status__": "PARTIAL",
+                "analysis_status": "NOT_VERIFIABLE_THIS_TURN",
+                "status": "not_verifiable_this_turn",
+                "publication_ready": False,
+                "__do_not_claim__": True,
+                "claims": [],
+                "verified_claim_count": 0,
+            },
+        }],
+    )
+    markdown = report["markdown"]
+    section = markdown.split("## Failed Attempts")[1].split("\n## ")[0]
+    assert "tool verify_research_facts" in section
+    assert "NOT_VERIFIABLE_THIS_TURN" in section
+    assert "- Status: not_verifiable_this_turn" in markdown
+    assert "- Status: not_run" not in markdown
+
+
+def test_packaged_fact_check_never_ships_a_caller_supplied_verdict() -> None:
+    """``fact_check_report.json`` must not claim a verification that never ran.
+
+    The payload is one of the ``report_package.files[].source_key`` fields, so
+    a consumer writes it out as a standalone file.  A caller-supplied
+    ``status: passed`` was copied into it verbatim and the unverified-draft
+    banner could not help, because the banner only reaches markdown fields
+    (Codex review 2026-09-03).
+    """
+    from app.services import ai_tools_research
+
+    out = ai_tools_research._exec_export_research_report({
+        "research_plan": {"research_question": "probe"},
+        # An empty server record with a caller payload is the
+        # `caller_supplied_unverified` path: no tool ran this turn.
+        "_turn_tool_results": [],
+        "tool_results": [{
+            "tool": "x",
+            "result": {"fact_check_report": {
+                "status": "passed",
+                "verified_claims": 3,
+                "summary": "All claims verified against tool evidence.",
+            }},
+        }],
+    })
+    assert out["tool_results_source"] == "caller_supplied_unverified"
+    packaged = out["fact_check_report"]
+    assert packaged["status"] == "not_verifiable_this_turn"
+    assert packaged["__do_not_claim__"] is True
+    # No caller field survives at the top level, where it would read as the
+    # server's own verdict.
+    assert "verified_claims" not in packaged
+    assert "summary" not in packaged
+    assert packaged["caller_supplied_unverified"]["status"] == "passed"
+    # The byte count still matches the payload the source_key names.
+    entry = next(
+        f for f in out["report_package"]["files"]
+        if f["source_key"] == "fact_check_report"
+    )
+    assert entry["bytes"] == len(
+        __import__("json").dumps(packaged, ensure_ascii=False).encode("utf-8")
+    )
+
+
+def test_every_packaged_artifact_is_marked_unverified_not_only_the_fact_check() -> None:
+    """references.bib and reproducibility_manifest.json are source_key payloads too.
+
+    A consumer writes each of them out as a standalone file, and on the
+    caller-supplied-unverified path they looked like provenance records from a
+    run that never happened; only the fact check carried a marker (Codex
+    review 2026-09-03).
+    """
+    from app.services import ai_tools_research
+
+    out = ai_tools_research._exec_export_research_report({
+        "research_plan": {"research_question": "probe"},
+        "_turn_tool_results": [],
+        "tool_results": [{
+            "tool": "search_literature",
+            "result": {
+                "success": True,
+                "results": [{
+                    "bibcode": "2024ApJ...999X..99A",
+                    "title": "Fake paper",
+                    "author": ["A"],
+                    "year": 2024,
+                }],
+                "fact_check_report": {"status": "passed"},
+            },
+        }],
+    })
+    assert out["tool_results_source"] == "caller_supplied_unverified"
+    assert out["bibtex"].startswith("% UNVERIFIED DRAFT")
+    manifest = out["reproducibility_manifest"]
+    assert manifest["status"] == "not_verifiable_this_turn"
+    assert manifest["__do_not_claim__"] is True
+    assert "caller_supplied_unverified" in manifest
+    # Every entry states the serialization its byte count assumes, and the
+    # count still matches the payload after all of these mutations.
+    import json as _json
+
+    for entry in out["report_package"]["files"]:
+        payload = out[entry["source_key"]]
+        assert entry["serialization"]
+        expected = (
+            len(payload.encode("utf-8"))
+            if isinstance(payload, str)
+            else len(_json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+        )
+        assert entry["bytes"] == expected, entry["path"]
+
+
+def test_displayed_probes_come_from_the_server_plan_record() -> None:
+    """``_trusted_tool_results`` authenticates the LIST, not the plan argument.
+
+    A turn that already ran ``plan_research_program`` could still hand
+    ``export_research_report`` a different ``research_plan`` and have its
+    probes rendered into the audit report as if they had been planned (Codex
+    review 2026-09-03).
+    """
+    from app.services.research_program import export_research_report
+
+    report = export_research_report(
+        research_plan={
+            "research_question": "probe",
+            "required_probes": ["fabricated_probe"],
+            "model_families": ["fabricated_model"],
+        },
+        tool_results=[{
+            "tool": "plan_research_program",
+            "result": {
+                "success": True,
+                "research_plan": {
+                    "research_question": "probe",
+                    "required_probes": ["registered_probe"],
+                    "model_families": ["lcdm"],
+                },
+            },
+        }],
+    )
+    markdown = report["markdown"]
+    assert "registered_probe" in markdown
+    assert "fabricated_probe" not in markdown
+    assert "lcdm" in markdown
+    assert "fabricated_model" not in markdown
+
+
+def test_the_whole_plan_section_comes_from_the_server_record() -> None:
+    """Not just the probes: the matrix and the blocking gaps too.
+
+    ``_trusted_tool_results`` authenticates the tool-result LIST, not the
+    ``research_plan`` argument, so an omitted or altered argument could make
+    the report claim a different experiment matrix -- or none at all -- and
+    a different set of blocking gaps (Codex review 2026-09-03).
+    """
+    from app.services.research_program import export_research_report
+
+    report = export_research_report(
+        research_plan={
+            "research_question": "probe",
+            "proposed_experiment_matrix": [
+                {"label": "fabricated", "dataset_keys": ["fake_ds"], "model": "lcdm"},
+            ],
+            "blocking_gaps": ["fabricated_gap"],
+        },
+        tool_results=[{
+            "tool": "plan_research_program",
+            "result": {"success": True, "research_plan": {
+                "research_question": "probe",
+                "proposed_experiment_matrix": [
+                    {"label": "registered", "dataset_keys": ["desi_dr2_bao"], "model": "lcdm"},
+                ],
+                "blocking_gaps": ["registered_gap"],
+            }},
+        }],
+    )
+    markdown = report["markdown"]
+    assert "registered" in markdown and "registered_gap" in markdown
+    assert "fabricated" not in markdown and "fabricated_gap" not in markdown
+
+
+def test_a_structured_non_run_is_a_recorded_attempt() -> None:
+    """success=True, PARTIAL, publication_ready=False and no error.
+
+    A runner that returned a structured non-run matched none of the failure
+    vocabularies and, being a direct result rather than a matrix cell, was
+    not seen by the cell walk either -- so the attempt vanished from the
+    report entirely (Codex review 2026-09-03).
+    """
+    from app.services.research_program import export_research_report
+
+    for status in ("NO_COMPRESSED_LIKELIHOOD", "EXTERNAL_COBAYA_NOT_RUN"):
+        report = export_research_report(
+            research_plan={"research_question": "probe"},
+            tool_results=[{
+                "tool": "run_cosmology_likelihood_chain",
+                "result": {
+                    "success": True,
+                    "__tool_status__": "PARTIAL",
+                    "analysis_status": status,
+                    "publication_ready": False,
+                },
+            }],
+        )
+        section = report["markdown"].split("## Failed Attempts")[1].split("\n## ")[0]
+        assert "run_cosmology_likelihood_chain" in section, status
+        assert status in section, status
+        assert "No failed tool result" not in section, status
+
+
+def test_config_only_and_scope_gap_non_runs_are_recorded_attempts() -> None:
+    """Every non-run status a producer actually emits reaches Failed Attempts.
+
+    Codex thread PRRT_kwDORoeoE86etMHc: the vocabulary listed "CONFIG_ONLY",
+    which no direct producer emits, while `build_cosmology_likelihood`
+    returns analysis_status="CONFIG_READY" (config_builder.py) and the
+    CMB-rotation runner returns "CMB_ROTATION_SCOPE_GAP"
+    (cmb_rotation_likelihoods._blocked) -- both success=True, PARTIAL,
+    publication_ready=False, __do_not_claim__=True, no error -- so the
+    section said no unusable attempt was recorded.  The blocked tier of
+    `run_cosmology_mcmc` (analysis_status="PARTIAL", chain_tier="blocked")
+    is the same bug through a status word no vocabulary can list; the
+    runners' own `chain_tier="blocked"` names it instead.
+    """
+    from app.services.research_program import export_research_report
+
+    def failed_section(report: dict) -> str:
+        return report["markdown"].split("## Failed Attempts")[1].split("\n## ")[0]
+
+    cases = (
+        ("build_cosmology_likelihood", "CONFIG_READY", {"execution_status": "not_run"}),
+        ("run_cmb_rotation_likelihood", "CMB_ROTATION_SCOPE_GAP", {"chain_tier": "blocked"}),
+        ("run_cosmology_mcmc", "PARTIAL", {"chain_tier": "blocked"}),
+    )
+    for tool, status, extra in cases:
+        section = failed_section(export_research_report(
+            research_plan={"research_question": "probe"},
+            tool_results=[{
+                "tool": tool,
+                "result": {
+                    "success": True,
+                    "__tool_status__": "PARTIAL",
+                    "analysis_status": status,
+                    "publication_ready": False,
+                    "__do_not_claim__": True,
+                    **extra,
+                },
+            }],
+        ))
+        assert f"tool {tool}" in section, status
+        assert status in section, status
+        if extra.get("chain_tier") == "blocked":
+            assert "chain_tier=blocked" in section, status
+        assert "No failed tool result" not in section, status
+
+    # The generic "publication_ready=False and __do_not_claim__=True" rule was
+    # rejected on purpose: these carry that envelope and are NOT failed
+    # attempts -- a matrix aggregate holding a publication-ready cell, and an
+    # evidence graph that correctly reported an unsupported claim.
+    usable = [
+        {
+            "tool": "run_research_matrix",
+            "result": {
+                "success": True,
+                "__tool_status__": "PARTIAL",
+                "analysis_status": "RESEARCH_MATRIX_DIAGNOSTIC",
+                "publication_ready": False,
+                "__do_not_claim__": True,
+                "matrix": [{
+                    "label": "ready_cell",
+                    "model": "lcdm",
+                    "dataset_keys": ["desi_dr2_bao"],
+                    "publication_ready": True,
+                    "result": {"parameters": {"H0": {"median": 67.4}}},
+                }],
+            },
+        },
+        {
+            "tool": "build_evidence_graph",
+            "result": {
+                "success": True,
+                "__tool_status__": "PARTIAL",
+                "analysis_status": "EVIDENCE_GRAPH_READY",
+                "publication_ready": False,
+                "__do_not_claim__": True,
+            },
+        },
+    ]
+    section = failed_section(
+        export_research_report(research_plan={"research_question": "probe"}, tool_results=usable)
+    )
+    assert "tool run_research_matrix" not in section
+    assert "tool build_evidence_graph" not in section
+    assert "No failed tool result" in section
+
+
+def test_the_caller_plan_argument_contributes_nothing_when_a_server_record_exists() -> None:
+    """One effective plan: the server record when present, else the argument.
+
+    Codex thread PRRT_kwDORoeoE86etMHh: `export_research_report` still read
+    the research question and the capability-gap collection (which feeds
+    Failed Attempts) from the caller's `research_plan` argument even when a
+    successful `plan_research_program` record was in `tool_results`, so a
+    fabricated argument leaked into the report title, Section 1, Failed
+    Attempts and the paper draft's Introduction.  Every plan read now goes
+    through the record whenever one exists -- including fields the record
+    does not carry, which the argument may not fill in.
+    """
+    from app.services.research_program import export_research_report
+
+    def record(plan: dict) -> dict:
+        return {"tool": "plan_research_program", "result": {"success": True, "research_plan": plan}}
+
+    def outputs(report: dict) -> tuple[str, str]:
+        return report["markdown"], report["paper_draft_markdown"]
+
+    # 1. The thread's own probe, verbatim.
+    markdown, draft = outputs(export_research_report(
+        research_plan={
+            "research_question": "FABRICATED",
+            "capability_gap_matrix": [
+                {"component": "FABRICATED_GAP", "status": "missing", "category": "x", "details": "fake"}
+            ],
+        },
+        tool_results=[record({
+            "research_question": "REGISTERED",
+            "capability_gap_matrix": [
+                {"component": "REGISTERED_GAP", "status": "missing", "category": "x", "details": "real"}
+            ],
+        })],
+    ))
+    assert "FABRICATED" not in markdown and "FABRICATED" not in draft
+    assert "REGISTERED" in markdown and "REGISTERED" in draft
+    assert markdown.startswith("# REGISTERED\n")
+    assert "capability REGISTERED_GAP" in markdown
+
+    # 2. Every plan field the report reads, all at once.
+    def plan(tag: str) -> dict:
+        return {
+            "research_question": f"{tag}_QUESTION",
+            "hypotheses": [f"{tag}_HYPOTHESIS"],
+            "required_probes": [f"{tag}_PROBE"],
+            "model_families": [f"{tag}_MODEL"],
+            "proposed_experiment_matrix": [
+                {"label": f"{tag}_CELL", "dataset_keys": [f"{tag}_DATASET"], "model": f"{tag}_MODEL"}
+            ],
+            "blocking_gaps": [f"{tag}_BLOCKING_GAP"],
+            "capability_gap_matrix": [{
+                "component": f"{tag}_COMPONENT",
+                "status": "missing",
+                "category": f"{tag}_CATEGORY",
+                "details": f"{tag}_DETAILS",
+            }],
+        }
+
+    markdown, draft = outputs(export_research_report(
+        research_plan=plan("FABRICATED"), tool_results=[record(plan("REGISTERED"))]
+    ))
+    assert "FABRICATED" not in markdown and "FABRICATED" not in draft
+    for field in (
+        "REGISTERED_QUESTION", "REGISTERED_HYPOTHESIS", "REGISTERED_PROBE", "REGISTERED_MODEL",
+        "REGISTERED_CELL", "REGISTERED_DATASET", "REGISTERED_BLOCKING_GAP", "REGISTERED_COMPONENT",
+    ):
+        assert field in markdown, field
+    assert "REGISTERED_QUESTION" in draft and "REGISTERED_BLOCKING_GAP" in draft
+
+    # 3. A record that LACKS a field does not let the argument fill it in.
+    markdown, draft = outputs(export_research_report(
+        research_plan=plan("FABRICATED"), tool_results=[record({"research_question": "REGISTERED_QUESTION"})]
+    ))
+    assert "FABRICATED" not in markdown and "FABRICATED" not in draft
+    assert "REGISTERED_QUESTION" in markdown
+
+    # 4. Without a record the argument is the only plan there is.
+    markdown, draft = outputs(export_research_report(research_plan=plan("ARGUMENT")))
+    assert "ARGUMENT_QUESTION" in markdown and "ARGUMENT_QUESTION" in draft

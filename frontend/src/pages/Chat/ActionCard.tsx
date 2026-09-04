@@ -73,6 +73,50 @@ export function VisibleResearchDiagnostics({
   );
 }
 
+/**
+ * The exported research report, surfaced ABOVE the raw-tool-card disclosure.
+ *
+ * Research turns fold every tool card into a collapsed `<details>` ("Show raw
+ * tool cards") so the step card can lead. The report is not audit trail — it is
+ * the deliverable of the whole turn, the one document a reader takes away — and
+ * inside that disclosure it is invisible unless the reader thinks to expand a
+ * control labelled as raw output. This renders it in the open; the card inside
+ * the disclosure stays where it is, exactly as `VisibleResearchDiagnostics`
+ * already does for the run_research_matrix diagnostics.
+ */
+export function VisibleResearchReport({
+  actions,
+  actionResults,
+}: {
+  actions: ChatAction[];
+  actionResults?: Map<number, Record<string, unknown>>;
+}) {
+  const primary = actions
+    .map((action, index) => ({
+      tool: String(action.action || ""),
+      result: resultForAction(action, index, actionResults),
+    }))
+    // The LAST successful export, not the first: a turn can export a draft
+    // and then export again after further verification, and showing the
+    // earlier one presents superseded content as the report (Codex review
+    // 2026-09-03).
+    .filter(({ tool, result }) => (
+      tool === "export_research_report"
+      && result
+      && typeof result.markdown === "string"
+      && result.markdown.trim() !== ""
+    ))
+    .at(-1);
+
+  if (!primary?.result) return null;
+
+  return (
+    <div className="chat-visible-research-report">
+      <ResearchProgramPanel result={primary.result} />
+    </div>
+  );
+}
+
 function getActionToolResult(action: ChatAction): Record<string, unknown> | undefined {
   const result = (action as Record<string, unknown>).tool_result;
   return result && typeof result === "object" ? result as Record<string, unknown> : undefined;

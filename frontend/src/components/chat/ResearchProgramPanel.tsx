@@ -1,3 +1,5 @@
+import { useState } from "react";
+import MarkdownText from "./MarkdownText";
 import PanelEmptyState from "./PanelEmptyState";
 
 type ResearchPlan = {
@@ -24,6 +26,18 @@ type ResearchPlan = {
     dataset_keys?: string[];
     model?: string;
   }[];
+};
+
+/**
+ * One entry of `report_package.files` from export_research_report. The
+ * reproducibility bundle is described by the report, not shipped as a
+ * download, so the panel only lists what the report claims exists.
+ */
+type ReportPackageFile = {
+  path?: string;
+  content_type?: string;
+  bytes?: number;
+  source_key?: string;
 };
 
 function asArray<T>(value: unknown): T[] {
@@ -327,7 +341,19 @@ function PlanView({ plan }: { plan: ResearchPlan }) {
       ) : null}
       {asArray<string>(plan.hypotheses).length ? (
         <div>
-          <strong style={{ color: "var(--color-text-primary)" }}>Hypotheses</strong>
+          {/*
+            The `hypotheses` JSON key is kept for contract stability, but the
+            backend fills it from a six-branch keyword substring lookup over
+            the question text — it is a rule-derived checklist, not something
+            a model proposed. Labelling it "Hypotheses" told the reader the
+            platform had reasoned about the science when it had not.
+          */}
+          <strong
+            style={{ color: "var(--color-text-primary)" }}
+            title="Rule-derived from keywords in the research question — not model-generated hypotheses."
+          >
+            Platform checklist (rule-derived)
+          </strong>
           <ul style={{ margin: "4px 0 0 18px" }}>
             {asArray<string>(plan.hypotheses).slice(0, 4).map((item) => <li key={item}>{item}</li>)}
           </ul>
@@ -747,6 +773,175 @@ function ToolImplementationQueueView({ result }: { result: Record<string, unknow
   );
 }
 
+/**
+ * Copy the whole report markdown in one click. The report is the only
+ * take-away a reader gets from a research run: there is no report route or
+ * page (the growth gate forbids adding one without a named user), so the
+ * panel itself has to hand the document over.
+ */
+function CopyReportMarkdownButton({ markdown }: { markdown: string }) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const [focused, setFocused] = useState(false);
+
+  // A denied clipboard (permission refused, insecure context, no API at all)
+  // must SAY so. Staying on "Copy as Markdown" is indistinguishable from a
+  // click that never registered, and a reader who believes the report is on
+  // the clipboard pastes the previous clipboard contents into their notes.
+  const handleCopy = async () => {
+    if (!navigator.clipboard?.writeText) {
+      setState("failed");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(markdown);
+      setState("copied");
+      window.setTimeout(() => setState("idle"), 1800);
+    } catch {
+      setState("failed");
+    }
+  };
+
+  const label = state === "copied" ? "Copied" : state === "failed" ? "Copy failed" : "Copy as Markdown";
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => { void handleCopy(); }}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        title={
+          state === "failed"
+            ? "The browser refused clipboard access — select the report text and copy it manually"
+            : "Copy the full report markdown to the clipboard"
+        }
+        style={{
+          border: `1px solid ${state === "failed" ? "var(--color-error, #b42318)" : "var(--color-separator)"}`,
+          borderRadius: 4,
+          background: "var(--color-bg)",
+          color: state === "failed" ? "var(--color-error, #b42318)" : "var(--color-text-secondary)",
+          cursor: "pointer",
+          fontSize: "0.72rem",
+          fontWeight: 600,
+          padding: "0.2rem 0.5rem",
+          outline: focused ? "2px solid var(--color-accent)" : "none",
+          outlineOffset: 2,
+        }}
+      >
+        {label}
+      </button>
+      {state === "failed" ? (
+        <span
+          role="status"
+          data-testid="research-report-copy-error"
+          style={{ color: "var(--color-error, #b42318)", fontSize: "0.72rem" }}
+        >
+          Clipboard access was refused — nothing was copied. Select the report text and copy it manually.
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * List the reproducibility bundle the report declares. Renders nothing when
+ * the payload carries no `report_package.files`, and says "size not reported"
+ * rather than inventing a byte count for an entry that has none.
+ */
+function ReportPackageFiles({ files }: { files: ReportPackageFile[] }) {
+  if (!files.length) return null;
+  return (
+    <div data-testid="research-report-package" style={{ marginTop: 10 }}>
+      <strong style={{ color: "var(--color-text-primary)" }}>Reproducibility package</strong>
+      <ul style={{ margin: "4px 0 0 18px" }}>
+        {files.map((file, index) => {
+          const path = String(file.path || "");
+          const bytes = typeof file.bytes === "number" && Number.isFinite(file.bytes) ? file.bytes : null;
+          return (
+            <li key={path || index}>
+              <code>{path || "(unnamed file)"}</code>{" "}
+              <span style={{ color: "var(--color-text-tertiary)" }}>
+                {bytes === null ? "size not reported" : `${bytes} bytes`}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * The fixed-section research report. It is rendered as markdown (headings,
+ * tables, lists) instead of a raw <pre> so a reader can actually navigate the
+ * sections; wide rows scroll inside this block rather than the page.
+ *
+ * Honest expectation: sections "Why it matters" and "Alternative explanations"
+ * are scaffolds the backend fills with a stated placeholder until an
+ * exploration loop exists. The panel renders whatever the tool produced and
+ * never fills those gaps on the client.
+ */
+function ReportView({ result }: { result: Record<string, unknown> }) {
+  const markdown = String(result.markdown || "");
+  const paperDraft = String(result.paper_draft_markdown || "");
+  const reportPackage =
+    result.report_package && typeof result.report_package === "object" && !Array.isArray(result.report_package)
+      ? (result.report_package as Record<string, unknown>)
+      : null;
+  const files = asArray<ReportPackageFile>(reportPackage?.files);
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <strong style={{ color: "var(--color-text-primary)" }}>Research Report Draft</strong>
+        {markdown ? <CopyReportMarkdownButton markdown={markdown} /> : null}
+      </div>
+      {markdown ? (
+        // `.research-report-markdown` exists so App.css can scope the `md-*`
+        // rules to this block. Every existing `md-*` rule is written as
+        // `.chat-message-content .md-…`, and the report renders in
+        // `.chat-actions-list` — a SIBLING of `.chat-message-content` — so
+        // without this class the headings, lists and matrix tables land here
+        // completely unstyled.
+        <div
+          className="research-report-markdown"
+          data-testid="research-report-markdown"
+          style={{
+            marginTop: 6,
+            maxHeight: 460,
+            overflow: "auto",
+            overflowWrap: "anywhere",
+            fontSize: "0.82rem",
+            lineHeight: 1.5,
+          }}
+        >
+          <MarkdownText content={markdown} />
+        </div>
+      ) : null}
+      <ReportPackageFiles files={files} />
+      {paperDraft ? (
+        <details style={{ marginTop: 10 }}>
+          <summary style={{ cursor: "pointer", color: "var(--color-text-primary)", fontWeight: 600 }}>
+            Paper Draft
+          </summary>
+          <pre
+            style={{
+              whiteSpace: "pre-wrap",
+              overflowWrap: "anywhere",
+              margin: "6px 0 0",
+              maxHeight: 320,
+              overflow: "auto",
+              fontSize: "0.75rem",
+            }}
+          >
+            {paperDraft}
+          </pre>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
 export default function ResearchProgramPanel({ result }: { result: Record<string, unknown> }) {
   const normalized = (
     result.result && typeof result.result === "object" && !Array.isArray(result.result)
@@ -797,24 +992,7 @@ export default function ResearchProgramPanel({ result }: { result: Record<string
       {hasToolOntology ? <ToolOntologyView result={normalized} /> : null}
       {hasToolGap ? <ToolGapMatrixView result={normalized} /> : null}
       {hasToolQueue ? <ToolImplementationQueueView result={normalized} /> : null}
-      {hasReport ? (
-        <div>
-          <strong style={{ color: "var(--color-text-primary)" }}>Research Report Draft</strong>
-          <pre style={{ whiteSpace: "pre-wrap", margin: "6px 0 0", fontSize: "0.72rem" }}>
-            {String(normalized.markdown || "")}
-          </pre>
-          {normalized.paper_draft_markdown ? (
-            <>
-              <strong style={{ color: "var(--color-text-primary)", display: "block", marginTop: 10 }}>
-                Paper Draft
-              </strong>
-              <pre style={{ whiteSpace: "pre-wrap", margin: "6px 0 0", fontSize: "0.72rem" }}>
-                {String(normalized.paper_draft_markdown || "")}
-              </pre>
-            </>
-          ) : null}
-        </div>
-      ) : null}
+      {hasReport ? <ReportView result={normalized} /> : null}
       {!hasAnySubview ? (
         <PanelEmptyState
           status={status || "UNKNOWN"}

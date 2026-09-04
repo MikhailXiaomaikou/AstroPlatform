@@ -37,8 +37,22 @@ function parseInline(text: string): ReactNode[] {
       }
     }
 
+    // CommonMark: an underscore between two word characters is a literal
+    // underscore, not emphasis. Audit identifiers are full of them, and
+    // "random_seed_mismatch" was rendering as "randomseedmismatch" -- the
+    // report exists to expose that exact reason code (Codex review
+    // 2026-09-03). Asterisks keep their intraword behaviour.
+    const wordChar = /[\p{L}\p{N}]/u;
+    const intrawordUnderscore = (at: number) =>
+      text[at] === "_"
+      && at > 0
+      && wordChar.test(text[at - 1])
+      && at + 1 < text.length
+      && wordChar.test(text[at + 1]);
+
     // Bold: **text** or __text__
-    if ((text[i] === "*" && text[i + 1] === "*") || (text[i] === "_" && text[i + 1] === "_")) {
+    if ((text[i] === "*" && text[i + 1] === "*")
+        || (text[i] === "_" && text[i + 1] === "_" && !intrawordUnderscore(i))) {
       const delim = text.substring(i, i + 2);
       const end = text.indexOf(delim, i + 2);
       if (end !== -1) {
@@ -49,7 +63,8 @@ function parseInline(text: string): ReactNode[] {
     }
 
     // Italic: *text* or _text_ (single)
-    if ((text[i] === "*" || text[i] === "_") && text[i + 1] !== text[i]) {
+    if ((text[i] === "*" || (text[i] === "_" && !intrawordUnderscore(i)))
+        && text[i + 1] !== text[i]) {
       const delim = text[i];
       const end = text.indexOf(delim, i + 1);
       if (end !== -1 && end > i + 1) {
@@ -154,8 +169,16 @@ export default function MarkdownText({ content }: { content: string }) {
         i++;
       }
       if (tableLines.length >= 2) {
+        // Split on UNESCAPED pipes only. The backend escapes a pipe inside a
+        // cell as a backslash-pipe (research_program._md_table_cell) so a
+        // dataset key or error text containing one cannot break the row;
+        // splitting on every pipe undid that escaping and shifted every later
+        // cell by one column (Codex review 2026-09-03).
         const parseRow = (row: string) =>
-          row.split("|").slice(1, -1).map((cell) => cell.trim());
+          row
+            .split(/(?<!\\)\|/)
+            .slice(1, -1)
+            .map((cell) => cell.trim().replace(/\\\|/g, "|"));
         const headerCells = parseRow(tableLines[0]);
         // tableLines[1] is the separator row — skip it
         const bodyRows = tableLines.slice(2).map(parseRow);

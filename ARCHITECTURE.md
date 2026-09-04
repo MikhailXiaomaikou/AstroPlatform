@@ -120,11 +120,16 @@ numeric validation, citation validation, rate limits, and UI status chips.
 **Research Mode workflow**
 
 1. Research-style observational-cosmology prompts first call
-   `plan_research_program`, which turns the user question into a rule-derived
-   platform checklist (keyword-templated statements from
-   `_hypotheses_from_question`, not model hypotheses), required probes,
-   candidate registered datasets, model families, executable level, blocking
-   gaps, and an experiment matrix.
+   `plan_research_program`, which turns the user question into a platform
+   checklist (rule-derived), required probes, candidate registered datasets,
+   model families, executable level, blocking gaps, and an experiment matrix.
+   The checklist is a keyword template (`_hypotheses_from_question` in
+   `research_program.py`), not a set of model-generated hypotheses; the JSON
+   key stays `hypotheses` for contract stability. `export_research_report`
+   labels it "Platform checklist (rule-derived)" only when a trusted
+   `plan_research_program` record in `tool_results` carries the same
+   checklist; a caller-supplied `research_plan` argument that nothing backs
+   is labelled as caller-supplied instead.
 2. `run_research_matrix` executes only the registered compressed-likelihood
    cells that can run today. Config-only or external-likelihood cells are
    preserved in the matrix as gaps, not silently approximated.

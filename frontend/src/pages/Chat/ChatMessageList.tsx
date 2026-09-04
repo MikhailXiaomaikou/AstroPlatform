@@ -8,7 +8,7 @@ import { EvidenceReceiptCards } from "../../components/chat/EvidenceReceiptCard"
 import ResearchStepsCard, { isResearchTurn } from "../../components/chat/ResearchStepsCard";
 import type { ConversationProvenance } from "../../hooks/useConversationProvenance";
 import { useI18n } from "../../i18n";
-import { ActionCard, ToolTurnSummary, VisibleResearchDiagnostics } from "./ActionCard";
+import { ActionCard, ToolTurnSummary, VisibleResearchDiagnostics, VisibleResearchReport } from "./ActionCard";
 import { HonestAbstentionCard } from "./ChatPanels";
 import { ValidationBadge } from "./ValidationBadge";
 import type { DisplayMessage } from "./chatStorage";
@@ -265,6 +265,10 @@ export function ChatMessageList({
                     <>
                       <ResearchStepsCard actions={msg.actions} />
                       <VisibleResearchDiagnostics
+                        actions={msg.actions}
+                        actionResults={msg.actionResults}
+                      />
+                      <VisibleResearchReport
                         actions={msg.actions}
                         actionResults={msg.actionResults}
                       />
