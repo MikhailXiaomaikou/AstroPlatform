@@ -449,3 +449,86 @@ def test_step3_exploratory_row_is_reason_aware() -> None:
     # sampler-budget knob named is the one the tool actually exposes.
     assert "No retry helps" in step3
     assert "n_samples" in step3
+
+
+def test_step3_ess_rows_quote_the_runtime_warnings_without_digits() -> None:
+    """The Step 3 ESS rows must quote the runtime warnings by shape, not by
+    number.
+
+    ``sampling.py`` ends both ESS warnings with the literal threshold
+    (``below publication threshold 400.`` / ``is below the publication
+    threshold of 400``).  A prompt row that copies those digits invites the
+    model to write "below 400" in prose, and the final honesty gate replaces
+    the whole reply whenever any reply number lands within 1 % of a withheld
+    non-publication value.  The reference block already tells the model not
+    to repeat the threshold, so the rows must not hand it the digits (PR #64
+    review thread e5Ju_, 2026-09-04).
+    """
+    import re
+
+    from app.api.chat import SYSTEM_PROMPT as prompt
+
+    step3 = prompt.split("### Step 3")[1].split("### Step 4")[0]
+    assert "publication threshold 400" not in step3
+    assert "publication threshold of 400" not in step3
+
+    rows = [line for line in step3.splitlines() if line.startswith("| ")]
+    ess_rows = [row for row in rows if "ESS" in row.split("|")[1]]
+    # exploratory ESS, ESS estimate unavailable, blocked ESS
+    assert len(ess_rows) >= 3, ess_rows
+    for row in ess_rows:
+        for quoted in re.findall(r"`([^`]*)`", row):
+            if "threshold" in quoted or "ESS" in quoted:
+                assert not re.search(r"\d", quoted), (quoted, row)
+
+
+def test_step3_blocked_row_scopes_the_sample_budget_retry_to_the_importance_sampler() -> None:
+    """The blocked-ESS row may prescribe the ``n_samples`` retry only for
+    ``bao_gaussian_importance``.
+
+    ``_run_emcee_chain`` runs a fixed ``n_burn + 1500`` steps for every
+    ``n_samples`` the tool accepts (the clamp is 256..20000, and
+    20000 // 32 walkers + 100 = 725 < 1500), so ``n_samples`` only sets the
+    size of the displayed sub-sample and cannot raise the ESS of a
+    ``compressed_emcee`` / ``sn_emcee`` chain.  The only prior knob,
+    ``priors``, narrows within the default bounds and is screened by
+    ``prior_dominance_screen`` -- it is not a convergence knob, so the row
+    must not prescribe a tighter prior either (PR #64 review thread e5JvD,
+    2026-09-04).
+    """
+    from pathlib import Path
+
+    from app.api.chat import SYSTEM_PROMPT as prompt
+    from app.services.cosmology_likelihoods import runners, sampling
+
+    sampling_source = Path(sampling.__file__).read_text(encoding="utf-8")
+    assert (
+        "n_steps = max(n_burn + 1500, n_burn + max(target_sample_count // n_walkers + 100, 1500))"
+        in sampling_source
+    )
+    runners_source = Path(runners.__file__).read_text(encoding="utf-8")
+    assert "sample_count = max(256, min(int(n_samples or 4000), 20000))" in runners_source
+
+    step3 = prompt.split("### Step 3")[1].split("### Step 4")[0]
+    rows = [line for line in step3.splitlines() if line.startswith("| ")]
+    blocked_rows = [
+        row for row in rows
+        if row.split("|")[1].strip().startswith('`chain_tier="blocked"` + ESS')
+    ]
+    assert len(blocked_rows) == 1, blocked_rows
+    action = blocked_rows[0].split("|")[2]
+    assert "n_samples" in action
+    assert "bao_gaussian_importance" in action
+    assert "tighter prior" not in action
+    # The emcee clause names both fixed-length samplers and prescribes no
+    # sample-budget retry after them.
+    emcee_clause = action.split("compressed_emcee", 1)[1]
+    assert "sn_emcee" in emcee_clause
+    assert "n_samples" not in emcee_clause
+    assert "no retry" in emcee_clause.lower()
+    assert "capability gap" in emcee_clause
+
+    # The narration example follows the same rule.
+    narration = prompt.split("Good narration looks like:")[1].split("This narration is what makes")[0]
+    assert "n_samples × 5" in narration
+    assert "bao_gaussian_importance" in narration
