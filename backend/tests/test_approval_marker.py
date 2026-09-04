@@ -789,28 +789,65 @@ def test_a_table_cell_delimiter_is_a_structural_prefix() -> None:
         assert marked.index(_MARKER) >= 1, text
 
 
-def test_a_fence_line_with_an_info_string_does_not_close_an_open_fence() -> None:
-    """Review thread e0fKl (2026-09-04): a closing fence carries no info string.
+def _reader_prose_lines(text: str) -> list[str]:
+    """The lines the product renderer shows as prose.
 
-    ``_fenced_lines`` recognised a closer by its prefix alone, so inside an
-    open ```` ```text ```` example the line ```` ```python ```` closed it and
-    the quoted verdict below was stamped (count 1, want 0), which marked an
-    otherwise clean reply limited.  CommonMark: a closing fence may be
-    followed only by spaces or tabs to the end of the line, so a fence line
-    with an info string while a fence is open is content.
+    ``frontend/src/components/chat/MarkdownText.tsx`` (every assistant
+    message, via ``ChatMessageList.tsx``) opens a code block on any line
+    whose ``trimStart()`` begins with ``` and closes it on the NEXT such
+    line, info string or not; ``~~~`` is not a fence there at all.
     """
+    lines = text.split("\n")
+    prose: list[str] = []
+    index = 0
+    while index < len(lines):
+        if lines[index].lstrip().startswith("```"):
+            index += 1
+            while index < len(lines) and not lines[index].lstrip().startswith("```"):
+                index += 1
+            index += 1
+            continue
+        prose.append(lines[index])
+        index += 1
+    return prose
+
+
+def test_a_verdict_either_fence_reading_exposes_is_stamped() -> None:
+    """Review thread e0fKl (2026-09-04) asked for CommonMark closers; rejected.
+
+    The thread read ``_fenced_lines`` against CommonMark, where a closing
+    fence carries no info string, so inside an open ```` ```text ```` example
+    the line ```` ```python ```` is content and the quoted verdict below it
+    is fenced.  The product renderer does not read it that way: MarkdownText
+    closes a block on ANY ``` line (see ``_reader_prose_lines``), so that
+    verdict is prose on the reader's screen, and a CommonMark-only closer
+    shipped it unstamped (count 0) where the prefix closer had stamped it --
+    a relaxation on the surface the marker protects.  A line is exempt only
+    when BOTH readings fence it; a verdict either reading exposes is stamped.
+    """
+    verdict = "APPROVED by reviewer: H0 = 67.36"
+    # The prefix reading (the renderer's) exposes the verdict.
     for text in (
-        "Never write:\n```text\n```python\nAPPROVED by reviewer: H0 = 67.36\n"
-        "```\n```\nUse the card.",
-        "~~~text\n~~~python\nAPPROVED by reviewer: H0 = 67.36\n~~~\n~~~",
+        f"Never write:\n```text\n```python\n{verdict}\n```\n```\nUse the card.",
+        f"```text\n```python\n{verdict}",
+        f"```text\n{verdict}\n``` python\n{verdict}",
+        f"~~~text\n~~~python\n{verdict}\n~~~\n~~~",
     ):
-        untouched, count = mark_unapproved_claims(text, _published_h0())
-        assert count == 0, text
-        assert untouched == text, text
-    # Trailing spaces or tabs after the closer still close it, and a verdict
-    # after the fence really closes is still stamped.
+        marked, count = mark_unapproved_claims(text, _published_h0())
+        assert count == 1, text
+        assert _MARKER + verdict in _reader_prose_lines(marked), text
+    # The CommonMark reading exposes the verdict: after a bare closer it is
+    # prose, even though the prefix reading has that closer re-open a block.
     marked, count = mark_unapproved_claims(
-        "```text\n```python\nquoted\n```  \t\nAPPROVED by reviewer: H0 = 67.36",
-        _published_h0(),
+        f"```text\n```python\nquoted\n```\n{verdict}", _published_h0()
     )
-    assert count == 1 and "NOT APPROVED - " in marked
+    assert count == 1 and marked.endswith(_MARKER + verdict)
+    # Trailing spaces or tabs after the closer close it under both readings.
+    marked, count = mark_unapproved_claims(
+        f"```text\n```python\nquoted\n```  \t\n{verdict}", _published_h0()
+    )
+    assert count == 1 and marked.endswith(_MARKER + verdict)
+    # Fenced under both readings: the quoted example is still left alone.
+    text = f"Never write:\n```text\n{verdict}\n```\nUse the card."
+    untouched, count = mark_unapproved_claims(text, _published_h0())
+    assert count == 0 and untouched == text

@@ -96,25 +96,18 @@ _FENCE_RE = re.compile(r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})(?P<rest>.*)")
 _INDENTED_CODE_RE = re.compile(r"^(?: {4}|[ ]{0,3}\t)")
 
 
-def _fenced_lines(lines: list[str]) -> list[bool]:
-    """Which lines sit inside a fenced code block, fences included.
-
-    A reply that TELLS the user not to write an approval line quotes one
-    inside a fence, and rewriting that example marked an otherwise clean
-    response as limited (Codex review 2026-09-03).
+def _fenced_under(lines: list[str], *, bare_closer: bool) -> list[bool]:
+    """One reading of the fences: which lines a code block covers, fences included.
 
     A fence closes only on a run of the SAME character at least as long as
-    the one that opened it (CommonMark).  Toggling on any fence line let the
-    inner backtick fence of a ``~~~~markdown`` example close the outer tilde
+    the one that opened it.  Toggling on any fence line let the inner
+    backtick fence of a ``~~~~markdown`` example close the outer tilde
     fence, and the quoted verdict was stamped (Codex review 2026-09-03,
     PRRT_kwDORoeoE86etNOq).
 
-    A closing fence may be followed only by spaces or tabs to the end of the
-    line (CommonMark); a fence line that carries an info string while a
-    fence is open is content.  Recognising the closer by its prefix alone
-    let a ``python``-tagged fence line inside an open ``text``-tagged
-    example close it, and the quoted verdict below was stamped (review
-    thread e0fKl, 2026-09-04).
+    With ``bare_closer`` the run must also be followed by nothing but spaces
+    or tabs to the end of the line (CommonMark); without it the run alone
+    closes, info string or not, which is how the product renderer reads it.
     """
     opener = ""
     flags: list[bool] = []
@@ -129,11 +122,36 @@ def _fenced_lines(lines: list[str]) -> list[bool]:
         elif (
             fence[0] == opener[0]
             and len(fence) >= len(opener)
-            and not match.group("rest").strip()
+            and not (bare_closer and match.group("rest").strip())
         ):
             opener = ""
         flags.append(True)
     return flags
+
+
+def _fenced_lines(lines: list[str]) -> list[bool]:
+    """Which lines sit inside a fenced code block under EVERY reading of it.
+
+    A reply that TELLS the user not to write an approval line quotes one
+    inside a fence, and rewriting that example marked an otherwise clean
+    response as limited (Codex review 2026-09-03).  Only a line that no
+    reader sees as prose is exempt.
+
+    Review thread e0fKl (2026-09-04) asked for the CommonMark closer alone:
+    a closing fence may be followed only by spaces or tabs, so inside an
+    open ```text example the line ```python is content and the verdict
+    below it is fenced.  The product renderer does not read it that way --
+    frontend/src/components/chat/MarkdownText.tsx (every assistant message,
+    via ChatMessageList.tsx) closes a block on ANY ``` line, info string or
+    not -- so that verdict is prose on the reader's screen, and a
+    CommonMark-only closer shipped it unstamped where the prefix closer had
+    stamped it.  A line is fenced here only when BOTH readings fence it; a
+    verdict either reading exposes is stamped.  (A stamp the other reader
+    sees inside a code block is the safe side of that disagreement.)
+    """
+    strict = _fenced_under(lines, bare_closer=True)
+    loose = _fenced_under(lines, bare_closer=False)
+    return [a and b for a, b in zip(strict, loose)]
 
 
 def _indented_code_lines(lines: list[str], fenced: list[bool]) -> list[bool]:
