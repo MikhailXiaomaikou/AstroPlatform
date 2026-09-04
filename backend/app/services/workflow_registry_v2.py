@@ -41,10 +41,10 @@ ExecutionBackend = Literal[
 ]
 
 REGISTRY_SCHEMA_VERSION: Final = "standard_astro_workflow_registry_v2"
-REGISTRY_EPOCH: Final = "2026-08-04.1"
+REGISTRY_EPOCH: Final = "2026-09-02.1"
 REGISTRY_STATUS: Final = "ACTIVE"
 REQUIREMENTS_LOCK_SHA256: Final = (
-    "d7a3cbe6f0092119bbf15b7ac230e672f8eb13e56b3a0b212ba446c88c09e7ff"
+    "e921888a98ad582cdcfe74dde14d16cb753cac2786b4183ddf158ab361aaedd7"
 )
 CONTROL_IMAGE_BUILD_SPEC_SHA256: Final = (
     "04bce6bb5c0f2842ccff2aa8080a9dc9496732a18abc791515876d3f6bb62852"

@@ -64,7 +64,7 @@ emcee>=3.1.0,<4
 corner>=2.2.0,<3
 # 替代 eval() 跑用户表达式 (condition pipeline 节点);
 # asteval 默认 AST 白名单, 比裸 eval 安全得多
-asteval>=0.9.31,<1
+asteval>=1.0.9,<2
 cobaya>=3.5,<4
 # PART AI Phase 5 #2 Track 2: external_cobaya likelihood backend.
 # CAMB is the Boltzmann-code dependency cobaya pulls in for Planck/ACT/SPT
