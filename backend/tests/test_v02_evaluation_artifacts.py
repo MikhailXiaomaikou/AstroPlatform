@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 from pathlib import Path
 
@@ -1078,3 +1079,541 @@ def test_completed_keys_duplicate_after_success_still_raises(
         evaluator._completed_keys(samples)
     with pytest.raises(ValueError):
         scorer._read_samples(samples)
+
+
+# ---------------------------------------------------------------------------
+# v0.3 exploration harness extensions (plan §3.2) — default behaviour is the
+# v0.2 matrix byte-for-byte; only explicit flags change anything.
+# ---------------------------------------------------------------------------
+
+
+def test_budget_flag_maps_to_runtime_config() -> None:
+    from app.services.agent_runtime.runtime_config import _workflow_budget_config
+
+    assert evaluator._workflow_budget_for("eval") == {
+        "mode": "default",
+        "max_iterations": 5,
+        "agent_loop_seconds": 240,
+        "summary_reserve_seconds": 30,
+    }
+    assert evaluator._workflow_budget_for("production") == {"mode": "default"}
+    assert evaluator._workflow_budget_for("long") == {"mode": "long"}
+    with pytest.raises(ValueError):
+        evaluator._workflow_budget_for("bogus")
+
+    # The loop applies ``budget = config(mode); budget.update(overrides)``.
+    for name, expected in (("eval", (5, 240)), ("production", (12, 360)), ("long", (30, 1800))):
+        overrides = evaluator._workflow_budget_for(name)
+        budget = _workflow_budget_config(overrides.get("mode"))
+        budget.update(overrides)
+        assert (budget["max_iterations"], int(budget["agent_loop_seconds"])) == expected
+
+
+def test_variant_sample_keys_are_unique_and_default_keys_unchanged() -> None:
+    # v0.2 shape: no variant, no lightweight suffix -> today's key.
+    assert (
+        evaluator._sample_key(
+            model="claude-fable-5", condition="standard_astro", task_id="V02_01", repeat_index=2
+        )
+        == "claude-fable-5|standard_astro|V02_01|2"
+    )
+    assert (
+        evaluator._sample_key(
+            model="m", condition="c", task_id="T", repeat_index=1, variant_id="zh"
+        )
+        == "m|c|T__zh|1"
+    )
+    assert (
+        evaluator._sample_key(
+            model="m", condition="c", task_id="T", repeat_index=1, lightweight_suffix="off"
+        )
+        == "m|c|T|1|lv=off"
+    )
+
+    tasks = [
+        {"id": "T1", "prompt": "plain"},
+        {
+            "id": "T2",
+            "prompt": "unused reference",
+            "variants": [
+                {"variant_id": "formal_en", "prompt": "formal"},
+                {"variant_id": "zh", "prompt": "中文"},
+            ],
+        },
+    ]
+    expanded = evaluator._expand_variants(tasks)
+    assert expanded == [
+        ("T1", None, "plain"),
+        ("T2", "formal_en", "formal"),
+        ("T2", "zh", "中文"),
+    ]
+    specs = list(
+        evaluator._iter_matrix(
+            models=["m"], conditions=["direct", "standard_astro"], expanded_tasks=expanded, repeats=2
+        )
+    )
+    keys = [spec.key for spec in specs]
+    assert len(keys) == len(set(keys)) == 2 * 3 * 2
+    assert "m|direct|T1|1" in keys and "m|standard_astro|T2__zh|2" in keys
+    assert not any("lv=" in key for key in keys)
+
+    # The frozen paraphrase file (2026-08-06) expands to unique keys too.
+    variants_path = evaluator.REPO_ROOT / "docs/research/standard_astro_v02_paraphrase_variants.json"
+    frozen = evaluator._expand_variants(evaluator._load_tasks(variants_path))
+    frozen_keys = {
+        evaluator._sample_key(
+            model="m", condition="standard_astro", task_id=task_id, repeat_index=1, variant_id=variant_id
+        )
+        for task_id, variant_id, _prompt in frozen
+    }
+    assert len(frozen_keys) == len(frozen) == 8 * 4
+
+    with pytest.raises(ValueError, match="variant ids"):
+        evaluator._expand_variants(
+            [{"id": "T", "variants": [{"variant_id": "a", "prompt": "x"}, {"variant_id": "a", "prompt": "y"}]}]
+        )
+
+
+def test_lightweight_both_doubles_matrix_and_restores_setting(monkeypatch) -> None:
+    expanded = [("T1", None, "prompt one")]
+    single = list(
+        evaluator._iter_matrix(
+            models=["m"], conditions=["standard_astro"], expanded_tasks=expanded, repeats=2
+        )
+    )
+    both = list(
+        evaluator._iter_matrix(
+            models=["m"],
+            conditions=["standard_astro"],
+            expanded_tasks=expanded,
+            repeats=2,
+            lightweight="both",
+        )
+    )
+    assert [spec.key for spec in single] == ["m|standard_astro|T1|1", "m|standard_astro|T1|2"]
+    assert [spec.key for spec in both] == [
+        "m|standard_astro|T1|1|lv=on",
+        "m|standard_astro|T1|1|lv=off",
+        "m|standard_astro|T1|2|lv=on",
+        "m|standard_astro|T1|2|lv=off",
+    ]
+    assert [spec.lightweight for spec in both] == [True, False, True, False]
+    # The direct condition never enters the agent loop: one sample, no suffix.
+    direct = list(
+        evaluator._iter_matrix(
+            models=["m"], conditions=["direct"], expanded_tasks=expanded, repeats=1, lightweight="both"
+        )
+    )
+    assert [spec.key for spec in direct] == ["m|direct|T1|1"]
+
+    observed: list[bool] = []
+
+    async def fake_loop(**kwargs):
+        observed.append(bool(evaluator.settings.lightweight_verification_enabled))
+        on_event = kwargs["on_event"]
+        await on_event({"type": "workflow_budget", "mode": "default", "max_iterations": 12, "agent_loop_seconds": 360})
+        await on_event({"type": "status", "message": "Listing the curated observational-cosmology dataset registry."})
+        await on_event({"type": "tool_call", "tool": "list_cosmology_datasets", "input": {}})
+        await on_event({"type": "tool_call", "tool": "build_cosmology_likelihood", "input": {}})
+        await on_event({"type": "agent_text", "content": "thinking"})
+        await on_event({"type": "tool_call", "tool": "run_cosmology_likelihood", "input": {}})
+        await on_event({"type": "agent_text", "content": "withheld", "draft": True})
+        assert kwargs["workflow_budget"] == {"mode": "default"}
+        return {
+            "reply": "done",
+            "validation_summary": None,
+            "tool_results": [
+                {"tool": "run_cosmology_likelihood", "result": {"H0": 67.4, "bibcode": "2020A&A...641A...6P", "n": 3}}
+            ],
+        }
+
+    monkeypatch.setattr(evaluator.chat, "_run_agent_loop", fake_loop)
+    monkeypatch.setattr(evaluator.settings, "lightweight_verification_enabled", False)
+    options = evaluator.RunOptions(budget="production", arm="C1", tasks_sha256="abc", git_rev="deadbee")
+
+    records = []
+    for spec in both[:2]:
+        records.append(
+            asyncio.run(
+                evaluator._run_sample(
+                    model=spec.model,
+                    condition=spec.condition,
+                    task_id=spec.task_id,
+                    prompt=spec.prompt,
+                    repeat_index=spec.repeat_index,
+                    evaluation_id="test",
+                    variant_id=spec.variant_id,
+                    lightweight=spec.lightweight,
+                    lightweight_suffix=spec.lightweight_suffix,
+                    options=options,
+                )
+            )
+        )
+        # Restored after every sample, whatever the sample set.
+        assert evaluator.settings.lightweight_verification_enabled is False
+
+    assert observed == [True, False]
+    assert [r["status"] for r in records] == ["completed", "completed"]
+    assert [r["lightweight_verification_enabled"] for r in records] == [True, False]
+    first = records[0]
+    assert first["sample_key"] == "m|standard_astro|T1|1|lv=on"
+    assert first["arm"] == "C1" and first["git_rev"] == "deadbee" and first["tasks_sha256"] == "abc"
+    assert first["variant_id"] is None
+    assert (first["budget_mode"], first["max_iterations"], first["agent_loop_seconds"]) == ("default", 12, 360)
+    assert first["tool_sequence"] == [
+        "list_cosmology_datasets",
+        "build_cosmology_likelihood",
+        "run_cosmology_likelihood",
+    ]
+    assert first["n_tool_calls"] == 3
+    assert first["forced_tool_calls"] == 2
+    assert first["model_chosen_tool_calls"] == 1
+    assert first["soft_reminder_fired"] is False
+    assert first["draft_agent_text_events"] == 1
+    assert first["steering_disabled"] is False
+    assert first["tool_scalar_universe"] == [3.0, 67.4]
+    assert first["routing_probe"]["task_kind"] in {
+        "deterministic_source_check",
+        "research_exploration",
+        "full_research",
+        "general",
+    }
+    assert first["llm_calls"] == 0 and first["visible_tools_per_llm_call"] == []
+    assert first["elapsed_seconds"] >= 0
+
+
+def test_v03_task_file_loads_without_the_eight_task_rule(tmp_path: Path) -> None:
+    v03 = tmp_path / "v03.json"
+    v03.write_text(
+        json.dumps(
+            {
+                "evaluation_id": "standard-astro-v03-exploration-depth",
+                "tasks": [{"id": "V03_01", "prompt": "a"}, {"id": "V03_02", "prompt": "b"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert [task["id"] for task in evaluator._load_tasks(v03)] == ["V03_01", "V03_02"]
+
+    v02 = tmp_path / "v02.json"
+    v02.write_text(
+        json.dumps(
+            {
+                "evaluation_id": "standard-astro-v02-something",
+                "tasks": [{"id": "V02_01", "prompt": "a"}, {"id": "V02_02", "prompt": "b"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="exactly eight tasks"):
+        evaluator._load_tasks(v02)
+
+
+def test_registered_repeats_give_each_task_class_its_count() -> None:
+    """The frozen v0.3 design registers chain x2 and open x4.  One global
+    --repeats produced 12 open samples per flag state - the underpowered zone
+    where a zero-event result cannot exclude the 25% threshold (review
+    2026-09-03).  An explicit --repeats still overrides the file."""
+    tasks_path = (
+        evaluator.REPO_ROOT / "docs/research/standard_astro_v03_exploration_tasks.json"
+    )
+    tasks = evaluator._load_tasks(tasks_path)
+    per_task = evaluator._registered_repeats(tasks_path, tasks)
+    task_class = {str(t["id"]): str(t["task_class"]) for t in tasks}
+    assert {task_class[k]: v for k, v in per_task.items()} == {"chain": 2, "open": 4}
+
+    specs = list(
+        evaluator._iter_matrix(
+            models=["m"],
+            conditions=["standard_astro"],
+            expanded_tasks=evaluator._expand_variants(tasks),
+            repeats=evaluator.DEFAULT_REPEATS,
+            lightweight="both",
+            repeats_by_task=per_task,
+        )
+    )
+    assert len({spec.key for spec in specs}) == len(specs)
+    open_off = [s for s in specs if task_class[s.task_id] == "open" and not s.lightweight]
+    chain_off = [s for s in specs if task_class[s.task_id] == "chain" and not s.lightweight]
+    assert len(open_off) == 16 and len(chain_off) == 8
+    assert sorted({s.repeat_index for s in open_off}) == [1, 2, 3, 4]
+    assert sorted({s.repeat_index for s in chain_off}) == [1, 2]
+
+    # No registered_repeats (every v0.2 file) -> the caller's own default.
+    v02_path = evaluator.REPO_ROOT / "docs/research/standard_astro_v02_preregistered_tasks.json"
+    assert evaluator._registered_repeats(v02_path, evaluator._load_tasks(v02_path)) == {}
+
+    # An explicit --repeats overrides: main() passes an empty mapping.
+    overridden = list(
+        evaluator._iter_matrix(
+            models=["m"],
+            conditions=["standard_astro"],
+            expanded_tasks=evaluator._expand_variants(tasks),
+            repeats=1,
+            lightweight="off",
+            repeats_by_task={},
+        )
+    )
+    assert len(overridden) == len(tasks)
+
+
+def test_steering_ablation_is_refused_when_the_switch_is_missing(monkeypatch) -> None:
+    """C2d's whole intervention is settings.evaluation_steering_disabled.  When
+    the build has no such switch the runner used to warn and then collect
+    ordinary flag-off samples labelled arm="C2d", so an ablation that
+    intervened in nothing could read as if it had (review 2026-09-03)."""
+
+    def _args(**overrides):
+        base = dict(
+            arm="C2d",
+            system_appendix=None,
+            conditions=None,
+            budget=None,
+            lightweight=None,
+            steering=None,
+            lane_override=False,
+            exploration_phase=False,
+        )
+        base.update(overrides)
+        return argparse.Namespace(**base)
+
+    parser = argparse.ArgumentParser()
+    monkeypatch.delattr(
+        type(evaluator.settings), "evaluation_steering_disabled", raising=False
+    )
+    assert not hasattr(evaluator.settings, "evaluation_steering_disabled")
+    with pytest.raises(SystemExit):
+        evaluator._resolve_arm(parser, _args())
+    # An explicit --steering off is refused for the same reason.
+    with pytest.raises(SystemExit):
+        evaluator._resolve_arm(parser, _args(arm=None, steering="off"))
+    # Arms that do not touch steering are unaffected.
+    resolved = _args(arm="C1")
+    evaluator._resolve_arm(parser, resolved)
+    assert resolved.steering == "on" and resolved.lightweight == "both"
+
+    # With the switch present the arm resolves to its registered cell.
+    monkeypatch.setattr(
+        type(evaluator.settings), "evaluation_steering_disabled", False, raising=False
+    )
+    c2d = _args()
+    evaluator._resolve_arm(parser, c2d)
+    assert (c2d.steering, c2d.lightweight, c2d.budget) == ("off", "off", "production")
+
+
+def test_exploration_arm_is_refused_when_its_switch_is_missing(monkeypatch) -> None:
+    """C2_exploration's intervention is settings.exploration_phase_enabled.
+
+    It warned and continued while C2d refused, and the scorer excludes neither
+    ``exploration_phase_enabled=false`` rows nor the arm label, so an arm that
+    intervened in nothing could be reported as evidence about the exploration
+    window (Codex review 2026-09-03).
+    """
+
+    def _args(**overrides):
+        base = dict(
+            arm="C2_exploration",
+            system_appendix=None,
+            conditions=None,
+            budget=None,
+            lightweight=None,
+            steering=None,
+            lane_override=False,
+            exploration_phase=False,
+        )
+        base.update(overrides)
+        return argparse.Namespace(**base)
+
+    parser = argparse.ArgumentParser()
+    monkeypatch.delattr(
+        type(evaluator.settings), "exploration_phase_enabled", raising=False
+    )
+    with pytest.raises(SystemExit):
+        evaluator._resolve_arm(parser, _args())
+    # An explicit --exploration-phase is refused for the same reason.
+    with pytest.raises(SystemExit):
+        evaluator._resolve_arm(parser, _args(arm=None, exploration_phase=True))
+    # Arms that do not touch the window are unaffected.
+    resolved = _args(arm="C1")
+    evaluator._resolve_arm(parser, resolved)
+    assert resolved.exploration_phase is False
+
+    monkeypatch.setattr(
+        type(evaluator.settings), "exploration_phase_enabled", False, raising=False
+    )
+    monkeypatch.setattr(
+        type(evaluator.settings), "evaluation_steering_disabled", False, raising=False
+    )
+    armed = _args()
+    evaluator._resolve_arm(parser, armed)
+    assert armed.exploration_phase is True
+
+
+def test_c2a_samples_carry_the_appendix_digest(tmp_path) -> None:
+    """Two different C2a appendices must not produce identical artifacts.
+
+    The appendix text was read and used but never recorded, so samples from
+    two different interventions shared a sample key and a task digest, and a
+    resume could mix or skip them silently (Codex review 2026-09-03).
+    """
+    import hashlib
+
+    first = "Explore before you conclude.\n"
+    second = "State one alternative explanation.\n"
+    digests = [
+        hashlib.sha256(text.encode("utf-8")).hexdigest() for text in (first, second)
+    ]
+    keys = [
+        evaluator._sample_key(
+            model="claude-fable-5",
+            condition="standard_astro",
+            task_id="V03_03_h0_anchor_clustering",
+            repeat_index=1,
+            appendix_sha256=digest,
+        )
+        for digest in digests
+    ]
+    assert keys[0] != keys[1]
+    assert all(digest[:12] in key for digest, key in zip(digests, keys))
+    # No appendix leaves the key exactly as it was before this field existed.
+    assert evaluator._sample_key(
+        model="claude-fable-5",
+        condition="standard_astro",
+        task_id="V03_03_h0_anchor_clustering",
+        repeat_index=1,
+    ) == "claude-fable-5|standard_astro|V03_03_h0_anchor_clustering|1"
+
+    options = evaluator.RunOptions(
+        arm="C2a",
+        system_appendix=first,
+        system_appendix_path=str(tmp_path / "arm_C2a.md"),
+        system_appendix_sha256=digests[0],
+    )
+    spec = next(
+        evaluator._iter_matrix(
+            models=["claude-fable-5"],
+            conditions=["standard_astro"],
+            expanded_tasks=[("V03_03_h0_anchor_clustering", None, "prompt")],
+            repeats=1,
+            appendix_sha256=options.system_appendix_sha256,
+        )
+    )
+    assert spec.appendix_sha256 == digests[0]
+    assert digests[0][:12] in spec.key
+
+
+def test_resume_refuses_a_different_run_configuration(tmp_path) -> None:
+    """A resume that changes what the arm measures must not append silently.
+
+    Rerunning C2c at the same revision with ``--budget production`` after a
+    long-budget run skipped the completed long samples and appended
+    production ones, and the scorer pools both into one stratum because
+    budget is not part of its stratification (Codex review 2026-09-03).
+    """
+    import json
+
+    import pytest
+
+    samples = tmp_path / "samples.jsonl"
+    samples.write_text(
+        json.dumps({
+            "sample_key": "claude-fable-5|standard_astro|V03_03|1",
+            "arm": "C2c",
+            "budget_mode": "long",
+            "steering_disabled": False,
+            "exploration_phase_enabled": False,
+            "system_appendix_sha256": None,
+            "tasks_sha256": "abc",
+            "status": "completed",
+        }) + "\n",
+        encoding="utf-8",
+    )
+    same = {
+        "arm": "C2c",
+        "budget_mode": "long",
+        "steering_disabled": False,
+        "exploration_phase_enabled": False,
+        "system_appendix_sha256": None,
+        "tasks_sha256": "abc",
+    }
+    # Same configuration resumes.
+    evaluator._assert_resume_configuration_matches(samples, same)
+    # A different budget, appendix or task file does not.
+    for field, value in (
+        ("budget_mode", "default"),
+        ("system_appendix_sha256", "deadbeef"),
+        ("tasks_sha256", "def"),
+        ("steering_disabled", True),
+    ):
+        with pytest.raises(SystemExit):
+            evaluator._assert_resume_configuration_matches(samples, {**same, field: value})
+
+
+def test_a_failed_sample_still_carries_its_flag_state(monkeypatch) -> None:
+    """The scorer reads the flag before it checks transport status.
+
+    A backend or agent-loop exception wrote a failed record without
+    ``lightweight_verification_enabled``, and one such sample made the
+    scorer's ``_flag`` raise ValueError, so the whole matrix produced no
+    transport-failure summary at all (Codex review 2026-09-03).
+    """
+    import asyncio
+
+    async def _boom(*_args, **_kwargs):
+        raise RuntimeError("bridge exploded")
+
+    monkeypatch.setattr(evaluator, "_run_standard", _boom)
+    record = asyncio.run(
+        evaluator._run_sample(
+            model="claude-fable-5",
+            condition="standard_astro",
+            task_id="V03_03_h0_anchor_clustering",
+            prompt="probe",
+            repeat_index=1,
+            evaluation_id="standard-astro-v03-exploration",
+            lightweight=False,
+            options=evaluator.RunOptions(arm="C1", budget="production"),
+        )
+    )
+    assert record["status"] == "failed"
+    assert record["lightweight_verification_enabled"] is False
+    assert record["budget"] == "production"
+    assert record["budget_mode"] == "default"
+    assert record["steering_disabled"] is False
+
+
+def test_resume_distinguishes_eval_from_production_budget(tmp_path) -> None:
+    """Both map to mode="default" while running 5/240 and 12/360.
+
+    Comparing modes alone let an interrupted eval-budget run be resumed with
+    the registered production default, silently mixing two limits into one
+    stratum (Codex review 2026-09-03).
+    """
+    import json
+
+    import pytest
+
+    assert evaluator._workflow_budget_for("eval")["mode"] == "default"
+    assert evaluator._workflow_budget_for("production")["mode"] == "default"
+    assert evaluator._workflow_budget_for("eval")["max_iterations"] == 5
+
+    samples = tmp_path / "samples.jsonl"
+    samples.write_text(
+        json.dumps({
+            "sample_key": "k", "arm": "C1", "budget": "eval",
+            "budget_mode": "default", "steering_disabled": False,
+            "exploration_phase_enabled": False, "system_appendix_sha256": None,
+            "tasks_sha256": "abc", "status": "completed",
+        }) + "\n",
+        encoding="utf-8",
+    )
+    same = {
+        "arm": "C1", "budget": "eval", "budget_mode": "default",
+        "steering_disabled": False, "exploration_phase_enabled": False,
+        "system_appendix_sha256": None, "tasks_sha256": "abc",
+    }
+    evaluator._assert_resume_configuration_matches(samples, same)
+    with pytest.raises(SystemExit):
+        evaluator._assert_resume_configuration_matches(
+            samples, {**same, "budget": "production"}
+        )

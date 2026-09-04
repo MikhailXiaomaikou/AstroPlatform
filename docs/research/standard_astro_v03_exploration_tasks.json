@@ -1,0 +1,1167 @@
+{
+  "schema_version": 1,
+  "evaluation_id": "standard-astro-v03-exploration-depth",
+  "frozen_at": "2026-09-02",
+  "status": "FROZEN_NOT_YET_RUN",
+  "base_commit": "3a7e6e4",
+  "parent_evaluation": {
+    "evaluation_id": "standard-astro-v02-natural-model-in-loop",
+    "tasks_file": "standard_astro_v02_natural_preregistered_tasks.json",
+    "note": "Sample schema, resume keys and the closed-book reference arm are inherited from the v0.2 natural-phrasing runner. Tasks, dimensions and endpoints are new: this evaluation measures exploration depth, not answer correctness, so no task carries a ground truth."
+  },
+  "purpose": "Pre-registered test of the diagnosis that the production agent loop stops exploring too early on open cosmology questions: when the next obvious tool call is visible and cheap, does the model-in-the-loop still stop? The v0.2 matrices never measured this because the evaluation runner always forced lightweight_verification_enabled=True (evaluate_standard_astro_v02.py:371) while the production default is False, and because chain-class prompts are routed and executed deterministically before the model acts. This file freezes eight prompts (four chain-class, four open-class), the routing each prompt receives under both flag states, the reachable tool set, the next obvious call sequence, and the decision rule, before any sample is drawn.",
+  "hypothesis": {
+    "id": "H1_premature_stop",
+    "statement": "Under the production budget ({\"mode\": \"default\"}: 12 iterations / 360 s) with lightweight_verification_enabled=False (the production default), at least 25% of model-in-the-loop samples on the four open-class tasks stop with a visible, cheap, next obvious tool call uncalled (premature_stop == true).",
+    "null": "Fewer than 25% of those samples stop prematurely; the 'explores too shallowly' diagnosis is not reproduced and the phase-4 exploration window is removed from the backlog.",
+    "primary_stratum": "task_class == open AND lightweight_verification_enabled == false AND llm_calls > 0",
+    "why_open_tasks_only": "Chain-class prompts are routed statically by _is_cosmology_likelihood_workflow before the model acts and their registry -> build -> run sequence is injected by the loop regardless of the model's tool choices. After the forced chain completes the visible tool menu is emptied (loop.py:1033) and the model is told to stop (loop.py:1240). A chain-class premature_stop therefore measures that wall, not model initiative. Chain samples are reported in their own stratum and never blended with open samples."
+  },
+  "confounds_stated_in_advance": [
+    "Static routing: chain-class prompts are classified full_research by the 'fit' heavy-intent pattern and executed by forced tool calls the model never selected. Their premature_stop rate is a property of loop.py:1033/1240, not of the model.",
+    "Flag semantics differ in kind, not degree: flag off -> a _is_cosmology_likelihood_workflow hit forces the chain; flag on -> any task_kind != full_research strips eleven heavy tools (loop.py:721-741) and zeroes the forced-chain flags. Results from the two states are reported side by side and never merged.",
+    "Substring routing: the router matches raw substrings ('h0' inside 'SH0ES' and 'H0LiCOW', 'add' inside 'ladder', 'test' inside 'latest', 'use' inside 'because'). Open prompts were written so that they carry dataset and model tokens but zero planning tokens; the test file re-checks this on every run so a router change that starts forcing an open prompt fails the test rather than silently changing the experiment.",
+    "Dataset-key extraction is imperfect and is recorded per task under routing_probe_observed (e.g. 'SDSS DR12' maps to sdss_6df_bao, 'Moresco 2020' maps to the generic cosmic_chronometers key, 'CCHP' and 'BBN' are not recognised). With no forced workflow this has no effect on open tasks; it is recorded as a finding, not fixed in this evaluation.",
+    "planck2018_compressed is status=metadata_only; whether build_cosmology_likelihood can run a chain on it, and whether a do_not_combine_with violation splits or refuses the build, are unverified. Observed dispositions are recorded; expectations are not edited after the run."
+  ],
+  "prompt_design_rules": [
+    "Each prompt is written the way a working observational cosmologist would type it: a scientific question with named datasets and models, no platform vocabulary ('registered', 'registry', 'executable chain'), no deliverable enumerations, no negation lists.",
+    "Open-class prompts must classify as task_kind 'general' with _is_cosmology_likelihood_workflow False, _is_research_program_workflow False and _cosmology_direct_route_from_prompt None. Because every open prompt necessarily names datasets (dataset tokens) and parameters such as H0, S8 or LCDM (model tokens), the only way to stay off the forced chain is to contain none of the router's planning tokens; the forbidden_prompt_tokens.substring_traps list is that planning-token set verbatim and is scanned as raw substrings, exactly as the router scans it.",
+    "Chain-class prompts deliberately carry one heavy-intent word ('fit') so that they classify full_research and receive the forced registry -> build -> run chain; they must not carry research_program trigger words (which would redirect them to plan_research_program) nor evidence-matrix or direct-route phrases.",
+    "Lane words (explore, investigate, hypothesis, method, approach, interpret, research, study) are forbidden in every prompt: they would flip an open prompt to task_kind research_exploration and change which tools the model sees.",
+    "Scalar-operation words (ratio, difference, product, weighted mean) are forbidden in every prompt: with a table/paper reference they route to the deterministic verify_scalar_derivation path.",
+    "Dedicated-model-gap words (growth-rate, growth index, modified gravity, early dark energy, ...) are forbidden in every prompt: they force the research-program workflow through _cosmology_has_dedicated_model_gap.",
+    "Any change to any prompt after freezing means a new tasks file and a new commitment file; this file is retained unchanged."
+  ],
+  "forbidden_prompt_tokens": {
+    "matching_rule": "Case-insensitive raw substring match against the prompt text, mirroring the router. An entry given as an object with match='word' is matched with word boundaries instead; each such entry carries a note saying why the narrowing is safe. applies_to is 'all' or 'open' (task_class == 'open').",
+    "categories": {
+      "scalar_operation_words": {
+        "applies_to": "all",
+        "router_reference": "prompt_routing._requested_scalar_operation",
+        "tokens": [
+          "ratio",
+          "difference",
+          "product",
+          "multipl",
+          "weighted mean",
+          "weighted average",
+          "d_m/d_h"
+        ]
+      },
+      "heavy_intent_words": {
+        "applies_to": "open",
+        "router_reference": "prompt_routing._HEAVY_INTENT_PATTERNS",
+        "note": "Chain-class prompts intentionally contain 'fit'; the category is therefore scanned on open prompts only.",
+        "tokens": [
+          "likelihood",
+          "fit",
+          "sampler",
+          "sampling",
+          "mcmc",
+          "posterior",
+          "cobaya",
+          "nested sampl"
+        ]
+      },
+      "research_program_triggers": {
+        "applies_to": "all",
+        "router_reference": "prompt_routing._is_research_program_workflow research_tokens",
+        "tokens": [
+          "research",
+          "study",
+          "analysis",
+          "analyze",
+          "analyse",
+          "assess",
+          "evaluate",
+          "compare",
+          "comparison",
+          "test",
+          "inspect",
+          "examine",
+          "constrain",
+          "identify",
+          "blind",
+          "workflow",
+          "robustness",
+          "matrix"
+        ]
+      },
+      "direct_route_phrases": {
+        "applies_to": "all",
+        "router_reference": "prompt_routing._cosmology_direct_route_from_prompt and the coverage-query route in loop.py:598-614",
+        "note": "'tension' is listed because it is both a robustness-matrix token and part of the explicit Planck+SH0ES anchor trigger. The Planck+SH0ES trigger also fires on 'planck' AND 'sh0es' AND 'anchor'; V03_03 says 'anchors' but never 'planck', which the routing probe confirms. The coverage-query words fire only together with a requested redshift and recognised dataset keys; V03_08 names redshifts, so they are forbidden outright.",
+        "tokens": [
+          "hubble tension",
+          "compare planck and sh0es",
+          "tension",
+          "alcock-paczynski",
+          "alcock paczynski",
+          "dm/dh ratio",
+          "bao bin anomaly",
+          "per-bin bao",
+          "geometric omega_m from bao",
+          "coverage",
+          "observed",
+          "measurement",
+          "extrapolat"
+        ]
+      },
+      "evidence_matrix_combinations": {
+        "applies_to": "all",
+        "router_reference": "prompt_routing._should_run_dark_energy_evidence_matrix",
+        "note": "The matrix route also fires without these phrases when a prompt names DESI DR2 plus two or more supernova sets together with a comparison word and 'w0wa', 'cpl' or 'dark energy'. V03_02 names DR2 and three supernova sets and therefore avoids every comparison word and the phrase 'dark energy'; the routing probe confirms de_matrix False.",
+        "tokens": [
+          "evidence matrix",
+          "robustness matrix",
+          "tension lab",
+          "chain matrix"
+        ]
+      },
+      "lane_words": {
+        "applies_to": "all",
+        "router_reference": "prompt_routing.classify_task_kind research_exploration branch",
+        "tokens": [
+          "explor",
+          "investigat",
+          "hypothes",
+          "method",
+          "approach",
+          "interpret"
+        ]
+      },
+      "dedicated_model_gap_words": {
+        "applies_to": "all",
+        "router_reference": "prompt_routing._cosmology_has_dedicated_model_gap and _cosmology_requires_dedicated_spectra_likelihood",
+        "tokens": [
+          "growth",
+          "modified gravity",
+          "modified-gravity",
+          "early dark energy",
+          "early-dark-energy",
+          "pre-recombination",
+          "before recombination",
+          "thawing",
+          "emergent",
+          "mirage",
+          "birefringence",
+          {
+            "token": "ede",
+            "match": "word",
+            "note": "Raw substring 'ede' would flag 'needed' and 'preceded'; the router itself only matches ' ede', 'ede ', 'ede-vs', 'ede vs', 'ede claim' and 'ede model', all of which a word-boundary match covers."
+          }
+        ]
+      },
+      "substring_traps": {
+        "applies_to": "open",
+        "router_reference": "prompt_routing._is_cosmology_likelihood_workflow planning_tokens (English entries)",
+        "note": "This is the router's planning-token list, scanned as raw substrings because the router does. It is what makes 'ladder' (add), 'latest' (test), 'because' (use), 'benefit' (fit) and 'prune' (run) dangerous in an open prompt. The Chinese planning tokens are omitted because every prompt is English. 'h0' is a model token, not a planning token, and is unavoidable in H0-anchor science; it is documented under substring_traps_acknowledged instead of being forbidden.",
+        "tokens": [
+          "available",
+          "availability",
+          "dataset",
+          "prior",
+          "compare",
+          "constraint",
+          "model",
+          "chain",
+          "cobaya",
+          "cosmosis",
+          "workflow",
+          "run",
+          "use",
+          "using",
+          "execut",
+          "fit",
+          "include",
+          "add",
+          "combine",
+          "differ",
+          "agree",
+          "same",
+          "posterior",
+          "product",
+          "config",
+          "research",
+          "study",
+          "analysis",
+          "analyze",
+          "analyse",
+          "evaluate",
+          "assess",
+          "robustness",
+          "matrix",
+          "test",
+          "consistent",
+          "supported",
+          "summar",
+          "pairwise",
+          "approximation",
+          "conclusion"
+        ]
+      }
+    },
+    "substring_traps_acknowledged": {
+      "h0": "Model token; matches inside 'SH0ES' and 'H0LiCOW' as well as the bare parameter name. Present in V03_03, V03_04 and V03_08 by scientific necessity. Mitigation: open prompts carry zero planning tokens, so the model-token hit cannot complete the three-way AND in _is_cosmology_likelihood_workflow.",
+      "add": "Planning token; matches inside 'ladder'. The distance-ladder wording was dropped from V03_03 for this reason.",
+      "use": "Planning token; matches inside 'because', 'useful', 'house'.",
+      "test": "Planning and research token; matches inside 'latest', 'greatest'.",
+      "summary": "Planning token; present in chain prompts V03_01, V03_04, V03_06 ('compressed CMB summary'), harmless there because the chain is intended; forbidden in open prompts.",
+      "growth": "Dedicated-model-gap token in 'growth-rate', 'growth index', 'growth model'; forbidden everywhere, so the S8 task speaks of redshift-space distortions instead."
+    }
+  },
+  "conditions": {
+    "C0": "Closed-book reference: the same model answers each prompt with no tools at all (tools=[]); establishes the baseline that a bare model cannot stop 'prematurely' because nothing is reachable.",
+    "C1": "Main experiment: production budget ({\"mode\": \"default\"}), the full cosmology-focus tool set, run under both flag states (lightweight_verification_enabled off = production default, and on = the state all v0.2 matrices used); chain tasks x2 repeats, open tasks x4 repeats.",
+    "C2a": "Ablation arm, prompt: C1 with flag off plus an evaluation-only system-prompt appendix that explicitly licenses continued tool use (requires PR 1.1; the appendix text is a separate frozen file).",
+    "C2b": "Ablation arm, lane: C1 with flag on but the runner wraps classify_task_kind so every non-deterministic task kind gets heavy_route_allowed=True (no tool stripping); isolates the lane filter.",
+    "C2c": "Ablation arm, budget: C1 with flag off and the long budget ({\"mode\": \"long\"}: 30 iterations / 1800 s), open tasks only; isolates the iteration/deadline cap.",
+    "C2d": "Ablation arm, steering: C1 with flag off and the evaluation-only steering-off switch (direct-route gate, pre-LLM synthetic chain steps and forced-chain overrides disabled; every exit gate kept; requires PR-3b).",
+    "C2_exploration": "Phase-4 candidate: the exploration-window mechanism itself, run only if C1 reproduces the premise and no single C2 arm removes it; measured with the C1 rubric and hard_escape must be 0."
+  },
+  "registered_repeats": {
+    "chain": 2,
+    "open": 4
+  },
+  "registered_repeats_note": "Repeats per task, by task_class, as registered in conditions.C1 and analysis_plan.power_note: open tasks x4 (16 samples per flag state, so a zero-event rule-of-three bound of 3/16 = 18.75% can exclude the 25% threshold) and chain tasks x2 (their premature_stop is a wall property, not a model property). The runner reads this mapping and gives each task its registered count; an explicit --repeats overrides it.",
+  "score_dimensions": [
+    "exploration_breadth",
+    "hypothesis_generation",
+    "claim_layering",
+    "push_through",
+    "premature_stop",
+    "under_delivery",
+    "hard_escape"
+  ],
+  "score_range_per_dimension": [
+    0,
+    2
+  ],
+  "score_dimension_definitions": {
+    "exploration_breadth": "Fraction of the reachable set (reachable_set for the flag state in force) that the model itself called, forced calls excluded: 0 = none; 1 = below 50%; 2 = 50% or more, or every visible item of next_obvious_sequence was called.",
+    "hypothesis_generation": "Labelled alternative explanations in the reply ('hypothesis:', 'alternative', 'could also', 'one possibility') that name a dataset or tool result present in the trajectory: 0 = none; 1 = one; 2 = two or more. The rule yields a candidate count; the user's adjudication fixes the value; an LLM judge is used only to break ties.",
+    "claim_layering": "2 = verified / exploratory / withheld layers agree with validation_summary.interventions and no number appears outside tool_scalar_universe; 1 = labels present but incomplete; 0 = any unlabelled number.",
+    "push_through": "After a tool result with __tool_status__ in {FAILED, EMPTY, SYNTHETIC} or publication_ready=False: 2 = at least one further model-chosen call; 1 = prose only; 0 = immediate refusal.",
+    "premature_stop": "Boolean primary endpoint plus stop_reason_class. True when hit_iteration_cap is False, hit_deadline is False, elapsed_seconds < 180, the first uncalled item of next_obvious_sequence is present in visible_tools_per_llm_call[-1], the stop is not a tier withholding (last chain result exploratory with disposition limited) and not an untrusted-evidence refusal. stop_reason_class is one of completed_reachable, premature_stop, blocked_by_lane, blocked_by_cascade, tier_withheld, cap, deadline, forced_chain_only, refusal, transport_failed.",
+    "under_delivery": "Expected disposition full but observed disposition in {limited, abstention, hard_block, refusal}.",
+    "hard_escape": "A labelled parameter value in the reply (H0, w0, wa, Omega_m, S8, sigma8, Omega_k, mnu) that is not within 1% of any value in tool_scalar_universe. Any occurrence is a release blocker."
+  },
+  "analysis_plan": {
+    "stratification": {
+      "by_llm_calls": "llm_calls == 0 is the deterministic-pipeline stratum; llm_calls > 0 is the model-in-the-loop stratum. Only the model-in-the-loop stratum can inform about model behaviour.",
+      "by_flag_state": "lightweight_verification_enabled == false (production default, never measured by the v0.2 runner) versus == true (the state of every v0.2 matrix). Reported side by side.",
+      "by_task_class": "chain (statically routed, forced chain) versus open (no forced workflow). Chain-class premature_stop measures loop.py:1033/1240, not model initiative.",
+      "rule": "strata = {flag_off, flag_on} x {pipeline, model_in_loop} x {chain, open}. Every stratum is reported with its own n. No two strata are ever pooled into a headline number."
+    },
+    "primary_endpoint": "premature_stop rate in the stratum task_class == open AND lightweight_verification_enabled == false AND llm_calls > 0, condition C1.",
+    "decision_rule": "premature_stop rate < 25% in the primary stratum => premise not reproduced: phase 4 is deleted from the backlog and the diagnosis note is withdrawn in writing. Rate >= 25% => premise reproduced: run the C2 ablation arms one at a time; phase 4 proceeds only if no single C2 arm brings the rate below 25%.",
+    "interval_reporting": "Each stratum proportion is reported with a Wilson 95% interval. A zero-event stratum is reported with the rule-of-three upper bound 3/n instead of a point estimate of 0%.",
+    "zero_event_rule_of_three": "0 events in n samples => 95% upper bound approximately 3/n. With n = 8 the bound is 37.5% and cannot exclude 25%; with n = 16 it is 18.75% and can.",
+    "power_note": "Four open tasks x 2 repeats = 8 samples per flag state, which cannot exclude a 25% rate on a zero-event result. This plan therefore runs the open tasks with --repeats 4 (16 samples per flag state) at a cost of roughly one extra hour of wall clock. Chain tasks keep 2 repeats because their premature_stop is a wall property, not a model property.",
+    "secondary_endpoints": [
+      "hard_escape count == 0 in every condition and stratum (release blocker if not)",
+      "exploration_breadth, hypothesis_generation, claim_layering, push_through, under_delivery per stratum",
+      "stop_reason_class distribution per stratum",
+      "routing_probe agreement: fraction of samples whose recorded routing matches expected_routing for the flag state in force (a miss is a router-drift finding, not an evaluation defect)",
+      "transport_failures per arm (a sample whose LLM bridge failed is excluded from proportions and counted separately)"
+    ],
+    "adjudication": "The scorer writes an adjudication CSV with the rule-based premature_stop and hypothesis candidates plus empty user columns; the user fills them; the rule-based value is the pre-registered primary value and the adjudicated value is reported alongside it.",
+    "expectations_registered_in_advance": [
+      "Hard escapes are expected to be zero; any escape is a release blocker.",
+      "Chain-class samples are expected to show stop_reason_class forced_chain_only or blocked_by_cascade under both flag states, because the loop empties the menu after the forced chain.",
+      "Under flag on, open-class samples cannot reach build_cosmology_likelihood or run_cosmology_likelihood_chain (lane stripping); a stop at that point is classed blocked_by_lane, not premature_stop.",
+      "The primary-stratum premature_stop rate is genuinely unknown. The author's prior is above 25%, but the evaluation is designed so that a result below 25% is accepted as a withdrawal of the diagnosis.",
+      "planck2018_compressed runnability and do_not_combine_with splitting behaviour are unverified; V03_01, V03_04 and V03_06 may come back limited for that reason and the expectation is not edited afterwards."
+    ]
+  },
+  "reachable_set_reference": {
+    "flag_off_menu": "The 60-tool cosmology-focus menu (chat._filter_tools_by_research_focus(TOOLS) with ASTRO_RESEARCH_FOCUS=cosmology). Per-task reachable_set lists the cosmology-relevant subset the next obvious sequence draws from; the remaining tools are reachable but not relevant to the task.",
+    "flag_on_stripped_tools": [
+      "plan_research_program",
+      "run_research_matrix",
+      "build_cosmology_likelihood",
+      "build_cosmology_robustness_matrix",
+      "run_cosmology_likelihood_chain",
+      "run_cosmology_robustness_matrix",
+      "run_dark_energy_evidence_matrix",
+      "run_cmb_rotation_likelihood",
+      "run_nested_sampler",
+      "fit_cosmology_mcmc",
+      "run_cobaya_cosmology"
+    ],
+    "chain_post_config_menu": "After a forced build_cosmology_likelihood / build_cosmology_robustness_matrix result exists, loop.py:1033 sets visible_tools = [] and loop.py:1240 appends a runtime note telling the model to stop calling tools."
+  },
+  "registry_facts_used": {
+    "as_of_commit": "3a7e6e4",
+    "status": {
+      "desi_dr1_bao": "external_likelihood",
+      "desi_dr2_bao": "external_likelihood",
+      "sdss_dr12_consensus_bao": "external_likelihood",
+      "eboss_dr16_rsd": "external_likelihood",
+      "eboss_dr16_lyauto_bao": "external_likelihood",
+      "eboss_dr16_lyxqso_bao": "external_likelihood",
+      "planck2018_compressed": "metadata_only",
+      "act_dr6_lensing": "external_likelihood",
+      "pantheon_plus": "ready",
+      "des_sn5yr": "external_likelihood",
+      "union3": "external_likelihood",
+      "kids1000_wl": "external_likelihood",
+      "des_y3_3x2pt": "external_likelihood",
+      "hsc_y1_cosmic_shear": "external_likelihood",
+      "cosmic_chronometers_moresco20": "external_likelihood",
+      "shoes_h0_riess22": "ready",
+      "trgb_h0_freedman19": "ready",
+      "cchp_h0_freedman24": "ready",
+      "h0licow_h0": "ready",
+      "megamaser_h0_pesce20": "ready",
+      "bbn_ombh2_schoeneberg24": "ready"
+    },
+    "do_not_combine_with": {
+      "desi_dr1_bao": [
+        "desi_dr2_bao",
+        "sdss_dr12_consensus_bao",
+        "eboss_dr16_elg_bao",
+        "eboss_dr16_lyauto_bao",
+        "eboss_dr16_lyxqso_bao",
+        "eboss_dr16_lrg_fsbao",
+        "eboss_dr16_qso_fsbao"
+      ],
+      "desi_dr2_bao": [
+        "desi_dr1_bao",
+        "sdss_dr12_consensus_bao",
+        "eboss_dr16_elg_bao",
+        "eboss_dr16_lyauto_bao",
+        "eboss_dr16_lyxqso_bao",
+        "eboss_dr16_lrg_fsbao",
+        "eboss_dr16_qso_fsbao"
+      ],
+      "planck2018_compressed": [
+        "planck_2018_highl_TTTEEE_lite",
+        "planck_2018_lowl_TT",
+        "planck_2018_lowl_EE",
+        "planck_2018_lensing",
+        "planck_pr4_lensing",
+        "act_dr6_lensing"
+      ],
+      "act_dr6_lensing": [
+        "planck_2018_lensing",
+        "planck_pr4_lensing",
+        "planck2018_compressed"
+      ],
+      "pantheon_plus": [
+        "des_sn5yr",
+        "union3",
+        "shoes_h0_riess22",
+        "pantheon18"
+      ],
+      "des_sn5yr": [
+        "pantheon_plus",
+        "union3",
+        "pantheon18"
+      ],
+      "union3": [],
+      "eboss_dr16_lyauto_bao": [
+        "desi_dr1_bao",
+        "desi_dr2_bao"
+      ],
+      "eboss_dr16_lyxqso_bao": [
+        "desi_dr1_bao",
+        "desi_dr2_bao"
+      ],
+      "sdss_dr12_consensus_bao": [
+        "eboss_dr16_lrg_fsbao",
+        "eboss_dr16_rsd",
+        "desi_dr1_bao",
+        "desi_dr2_bao"
+      ],
+      "cosmic_chronometers_moresco20": [
+        "cosmic_chronometers"
+      ],
+      "shoes_h0_riess22": [],
+      "trgb_h0_freedman19": [
+        "shoes_h0_riess22"
+      ],
+      "cchp_h0_freedman24": [
+        "trgb_h0_freedman19",
+        "shoes_h0_riess22"
+      ],
+      "kids1000_wl": [],
+      "bbn_ombh2_schoeneberg24": []
+    },
+    "model_families": [
+      "lcdm",
+      "wcdm",
+      "w0wa_cdm",
+      "ok_lcdm",
+      "ok_wcdm",
+      "ok_w0wa_cdm",
+      "lcdm_mnu",
+      "w0wa_cdm_mnu"
+    ]
+  },
+  "tasks": [
+    {
+      "id": "V03_01_bao_release_dependence",
+      "title": "Dark-energy conclusions under DESI DR1 versus DR2 BAO",
+      "task_class": "chain",
+      "prompt": "Fit LCDM and w0wa CDM twice each: once with DESI DR1 BAO and once with DESI DR2 BAO, both times together with the Planck 2018 compressed CMB summary and Pantheon+ supernovae. Which dark-energy conclusions flip when the BAO release is swapped?",
+      "registered_datasets": [
+        "desi_dr1_bao",
+        "desi_dr2_bao",
+        "planck2018_compressed",
+        "pantheon_plus"
+      ],
+      "model_families": [
+        "lcdm",
+        "w0wa_cdm"
+      ],
+      "do_not_combine_notes": "desi_dr1_bao and desi_dr2_bao exclude each other, so the two BAO releases must be two separate legs. planck2018_compressed excludes only the full Planck likelihoods and the lensing keys, none of which are named. pantheon_plus excludes the other supernova compilations and shoes_h0_riess22, none named.",
+      "expected_routing": {
+        "flag_off": {
+          "task_kind": "full_research",
+          "matched_signals": [
+            "positive_heavy_intent:fit"
+          ],
+          "cosmology_likelihood_workflow": true,
+          "research_program_workflow": false,
+          "direct_route": null,
+          "forced_sequence": [
+            "list_cosmology_datasets",
+            "build_cosmology_likelihood(lcdm, [desi_dr2_bao, pantheon_plus, planck2018_compressed])",
+            "build_cosmology_likelihood(w0wa_cdm, [desi_dr2_bao, pantheon_plus, planck2018_compressed])",
+            "run_cosmology_likelihood_chain(lcdm, ...)",
+            "run_cosmology_likelihood_chain(w0wa_cdm, ...)"
+          ],
+          "note": "_cosmology_bao_dataset_key_from_prompt resolves to desi_dr2_bao when DR2 is named anywhere, so the forced chain covers the DR2 leg only. The DR1 leg is never built by the router."
+        },
+        "flag_on": {
+          "task_kind": "full_research",
+          "heavy_route_allowed": true,
+          "cosmology_likelihood_workflow": true,
+          "research_program_workflow": false,
+          "direct_route": null,
+          "note": "Identical to flag_off: heavy_route_allowed is True so nothing is stripped or zeroed."
+        }
+      },
+      "routing_probe_observed": {
+        "dataset_keys": [
+          "desi_dr2_bao",
+          "pantheon_plus",
+          "planck2018_compressed"
+        ],
+        "models": [
+          "lcdm",
+          "w0wa_cdm"
+        ],
+        "bao_key": "desi_dr2_bao",
+        "supernova_sets": [
+          "pantheon_plus"
+        ],
+        "robustness_matrix": false,
+        "dark_energy_evidence_matrix": false
+      },
+      "reachable_set": {
+        "flag_off": [
+          "list_cosmology_datasets",
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain",
+          "evaluate_chain_diagnostics",
+          "get_cosmology_run_status",
+          "load_cosmology_data_product"
+        ],
+        "flag_on": [
+          "list_cosmology_datasets",
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain",
+          "evaluate_chain_diagnostics",
+          "get_cosmology_run_status",
+          "load_cosmology_data_product"
+        ],
+        "note": "Both states: after the forced build the menu is emptied (loop.py:1033); every listed tool is reachable only before that point or through the forced calls themselves."
+      },
+      "next_obvious_sequence": [
+        "build_cosmology_likelihood(w0wa_cdm, [desi_dr1_bao, planck2018_compressed, pantheon_plus])",
+        "run_cosmology_likelihood_chain(w0wa_cdm, [desi_dr1_bao, planck2018_compressed, pantheon_plus])",
+        "build_cosmology_likelihood(lcdm, [desi_dr1_bao, planck2018_compressed, pantheon_plus])",
+        "run_cosmology_likelihood_chain(lcdm, [desi_dr1_bao, planck2018_compressed, pantheon_plus])"
+      ],
+      "expected_disposition": "limited",
+      "expected_disposition_rationale": "The DR1 leg is unreachable once the forced DR2 chain has emptied the menu, so at best half of the requested comparison can be executed and the release-dependence question cannot be answered in full. planck2018_compressed runnability is additionally unverified.",
+      "expected_stop_reason_class": "forced_chain_only",
+      "prompt_design_note": "English rendering of the plan's task description. 'Fit' is the single intentional heavy-intent word. 'compare'/'comparison' are avoided so the DR1 'reference' branch of the dark-energy matrix route and the research-program workflow do not fire.",
+      "routing_probe_checked": true,
+      "next_obvious_tools": {
+        "flag_off": [
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain",
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain"
+        ],
+        "flag_on": [
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain",
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain"
+        ]
+      }
+    },
+    {
+      "id": "V03_02_sn_sample_dependence",
+      "title": "Which supernova sample pulls w away from -1",
+      "task_class": "chain",
+      "prompt": "Fit LCDM and wCDM to DESI DR2 BAO paired in turn with Pantheon+, DES-SN5YR and Union3 supernovae. Which supernova sample pulls w away from -1, and does LCDM stay acceptable in each case?",
+      "registered_datasets": [
+        "desi_dr2_bao",
+        "pantheon_plus",
+        "des_sn5yr",
+        "union3"
+      ],
+      "model_families": [
+        "lcdm",
+        "wcdm"
+      ],
+      "do_not_combine_notes": "pantheon_plus, des_sn5yr and union3 are mutually exclusive supernova compilations (pantheon_plus and des_sn5yr each list the others; union3 lists none but is listed by both). 'Paired in turn' makes each supernova set its own column, which is what the robustness matrix does. des_sn5yr and union3 are external_likelihood; only the pantheon_plus column is 'ready'.",
+      "expected_routing": {
+        "flag_off": {
+          "task_kind": "full_research",
+          "matched_signals": [
+            "positive_heavy_intent:fit"
+          ],
+          "cosmology_likelihood_workflow": true,
+          "research_program_workflow": false,
+          "direct_route": null,
+          "forced_sequence": [
+            "list_cosmology_datasets",
+            "build_cosmology_robustness_matrix(lcdm, bao=desi_dr2_bao, supernova_sets=[pantheon_plus, des_sn5yr, union3])",
+            "build_cosmology_robustness_matrix(wcdm, bao=desi_dr2_bao, supernova_sets=[pantheon_plus, des_sn5yr, union3])",
+            "run_cosmology_robustness_matrix(lcdm, ...)",
+            "run_cosmology_robustness_matrix(wcdm, ...)"
+          ],
+          "note": "'Union3' is itself a robustness token, so the matrix path fires with no comparison word. The dark-energy evidence matrix direct route does not fire because the prompt contains neither a comparison word nor 'dark energy'."
+        },
+        "flag_on": {
+          "task_kind": "full_research",
+          "heavy_route_allowed": true,
+          "cosmology_likelihood_workflow": true,
+          "research_program_workflow": false,
+          "direct_route": null,
+          "note": "Identical to flag_off."
+        }
+      },
+      "routing_probe_observed": {
+        "dataset_keys": [
+          "desi_dr2_bao",
+          "pantheon_plus",
+          "union3"
+        ],
+        "models": [
+          "lcdm",
+          "wcdm"
+        ],
+        "bao_key": "desi_dr2_bao",
+        "supernova_sets": [
+          "pantheon_plus",
+          "des_sn5yr",
+          "union3"
+        ],
+        "robustness_matrix": true,
+        "dark_energy_evidence_matrix": false
+      },
+      "reachable_set": {
+        "flag_off": [
+          "list_cosmology_datasets",
+          "build_cosmology_robustness_matrix",
+          "run_cosmology_robustness_matrix",
+          "evaluate_chain_diagnostics",
+          "get_cosmology_run_status"
+        ],
+        "flag_on": [
+          "list_cosmology_datasets",
+          "build_cosmology_robustness_matrix",
+          "run_cosmology_robustness_matrix",
+          "evaluate_chain_diagnostics",
+          "get_cosmology_run_status"
+        ],
+        "note": "Both states: menu emptied after the forced build (loop.py:1033)."
+      },
+      "next_obvious_sequence": [
+        "evaluate_chain_diagnostics on the wCDM cells"
+      ],
+      "expected_disposition": "limited",
+      "expected_disposition_accepted": [
+        "limited",
+        "full"
+      ],
+      "expected_disposition_rationale": "Two of the three supernova columns are external_likelihood, so the matrix is expected to report runnable and non-runnable cells and the disposition is limited by static routing. Full is accepted only if every requested cell runs; either way the disposition is fixed before the model acts.",
+      "expected_stop_reason_class": "forced_chain_only",
+      "prompt_design_note": "English rendering of the plan's task description. The three supernova sets plus DESI DR2 would trigger the dark-energy evidence matrix direct route with any comparison word, so 'compare' and 'dark energy' are absent by design.",
+      "routing_probe_checked": true,
+      "next_obvious_tools": {
+        "flag_off": [
+          "evaluate_chain_diagnostics"
+        ],
+        "flag_on": [
+          "evaluate_chain_diagnostics"
+        ]
+      }
+    },
+    {
+      "id": "V03_03_h0_anchor_clustering",
+      "title": "Which local H0 anchors cluster together and which sit near BAO+BBN",
+      "task_class": "open",
+      "prompt": "Take the local anchors for the Hubble constant - SH0ES, TRGB, CCHP, the megamaser distances and the H0LiCOW time delays - alongside what BAO plus BBN imply on their own. Which of these anchors sit close to one another, and which of them land near the BAO+BBN value?",
+      "registered_datasets": [
+        "shoes_h0_riess22",
+        "trgb_h0_freedman19",
+        "cchp_h0_freedman24",
+        "megamaser_h0_pesce20",
+        "h0licow_h0",
+        "desi_dr2_bao",
+        "bbn_ombh2_schoeneberg24"
+      ],
+      "model_families": [
+        "lcdm"
+      ],
+      "do_not_combine_notes": "shoes_h0_riess22, trgb_h0_freedman19 and cchp_h0_freedman24 are mutually exclusive anchors and must be looked at one at a time, never summed. megamaser_h0_pesce20, h0licow_h0, desi_dr2_bao and bbn_ombh2_schoeneberg24 carry no exclusions; BAO+BBN is the one legitimate combination in the task.",
+      "expected_routing": {
+        "flag_off": {
+          "task_kind": "general",
+          "matched_signals": [
+            "no_execution_intent"
+          ],
+          "cosmology_likelihood_workflow": false,
+          "research_program_workflow": false,
+          "direct_route": null,
+          "forced_sequence": [],
+          "note": "With the flag off loop.py never consults classify_task_kind (routing_decision is None); the value recorded here is the pure classification of the prompt text and is what the test re-checks. No workflow, no forced call: the model sees the full cosmology-focus menu from iteration 0."
+        },
+        "flag_on": {
+          "task_kind": "general",
+          "heavy_route_allowed": false,
+          "cosmology_likelihood_workflow": false,
+          "research_program_workflow": false,
+          "direct_route": null,
+          "forced_sequence": [],
+          "note": "Same classification; the eleven heavy tools are stripped from the menu (loop.py:721-741), so build/run chains are unreachable and a stop after the registry call is blocked_by_lane, not premature."
+        }
+      },
+      "routing_probe_observed": {
+        "dataset_keys": [
+          "desi_dr1_bao",
+          "trgb_h0_freedman19",
+          "h0licow_h0",
+          "megamaser_h0_pesce20",
+          "shoes_h0_riess22"
+        ],
+        "models": [],
+        "note": "Bare 'BAO' resolves to desi_dr1_bao by default; 'CCHP' and 'BBN' are not recognised by the extractor. Irrelevant to routing because no workflow fires; recorded as a finding."
+      },
+      "reachable_set": {
+        "flag_off": [
+          "list_cosmology_datasets",
+          "load_cosmology_data_product",
+          "compare_luminosity_distances",
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain",
+          "evaluate_chain_diagnostics",
+          "audit_published_constraint",
+          "search_literature",
+          "run_python"
+        ],
+        "flag_on": [
+          "list_cosmology_datasets",
+          "load_cosmology_data_product",
+          "compare_luminosity_distances",
+          "audit_published_constraint",
+          "search_literature",
+          "run_python"
+        ]
+      },
+      "next_obvious_sequence": [
+        "list_cosmology_datasets([shoes_h0_riess22, trgb_h0_freedman19, cchp_h0_freedman24, megamaser_h0_pesce20, h0licow_h0, desi_dr2_bao, bbn_ombh2_schoeneberg24])",
+        "flag_off: build_cosmology_likelihood(lcdm, [desi_dr2_bao, bbn_ombh2_schoeneberg24]) -> run_cosmology_likelihood_chain",
+        "flag_on: compare_luminosity_distances(comparison_mode=h0_anchors)"
+      ],
+      "expected_disposition": "full",
+      "expected_disposition_rationale": "All five anchors are status ready with a central value and uncertainty in the registry, and the BAO+BBN pair is combinable; the clustering question is answerable from registry values plus one executable LCDM chain (flag off) or the anchor comparison tool (flag on).",
+      "expected_stop_reason_class": "completed_reachable",
+      "prompt_design_note": "English rendering of the plan's task description. 'distance ladder' was dropped because 'ladder' contains the planning token 'add'; 'Planck' is absent so the Planck+SH0ES anchor direct route cannot fire on 'anchors'; no comparison, tension or planning word appears. Verified: task_kind general, both workflow predicates False, direct route None, zero planning-token hits.",
+      "routing_probe_checked": true,
+      "next_obvious_tools": {
+        "flag_off": [
+          "list_cosmology_datasets",
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain"
+        ],
+        "flag_on": [
+          "list_cosmology_datasets",
+          "compare_luminosity_distances"
+        ]
+      }
+    },
+    {
+      "id": "V03_04_curvature",
+      "title": "Flat versus free-curvature LCDM on DESI DR2 + Planck compressed + Pantheon+",
+      "task_class": "chain",
+      "prompt": "Fit flat LCDM and LCDM with free curvature (Omega_k) to DESI DR2 BAO plus the Planck 2018 compressed CMB summary plus Pantheon+. Does the curvature pull away from zero, and by how much does H0 shift between the flat and curved fits?",
+      "registered_datasets": [
+        "desi_dr2_bao",
+        "planck2018_compressed",
+        "pantheon_plus"
+      ],
+      "model_families": [
+        "lcdm",
+        "ok_lcdm"
+      ],
+      "do_not_combine_notes": "None of the three datasets excludes another. planck2018_compressed is metadata_only, so whether the chain executes is unverified.",
+      "expected_routing": {
+        "flag_off": {
+          "task_kind": "full_research",
+          "matched_signals": [
+            "positive_heavy_intent:fit"
+          ],
+          "cosmology_likelihood_workflow": true,
+          "research_program_workflow": false,
+          "direct_route": null,
+          "forced_sequence": [
+            "list_cosmology_datasets",
+            "build_cosmology_likelihood(lcdm, [desi_dr2_bao, pantheon_plus, planck2018_compressed])",
+            "build_cosmology_likelihood(ok_lcdm, [desi_dr2_bao, pantheon_plus, planck2018_compressed])",
+            "run_cosmology_likelihood_chain(lcdm, ...)",
+            "run_cosmology_likelihood_chain(ok_lcdm, ...)"
+          ]
+        },
+        "flag_on": {
+          "task_kind": "full_research",
+          "heavy_route_allowed": true,
+          "cosmology_likelihood_workflow": true,
+          "research_program_workflow": false,
+          "direct_route": null,
+          "note": "Identical to flag_off."
+        }
+      },
+      "routing_probe_observed": {
+        "dataset_keys": [
+          "desi_dr2_bao",
+          "pantheon_plus",
+          "planck2018_compressed"
+        ],
+        "models": [
+          "lcdm",
+          "ok_lcdm"
+        ],
+        "bao_key": "desi_dr2_bao",
+        "supernova_sets": [
+          "pantheon_plus"
+        ],
+        "robustness_matrix": false,
+        "dark_energy_evidence_matrix": false
+      },
+      "reachable_set": {
+        "flag_off": [
+          "list_cosmology_datasets",
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain",
+          "evaluate_chain_diagnostics",
+          "get_cosmology_run_status"
+        ],
+        "flag_on": [
+          "list_cosmology_datasets",
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain",
+          "evaluate_chain_diagnostics",
+          "get_cosmology_run_status"
+        ],
+        "note": "Both states: menu emptied after the forced build (loop.py:1033)."
+      },
+      "next_obvious_sequence": [
+        "evaluate_chain_diagnostics on the ok_lcdm chain"
+      ],
+      "expected_disposition": "limited",
+      "expected_disposition_accepted": [
+        "limited",
+        "full"
+      ],
+      "expected_disposition_rationale": "Both requested models are built and run by the forced chain, so full is possible; limited is the primary expectation because planck2018_compressed is metadata_only and its runnability is unverified. Either way the disposition is fixed by static routing before the model acts.",
+      "expected_stop_reason_class": "forced_chain_only",
+      "prompt_design_note": "English rendering of the plan's task description. 'curvature' is a matrix_or_extended_context word in the direct-route function but only matters together with a Hubble-tension trigger, which is absent.",
+      "routing_probe_checked": true,
+      "next_obvious_tools": {
+        "flag_off": [
+          "evaluate_chain_diagnostics"
+        ],
+        "flag_on": [
+          "evaluate_chain_diagnostics"
+        ]
+      }
+    },
+    {
+      "id": "V03_05_growth_s8",
+      "title": "S8 from RSD, weak lensing and Planck",
+      "task_class": "open",
+      "prompt": "Three roads to S8: the eBOSS DR16 redshift-space distortions, the weak-lensing surveys KiDS-1000, DES Y3 and HSC Y1, and Planck 2018. Do the lensing surveys all come in low relative to Planck, and where does the RSD value fall in between?",
+      "registered_datasets": [
+        "eboss_dr16_rsd",
+        "kids1000_wl",
+        "des_y3_3x2pt",
+        "hsc_y1_cosmic_shear",
+        "planck2018_compressed"
+      ],
+      "model_families": [
+        "lcdm"
+      ],
+      "do_not_combine_notes": "kids1000_wl, des_y3_3x2pt and hsc_y1_cosmic_shear carry no exclusions. eboss_dr16_rsd excludes the eBOSS full-shape keys and sdss_dr12_consensus_bao, none named. planck2018_compressed excludes the full Planck likelihoods and the lensing keys, none named. The task is a side-by-side reading, not a joint fit.",
+      "expected_routing": {
+        "flag_off": {
+          "task_kind": "general",
+          "matched_signals": [
+            "no_execution_intent"
+          ],
+          "cosmology_likelihood_workflow": false,
+          "research_program_workflow": false,
+          "direct_route": null,
+          "forced_sequence": [],
+          "note": "Pure classification of the prompt text; loop.py does not consult it when the flag is off. No workflow, no forced call."
+        },
+        "flag_on": {
+          "task_kind": "general",
+          "heavy_route_allowed": false,
+          "cosmology_likelihood_workflow": false,
+          "research_program_workflow": false,
+          "direct_route": null,
+          "forced_sequence": [],
+          "note": "Heavy tools stripped (loop.py:721-741)."
+        }
+      },
+      "routing_probe_observed": {
+        "dataset_keys": [
+          "planck2018_compressed",
+          "kids1000_wl",
+          "des_y3_3x2pt",
+          "hsc_y1_cosmic_shear"
+        ],
+        "models": [],
+        "note": "'eBOSS DR16 redshift-space distortions' is not mapped to eboss_dr16_rsd by the extractor. Irrelevant to routing because no workflow fires; recorded as a finding."
+      },
+      "reachable_set": {
+        "flag_off": [
+          "list_cosmology_datasets",
+          "load_cosmology_data_product",
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain",
+          "evaluate_chain_diagnostics",
+          "audit_published_constraint",
+          "search_literature",
+          "run_python"
+        ],
+        "flag_on": [
+          "list_cosmology_datasets",
+          "load_cosmology_data_product",
+          "audit_published_constraint",
+          "search_literature",
+          "run_python"
+        ]
+      },
+      "next_obvious_sequence": [
+        "list_cosmology_datasets([eboss_dr16_rsd, kids1000_wl, des_y3_3x2pt, hsc_y1_cosmic_shear, planck2018_compressed])",
+        "load_cosmology_data_product for the S8 summaries",
+        "flag_off: build_cosmology_likelihood(lcdm, [kids1000_wl]) -> run_cosmology_likelihood_chain"
+      ],
+      "expected_disposition": "full",
+      "expected_disposition_rationale": "The question asks where five published S8 values sit relative to each other; every key is registered with a citation-pinned summary, so a side-by-side reading with sources is deliverable without any executable chain.",
+      "expected_stop_reason_class": "completed_reachable",
+      "prompt_design_note": "English rendering of the plan's task description. 'growth' is avoided everywhere (it is a dedicated-model-gap trigger in 'growth-rate'/'growth index'), so the RSD probe is named by its observable. Verified: task_kind general, both workflow predicates False, direct route None, zero planning-token hits.",
+      "routing_probe_checked": true,
+      "next_obvious_tools": {
+        "flag_off": [
+          "list_cosmology_datasets",
+          "load_cosmology_data_product",
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain"
+        ],
+        "flag_on": [
+          "list_cosmology_datasets",
+          "load_cosmology_data_product"
+        ]
+      }
+    },
+    {
+      "id": "V03_06_mnu_vs_de_freedom",
+      "title": "Neutrino mass with and without w0wa freedom, Planck compressed versus ACT DR6 lensing",
+      "task_class": "chain",
+      "prompt": "Fit LCDM with the neutrino mass free and w0wa CDM with the neutrino mass free, once against the Planck 2018 compressed CMB summary and once against ACT DR6 lensing, each with DESI DR2 BAO. Does letting w0 and wa float change what the two CMB summaries say about the neutrino mass?",
+      "registered_datasets": [
+        "planck2018_compressed",
+        "act_dr6_lensing",
+        "desi_dr2_bao"
+      ],
+      "model_families": [
+        "lcdm_mnu",
+        "w0wa_cdm_mnu"
+      ],
+      "do_not_combine_notes": "planck2018_compressed and act_dr6_lensing exclude each other, so the two CMB summaries must be two separate legs. The router's forced build names both keys in one dataset list, which is a do_not_combine_with violation; whether build_cosmology_likelihood splits the list or refuses is unverified and is recorded, not fixed.",
+      "expected_routing": {
+        "flag_off": {
+          "task_kind": "full_research",
+          "matched_signals": [
+            "positive_heavy_intent:fit"
+          ],
+          "cosmology_likelihood_workflow": true,
+          "research_program_workflow": false,
+          "direct_route": null,
+          "forced_sequence": [
+            "list_cosmology_datasets",
+            "build_cosmology_likelihood(lcdm, [desi_dr2_bao, planck2018_compressed, act_dr6_lensing])",
+            "build_cosmology_likelihood(w0wa_cdm, [desi_dr2_bao, planck2018_compressed, act_dr6_lensing])",
+            "build_cosmology_likelihood(w0wa_cdm_mnu, [desi_dr2_bao, planck2018_compressed, act_dr6_lensing])",
+            "run_cosmology_likelihood_chain x3 on the same triples"
+          ],
+          "note": "The model extractor attaches the neutrino intent to w0wa only (lcdm, w0wa_cdm, w0wa_cdm_mnu); lcdm_mnu is never built. All three builds carry the excluded planck+act pair."
+        },
+        "flag_on": {
+          "task_kind": "full_research",
+          "heavy_route_allowed": true,
+          "cosmology_likelihood_workflow": true,
+          "research_program_workflow": false,
+          "direct_route": null,
+          "note": "Identical to flag_off."
+        }
+      },
+      "routing_probe_observed": {
+        "dataset_keys": [
+          "desi_dr2_bao",
+          "planck2018_compressed",
+          "act_dr6_lensing"
+        ],
+        "models": [
+          "lcdm",
+          "w0wa_cdm",
+          "w0wa_cdm_mnu"
+        ],
+        "bao_key": "desi_dr2_bao",
+        "supernova_sets": [],
+        "robustness_matrix": false,
+        "dark_energy_evidence_matrix": false
+      },
+      "reachable_set": {
+        "flag_off": [
+          "list_cosmology_datasets",
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain",
+          "evaluate_chain_diagnostics",
+          "get_cosmology_run_status"
+        ],
+        "flag_on": [
+          "list_cosmology_datasets",
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain",
+          "evaluate_chain_diagnostics",
+          "get_cosmology_run_status"
+        ],
+        "note": "Both states: menu emptied after the forced build (loop.py:1033)."
+      },
+      "next_obvious_sequence": [
+        "build_cosmology_likelihood(lcdm_mnu, [desi_dr2_bao, act_dr6_lensing]) and (w0wa_cdm_mnu, [desi_dr2_bao, act_dr6_lensing]) without planck2018_compressed",
+        "build_cosmology_likelihood(lcdm_mnu, [desi_dr2_bao, planck2018_compressed])",
+        "run_cosmology_likelihood_chain on each rebuilt leg"
+      ],
+      "expected_disposition": "limited",
+      "expected_disposition_rationale": "The forced build combines two mutually excluded CMB summaries and omits lcdm_mnu; the separated ACT leg and the lcdm_mnu leg are unreachable after the menu is emptied. The dnc handling of the builder is unverified, so the observed disposition is recorded as found.",
+      "expected_stop_reason_class": "forced_chain_only",
+      "prompt_design_note": "English rendering of the plan's task description with DESI DR2 BAO added as the common distance anchor so that a neutrino-mass fit has a geometric lever arm. 'lensing' alone does not trigger the weak-lensing family because 'ACT DR6 lensing' resolves to act_dr6_lensing.",
+      "routing_probe_checked": true,
+      "next_obvious_tools": {
+        "flag_off": [
+          "build_cosmology_likelihood",
+          "build_cosmology_likelihood",
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain",
+          "run_cosmology_likelihood_chain",
+          "run_cosmology_likelihood_chain"
+        ],
+        "flag_on": [
+          "build_cosmology_likelihood",
+          "build_cosmology_likelihood",
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain",
+          "run_cosmology_likelihood_chain",
+          "run_cosmology_likelihood_chain"
+        ]
+      }
+    },
+    {
+      "id": "V03_07_chronometers_vs_bao_hz",
+      "title": "Cosmic-chronometer H(z) against DESI DR2 BAO H(z)",
+      "task_class": "open",
+      "prompt": "Put the Moresco 2020 cosmic-chronometer H(z) points next to the H(z) values implied by DESI DR2 BAO. Do the chronometers sit systematically high or low relative to the BAO curve, and is any offset larger than the chronometer error bars?",
+      "registered_datasets": [
+        "cosmic_chronometers_moresco20",
+        "desi_dr2_bao"
+      ],
+      "model_families": [
+        "lcdm"
+      ],
+      "do_not_combine_notes": "cosmic_chronometers_moresco20 excludes only the older cosmic_chronometers key; desi_dr2_bao excludes the other BAO releases. The two named keys may be combined, but the task is a curve-against-points reading, not a joint fit.",
+      "expected_routing": {
+        "flag_off": {
+          "task_kind": "general",
+          "matched_signals": [
+            "no_execution_intent"
+          ],
+          "cosmology_likelihood_workflow": false,
+          "research_program_workflow": false,
+          "direct_route": null,
+          "forced_sequence": [],
+          "note": "Pure classification of the prompt text; loop.py does not consult it when the flag is off. No workflow, no forced call."
+        },
+        "flag_on": {
+          "task_kind": "general",
+          "heavy_route_allowed": false,
+          "cosmology_likelihood_workflow": false,
+          "research_program_workflow": false,
+          "direct_route": null,
+          "forced_sequence": [],
+          "note": "Heavy tools stripped (loop.py:721-741)."
+        }
+      },
+      "routing_probe_observed": {
+        "dataset_keys": [
+          "desi_dr2_bao",
+          "cosmic_chronometers"
+        ],
+        "models": [],
+        "note": "'Moresco 2020' resolves to the generic cosmic_chronometers key, not cosmic_chronometers_moresco20. Irrelevant to routing because no workflow fires; recorded as a finding."
+      },
+      "reachable_set": {
+        "flag_off": [
+          "list_cosmology_datasets",
+          "load_cosmology_data_product",
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain",
+          "evaluate_chain_diagnostics",
+          "compare_luminosity_distances",
+          "search_literature",
+          "run_python"
+        ],
+        "flag_on": [
+          "list_cosmology_datasets",
+          "load_cosmology_data_product",
+          "compare_luminosity_distances",
+          "search_literature",
+          "run_python"
+        ]
+      },
+      "next_obvious_sequence": [
+        "list_cosmology_datasets([cosmic_chronometers_moresco20, desi_dr2_bao])",
+        "load_cosmology_data_product(cosmic_chronometers_moresco20)",
+        "flag_off: build_cosmology_likelihood(lcdm, [cosmic_chronometers_moresco20]) -> run_cosmology_likelihood_chain"
+      ],
+      "expected_disposition": "limited",
+      "expected_disposition_rationale": "No registered tool draws an H(z) curve from a BAO chain and overlays chronometer points; without the sandbox (run_python) the point-by-point offset cannot be computed, so the honest answer is the loaded data plus a stated capability gap. Full is not expected even with perfect exploration.",
+      "expected_stop_reason_class": "blocked_by_cascade",
+      "prompt_design_note": "English rendering of the plan's task description. 'measurement', 'observed' and 'coverage' are absent so the coverage-query direct route cannot fire; no redshift value is given. Verified: task_kind general, both workflow predicates False, direct route None, zero planning-token hits.",
+      "routing_probe_checked": true,
+      "next_obvious_tools": {
+        "flag_off": [
+          "list_cosmology_datasets",
+          "load_cosmology_data_product",
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain"
+        ],
+        "flag_on": [
+          "list_cosmology_datasets",
+          "load_cosmology_data_product"
+        ]
+      }
+    },
+    {
+      "id": "V03_08_lya_vs_galaxy_bao",
+      "title": "Lyman-alpha BAO versus galaxy BAO pull on H0 and Omega_m",
+      "task_class": "open",
+      "prompt": "Within flat LCDM, the eBOSS DR16 Lyman-alpha auto and cross BAO at z ~ 2.3 and the SDSS DR12 galaxy BAO at z < 0.7 each pull H0 and Omega_m somewhere. Do the high-redshift and low-redshift BAO pull H0 and Omega_m in one direction, or in opposite directions?",
+      "registered_datasets": [
+        "eboss_dr16_lyauto_bao",
+        "eboss_dr16_lyxqso_bao",
+        "sdss_dr12_consensus_bao"
+      ],
+      "model_families": [
+        "lcdm"
+      ],
+      "do_not_combine_notes": "eboss_dr16_lyauto_bao and eboss_dr16_lyxqso_bao exclude only the DESI releases, so the two Lyman-alpha keys may be run together. sdss_dr12_consensus_bao excludes the eBOSS full-shape keys and DESI, not the Lyman-alpha keys. The task asks for two separate pulls, so the galaxy and Lyman-alpha legs are run apart in any case.",
+      "expected_routing": {
+        "flag_off": {
+          "task_kind": "general",
+          "matched_signals": [
+            "no_execution_intent"
+          ],
+          "cosmology_likelihood_workflow": false,
+          "research_program_workflow": false,
+          "direct_route": null,
+          "forced_sequence": [],
+          "note": "Pure classification of the prompt text; loop.py does not consult it when the flag is off. The extractor produces a non-empty run_calls list (lcdm on sdss_6df_bao) but it is never injected because the workflow predicate is False."
+        },
+        "flag_on": {
+          "task_kind": "general",
+          "heavy_route_allowed": false,
+          "cosmology_likelihood_workflow": false,
+          "research_program_workflow": false,
+          "direct_route": null,
+          "forced_sequence": [],
+          "note": "Heavy tools stripped (loop.py:721-741); the build/run legs are unreachable."
+        }
+      },
+      "routing_probe_observed": {
+        "dataset_keys": [
+          "sdss_6df_bao"
+        ],
+        "models": [
+          "lcdm"
+        ],
+        "note": "'SDSS DR12 galaxy BAO' is mis-mapped to sdss_6df_bao and the Lyman-alpha keys are not recognised. Known finding from the plan (not fixed here); harmless because no workflow fires."
+      },
+      "reachable_set": {
+        "flag_off": [
+          "list_cosmology_datasets",
+          "load_cosmology_data_product",
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain",
+          "evaluate_chain_diagnostics",
+          "assess_bao_bin_anomaly",
+          "search_literature",
+          "run_python"
+        ],
+        "flag_on": [
+          "list_cosmology_datasets",
+          "load_cosmology_data_product",
+          "assess_bao_bin_anomaly",
+          "search_literature",
+          "run_python"
+        ]
+      },
+      "next_obvious_sequence": [
+        "list_cosmology_datasets([eboss_dr16_lyauto_bao, eboss_dr16_lyxqso_bao, sdss_dr12_consensus_bao])",
+        "flag_off: build_cosmology_likelihood(lcdm, [eboss_dr16_lyauto_bao, eboss_dr16_lyxqso_bao]) -> run_cosmology_likelihood_chain",
+        "flag_off: build_cosmology_likelihood(lcdm, [sdss_dr12_consensus_bao]) -> run_cosmology_likelihood_chain"
+      ],
+      "expected_disposition": "full",
+      "expected_disposition_rationale": "Both legs are registered and combinable within themselves; a direction-of-pull answer needs only the two LCDM chains (flag off) or, at minimum, the registered summaries with their citations.",
+      "expected_stop_reason_class": "completed_reachable",
+      "prompt_design_note": "English rendering of the plan's task description. 'same direction' was rewritten as 'one direction, or in opposite directions' because 'same' is a planning token. Verified: task_kind general, both workflow predicates False, direct route None, zero planning-token hits.",
+      "routing_probe_checked": true,
+      "next_obvious_tools": {
+        "flag_off": [
+          "list_cosmology_datasets",
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain",
+          "build_cosmology_likelihood",
+          "run_cosmology_likelihood_chain"
+        ],
+        "flag_on": [
+          "list_cosmology_datasets"
+        ]
+      }
+    }
+  ],
+  "next_obvious_tools_note": "next_obvious_sequence is the human-readable step list. next_obvious_tools is the machine-comparable projection the scorer uses: bare tool names per flag state, derived from the sequence before freezing. Every tool named anywhere in a step is projected, including the second half of a chained step written 'build_cosmology_likelihood(...) -> run_cosmology_likelihood_chain'; a step prefixed 'flag_off:' or 'flag_on:' is projected into that flag state only. The scorer compares tool names, never the descriptive strings, so a step written as 'list_cosmology_datasets([...])' still matches a recorded tool_sequence entry. V03_06 is projected by hand rather than derived from the step text: its first step describes TWO ACT builds in one sentence and its third step says \"on each rebuilt leg\", so a per-name derivation undercounted it as two builds and one run. The registered projection is three builds and three runs."
+}
