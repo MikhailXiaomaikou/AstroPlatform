@@ -1160,6 +1160,67 @@ def _runner_success(
             + " — without a chain-derived chi2 this run cannot enter "
             "model-comparison pairing."
         )
+    # The message to the model follows the tier computed above (Codex review
+    # 2026-09-03, thread PRRT_kwDORoeoE86eta7A): it used to say "say the run
+    # is exploratory" for every tier, so a chain blocked by unverified inputs
+    # or missing diagnostics reached the user as merely exploratory. The
+    # blocked causes are read off the same three conditions that decide
+    # preliminary_ready, so the stated "why" cannot drift from the tier.
+    if chain_tier == "publication":
+        message_to_model = (
+            "External Cobaya MCMC produced this posterior and it passed the "
+            "publication gate: at least four independent chains, rank-normalized "
+            "R-hat < 1.01, bulk ESS >= 400 for every critical parameter, "
+            "hash-verified non-compressed likelihood inputs (including the real "
+            "low-l EE likelihood when tau is sampled), and an attested "
+            "model-adequacy manifest. chain_tier is publication: you may quote "
+            "the posterior median and interval, stating that tier. If this "
+            "turn also carries a non-publication chain result, keep the digits "
+            "in this card -- the reply gate reads a promoted median within 1% "
+            "of a withheld one as the withheld one and replaces the whole reply."
+        )
+    elif chain_tier == "exploratory":
+        message_to_model = (
+            "External Cobaya MCMC produced this posterior. "
+            "Publication requires at least four independent chains, rank-normalized "
+            "R-hat < 1.01, bulk ESS >= 400 for every critical parameter, and "
+            "hash-verified non-compressed likelihood inputs, including the real "
+            "low-l EE likelihood when tau is sampled. Otherwise its posterior "
+            "numbers stay in this tool card: say the run is exploratory and "
+            "why, and describe the result qualitatively. Do not write the "
+            "median, the interval, a rounded value or an Nsigma derived from "
+            "them, with or without a 'preliminary' label -- the reply gate "
+            "withholds any number within 1% of a non-publication posterior "
+            "and replaces the whole reply."
+        )
+    else:
+        blocked_causes: list[str] = []
+        if not summaries:
+            blocked_causes.append(
+                "no posterior summaries could be read from the chain products"
+            )
+        if not data_verified:
+            blocked_causes.append("the likelihood inputs are not hash-verified")
+        overall_status = diagnostics.get("overall_status")
+        if overall_status == "no_chains":
+            blocked_causes.append("the sampler produced no chains")
+        elif overall_status == "diagnostics_unavailable":
+            blocked_causes.append("convergence diagnostics are unavailable")
+        message_to_model = (
+            "External Cobaya MCMC ran, but this chain is BLOCKED "
+            "(chain_tier=blocked): "
+            + "; ".join(blocked_causes)
+            + ". Publication gate reasons: "
+            + ", ".join(publication_gate["reasons"])
+            + ". Do NOT report H0 / Om0 / w0 / wa / sigma8 / HDI or any other "
+            "posterior number from this result in any form, and do not "
+            "describe it qualitatively either: nothing from a blocked chain "
+            "may be quoted or described as a result. Tell the user the run is "
+            "blocked and why, and what would unblock it: hash-verified pinned "
+            "likelihood inputs, available convergence diagnostics "
+            "(rank-normalized R-hat and bulk ESS), and at least four "
+            "independent chains."
+        )
     envelope = {
         "success": True,
         "__tool_status__": "COMPLETED" if publication_ready else "PARTIAL",
@@ -1184,14 +1245,7 @@ def _runner_success(
         "dataset_keys": [entry.key for entry in entries],
         "random_seed": seed,
         "warnings": warnings,
-        "__message_to_model__": (
-            "External Cobaya MCMC produced this posterior. "
-            "Publication requires at least four independent chains, rank-normalized "
-            "R-hat < 1.01, bulk ESS >= 400 for every critical parameter, and "
-            "hash-verified non-compressed likelihood inputs, including the real "
-            "low-l EE likelihood when tau is sampled. Otherwise report it only "
-            "as preliminary."
-        ),
+        "__message_to_model__": message_to_model,
         "provenance": {
             "cosmology_likelihood": {
                 "registry_version": "2026-04-30",

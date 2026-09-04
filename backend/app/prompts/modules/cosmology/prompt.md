@@ -77,8 +77,14 @@ A first chain rarely passes the publication bar. When it doesn't:
 
 | Symptom | Auto-action (do NOT ask the user first) |
 |---|---|
-| `chain_tier="exploratory"` (ESS in 100–400) | Retry once with `n_steps × 3` to push into publication tier |
-| `chain_tier="blocked"` + ESS < 100 | Retry with `n_steps × 5` AND tighter prior on a degenerate param |
+| `chain_tier="exploratory"` — read WHY off this run first (`publication_gate.reasons`, `warnings`, `prior_dominance_screen`); several reasons usually apply at once | Act per reason (rows below). An in-process `run_cosmology_likelihood_chain` always carries the independent-chains code, so no retry lifts it to publication tier: after at most one retry, report the remaining reasons in words (Step 5) and stop |
+| … ESS below the publication threshold (the `warnings` entry of the shape `ESS=… below publication threshold …`, or the `__exploratory_warning__` clause `… is below the publication threshold of …`; name the reason in words and never copy the threshold digits into prose) | Retry once with `n_samples × 3` when `sampler` is `bao_gaussian_importance` — the tool's only sampler-budget knob (no `n_steps` / `n_walkers` exist there); from the default it triples the importance-proposal draws. If `sampler` is `compressed_emcee` / `sn_emcee` the chain length is fixed, so do not retry — name the ESS reason in words |
+| … ESS estimate failed outright (warning `effective-sample-size estimate unavailable`; convergence unverified) | Retry once with a different `random_seed` (no run-length knob exists on this tool); if it fails again, stop and report convergence as unverified |
+| … `off_anchor_frontier` (w / w0 / wa with no reproduced published anchor) | No retry helps. Say the missing piece is a reproduced published anchor for this exact model + dataset combination — do not invent one |
+| … `compressed_or_approximate_likelihood` / `literature_typed_input` | No retry helps. Say the likelihood is compressed or approximate and the result stays exploratory |
+| … `prior_dominance_screen_failed` (see `prior_dominance_screen.flagged_parameters`) | Do not just rerun. If you passed `priors`, rerun once without them (`priors` can only tighten within the default bounds; no wider setting exists). If the flag persists, report the flagged parameters and that a separately attested prior-sensitivity study is required — no retry supplies it |
+| … `fewer_than_four_independent_chains` (with `importance_samples_are_not_independent_chains`, `flattened_coupled_emcee_ensemble` or `analytic_draws_are_not_independent_chains`), or R-hat AT OR ABOVE its threshold on the external Cobaya path | No retry helps: the in-process runner never supplies four independent chains and exposes no chain-count or run-length knob (`n_walkers` is fixed). Say so in words; only the external Cobaya CMB path counts real chains |
+| `chain_tier="blocked"` + ESS < 100 | Only when `sampler` is `bao_gaussian_importance`: retry once with `n_samples × 5` (this tool's only sampler-budget knob; `n_steps` / `n_walkers` belong to `fit_cosmology_mcmc`, which never reaches publication tier). When `sampler` is `compressed_emcee` / `sn_emcee` the chain length is fixed, so no retry helps — report the blocked result as a capability gap in words (Step 5) and quote no number from it |
 | `chain_tier="blocked"` + inline rows | State the `manual_attestation` field shape and ask for the source paper bibcode |
 | `data_origin="unavailable"` | Switch to a registered dataset that covers the same probe |
 | EMPTY rows from `run_adql` | Broaden cone radius 2× and retry once |
@@ -101,14 +107,49 @@ A single chain is a hypothesis, not evidence. For any headline claim, also:
 ### Step 5 — Synthesize, don't dump
 
 Don't just paste the chain's posterior table. Place the result in the
-Hubble-tension / S8-tension landscape:
+Hubble-tension / S8-tension landscape, quoting only what the result's tier
+allows:
 
-- "Our H0 = X ± Y sits Nσ below the local SH0ES anchor (cite the value your
-  tool/literature call actually returned, e.g. Riess+22)"
-- "Our Ωm is consistent with Planck18 within Nσ"
-- "The published DESI w0 (from your extract_literature_tables/search_literature
-  call) is w0 = X ± Y; our refit recovers w0 = X ± Y, consistent within Nσ but
-  not yet publication-grade (chain_tier=exploratory)"
+- `chain_tier="publication"` (publication_ready=true): "Our H0 = X ± Y sits
+  Nσ below the local SH0ES anchor (cite the value your tool/literature call
+  actually returned, e.g. Riess+22)"; "Our Ωm is consistent with Planck18
+  within Nσ".
+- `chain_tier="exploratory"` (publication_ready=false): the posterior numbers
+  stay in the tool card, which the user already sees. Describe the result
+  only qualitatively — "the exploratory chain lands on the Planck side of
+  the H0 landscape and cannot support a claimable H0" — and state the
+  reason the run gives you: read `publication_gate.reasons` / the run's
+  warnings and summarize THOSE (off-anchor target, compressed or
+  approximate likelihood, prior-dominance flag, too few independent
+  chains, ESS below its threshold, R-hat AT OR ABOVE its threshold — a chain
+  fails on R-hat by being too HIGH, not too low. Name the direction in
+  words and do NOT repeat the numeric threshold or the reason code's
+  digits: the final gate withholds any number within 1% of a value under
+  `parameters`, and a chain's own R-hat sits right beside 1.01, so quoting
+  the threshold can replace the whole reply). Do not invent a generic low-ESS
+  diagnosis; a chain can be demoted with ESS well above 400. Do not write
+  the median, the interval, a rounded value ("around 68"), a range
+  ("67–69"), or an Nσ offset derived from it: the final honesty gate
+  withholds any number within 1% of a non-publication posterior or tension
+  value regardless of wording, and replaces the whole reply.
+- A PROMOTED RERUN in a turn that also produced the exploratory result it
+  replaces: its digits stay in the card as well. Step 3's required retry
+  leaves the first, non-publication posterior in the same turn's results,
+  and successive chains on the same data usually land within 1% of each
+  other, so the honesty gate reads the promoted median as the withheld one
+  and replaces the whole reply. Say the rerun reached publication tier and
+  what changed (ESS, R-hat, the anchor that was added), point at its tool
+  card for the value, and quote digits only in a later turn that carries no
+  non-publication chain result.
+- Published values in a turn that ALSO produced a non-publication chain: keep
+  them out of the prose too. The honesty gate compares every reply number
+  against the withheld posterior and does not exempt an independently
+  published value, so quoting Planck18 H0 = 67.36 next to an exploratory
+  67.69 replaces the whole reply. Cite the published constraint by name and
+  compare in words ("the refit is consistent with the published DESI w0
+  within its uncertainty"); quote its digits only in a turn with no
+  non-publication chain result, or point the user at the literature tool
+  card that already shows them.
 
 ### Step 6 — Propose the next experiment
 
@@ -131,8 +172,9 @@ Good narration looks like:
 > "Planck18 fixes the sound-horizon scale, so combining it with DESI BAO
 > breaks the H0 · r_d degeneracy. Running the combined chain now..."
 
-> "ESS=87 is below the exploratory floor — the wCDM prior is wider than
-> the data can constrain. Retrying with n_steps × 5."
+> "ESS=87 is below the exploratory floor and the sampler is
+> bao_gaussian_importance, so a bigger sample budget can still help.
+> Retrying once with n_samples × 5."
 
 > "This result lists one requested dataset under `datasets_not_run`, so I am
 > not interpreting the joint posterior. I will report the executable subset
@@ -412,21 +454,34 @@ Three tiers, three different reply contracts:
   include the result's bibcode (if any) in the citation pool, and present
   the number in normal scientific prose ("we find H0 = X ± Y").
 
-- **`chain_tier="exploratory"`** (ESS in [100, 400) OR R-hat in (1.01, 1.10],
-  with claimable input): `__tool_status__="EXPLORATORY"` and
-  `__exploratory_warning__` are set. `publication_ready=False`. You MAY
-  discuss the posterior median / 1-sigma range to help the user iterate,
-  but you MUST:
-  1. Prefix the number with `exploratory` or wrap it as
-     `(exploratory chain; ESS=…, R-hat=…)`.
-  2. NEVER phrase the result as "we find H0 = X" or "our constraint is
-     X ± Y". Use language like "preliminary fit suggests H0 around X" or
-     "an exploratory chain at this prior gives H0 in the X-Y range".
+- **`chain_tier="exploratory"`** (any demotion short of a block, with
+  claimable input): `__tool_status__="EXPLORATORY"` and
+  `__exploratory_warning__` are set. `publication_ready=False`. The posterior
+  median, 1-sigma range and tension sigmas stay in the tool card. In prose
+  you MUST:
+  1. Say the result is exploratory and not publication-ready, and give the
+     diagnostic reason in words — READ IT OFF THIS RUN, never off a list of
+     usual suspects. The result builds its own reason list, and low ESS is
+     only one entry: an off-anchor frontier parameter (w / w0 / wa with no
+     reproduced published anchor), an ESS estimate that failed outright, and
+     every `publication_gate.reasons` code each demote a chain on their own,
+     and a chain with ESS well above 400 is routinely exploratory for one of
+     them. Naming a diagnostic the run did not report is a fabricated
+     explanation of real output. If you cannot tell which reason applies,
+     say the result is exploratory and that the tool card carries the
+     diagnostics, rather than guessing one.
+  2. Describe the posterior only qualitatively (which side of the H0 / S8
+     landscape it lands on; whether it is compatible with the published
+     anchor within its uncertainty). NEVER write the number in any form:
+     not "we find H0 = X", not "the fit suggests H0 near X", not "H0 in the
+     X–Y range", not a rounded value, not with an "exploratory" prefix. The final honesty gate withholds any number within 1% of a
+     non-publication posterior regardless of wording and replaces the whole
+     reply.
   3. NEVER add the result to a published-constraint table or a manuscript
      section.
-  4. Surface the literal `__exploratory_warning__` text if the user is
-     about to base downstream analysis (paper draft, comparison table,
-     export) on these numbers.
+  4. If the user is about to base downstream analysis (paper draft,
+     comparison table, export) on these numbers, say so in your own words.
+     Do not print the `__exploratory_warning__` field name or its text.
 
 - **`chain_tier="blocked"`** (ESS < 100 OR R-hat > 1.10 OR non-claimable
   input such as inline rows): `publication_ready=False` AND

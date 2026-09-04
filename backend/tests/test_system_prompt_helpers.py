@@ -229,3 +229,306 @@ def test_system_prompt_requires_lfr_orientation_before_coefficient_comparison():
     assert "Declare fit orientation and pivot" in SYSTEM_PROMPT
     assert "log_luminosity = alpha + beta * log10(FWHM_km_s / 100)" in SYSTEM_PROMPT
     assert "NOT directly comparable" in normalised
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-02 (review H6a): the prompt must not invite exploratory posterior
+# numbers into prose — the honesty gate withholds them regardless of wording.
+# ---------------------------------------------------------------------------
+
+
+def test_cosmology_prompt_no_longer_invites_exploratory_posterior_numbers() -> None:
+    from app.api.chat import SYSTEM_PROMPT
+
+    for stale in (
+        "You MAY discuss the posterior median",
+        "our refit recovers w0 = X ± Y",
+        "preliminary fit suggests H0 around X",
+        "Surface the literal `__exploratory_warning__`",
+    ):
+        assert stale not in SYSTEM_PROMPT, stale
+    assert "stay in the tool card" in SYSTEM_PROMPT
+    assert "NEVER write the number in any form" in SYSTEM_PROMPT
+
+
+def test_exploratory_labelled_h0_is_forbidden_by_prompt_and_gate() -> None:
+    """The prompt and the honesty gate now agree: an 'exploratory'-labelled
+    H0 quote is forbidden in prose. test_claim_validator pins that the claim
+    validator itself allows such a sentence; the honesty gate is the layer
+    that withholds it."""
+    from app.api.chat import SYSTEM_PROMPT
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    assert "regardless of wording" in SYSTEM_PROMPT
+    escaped = nonpublication_posterior_values(
+        "An exploratory chain at this prior gives H0 around 68 km/s/Mpc.",
+        [{
+            "tool": "run_cosmology_likelihood_chain",
+            "result": {
+                "publication_ready": False,
+                "chain_tier": "exploratory",
+                "parameters": {"H0": {"median": 67.69, "std": 0.52}},
+            },
+        }],
+    )
+    assert escaped == [68.0]
+
+
+def test_cosmology_prompt_does_not_invent_a_generic_low_ess_diagnosis() -> None:
+    """A chain can be demoted off-anchor, for compressed input, for prior
+    dominance or for too few independent chains with ESS well above 400.
+    Telling the model to say "ESS below threshold" would make it report a
+    diagnosis the run never produced (review 2026-09-03)."""
+    from app.api.chat import SYSTEM_PROMPT
+
+    assert "not publication-ready (ESS below threshold)" not in SYSTEM_PROMPT
+    assert "publication_gate.reasons" in SYSTEM_PROMPT
+    assert "Do not invent a generic low-ESS" in SYSTEM_PROMPT
+
+
+def test_cosmology_prompt_keeps_published_anchors_out_of_mixed_turns() -> None:
+    """The honesty gate compares every reply number against the withheld
+    posterior and does not exempt an independently published value, so a
+    published anchor within 1% of an exploratory median replaces the whole
+    reply."""
+    from app.api.chat import SYSTEM_PROMPT
+
+    assert "in a turn that ALSO produced a non-publication chain" in SYSTEM_PROMPT
+    assert "does not exempt an independently\n  published value" in SYSTEM_PROMPT
+
+
+def test_exploratory_diagnostic_rule_is_sourced_from_the_run() -> None:
+    """The prompt must not hand the model a fixed list of causes to pick from.
+
+    A chain is demoted to exploratory by any of several independent reasons
+    (``cosmology_likelihoods/sampling.py`` builds the list: a failed ESS
+    estimate, ESS below 400, the off-anchor frontier guard, and every
+    ``publication_gate.reasons`` code).  Naming low ESS, R-hat or compressed
+    input as the explanation is literally false for a chain with ESS above
+    400 that the off-anchor guard demoted (Codex review 2026-09-03).
+    """
+    from app.api.chat import SYSTEM_PROMPT as prompt
+    assert "READ IT OFF THIS RUN" in prompt
+    assert "off-anchor frontier parameter" in prompt
+    assert "publication_gate.reasons" in prompt
+    # The old closed list is gone.
+    assert (
+        "give the\n     diagnostic reason in words (ESS below the 400-per-parameter "
+        "threshold,\n     R-hat above 1.01, compressed input)"
+    ) not in prompt
+    # The field name itself still must not be printed to the user.
+    assert "__exploratory_warning__" in prompt
+
+
+def test_prompt_warns_that_a_promoted_rerun_still_cannot_quote_digits() -> None:
+    """The publication branch invited a number the gate then replaces.
+
+    Step 3's required retry leaves the first, non-publication posterior in
+    the same turn's results, and successive chains on the same data usually
+    land within 1% of each other, so `nonpublication_posterior_values` reads
+    a promoted median as the withheld one (measured: a promoted 67.35 against
+    a withheld 67.32 returns [67.35]).  The prompt now says so instead of
+    inviting the blocked sentence (Codex review 2026-09-03).
+    """
+    from app.api.chat import SYSTEM_PROMPT as prompt
+
+    assert "PROMOTED RERUN" in prompt
+    assert "reached publication tier" in prompt
+
+
+def test_promoted_rerun_digits_are_still_withheld_in_a_mixed_turn() -> None:
+    """The measurement behind the prompt rule above, pinned so it cannot drift."""
+    from app.services.agent_runtime.honesty import nonpublication_posterior_values
+
+    mixed = [
+        {"tool": "run_cosmology_likelihood_chain", "result": {
+            "success": True, "publication_ready": False, "chain_tier": "exploratory",
+            "parameters": {"H0": {"median": 67.32, "std": 0.60}}}},
+        {"tool": "run_cosmology_likelihood_chain", "result": {
+            "success": True, "publication_ready": True, "chain_tier": "publication",
+            "parameters": {"H0": {"median": 67.35, "std": 0.42}}}},
+    ]
+    assert nonpublication_posterior_values(
+        "The rerun is publication-ready: H0 = 67.35 +/- 0.42 km/s/Mpc.", mixed
+    ) == [67.35]
+
+
+def test_prompt_states_the_rhat_failure_direction_correctly() -> None:
+    """A chain fails on R-hat by being too HIGH, not too low.
+
+    The exploratory branch listed "R-hat below threshold" among the
+    diagnostics to report, while `_assess_publication_gate` emits
+    `rank_normalized_rhat_at_or_above_1.01`; a model following the prompt
+    would have inverted the run's own reason (Codex review 2026-09-03).
+    """
+    from app.api.chat import SYSTEM_PROMPT as prompt
+
+    assert "R-hat AT OR ABOVE its threshold" in prompt
+    assert "ESS or R-hat below threshold" not in prompt
+    # And the threshold's digits are NOT quoted back: a chain's own R-hat
+    # sits within 1% of 1.01, so repeating it can replace the whole reply
+    # (Codex review 2026-09-03).
+    assert "do NOT repeat the numeric threshold" in prompt
+    assert "rank_normalized_rhat_at_or_above_1.01" not in prompt
+
+
+def test_tool_payloads_do_not_invite_preliminary_numbers() -> None:
+    """A tool's own message to the model is part of the reply contract.
+
+    The external Cobaya and compressed CMB-rotation paths told the model to
+    "report it only as preliminary" and to describe beta_deg as "compressed
+    preliminary" -- inviting exactly the prose number the reply gate
+    withholds, and those paths are the ones that carry no
+    __exploratory_warning__ (Codex review 2026-09-03).
+    """
+    from pathlib import Path
+
+    runner = Path(__file__).resolve().parents[1] / "app/services/cobaya_runner.py"
+    rotation = Path(__file__).resolve().parents[1] / "app/services/cmb_rotation_likelihoods.py"
+    runner_text = runner.read_text(encoding="utf-8")
+    rotation_text = rotation.read_text(encoding="utf-8")
+
+    assert "report it only " not in runner_text
+    assert "stay in this tool card" in runner_text
+    assert "described as " not in rotation_text.split("__message_to_model__")[1][:400]
+    assert "stays in this tool card" in rotation_text
+
+
+def test_step3_exploratory_row_is_reason_aware() -> None:
+    """Step 3's auto-iterate table must not burn a retry on causes no longer
+    chain can fix.
+
+    The old single row, ``chain_tier="exploratory" (ESS in 100-400) -> retry
+    with n_steps x 3``, contradicted the chain_tier reference: a chain is
+    exploratory for ANY demotion short of a block.  ``verification.py``
+    (``_assess_publication_gate``) and ``sampling.py`` build the reason list
+    from an off-anchor frontier parameter, a compressed or approximate
+    likelihood, a failed prior-dominance screen, too few independent chains,
+    an ESS below the publication threshold, or an ESS estimate that failed
+    outright -- and only the ESS entries respond to a bigger sample budget
+    (Codex review 2026-09-03).
+    """
+    from pathlib import Path
+
+    from app.api.chat import SYSTEM_PROMPT as prompt
+    from app.services.cosmology_likelihoods import sampling
+    from app.services.cosmology_likelihoods.verification import _assess_publication_gate
+
+    step3 = prompt.split("### Step 3")[1].split("### Step 4")[0]
+    assert '`chain_tier="exploratory"` (ESS in 100–400)' not in step3
+    assert "to push into publication tier" not in step3
+
+    # Reason codes the shared gate emits for every in-process chain
+    # (n_independent_chains is hard-coded to 0 there, per_parameter is None).
+    gate = _assess_publication_gate(
+        cov_fidelity="full",
+        likelihood_is_compressed_or_approximate=True,
+        n_independent_chains=0,
+        per_parameter=None,
+        critical_parameters=["H0", "omegam"],
+    )
+    for code in (
+        "compressed_or_approximate_likelihood",
+        "fewer_than_four_independent_chains",
+    ):
+        assert code in gate["reasons"], code
+        assert code in step3, code
+
+    # Reason codes and warning phrases the in-process runner appends itself.
+    sampling_source = Path(sampling.__file__).read_text(encoding="utf-8")
+    for grounded in (
+        "off_anchor_frontier",
+        "prior_dominance_screen_failed",
+        "below the publication threshold",
+        "effective-sample-size estimate unavailable",
+    ):
+        assert grounded in sampling_source, grounded
+        assert grounded in step3, grounded
+
+    # The structural reasons are named as ones a retry cannot fix, and the
+    # sampler-budget knob named is the one the tool actually exposes.
+    assert "No retry helps" in step3
+    assert "n_samples" in step3
+
+
+def test_step3_ess_rows_quote_the_runtime_warnings_without_digits() -> None:
+    """The Step 3 ESS rows must quote the runtime warnings by shape, not by
+    number.
+
+    ``sampling.py`` ends both ESS warnings with the literal threshold
+    (``below publication threshold 400.`` / ``is below the publication
+    threshold of 400``).  A prompt row that copies those digits invites the
+    model to write "below 400" in prose, and the final honesty gate replaces
+    the whole reply whenever any reply number lands within 1 % of a withheld
+    non-publication value.  The reference block already tells the model not
+    to repeat the threshold, so the rows must not hand it the digits (PR #64
+    review thread e5Ju_, 2026-09-04).
+    """
+    import re
+
+    from app.api.chat import SYSTEM_PROMPT as prompt
+
+    step3 = prompt.split("### Step 3")[1].split("### Step 4")[0]
+    assert "publication threshold 400" not in step3
+    assert "publication threshold of 400" not in step3
+
+    rows = [line for line in step3.splitlines() if line.startswith("| ")]
+    ess_rows = [row for row in rows if "ESS" in row.split("|")[1]]
+    # exploratory ESS, ESS estimate unavailable, blocked ESS
+    assert len(ess_rows) >= 3, ess_rows
+    for row in ess_rows:
+        for quoted in re.findall(r"`([^`]*)`", row):
+            if "threshold" in quoted or "ESS" in quoted:
+                assert not re.search(r"\d", quoted), (quoted, row)
+
+
+def test_step3_blocked_row_scopes_the_sample_budget_retry_to_the_importance_sampler() -> None:
+    """The blocked-ESS row may prescribe the ``n_samples`` retry only for
+    ``bao_gaussian_importance``.
+
+    ``_run_emcee_chain`` runs a fixed ``n_burn + 1500`` steps for every
+    ``n_samples`` the tool accepts (the clamp is 256..20000, and
+    20000 // 32 walkers + 100 = 725 < 1500), so ``n_samples`` only sets the
+    size of the displayed sub-sample and cannot raise the ESS of a
+    ``compressed_emcee`` / ``sn_emcee`` chain.  The only prior knob,
+    ``priors``, narrows within the default bounds and is screened by
+    ``prior_dominance_screen`` -- it is not a convergence knob, so the row
+    must not prescribe a tighter prior either (PR #64 review thread e5JvD,
+    2026-09-04).
+    """
+    from pathlib import Path
+
+    from app.api.chat import SYSTEM_PROMPT as prompt
+    from app.services.cosmology_likelihoods import runners, sampling
+
+    sampling_source = Path(sampling.__file__).read_text(encoding="utf-8")
+    assert (
+        "n_steps = max(n_burn + 1500, n_burn + max(target_sample_count // n_walkers + 100, 1500))"
+        in sampling_source
+    )
+    runners_source = Path(runners.__file__).read_text(encoding="utf-8")
+    assert "sample_count = max(256, min(int(n_samples or 4000), 20000))" in runners_source
+
+    step3 = prompt.split("### Step 3")[1].split("### Step 4")[0]
+    rows = [line for line in step3.splitlines() if line.startswith("| ")]
+    blocked_rows = [
+        row for row in rows
+        if row.split("|")[1].strip().startswith('`chain_tier="blocked"` + ESS')
+    ]
+    assert len(blocked_rows) == 1, blocked_rows
+    action = blocked_rows[0].split("|")[2]
+    assert "n_samples" in action
+    assert "bao_gaussian_importance" in action
+    assert "tighter prior" not in action
+    # The emcee clause names both fixed-length samplers and prescribes no
+    # sample-budget retry after them.
+    emcee_clause = action.split("compressed_emcee", 1)[1]
+    assert "sn_emcee" in emcee_clause
+    assert "n_samples" not in emcee_clause
+    assert "no retry" in emcee_clause.lower()
+    assert "capability gap" in emcee_clause
+
+    # The narration example follows the same rule.
+    narration = prompt.split("Good narration looks like:")[1].split("This narration is what makes")[0]
+    assert "n_samples × 5" in narration
+    assert "bao_gaussian_importance" in narration

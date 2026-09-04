@@ -352,8 +352,11 @@ def run_cmb_rotation_likelihood(
         "__message_to_model__": (
             "This is an exploratory compressed CMB-rotation result, not a "
             "publication-ready external Planck/ACT/BICEP likelihood. The instrument "
-            "angle prior was marginalized, but beta_deg must be described as "
-            "compressed preliminary and only for datasets_used."
+            "angle prior was marginalized. beta_deg stays in this tool card: "
+            "describe it qualitatively, for datasets_used only, and do not "
+            "write the number in the reply with or without a 'preliminary' "
+            "label -- the reply gate withholds any number within 1% of a "
+            "non-publication posterior and replaces the whole reply."
         ),
         "provenance": {
             "cmb_rotation_likelihood": {
