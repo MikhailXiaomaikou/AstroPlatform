@@ -28,7 +28,13 @@ Never use bare `python3` (system python lacks the science deps and dies in colle
 |---|---|
 | `backend/app/services/cosmology.py` | `tests/test_cosmology_preset_fail_closed.py tests/test_cosmology_anchor_gate.py tests/test_astro_fundamentals.py` |
 | `backend/app/services/cosmology_mcmc.py` | `tests/test_cosmology_mcmc.py tests/test_cosmology_importance_sampler.py` |
-| `backend/app/services/cosmology_likelihoods/*` (package: `registry.py`, `bao.py`/`sn.py`/`cc.py`/`rsd.py`/`cmb.py`, `verification.py`, `runners.py`, `sampling.py`) | `tests/test_cosmology_*.py tests/test_cobaya_adapter_registry.py` — narrow with `-k <probe family>` while iterating |
+| `backend/app/services/cosmology_likelihoods/*` (package: `registry.py`, `bao.py`/`sn.py`/`cc.py`/`rsd.py`/`cmb.py`, `verification.py`, `runners.py`, `sampling.py`) | `tests/test_cosmology_*.py tests/test_cobaya_adapter_registry.py` — narrow with `-k <probe family>` while iterating — plus the probe-specific tests in the per-module rows below (the `test_cosmology_*` glob does not match them) |
+| `backend/app/services/cosmology_likelihoods/bao.py` | `tests/test_eboss_dr16_grid_bao.py tests/test_sdss_dr12_consensus.py tests/test_sdss_mgs_prob_likelihood.py tests/test_transient_loader_failure_not_cached.py` |
+| `backend/app/services/cosmology_likelihoods/sn.py` | `tests/test_union3_full_vector.py tests/test_pantheon18_full_vector.py tests/test_pantheon_plus_provenance_binding.py` |
+| `backend/app/services/cosmology_likelihoods/cc.py` | `tests/test_cc_provenance_binding.py tests/test_transient_loader_failure_not_cached.py` |
+| `backend/app/services/cosmology_likelihoods/rsd.py` | `tests/test_rsd_provenance_binding.py tests/test_transient_loader_failure_not_cached.py` |
+| `backend/app/services/cosmology_likelihoods/cmb.py` | `tests/test_planck_distance_prior.py tests/test_act_dr6_lenslike.py` |
+| `backend/app/services/cosmology_likelihoods/registry.py`, `sampling.py`, `runners.py` | no probe test is specific to these, but every probe test above except `test_transient_loader_failure_not_cached.py` enters through `get_cosmology_dataset` / `run_likelihood_chain`, so run them all; the cobaya-path Planck entries `tests/test_planck_pliklite.py tests/test_planck_lowl.py tests/test_planck_lensing.py` additionally pin `_cobaya_parameter_order` / `_sanitize_runner_priors` (`sampling.py`) |
 | `backend/app/services/claim_validator.py` | `tests/test_claim_validator.py tests/test_abstention_parser.py tests/test_red_team_corpus.py` |
 | `backend/app/services/synthetic_code_detector.py` | `tests/test_synthetic_code_detector.py tests/test_red_team_corpus.py` |
 | `backend/app/services/result_provenance.py` | `tests/test_result_provenance.py` |

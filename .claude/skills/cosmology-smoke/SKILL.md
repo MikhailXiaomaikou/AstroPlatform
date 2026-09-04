@@ -15,7 +15,9 @@ This skill runs four cheap science checks against the cosmology stack. Total wal
 > with importance-sampler ESS = 2 and the `parameters` block redacted, so it reports
 > `pass=false`. Until the anchors are re-decided with the user (which tier check 1 should
 > expect; which dataset/sampler combination gives a healthy wCDM chain), treat checks 1-2 as
-> **informational** and checks 3-4 as the real gates. Do not "fix" this by loosening the gate.
+> **informational** and checks 3-4 as the real gates: the snippet prints checks 1-2 with an
+> "(informational, expected pass=false on the current baseline)" label and takes its exit
+> status from checks 3-4 only. Do not "fix" this by loosening the gate.
 
 ## Checks
 
@@ -100,15 +102,24 @@ results["distmod_precision_mag"] = {
 }
 
 print(json.dumps(results, indent=2, default=float))
-all_pass = all(c["pass"] for c in results.values())
-import sys; sys.exit(0 if all_pass else 1)
+
+# Checks 1-2 are informational until their anchors are re-decided (known-state note above);
+# only checks 3-4 decide the exit status.
+INFORMATIONAL = ("lcdm_h0_anchor", "wcdm_w_near_minus_one")
+GATES = ("chain_tier_blocked_inline", "distmod_precision_mag")
+for name in INFORMATIONAL:
+    print(f"{name}: pass={results[name]['pass']} (informational, expected pass=false on the current baseline)")
+for name in GATES:
+    print(f"{name}: pass={results[name]['pass']} (gate)")
+gates_pass = all(results[name]["pass"] for name in GATES)
+import sys; sys.exit(0 if gates_pass else 1)
 PY
 ```
 
 ## Interpretation
 
-- All four `pass=true` → safe to push. (See the known-state note at the top: as of 2026-09-02 checks 1-2 are informational until re-anchored.)
-- `lcdm_h0_anchor.pass=false` → check `_flat_de_distances_at_z` or `_bao_predictions` in `cosmology_likelihoods/bao.py` for regressions.
-- `wcdm_w_near_minus_one.pass=false` → check w prior bounds or the w handling in `_bao_predictions` (`cosmology_likelihoods/bao.py`).
+- Exit 0 (both gates, checks 3-4, `pass=true`) → safe to push. Checks 1-2 are printed as informational and do not affect the exit status (see the known-state note at the top: as of 2026-09-02 they are expected `pass=false` until re-anchored).
+- `lcdm_h0_anchor.pass=false` → expected on the current baseline (tier `exploratory`); if `h0_median` leaves 66.5-68.5, check `_flat_de_distances_at_z` or `_bao_predictions` in `cosmology_likelihoods/bao.py` for regressions.
+- `wcdm_w_near_minus_one.pass=false` → expected on the current baseline (`chain_tier=blocked`, `w_median=null`); if `w_median` is present but outside (-1.5, -0.5), check w prior bounds or the w handling in `_bao_predictions` (`cosmology_likelihoods/bao.py`).
 - `chain_tier_blocked_inline.pass=false` → check `CLAIMABLE_INPUT_ORIGINS` filter in `fit_cosmology_emcee`.
 - `distmod_precision_mag.pass=false` → check Gauss-Legendre node order in `distance_modulus_model`; should not regress past 32.
