@@ -2388,3 +2388,23 @@ def test_the_draft_channel_mirrors_the_final_validator() -> None:
     for text in ("Draft: H0 = 67.36 km/s/Mpc.", "Draft: H0 = 67.36 ± 0.42 km/s/Mpc."):
         kept, count = redact_gated_values(text, [], published)
         assert count == 0 and kept == text, text
+
+
+def test_the_draft_reads_through_markup_marks_like_the_final_gate() -> None:
+    """A mark around the number must not hide it from the draft redactor.
+
+    The final gate strips emphasis and code marks before its guards run
+    (round 17, R3); the draft decides on the same stripped text and blanks
+    the span in the original, so the marks survive around ``[withheld]``.
+    """
+    from app.services.agent_runtime.honesty import redact_gated_values
+
+    chain = _exploratory_chain(68.0)
+    messages = [{"role": "user", "content": "Summarise the run."}]
+    text, count = redact_gated_values("H0 is **68%** credible interval withheld.", messages, chain)
+    assert count == 1 and "68" not in text, text
+    assert text == "H0 is **[withheld]%** credible interval withheld.", text
+    text, count = redact_gated_values("The **68%** credible interval for H0 is withheld.", messages, chain)
+    assert count == 0 and "68%" in text, text
+    text, count = redact_gated_values("Draft: `H0 = 68.0` km/s/Mpc, exploratory.", messages, chain)
+    assert count == 1 and text == "Draft: `H0 = [withheld]` km/s/Mpc, exploratory.", text

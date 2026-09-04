@@ -367,6 +367,35 @@ def _strip_markup_marks(text: str) -> str:
         text = stripped
 
 
+def _strip_markup_marks_with_map(text: str) -> tuple[str, list[int]]:
+    """``_strip_markup_marks`` plus, for every kept character, its source offset.
+
+    The redactor decides on the stripped text (so ``**68%**`` reads like
+    ``68%``, as it does in the final gate) but must blank the span in the
+    ORIGINAL draft, so each stripped index maps back to where it came from.
+    Only characters are removed, never inserted, so the map is a subsequence.
+    """
+    positions = list(range(len(text)))
+    while True:
+        out: list[str] = []
+        keep: list[int] = []
+        last = 0
+        matched = False
+        for match in _MARKUP_MARK_RE.finditer(text):
+            matched = True
+            out.append(text[last:match.start()])
+            keep.extend(positions[last:match.start()])
+            out.append(match.group(2))
+            keep.extend(positions[match.start(2):match.end(2)])
+            last = match.end()
+        if not matched:
+            return text, positions
+        out.append(text[last:])
+        keep.extend(positions[last:])
+        text = "".join(out)
+        positions = keep
+
+
 class _Token(NamedTuple):
     value: float
     start: int
@@ -1027,12 +1056,15 @@ def redact_gated_values(
 
     uncited_spans = _uncited_value_spans(source, validate_claims(source, tool_results).uncited)
     flagged: set[tuple[int, int]] = set(uncited_spans)
-    for token in _reply_number_spans(source):
+    # The two numeric gates decide on the mark-stripped text, exactly as the
+    # final gate does (round 17, R3), and the span is blanked in the source.
+    stripped, positions = _strip_markup_marks_with_map(source)
+    for token in _reply_number_spans(stripped):
         if (
             _echo_token_flagged(token.value, unsupported)
-            or _withheld_token_flagged(source, token, withheld_all, withheld_h0)
+            or _withheld_token_flagged(stripped, token, withheld_all, withheld_h0)
         ):
-            flagged.add((token.start, token.end))
+            flagged.add((positions[token.start], positions[token.end - 1] + 1))
     spans = sorted(flagged)
     if not spans:
         return source, 0
