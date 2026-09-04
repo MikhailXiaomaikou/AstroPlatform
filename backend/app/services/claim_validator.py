@@ -3739,13 +3739,18 @@ _CONFIRMED_ASSERTION_RE = re.compile(
 # "假设：已被证实，X").  A confirmation of some other noun ("The calibration is
 # confirmed, while our hypothesis is that X") confirms a premise and must
 # leave the hedge standing (Codex review 2026-09-03).
+# The Chinese label's confirmation is read through the same separator the
+# label itself accepts: once _HYPOTHESIS_LABEL_RE learned "假设——", reading
+# only "假设：" here left "假设——已被证实，X" exempt while "假设：已被证实，X"
+# stayed caught (verifier 2026-09-04, thread fJuvl).
 _CONFIRMED_HYPOTHESIS_RE = re.compile(
     r"\b(?:hypothes[ei]s|forecasts?|predictions?|claims?|conjectures?)\b[^\n;]{0,24}?"
     r"\b(?:is|are|was|were|has|have|had|now)"
     r"(?:\s+(?:now|since|already|finally|independently|subsequently))?"
     r"(?:\s+been)?\s+(?:now\s+)?confirmed\b"
     r"|\bconfirms?\s+(?:the|our|this)\s+(?:hypothes[ei]s|forecast|prediction|claim)\b"
-    r"|^[^\n]{0,24}?(?:假设|预测|猜想)[:：][^\n]{0,12}?(?:得到|已被|已经?)?证实",
+    r"|^[^\n]{0,24}?(?:假设|预测|猜想)" + _ZH_HYPOTHESIS_LABEL_SEPARATOR
+    + r"[^\n]{0,12}?(?:得到|已被|已经?)?证实",
     re.IGNORECASE,
 )
 _ZH_HUBBLE_TENSION_RESOLUTION_RE = re.compile(

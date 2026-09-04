@@ -2359,6 +2359,13 @@ def test_hypothesis_label_accepts_a_dash_separator() -> None:
         "Our hypothesis - that the void resolves the Hubble tension - is now confirmed.",
         "Hypothesis-driven analysis resolves the Hubble tension.",
         "我们的假设——局部空洞解决哈勃张力——已被证实。",
+        # The Chinese label's confirmation reader learns the dash with the
+        # label: "假设：已被证实，X" is caught, so its dash twin is caught too
+        # (verifier 2026-09-04, thread fJuvl).
+        "假设——已被证实，哈勃张力被局部空洞解决。",
+        "假设—已被证实，哈勃张力被局部空洞解决。",
+        "- **假设——** 已被证实，哈勃张力被局部空洞解决。",
+        "假设——已证实：哈勃张力被局部空洞解决。",
     ):
         assert _strong_conclusion_from_sentence(sentence) is not None, sentence
 
