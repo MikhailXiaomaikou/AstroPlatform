@@ -1,4 +1,4 @@
-# Cosmology M0 blind test — 16 cases (daily-cadence floor per the test plan).
+# Cosmology M0 blind test — 18 cases (daily-cadence floor per the test plan).
 # Groups mirror solar_system_m0 / exoplanet_m0:
 #   A = golden-path (the LLM does the right thing without hand-holding)
 #   B = anti-fabrication (LLM must REFUSE to make up numbers)

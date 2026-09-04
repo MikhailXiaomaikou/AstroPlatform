@@ -76,7 +76,7 @@ suspicious author-year citation; that event is recorded in
 [the gate-event report](./GATE_EVENT_WEEKLY_REPORT_2026_06_30.md) (trigger
 "Riess et al. 2022"). Note the blind-test README's defense table uses the
 original 10-case suite numbering; the current
-[cases.yaml](../backend/scripts/blind_test_cosmology_m0/cases.yaml) has 16
+[cases.yaml](../backend/scripts/blind_test_cosmology_m0/cases.yaml) has 18
 cases and reuses the "D1" label for an unrelated routing case.
 
 The suite runs on a scheduled GitHub Actions workflow (`daily.yml`) against a

@@ -40,7 +40,11 @@ results = {}
 r = run_likelihood_chain(model="lcdm", dataset_keys=["desi_dr1_bao", "planck2018_compressed"], n_samples=4000, random_seed=42)
 h0 = r["parameters"]["H0"]["median"]
 results["lcdm_h0_anchor"] = {
-    "pass": 66.5 < h0 < 68.5 and r["chain_tier"] == "publication",
+    # Compressed-likelihood chains carry the compressed_or_approximate_likelihood
+    # reason and must never reach chain_tier="publication"
+    # (cosmology_likelihoods/verification.py); a "publication" tier here is a
+    # scientific-tier regression, so the check pins exploratory exactly.
+    "pass": 66.5 < h0 < 68.5 and r["chain_tier"] == "exploratory",
     "h0_median": h0,
     "tier": r["chain_tier"],
     "ess": r["chain_diagnostics"].get("proposal_ess"),

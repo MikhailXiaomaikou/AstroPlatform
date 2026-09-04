@@ -1032,3 +1032,15 @@ def test_f2_exact_publication_true_positive_through_verifier_boundary(
         )["valid"]
         is False
     )
+
+
+# ---------- cases.yaml header ----------
+
+
+def test_cases_yaml_header_count_matches_case_ids() -> None:
+    import re
+
+    header = (_RUNNER_DIR / "cases.yaml").read_text(encoding="utf-8").splitlines()[0]
+    declared = re.search(r"(\d+) cases", header)
+    assert declared is not None, header
+    assert int(declared.group(1)) == len(_load_cases())

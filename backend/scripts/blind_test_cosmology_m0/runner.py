@@ -69,6 +69,14 @@ def _check_env(provider: str) -> str | None:
                 "    export OPENAI_CLI_COMMAND=codex"
             )
         return None
+    if provider == "claude-cli":
+        if os.environ.get("CLAUDE_CLI_ENABLED", "").strip().lower() not in {"1", "true", "yes", "on"}:
+            raise SystemExit(
+                "claude-cli provider 需要 CLAUDE_CLI_ENABLED=1 (在干净终端里跑, 不要在 Claude Code 会话内)。\n"
+                "    export CLAUDE_CLI_ENABLED=1\n"
+                "    export CLAUDE_CLI_COMMAND=claude"
+            )
+        return None
     if provider == "deepseek":
         key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
         if not key:
@@ -132,6 +140,8 @@ async def run_one_case(case: dict, api_key: str | None, out_dir: Path, *, provid
     tools = _filter_tools_by_research_focus(TOOLS)
     if provider == "local":
         profile = resolve_model_profile("local", "local:openai-cli")
+    elif provider == "claude-cli":
+        profile = resolve_model_profile("local", "local:claude-cli")
     elif provider == "deepseek":
         # BLIND_DEEPSEEK_PROFILE lets a manual daily.yml dispatch pick the
         # non-thinking deepseek:v4-flash profile as a fallback; the cron
@@ -164,7 +174,7 @@ async def run_one_case(case: dict, api_key: str | None, out_dir: Path, *, provid
                 provider_api_keys={provider: api_key} if api_key else {},
                 agent_name="blind_test",
                 python_session_id=python_session_id,
-                preferred_backend=provider,
+                preferred_backend="local" if provider == "claude-cli" else provider,
                 model_profile=profile,
                 user_id=None,
                 chat_session_id=None,
@@ -815,9 +825,9 @@ async def main() -> None:
     parser.add_argument("--group", help="只跑指定 group (A/B/C/D/E)")
     parser.add_argument(
         "--provider",
-        choices=["anthropic", "local", "deepseek"],
+        choices=["anthropic", "local", "claude-cli", "deepseek"],
         default="anthropic",
-        help="LLM backend: anthropic needs ANTHROPIC_API_KEY; deepseek needs DEEPSEEK_API_KEY; local uses the OpenAI-compatible local server.",
+        help="LLM backend: anthropic needs ANTHROPIC_API_KEY; deepseek needs DEEPSEEK_API_KEY; local uses the OpenAI-compatible local server (codex CLI); claude-cli uses the local claude CLI bridge (CLAUDE_CLI_ENABLED=1, clean terminal only).",
     )
     args = parser.parse_args()
 
