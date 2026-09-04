@@ -37,6 +37,7 @@
 - [ ] **claim_validator warnings 列表数字泄漏统一化**(optional, small, 2026-06-12 审查发现):_FREETEXT_KEYS 跳过只对字符串值生效,list 值的 warnings 里的数字(如 "w=-1"、年份)进 claim universe——既有弱点非本轮引入,subtree-skip "warnings" 键即可关死;改前先查红队语料防误杀。
 - [ ] **cobaya 外部 envelope 补 fit_statistics**(optional, medium, 2026-06-12 审查发现):_runner_success 已补 chain_tier(本轮),但无 fit_statistics(chi2/aic/bic 需从 cobaya 样本表新增管道)——外部路径的链进不了 model_comparisons 配对(诚实缺席非错误);补上后 ok_*/_mnu 的模型对比才能经外部路径产出。
 - [ ] **loader 失败记录缓存毒化统一化**(optional, medium):bao/fsbao/cc/cc_full_cov/rsd 5 个 loader 仍缓存 unverified 回退记录至重启(union3/MGS 已免疫);方向 fail-safe(只挡发表不出错数),按 union3 模式统一。
+- [ ] **定语式 confirmed 修饰 hedge 名词的洗白句**(hedge 语法 backlog 候选, 2026-09-04 实测, Codex thread fJuvd):"The confirmed forecast that … remains robust."、"Our independently confirmed hypothesis is that …" 这类 confirmed 作定语修饰 hypothesis/forecast 的句子,origin/main 与本分支(PR #65)一样放行(2026-09-04 用 _strong_conclusion_from_sentence 实测两边均 exempt)——非放宽,本轮不修;修法方向 = 把落在 hedge 名词上的定语式确认读成对从句本身的确认(与 "is confirmed" 谓语式同权),改前先跑红队语料防误杀。
 
 ## P4 — 文档/记录修缮
 (暂空 — 2026-06-13 全部完成,见已完成段)

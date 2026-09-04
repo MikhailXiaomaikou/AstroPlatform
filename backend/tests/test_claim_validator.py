@@ -2321,6 +2321,48 @@ def test_chinese_hypothesis_label_survives_markdown_markers() -> None:
     ) is not None
 
 
+def test_hypothesis_label_accepts_a_dash_separator() -> None:
+    """A Markdown label can be closed by a dash instead of a colon.
+
+    ``**Hypothesis** -- a local void ...`` is the same anchored label as
+    ``**Hypothesis:** a local void ...``; requiring the colon turned it into a
+    blocked conclusion (Codex review 2026-09-04, thread fJuvl).  origin/main
+    exempts every one of these through the bare noun this branch narrowed.
+    Only the anchored label form learns the dash: a dash in the middle of a
+    sentence is ordinary punctuation, so a confirmed hypothesis set off by
+    dashes stays a strong conclusion.
+    """
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    for sentence in (
+        "**Hypothesis** — a local void resolves the Hubble tension.",
+        "- **Hypothesis** — a local void resolves the Hubble tension.",
+        "**Hypothesis** - a local void resolves the Hubble tension.",
+        "**Hypothesis** – a local void resolves the Hubble tension.",
+        "**Hypothesis —** a local void resolves the Hubble tension.",
+        "Hypothesis — a local void resolves the Hubble tension.",
+        "1. Hypothesis—a local void resolves the Hubble tension.",
+        "假设——局部空洞解决哈勃张力。",
+        "- **假设**——局部空洞解决哈勃张力。",
+        "- **假设——** 局部空洞解决哈勃张力。",
+        "假设—局部空洞解决哈勃张力。",
+    ):
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+    # A dash that is not the label's separator does not label the sentence.
+    for sentence in (
+        "The hypothesis — a local void resolves the Hubble tension — is confirmed.",
+        # The reviewer's "Our hypothesis - that the void resolves it - is now
+        # confirmed." names no recognised conclusion (no "Hubble tension"),
+        # so it is exempt on origin/main and here alike; this is the same
+        # sentence with the conclusion the gate actually reads.
+        "Our hypothesis - that the void resolves the Hubble tension - is now confirmed.",
+        "Hypothesis-driven analysis resolves the Hubble tension.",
+        "我们的假设——局部空洞解决哈勃张力——已被证实。",
+    ):
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+
 def test_a_denial_of_another_topic_does_not_wash_a_confirmed_conclusion() -> None:
     """An explicit denial only restores the exemption it actually governs.
 

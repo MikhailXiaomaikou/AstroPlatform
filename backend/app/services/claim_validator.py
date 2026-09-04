@@ -3676,17 +3676,26 @@ _ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE = re.compile(
 # All three Markdown shapes a model actually writes are accepted, including a
 # bold span that swallows the colon inside a list item
 # ("- **Hypothesis:** ...", review 2026-09-03).
+# The label is closed by a colon or by a dash -- ASCII (also "--"), en dash or
+# em dash (also the Chinese "——"), with optional spaces around it.  Requiring
+# the colon turned "**Hypothesis** — a local void ..." into a blocked
+# conclusion (Codex review 2026-09-04, thread fJuvl).  An ASCII hyphen joined
+# to the next word is a compound ("Hypothesis-driven analysis ..."), not a
+# label.  Only this anchored label learns the dash: a dash in the middle of a
+# sentence ("The hypothesis — X — is confirmed") is ordinary punctuation.
+_HYPOTHESIS_LABEL_SEPARATOR = r"(?::|-+(?![A-Za-z0-9])|[\u2013\u2014]+)"
+_ZH_HYPOTHESIS_LABEL_SEPARATOR = r"(?:[:：]|\u2014+)"
 _HYPOTHESIS_LABEL_RE = re.compile(
     r"^[ \t]*(?:(?:[-*>#]+|\d+[.)])[ \t]*)?"
-    r"(?:\*\*[ \t]*hypothesis[ \t]*:[ \t]*\*\*"
-    r"|\*\*[ \t]*hypothesis[ \t]*\*\*[ \t]*:"
-    r"|hypothesis[ \t]*:"
+    r"(?:\*\*[ \t]*hypothesis[ \t]*" + _HYPOTHESIS_LABEL_SEPARATOR + r"[ \t]*\*\*"
+    r"|\*\*[ \t]*hypothesis[ \t]*\*\*[ \t]*" + _HYPOTHESIS_LABEL_SEPARATOR
+    + r"|hypothesis[ \t]*" + _HYPOTHESIS_LABEL_SEPARATOR
     # The Chinese label is written in the same Markdown forms; recognising
     # only the bare form blocked "- **假设：** ..." as a strong conclusion
     # (review 2026-09-03).
-    r"|\*\*[ \t]*假设[ \t]*[:：][ \t]*\*\*"
-    r"|\*\*[ \t]*假设[ \t]*\*\*[ \t]*[:：]"
-    r"|假设[ \t]*[:：])",
+    + r"|\*\*[ \t]*假设[ \t]*" + _ZH_HYPOTHESIS_LABEL_SEPARATOR + r"[ \t]*\*\*"
+    r"|\*\*[ \t]*假设[ \t]*\*\*[ \t]*" + _ZH_HYPOTHESIS_LABEL_SEPARATOR
+    + r"|假设[ \t]*" + _ZH_HYPOTHESIS_LABEL_SEPARATOR + r")",
     re.I,
 )
 # A confirmation only cancels a hedge when the sentence is not itself denying
