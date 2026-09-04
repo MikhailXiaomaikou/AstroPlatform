@@ -423,3 +423,58 @@ def test_merged_reply_approval_marker_emits_a_gate_event(monkeypatch, tmp_path):
     ] == [("approval_marker", "annotated_limited")]
     # ...and the counter moved by one.
     assert _counter() == before + 1.0
+
+
+def test_ordinary_counts_are_not_redacted_as_claim_values() -> None:
+    """Review thread e0fKr (2026-09-04): ``details.value_count`` is a count.
+
+    Every numeric leaf in the event was round-tripped through the redactor
+    as a bare string, so a count that happened to equal a withheld statistic
+    -- ``value_count = 1`` while the exploratory run's std was 1.0 -- shipped
+    as ``"[withheld]"`` and corrupted the audit event (so did a violation's
+    ``line_number``).  A numeric leaf is redacted only under a claim-value
+    key; string leaves keep the current behaviour everywhere.
+    """
+    from app.observability.gate_events import redact_event_for_wire
+    from app.services.agent_runtime.honesty import redact_gated_values
+
+    exploratory = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {
+            "success": True,
+            "publication_ready": False,
+            "chain_tier": "exploratory",
+            "parameters": {"H0": {"median": 70.12, "std": 1.0}},
+        },
+    }]
+
+    def _redact(text: str):
+        return redact_gated_values(text, [], exploratory)
+
+    event = {
+        "details": {
+            "value_count": 1,
+            "claims": [{"label": "H0", "value": 70.12, "raw": "H0 = 70.12 +/- 1.0"}],
+            "violations": [
+                {"kind": "numeric", "match_text": "H0 = 70.12", "line_number": 1},
+            ],
+            "withheld": {"values": [1.0]},
+        },
+        "draft_preview": "H0 = 70.12 +/- 1.0 km/s/Mpc from the exploratory run",
+        "final_preview": "",
+    }
+    wire = redact_event_for_wire(event, _redact)
+    # Counts and positions survive as the numbers they are.
+    assert wire["details"]["value_count"] == 1
+    assert wire["details"]["violations"][0]["line_number"] == 1
+    # A claim-value numeric leaf is still redacted, in a record or a list.
+    assert wire["details"]["claims"][0]["value"] == "[withheld]"
+    assert wire["details"]["withheld"]["values"] == ["[withheld]"]
+    # Prose carrying the withheld values is still redacted.
+    for prose in (
+        wire["details"]["claims"][0]["raw"],
+        wire["details"]["violations"][0]["match_text"],
+        wire["draft_preview"],
+    ):
+        assert "70.12" not in prose and "1.0" not in prose, prose
+    assert "70.12" not in json.dumps(wire, default=str)

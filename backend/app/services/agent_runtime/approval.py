@@ -90,7 +90,7 @@ _APPROVAL_LINE_RE = re.compile(
 _MARKER = "NOT APPROVED - "
 
 
-_FENCE_RE = re.compile(r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})")
+_FENCE_RE = re.compile(r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})(?P<rest>.*)")
 # Four spaces, or a tab within the first three columns, open a Markdown
 # indented code block.
 _INDENTED_CODE_RE = re.compile(r"^(?: {4}|[ ]{0,3}\t)")
@@ -108,6 +108,13 @@ def _fenced_lines(lines: list[str]) -> list[bool]:
     inner backtick fence of a ``~~~~markdown`` example close the outer tilde
     fence, and the quoted verdict was stamped (Codex review 2026-09-03,
     PRRT_kwDORoeoE86etNOq).
+
+    A closing fence may be followed only by spaces or tabs to the end of the
+    line (CommonMark); a fence line that carries an info string while a
+    fence is open is content.  Recognising the closer by its prefix alone
+    let a ``python``-tagged fence line inside an open ``text``-tagged
+    example close it, and the quoted verdict below was stamped (review
+    thread e0fKl, 2026-09-04).
     """
     opener = ""
     flags: list[bool] = []
@@ -119,7 +126,11 @@ def _fenced_lines(lines: list[str]) -> list[bool]:
         fence = match.group("fence")
         if not opener:
             opener = fence
-        elif fence[0] == opener[0] and len(fence) >= len(opener):
+        elif (
+            fence[0] == opener[0]
+            and len(fence) >= len(opener)
+            and not match.group("rest").strip()
+        ):
             opener = ""
         flags.append(True)
     return flags

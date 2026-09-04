@@ -787,3 +787,30 @@ def test_a_table_cell_delimiter_is_a_structural_prefix() -> None:
         # The marker lands inside the cell, after the delimiter.
         assert marked.startswith("|"), text
         assert marked.index(_MARKER) >= 1, text
+
+
+def test_a_fence_line_with_an_info_string_does_not_close_an_open_fence() -> None:
+    """Review thread e0fKl (2026-09-04): a closing fence carries no info string.
+
+    ``_fenced_lines`` recognised a closer by its prefix alone, so inside an
+    open ```` ```text ```` example the line ```` ```python ```` closed it and
+    the quoted verdict below was stamped (count 1, want 0), which marked an
+    otherwise clean reply limited.  CommonMark: a closing fence may be
+    followed only by spaces or tabs to the end of the line, so a fence line
+    with an info string while a fence is open is content.
+    """
+    for text in (
+        "Never write:\n```text\n```python\nAPPROVED by reviewer: H0 = 67.36\n"
+        "```\n```\nUse the card.",
+        "~~~text\n~~~python\nAPPROVED by reviewer: H0 = 67.36\n~~~\n~~~",
+    ):
+        untouched, count = mark_unapproved_claims(text, _published_h0())
+        assert count == 0, text
+        assert untouched == text, text
+    # Trailing spaces or tabs after the closer still close it, and a verdict
+    # after the fence really closes is still stamped.
+    marked, count = mark_unapproved_claims(
+        "```text\n```python\nquoted\n```  \t\nAPPROVED by reviewer: H0 = 67.36",
+        _published_h0(),
+    )
+    assert count == 1 and "NOT APPROVED - " in marked

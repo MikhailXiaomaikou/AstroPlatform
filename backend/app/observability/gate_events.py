@@ -147,6 +147,11 @@ _WIRE_REDACTED_NUMBER = "[withheld]"
 # it unchanged while the sibling `raw` was blanked (Codex review
 # 2026-09-03).  The number is decided WITH its context instead.
 _CLAIM_CONTEXT_KEYS = ("raw", "text", "snippet", "sentence", "claim", "label")
+# Keys under which a numeric leaf IS a claim value (claims_to_dicts writes
+# ``value``).  Only these leaves go through the redactor: a count, a line
+# number or an iteration budget elsewhere in the event is not a claim, and
+# ``details.value_count = 1`` shipped as "[withheld]" whenever a withheld
+# statistic happened to be 1.0 (review thread e0fKr, 2026-09-04).
 _CLAIM_VALUE_KEYS = ("value", "values", "number", "numbers")
 
 
@@ -154,7 +159,10 @@ def _redact_tree(
     node: Any,
     redact: Callable[[str], tuple[str, int]],
     context: str = "",
+    path: tuple[str, ...] = (),
 ) -> Any:
+    """``path`` is the chain of dictionary keys above ``node``; a list does
+    not add to it, so a leaf in ``values: [...]`` still sits under ``values``."""
     if isinstance(node, str):
         return redact(node)[0]
     if isinstance(node, dict):
@@ -164,10 +172,16 @@ def _redact_tree(
             if isinstance(node.get(key), str)
         )
         nested = f"{context} {own}".strip() if own else context
-        return {k: _redact_tree(v, redact, nested) for k, v in node.items()}
+        return {
+            k: _redact_tree(v, redact, nested, (*path, str(k)))
+            for k, v in node.items()
+        }
     if isinstance(node, (list, tuple)):
-        return [_redact_tree(v, redact, context) for v in node]
+        return [_redact_tree(v, redact, context, path) for v in node]
     if isinstance(node, (int, float)) and not isinstance(node, bool):
+        if not any(key in _CLAIM_VALUE_KEYS for key in path):
+            # Not a claim value: a count, a line number, an iteration budget.
+            return node
         # A blocking gate reports the offending claim as BOTH a raw snippet
         # and a parsed number (claim_validator.Claim.value), so redacting only
         # the strings would ship the withheld value as a JSON float one key
