@@ -147,7 +147,23 @@ class InferenceError(RuntimeError):
     pass
 
 
-def _normalize_openai_messages(messages: list[dict]) -> list[dict]:
+def _thinking_mode_enabled(profile: ModelProfile | None) -> bool:
+    """True when the profile sends DeepSeek's `thinking: {type: enabled}` payload.
+
+    In that mode every assistant `tool_calls` message in the history must
+    carry a `reasoning_content` key, including turns the platform synthesized
+    without calling the model (loop.py pre-LLM direct routes and forced chain
+    steps). Live probe 2026-09-02 against deepseek-v4-pro: missing key -> HTTP
+    400 "must be passed back"; empty string -> HTTP 200.
+    """
+    extra = getattr(profile, "extra_payload", None) or {}
+    thinking = extra.get("thinking") if isinstance(extra, dict) else None
+    return isinstance(thinking, dict) and thinking.get("type") == "enabled"
+
+
+def _normalize_openai_messages(
+    messages: list[dict], *, thinking_mode: bool = False
+) -> list[dict]:
     normalized: list[dict] = []
     for message in messages:
         role = message.get("role", "user")
@@ -192,6 +208,13 @@ def _normalize_openai_messages(messages: list[dict]) -> list[dict]:
             }
             if reasoning_text:
                 msg["reasoning_content"] = reasoning_text
+            elif thinking_mode:
+                # Platform-synthesized tool turn (no model call produced it).
+                # DeepSeek thinking mode rejects the request when the key is
+                # absent from an assistant tool_calls message and accepts an
+                # empty string, which is also the honest value: no reasoning
+                # was generated for this turn.
+                msg["reasoning_content"] = ""
             normalized.append(msg)
             continue
 
@@ -609,7 +632,11 @@ class OpenAICompatibleBackend(LLMBackend):
         payload_messages = []
         if system:
             payload_messages.append({"role": "system", "content": system})
-        payload_messages.extend(_normalize_openai_messages(messages))
+        payload_messages.extend(
+            _normalize_openai_messages(
+                messages, thinking_mode=_thinking_mode_enabled(profile)
+            )
+        )
 
         headers = {"Content-Type": "application/json"}
         if key:
