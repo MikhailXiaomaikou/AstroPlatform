@@ -63,9 +63,12 @@ Measure changing counts with `scripts/stats.sh`; do not copy old numbers.
   specialized notation; include detail needed to assess the conclusion.
 - State assumptions and consequential tradeoffs. Ask only when missing
   information materially changes the goal, scientific interpretation, or
-  authorization. Once a plan is approved, carry it through.
+  authorization and cannot be resolved from available evidence. A request
+  to implement, fix, or deliver authorizes the necessary local work; explain
+  consequential choices and proceed without a separate plan approval.
 - A remark such as "note X" is context unless it clearly asks for a change.
-  Do not turn it into an unrelated feature or rename.
+  Do not turn it into an unrelated feature or rename, or treat it as a
+  cancellation of work already authorized.
 - Keep progress updates brief. Report what changed, what was verified, and
   what remains unresolved. A status question calls for a short answer, then
   continued work.
@@ -75,6 +78,26 @@ Measure changing counts with `scripts/stats.sh`; do not copy old numbers.
   messages use English; intentional localized UI stays bilingual.
 - Product replies and `run_python` output have their own English-only contract
   in `base.md`; do not confuse it with developer conversation.
+
+### Carry long tasks to completion
+
+- Continue through implementation, scoped fixes, conflict resolution,
+  verification, and authorized delivery. Do not end at a plan, partial
+  result, or offer to continue while useful authorized work remains.
+- Resolve routine implementation choices from repository conventions and
+  evidence. After a failure, investigate and try reasonable alternatives
+  within scope; continue independent work while a genuine blocker remains.
+  Ask one focused question only when missing input or authority is required,
+  after making the decision concrete. Do not loop on an unchanged failure.
+- Preserve a recoverable record of the goal, decisions, branch/version,
+  completed checks, and remaining work. Use it to resume after interruptions
+  or context loss without restarting or silently dropping unfinished items.
+- Treat new messages as steering unless the user clearly cancels or replaces
+  the task. A status question gets a brief answer followed by continued work.
+  Report completed, blocked, and unverified items accurately.
+- Respect review-only, test-only, local-only, no-commit, and no-push limits.
+  Greater autonomy never relaxes scientific invariants, evidence standards,
+  required tests, protected-branch rules, or tool permissions.
 
 ## Editing and ownership
 
@@ -212,12 +235,21 @@ The full backend suite is a pre-commit gate for backend/runtime changes.
 ## Git and deployment
 
 - Use a feature branch. Do not push directly to protected `main`.
-- Before a commit, show scope, verification, and proposed message; obtain
-  approval unless already authorized. Unattended work may commit only
-  pre-approved changes.
-- Push and merge require explicit authorization. After an authorized push,
-  watch required CI. Merge only with authorization and passing checks;
-  never force-push without authorization.
+- Implementation and repair requests authorize the necessary local commits
+  after required checks. Briefly report scope, verification, and commit
+  message; do not stop for separate approval of each commit.
+- A request for remote delivery or to create, update, or fix a PR authorizes
+  ordinary pushes to that task's feature branch, PR creation/updates, and
+  following required CI through scoped fixes. Preserve existing user work.
+- Merge or deploy when the user clearly requests that operation and target,
+  and the relevant checks pass. Existing authorization persists through
+  necessary fixes and verification; do not ask again for every step.
+  A merge-readiness review, a request for greater autonomy, or a change to
+  these rules does not itself request a merge or deployment.
+- Ask before overwriting unrelated work or remote history, destroying user
+  data, incurring new costs, or communicating with third parties outside
+  the existing request. Complete independent preparation first. Honor any
+  explicit narrower limits; unattended work uses the same authorization.
 - Preserve unrelated work when synchronizing branches. Report branch and
   unpushed status at handoff.
 - Read `render.yaml` and `docker-compose.yml` before deployment changes.
