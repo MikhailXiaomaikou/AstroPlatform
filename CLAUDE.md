@@ -26,8 +26,8 @@ registered data, and tested execution paths.
   restrictive prompts, and exit gates. General-agent architecture,
   `research environment as the top-level architecture`, dynamic or fused
   tools, and an eight-role alliance remain rejected directions.
-- Claims about model behavior need a pre-registered task file, committed
-  sha256, and results separated by `llm_calls` and
+- Measure before engineering behaviour: claims about model behavior need a
+  pre-registered task file, committed sha256, and results separated by `llm_calls` and
   `LIGHTWEIGHT_VERIFICATION_ENABLED`. Build `exploration_phase_enabled` only
   if v03 finds `premature_stop >= 25%` on open tasks and no single-mechanism
   arm resolves it.
@@ -157,8 +157,9 @@ equivalent GitHub API). Red scheduled suites take priority. The same error
 across two runs is a product defect: check existing triage and file an issue
 that day with authorization.
 
-Behavior changes may merge only when both suites are green and HEAD has a
-rerun baseline at `.local/standard-astro-v02-natural/rerun_<rev>_summary.json`.
+Instrument-first: behavior changes may merge only when both suites are green
+and HEAD has a rerun baseline at
+`.local/standard-astro-v02-natural/rerun_<rev>_summary.json`.
 The sole exception repairs the failing instrument itself: focused and full
 deterministic tests must pass, and the next scheduled run is its acceptance.
 
