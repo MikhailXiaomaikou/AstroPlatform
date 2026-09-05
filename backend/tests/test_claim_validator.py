@@ -2144,3 +2144,692 @@ def test_data_rows_still_populate_universe():
     payload = {"result": {"rows": [{"mag": 12.3}, {"mag": 13.1}]}}
     universe = set(_iter_numeric_values(payload))
     assert 12.3 in universe and 13.1 in universe
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-02 (review H9): a bare hypothesis / forecast noun must not wash a
+# strong cosmology conclusion through the conclusion gate.
+# ---------------------------------------------------------------------------
+
+
+def test_bare_hypothesis_or_forecast_noun_does_not_wash_strong_conclusion() -> None:
+    from app.services.claim_validator import (
+        _strong_conclusion_from_sentence,
+        scientific_conclusion_scope_violations,
+    )
+
+    washing = [
+        "Our hypothesis is confirmed: the Hubble tension is resolved by a local void.",
+        "Consistent with our hypothesis, the data reject LCDM and dark energy evolves.",
+        "The forecast is now confirmed: the Hubble tension is resolved by a local void.",
+        "We hypothesise that the Hubble tension is resolved by a local void.",
+        "我们的假设得到证实：哈勃张力已被局部空洞解决。",
+        "预测已被证实：哈勃张力已被局部空洞解决。",
+    ]
+    for sentence in washing:
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+        assert scientific_conclusion_scope_violations(sentence, []), sentence
+
+    hedged = [
+        "Hypothesis: a local void resolves the Hubble tension.",
+        "**Hypothesis:** a local void resolves the Hubble tension.",
+        "- Hypothesis: a local void resolves the Hubble tension.",
+        "A local void resolving the Hubble tension is a hypothesis worth testing.",
+        "The model forecast that the Hubble tension is resolved once calibration improves.",
+        "假设：局部空洞解决哈勃张力。",
+        "预测新的标定将解决哈勃张力。",
+    ]
+    for sentence in hedged:
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+
+def test_hypothesis_narrowing_is_a_strict_subset_of_the_old_exemption() -> None:
+    """The narrowed hedge must never exempt a form the bare-noun alternation
+    did not already exempt. "forecasts that" (plural) and 预计 were outside
+    \bforecast\b / 预测 at origin/main, so they stay non-exempt here; only the
+    label and predicate forms that contained the bare noun survive."""
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    for sentence in (
+        "The model forecasts that the Hubble tension is resolved once calibration improves.",
+        "预计新的标定将解决哈勃张力。",
+        # The predicate form admits only the two nouns main exempted as bare
+        # words, in the singular.  "conjecture", "prediction" and 猜想 were
+        # never exempt on main and an earlier revision of this branch quietly
+        # admitted them (audit 2026-09-03); plurals were never exempt either.
+        "Our conjecture is that a local void resolves the Hubble tension.",
+        "Our prediction is that a local void resolves the Hubble tension.",
+        "我们的猜想是局部空洞解决哈勃张力。",
+        "Our hypotheses are that a local void resolves the Hubble tension.",
+        "Our forecasts are that the Hubble tension is resolved after recalibration.",
+    ):
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+    # And the forms that DO survive are exactly the bare-noun ones main had.
+    for sentence in (
+        "Our hypothesis is that a local void resolves the Hubble tension.",
+        "Our forecast is that the Hubble tension is resolved after recalibration.",
+        "我们的假设是局部空洞解决哈勃张力。",
+        "我们的预测是局部空洞解决哈勃张力。",
+    ):
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+
+def test_hypothesis_label_regex_is_linear_on_a_pathological_prefix() -> None:
+    """CodeQL py/polynomial-redos: the first draft wrote the bold marker as an
+    optional group between two ``\\s*`` runs, which backtracks polynomially on
+    "hypothesis" followed by a long whitespace run.  The reply text is
+    attacker-influenced, so the shape matters, not just the result."""
+    import time
+
+    from app.services.claim_validator import _HYPOTHESIS_LABEL_RE
+
+    pathological = "hypothesis" + " " * 60_000 + "!"
+    started = time.perf_counter()
+    assert _HYPOTHESIS_LABEL_RE.search(pathological) is None
+    assert time.perf_counter() - started < 0.5
+
+
+def test_hedge_phrase_does_not_launder_a_confirmed_conclusion() -> None:
+    """A hedge word plus a confirmation in the same sentence is an assertion,
+    not a hypothesis: "The forecast that X is resolved is now confirmed"
+    must not skip the attestation requirement (review 2026-09-03)."""
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    for sentence in (
+        "The forecast that the Hubble tension is resolved is now confirmed.",
+        "This is a hypothesis worth testing, and the Hubble tension is resolved "
+        "by a local void as now confirmed.",
+        "Hypothesis: confirmed - the Hubble tension is resolved by a local void.",
+        "假设：已被证实，哈勃张力被局部空洞解决。",
+    ):
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+    # Unrelated pre-existing gap, recorded so it is not mistaken for this
+    # change: the strong-conclusion patterns require "Hubble tension ...
+    # resolved" in that order, so "a local void resolving the Hubble tension"
+    # is not detected as a conclusion at all, with or without a confirmation.
+    assert (
+        _strong_conclusion_from_sentence(
+            "A local void resolving the Hubble tension is now confirmed."
+        )
+        is None
+    )
+
+    # A hedge without a confirmation is still a hedge.
+    for sentence in (
+        "Hypothesis: a local void resolves the Hubble tension.",
+        "The model forecast that the Hubble tension is resolved once calibration improves.",
+    ):
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+
+def test_hypothesis_label_accepts_nested_markdown_markers() -> None:
+    """``- **Hypothesis:** ...`` is the shape a model actually writes; missing
+    it turned an explicitly labelled hypothesis into a blocked conclusion."""
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    for sentence in (
+        "- **Hypothesis:** a local void resolves the Hubble tension.",
+        "* **Hypothesis:** a local void resolves the Hubble tension.",
+        "> **Hypothesis:** a local void resolves the Hubble tension.",
+        "1. **Hypothesis:** a local void resolves the Hubble tension.",
+        "- **Hypothesis**: a local void resolves the Hubble tension.",
+        "**Hypothesis:** a local void resolves the Hubble tension.",
+        "- Hypothesis: a local void resolves the Hubble tension.",
+    ):
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+
+def test_a_confirmation_of_an_unrelated_premise_keeps_the_hedge() -> None:
+    """The confirmation guard must qualify the conclusion, not any clause:
+    "Although the calibration is confirmed, there is no evidence the Hubble
+    tension is resolved" is a denial, and blocking it is a false kill
+    (review 2026-09-03)."""
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    for sentence in (
+        "Although the calibration is confirmed, there is no evidence the Hubble tension is resolved.",
+        "The pipeline is confirmed, but we cannot conclude that the Hubble tension is resolved.",
+        "The instrument model is confirmed; the data do not show that dark energy evolves.",
+    ):
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+    # The laundering shapes stay flagged.
+    for sentence in (
+        "The forecast that the Hubble tension is resolved is now confirmed.",
+        "Our hypothesis is confirmed: the Hubble tension is resolved by a local void.",
+    ):
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+
+def test_chinese_hypothesis_label_survives_markdown_markers() -> None:
+    """The English label matcher learned list and bold markers; the Chinese
+    one is written in the same forms and must not be blocked."""
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    for sentence in (
+        "- **假设：** 局部空洞解决哈勃张力。",
+        "* 假设：局部空洞解决哈勃张力。",
+        "1. **假设：** 局部空洞解决哈勃张力。",
+        "> 假设：局部空洞解决哈勃张力。",
+        "假设：局部空洞解决哈勃张力。",
+    ):
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+    assert _strong_conclusion_from_sentence(
+        "我们的假设得到证实：哈勃张力已被局部空洞解决。"
+    ) is not None
+
+
+def test_hypothesis_label_accepts_a_dash_separator() -> None:
+    """A Markdown label can be closed by a dash instead of a colon.
+
+    ``**Hypothesis** -- a local void ...`` is the same anchored label as
+    ``**Hypothesis:** a local void ...``; requiring the colon turned it into a
+    blocked conclusion (Codex review 2026-09-04, thread fJuvl).  origin/main
+    exempts every one of these through the bare noun this branch narrowed.
+    Only the anchored label form learns the dash: a dash in the middle of a
+    sentence is ordinary punctuation, so a confirmed hypothesis set off by
+    dashes stays a strong conclusion.
+    """
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    for sentence in (
+        "**Hypothesis** — a local void resolves the Hubble tension.",
+        "- **Hypothesis** — a local void resolves the Hubble tension.",
+        "**Hypothesis** - a local void resolves the Hubble tension.",
+        "**Hypothesis** – a local void resolves the Hubble tension.",
+        "**Hypothesis —** a local void resolves the Hubble tension.",
+        "Hypothesis — a local void resolves the Hubble tension.",
+        "1. Hypothesis—a local void resolves the Hubble tension.",
+        "假设——局部空洞解决哈勃张力。",
+        "- **假设**——局部空洞解决哈勃张力。",
+        "- **假设——** 局部空洞解决哈勃张力。",
+        "假设—局部空洞解决哈勃张力。",
+    ):
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+    # A dash that is not the label's separator does not label the sentence.
+    for sentence in (
+        "The hypothesis — a local void resolves the Hubble tension — is confirmed.",
+        # The reviewer's "Our hypothesis - that the void resolves it - is now
+        # confirmed." names no recognised conclusion (no "Hubble tension"),
+        # so it is exempt on origin/main and here alike; this is the same
+        # sentence with the conclusion the gate actually reads.
+        "Our hypothesis - that the void resolves the Hubble tension - is now confirmed.",
+        "Hypothesis-driven analysis resolves the Hubble tension.",
+        "我们的假设——局部空洞解决哈勃张力——已被证实。",
+        # The Chinese label's confirmation reader learns the dash with the
+        # label: "假设：已被证实，X" is caught, so its dash twin is caught too
+        # (verifier 2026-09-04, thread fJuvl).
+        "假设——已被证实，哈勃张力被局部空洞解决。",
+        "假设—已被证实，哈勃张力被局部空洞解决。",
+        "- **假设——** 已被证实，哈勃张力被局部空洞解决。",
+        "假设——已证实：哈勃张力被局部空洞解决。",
+    ):
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+
+def test_a_denial_of_another_topic_does_not_wash_a_confirmed_conclusion() -> None:
+    """An explicit denial only restores the exemption it actually governs.
+
+    The denial was matched against the whole sentence, so a denial about an
+    unrelated subject cancelled the confirmation rule and let a confirmed
+    conclusion through untouched (Codex review 2026-09-03).  The denial is now
+    read in the clause that holds the conclusion; the confirmation and the
+    hedge stay sentence-scoped, so this can only remove an exemption.
+    """
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    washed = [
+        "Although there is no evidence for spatial curvature, our forecast "
+        "is confirmed: the Hubble tension is resolved by a local void.",
+        "There is no evidence for a neutrino mass, and the forecast is now "
+        "confirmed: the Hubble tension is resolved by a local void.",
+    ]
+    for sentence in washed:
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+    # A denial that DOES govern the conclusion still exempts it, and so does
+    # every other shape the exemption was built for.
+    preserved = [
+        "Although the calibration is confirmed, there is no evidence the "
+        "Hubble tension is resolved.",
+        "There is no evidence that the Hubble tension is resolved by a local void.",
+        "Hypothesis: a local void resolves the Hubble tension.",
+        "A local void may resolve the Hubble tension.",
+        "没有证据表明哈勃张力已解决。",
+    ]
+    for sentence in preserved:
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+
+def test_narrowing_did_not_take_ordinary_hedges_with_it() -> None:
+    """Two exemptions that main had and the H9 narrowing dropped.
+
+    ``Our hypothesis is that X`` is ordinary hedged prose; only the bare noun
+    beside a confirmation was meant to stop washing.  And ``the data do not
+    resolve the Hubble tension`` is a denial the hedge vocabulary already
+    recognised, but the denial vocabulary did not, so scoping the denial to
+    the conclusion's clause turned it into a strong conclusion whenever
+    anything else in the sentence was confirmed (Codex review 2026-09-03).
+
+    Both are restored here WITHOUT reopening the washing hole: the
+    confirmation rule still cancels a hedge, so every washed sentence below
+    stays a violation.
+    """
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    exempt = [
+        "Our hypothesis is that a local void resolves the Hubble tension.",
+        "Although the calibration is confirmed, the data do not resolve the "
+        "Hubble tension.",
+        "The data do not resolve the Hubble tension.",
+        "This is a hypothesis worth testing: a local void resolves the Hubble tension.",
+        "Although the calibration is confirmed, there is no evidence the "
+        "Hubble tension is resolved.",
+    ]
+    for sentence in exempt:
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+    violations = [
+        # The verb form is deliberately not exempt (2026-09-02 user decision).
+        "We hypothesise that a local void resolves the Hubble tension.",
+        "Our hypothesis is confirmed: the Hubble tension is resolved by a local void.",
+        "The forecast is now confirmed: the Hubble tension is resolved by a local void.",
+        "Although there is no evidence for spatial curvature, our forecast is "
+        "confirmed: the Hubble tension is resolved by a local void.",
+        "The model forecasts that a local void resolves the Hubble tension.",
+        "The Hubble tension is resolved by a local void.",
+    ]
+    for sentence in violations:
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+
+def test_the_hedge_decision_is_made_in_the_conclusion_clause() -> None:
+    """A sentence can carry a denied conclusion AND an asserted one.
+
+    Three findings, one root cause (Codex review 2026-09-03): every term of
+    the hedge decision -- the hedge, the confirmation that cancels it, the
+    denial that restores it -- describes a specific proposition, and reading
+    any of them across the whole sentence attached it to the wrong one.  The
+    detector also stopped at the first conclusion it matched, so a denied
+    curvature claim masked an asserted dark-energy one in the same sentence.
+
+    A confirmation in an EARLIER clause still cancels the hedge when what it
+    confirms is the hypothesis itself; confirming some other premise does not.
+    """
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    asserted = [
+        # A denied curvature claim no longer masks the asserted dark-energy one.
+        "Although there is no evidence for spatial curvature, our forecast is "
+        "confirmed: dark energy evolves with time.",
+        # The Hubble regex spans the comma, so the clause is taken from the
+        # conclusion's end, not its whole span.
+        "There is no evidence the Hubble tension is caused by calibration, but "
+        "our forecast is confirmed: a local void resolves the Hubble tension.",
+        "Although there is no evidence for spatial curvature, our forecast is "
+        "confirmed: the Hubble tension is resolved by a local void.",
+        # A confirmation of the hypothesis itself still cancels the hedge,
+        # in either language.
+        "Our hypothesis is confirmed: the Hubble tension is resolved by a local void.",
+        "The forecast is now confirmed: the Hubble tension is resolved by a local void.",
+        "假设：已被证实，哈勃张力被局部空洞解决。",
+        "The forecast that the Hubble tension is resolved is now confirmed.",
+        "Hypothesis: confirmed - the Hubble tension is resolved by a local void.",
+    ]
+    for sentence in asserted:
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+    hedged = [
+        # Confirming a PREMISE leaves the hedge standing.
+        "The calibration is confirmed, while our hypothesis is that a local "
+        "void resolves the Hubble tension.",
+        "The calibration is confirmed, and the Hubble tension may be resolved.",
+        # A hedge that introduces the conclusion through a colon labels the
+        # whole sentence, as long as it carries no confirmation of its own.
+        "This is a hypothesis worth testing: a local void resolves the Hubble tension.",
+        "Although the calibration is confirmed, there is no evidence the "
+        "Hubble tension is resolved.",
+        "There is no evidence that dark energy evolves with time.",
+        "Dark energy may evolve with time.",
+    ]
+    for sentence in hedged:
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+
+def test_a_parenthetical_and_an_unpunctuated_coordination_are_read_correctly() -> None:
+    """Two more clause-boundary errors, both false kills (Codex review 2026-09-03).
+
+    A comma pair with no coordinating word is a parenthetical, not a clause
+    boundary: "The Hubble tension may, after recalibration, be resolved" was
+    reduced to " be resolved by a local void" and lost its own hedge.  The
+    hedge pattern also could not span the parenthetical -- a gap present on
+    main too -- so the modal now tolerates one interposed comma phrase.
+
+    And two propositions can be joined with no punctuation at all: "The
+    calibration is confirmed and our hypothesis is that X" stayed one clause,
+    so the confirmation of the premise cancelled the hedge on the hypothesis.
+    """
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    hedged = [
+        "The Hubble tension may, after recalibration, be resolved by a local void.",
+        "The Hubble tension may be resolved by a local void.",
+        "The calibration is confirmed and our hypothesis is that a local void "
+        "resolves the Hubble tension.",
+        "The calibration is confirmed, and the Hubble tension may be resolved.",
+    ]
+    for sentence in hedged:
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+    asserted = [
+        # The same parenthetical around an ASSERTION is still a conclusion.
+        "The Hubble tension is, after recalibration, resolved by a local void.",
+        "This is a hypothesis worth testing, and the Hubble tension is resolved "
+        "by a local void as now confirmed.",
+        "The Hubble tension is resolved by a local void.",
+    ]
+    for sentence in asserted:
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+
+def test_the_hedge_pattern_stays_linear_with_a_parenthetical() -> None:
+    """The interposed group is comma-anchored, so nothing splits ambiguously."""
+    import time
+
+    from app.services.claim_validator import _NONASSERTIVE_COSMOLOGY_CONTEXT_RE
+
+    timings = []
+    for size in (4000, 16000, 64000):
+        probe = "may" + " " * size + "," + "x" * size + "," + " " * size + "z"
+        started = time.perf_counter()
+        _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(probe)
+        timings.append(time.perf_counter() - started)
+    assert timings[-1] < 1.0
+
+
+def test_predicate_hedges_and_coordinated_predicates_survive() -> None:
+    """Three more false kills from the narrowing and the clause split.
+
+    ``Our forecast is that X`` is the same predicate shape as ``our
+    hypothesis is that X``; the Chinese ``我们的假设是 X`` had no equivalent
+    at all after the bare 假设 alternative was narrowed; and treating every
+    ``and`` as a clause boundary detached a coordinated predicate from its
+    own modal -- ``may weaken and ultimately be resolved`` lost the ``may``
+    (Codex review 2026-09-03).
+
+    ``and``/``yet`` now split only when a new SUBJECT follows, which is what
+    separates "and our hypothesis is that X" from "and ultimately be
+    resolved".
+    """
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    hedged = [
+        "Our forecast is that the Hubble tension is resolved after recalibration.",
+        "我们的假设是局部空洞解决哈勃张力。",
+        "The Hubble tension may weaken and ultimately be resolved by a local void.",
+        "The calibration is confirmed and our hypothesis is that a local void "
+        "resolves the Hubble tension.",
+    ]
+    for sentence in hedged:
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+    asserted = [
+        "The forecast is now confirmed: the Hubble tension is resolved by a local void.",
+        "假设：已被证实，哈勃张力被局部空洞解决。",
+        "哈勃张力被本地空洞解决。",
+        "The Hubble tension is resolved by a local void.",
+    ]
+    for sentence in asserted:
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+
+def test_an_adverb_in_the_auxiliary_and_a_shared_modal() -> None:
+    """Two more shapes, one in each direction (Codex review 2026-09-03).
+
+    ``has now been confirmed`` is as ordinary as ``has been confirmed``, and
+    the auxiliary pattern did not admit the adverb, so the confirmation was
+    missed and a laundered conclusion stayed exempt.
+
+    And one modal can scope two coordinated clauses: "The Hubble tension may
+    weaken and the remaining discrepancy be resolved by a local void" leaves
+    the second clause with a bare infinitive and no modal of its own.  Only a
+    bare infinitive triggers the lookback, so a second clause with its own
+    finite verb still stands alone.
+    """
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    asserted = [
+        "The forecast that the Hubble tension is resolved has now been confirmed.",
+        "Our hypothesis has now been confirmed: the Hubble tension is resolved "
+        "by a local void.",
+        # A finite verb after "and" is its own clause, hedge or not.
+        "The data may be noisy and the Hubble tension is resolved by a local void.",
+    ]
+    for sentence in asserted:
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+    hedged = [
+        "The Hubble tension may weaken and the remaining discrepancy be "
+        "resolved by a local void.",
+        "The Hubble tension may weaken and ultimately be resolved by a local void.",
+    ]
+    for sentence in hedged:
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+
+def test_a_coordinator_a_subject_bound_anchor_and_a_confirmed_denial() -> None:
+    """Four more false kills, each from reading the wrong clause (Codex review
+    2026-09-03).
+
+    PRRT_kwDORoeoE86etYLJ: ", and after repeated checks," starts with a
+    coordinating word, so it opens a new proposition rather than an aside;
+    reading it as a parenthetical reverted the clause to the sentence start,
+    where an unrelated confirmation cancelled "may be resolved".
+
+    PRRT_kwDORoeoE86etYLM: the dark-energy anchor was the LAST evolution word
+    in the sentence, which belonged to "galaxy formation evolves" in the
+    unrelated second clause, so the conclusion's own clause lost its "may".
+    The anchor now follows its subject, which also closes the mirror image:
+    a hedge in the OTHER clause no longer washes an asserted evolution.
+
+    PRRT_kwDORoeoE86eypXC: a confirmed forecast in an earlier clause cancelled
+    "our hypothesis is that" across a "while".  A prefix confirmation cancels
+    only when it introduces the conclusion clause: the prefix ends with a
+    colon or dash, or no coordinating word stands between the two.
+
+    PRRT_kwDORoeoE86eypXG asked for "confirmed / shown / found not to
+    resolve" to be read as a negative result.  That exemption was withdrawn
+    (2026-09-03, round eleven): every relaxation found after it -- "confirmed
+    not to resolve the S8 tension yet resolves the Hubble tension" and thirty
+    more -- was downstream of it, so the phrase is now read exactly as
+    origin/main reads it: no hedge.  The two sentences it used to exempt are
+    asserted below: "shown not to resolve" exactly as on main, and "Our
+    hypothesis is confirmed not to resolve" through the narrowed bare-noun
+    hedge (origin/main still exempts that one via the bare noun).  A
+    user-signed relaxation may reinstate them.
+    """
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    hedged = [
+        "The calibration is confirmed, and after repeated checks, the Hubble "
+        "tension may be resolved by a local void.",
+        "Dark energy may evolve with time, while galaxy formation evolves nonlinearly.",
+        "Our dark-energy forecast is confirmed, while our hypothesis is that a "
+        "local void may resolve the Hubble tension.",
+        # Confirming a premise still leaves the predicate hedge standing.
+        "The calibration is confirmed, while our hypothesis is that a local "
+        "void resolves the Hubble tension.",
+        # The anchor follows its subject in either clause order.
+        "Galaxy formation evolves nonlinearly, while dark energy may evolve with time.",
+    ]
+    for sentence in hedged:
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+    asserted = [
+        # 1: the same coordinator around an assertion; a real aside (no
+        # coordinating word) still reverts the clause to the confirmation.
+        "The calibration is confirmed, and after repeated checks, the Hubble "
+        "tension is resolved by a local void.",
+        "Our hypothesis is confirmed, after repeated checks, the Hubble tension "
+        "is resolved by a local void.",
+        "The Hubble tension is, after repeated checks, resolved by a local void.",
+        # 2: a hedge on the unrelated clause does not reach the dark-energy one.
+        "Dark energy evolves with time, while galaxy formation may evolve nonlinearly.",
+        "Galaxy formation may evolve nonlinearly, while dark energy evolves with time.",
+        "Galaxy formation evolves nonlinearly, and dark energy evolves with time.",
+        # 3: a confirmation that INTRODUCES the clause still cancels its hedge.
+        "Our hypothesis is confirmed: the Hubble tension is resolved by a local void.",
+        "The forecast is now confirmed: the Hubble tension is resolved by a local void.",
+        "假设：已被证实，哈勃张力被局部空洞解决。",
+        "Our hypothesis has now been confirmed: the Hubble tension is resolved "
+        "by a local void.",
+        "Our hypothesis is confirmed: a local void may resolve the Hubble tension.",
+        "Our hypothesis is confirmed, a local void may resolve the Hubble tension.",
+        "Our dark-energy forecast is confirmed, while the Hubble tension is "
+        "resolved by a local void.",
+        # 4: "confirmed / shown / found not to" is not a hedge (main parity;
+        # the round-seven exemption was withdrawn), and a confirmation OF the
+        # resolution is still a conclusion.
+        "Our hypothesis is confirmed not to resolve the Hubble tension.",
+        "The void model is shown not to resolve the Hubble tension.",
+        "Our hypothesis is confirmed to resolve the Hubble tension.",
+        "Our hypothesis is confirmed: a local void is shown to resolve the Hubble tension.",
+        "The void model is confirmed not to be ruled out and the Hubble tension "
+        "is resolved by a local void.",
+    ]
+    for sentence in asserted:
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+
+def test_a_confirmed_denial_is_read_as_main_reads_it() -> None:
+    """"confirmed / shown / found not to <verb>" is not a hedge.
+
+    Round seven read it as a negative result (PRRT_kwDORoeoE86eypXG).  Every
+    relaxation found since -- "The void model is confirmed not to resolve
+    the S8 tension yet resolves the Hubble tension", "... because it
+    resolves ...", "A void model confirmed not to resolve the S8 tension
+    still resolves ...", "Dark energy is confirmed not to evolve at low
+    redshift yet evolves at high redshift", an emphasised verb, a verbless
+    conclusion after the denial -- came from that one exemption, so it is
+    withdrawn and the phrase is read exactly as origin/main (3a7e6e4) reads
+    it.  The four negative-result sentences the PR body had disclosed as
+    exempt are caught again, as on main; a user-signed relaxation may
+    reinstate them later.  The denial forms main already had are untouched.
+
+    Known and disclosed, not pinned: "The void model is confirmed not to
+    resolve the S8 tension yet may resolve the Hubble tension" is caught
+    (main exempts it), because the confirmation in the clause cancels the
+    modal and only the withdrawn alternative used to restore it.  Reading
+    "confirmed not to" as a denial again is the exemption this test
+    withdraws, so that sentence waits for a user-signed decision.
+    """
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    asserted = [
+        # The four disclosed negative-result sentences, caught as on main.
+        "The void model is shown not to resolve the Hubble tension.",
+        "The void model is found not to alleviate the Hubble tension.",
+        "The void model is confirmed not to resolve the Hubble tension.",
+        "The data are confirmed not to favour spatial curvature.",
+        # The relaxations the exemption let through.
+        "The void model is confirmed not to resolve the S8 tension yet resolves "
+        "the Hubble tension.",
+        "The void model is confirmed not to resolve the S8 tension because it "
+        "resolves the Hubble tension instead.",
+        "A void model confirmed not to resolve the S8 tension still resolves the "
+        "Hubble tension.",
+        "Dark energy is confirmed not to evolve at low redshift yet evolves at "
+        "high redshift.",
+        "The void model is confirmed not to resolve the S8 tension yet "
+        "**resolves** the Hubble tension.",
+        "The void model is shown not to resolve the Hubble tension, which is "
+        "instead resolved by a local void.",
+        "The Hubble tension is resolved by a model confirmed not to resolve the "
+        "S8 tension.",
+        "The void model is confirmed not to resolve the S8 tension nor the "
+        "Hubble tension.",
+    ]
+    for sentence in asserted:
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence
+
+    # The denial forms main already had still hedge.
+    hedged = [
+        "The data do not resolve the Hubble tension.",
+        "The void model failed to resolve the Hubble tension.",
+        "There is no evidence that the Hubble tension is resolved by a local void.",
+        "The void model does not show that the Hubble tension is resolved.",
+    ]
+    for sentence in hedged:
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+
+def test_a_bare_infinitive_conjunct_inherits_the_modal_before_it() -> None:
+    """A conjunct with no finite verb takes its modal from the conjunct before.
+
+    "The Hubble tension may weaken, and the remaining discrepancy be resolved
+    by a local void" is one hedged prediction: "be resolved" is a bare
+    infinitive and "may" scopes over both conjuncts.  Splitting the sentence
+    at the comma left the second conjunct with no modal of its own, and the
+    lookback saw only " and", so an honest hedge was refused while
+    origin/main exempts it (Codex review 2026-09-03, round seven).
+
+    A conjunct whose verb is a bare infinitive -- be / get / become plus its
+    complement, or a bare stem such as "persist" -- inherits the modal of
+    the nearest earlier conjunct that has one, walking back across
+    consecutive bare-infinitive conjuncts.  A conjunct with a finite verb
+    inherits nothing, so "..., and a local void resolves it" stays caught:
+    main exempts it only because it reads whole sentences, and keeping it
+    caught is a tightening.  Only a modal is inherited, and a modal that a
+    confirmation cancelled is not.  A Chinese conjunct that 而 / 并 / 且
+    continues inherits 可能 the same way; a bare fullwidth comma does not.
+    """
+    from app.services.claim_validator import _strong_conclusion_from_sentence
+
+    hedged = [
+        "The Hubble tension may weaken, and the remaining discrepancy be "
+        "resolved by a local void.",
+        "The Hubble tension might weaken, or the remaining discrepancy be "
+        "resolved by a local void.",
+        "The Hubble tension may weaken, but the remaining discrepancy be "
+        "resolved by a local void.",
+        "The Hubble tension may weaken, and then be resolved by a local void.",
+        "The Hubble tension might weaken, and the remaining discrepancy get "
+        "resolved by a local void.",
+        "The Hubble tension could weaken, the S8 tension persist, and the "
+        "remaining discrepancy be resolved by a local void.",
+        "The Hubble tension might weaken, and, in fact, the remaining "
+        "discrepancy be resolved by a local void.",
+        "The Hubble tension may weaken and the remaining discrepancy be "
+        "resolved by a local void.",
+        "哈勃张力可能减弱，而剩余差异则被局部空洞解决。",
+    ]
+    for sentence in hedged:
+        assert _strong_conclusion_from_sentence(sentence) is None, sentence
+
+    asserted = [
+        # A finite verb in the conjunct: nothing is inherited.
+        "The Hubble tension may weaken, and a local void resolves it.",
+        "The Hubble tension may weaken, and the remaining discrepancy is "
+        "resolved by a local void.",
+        "The Hubble tension may weaken, and the remaining discrepancy has been "
+        "resolved by a local void.",
+        "The Hubble tension may weaken, and the remaining discrepancy is to be "
+        "resolved by a local void.",
+        "The Hubble tension could weaken, the S8 tension persists, and the "
+        "remaining discrepancy is resolved by a local void.",
+        # The walk back stops at the first conjunct with a finite verb; one
+        # with no modal, or with a cancelled one, gives nothing.
+        "The calibration is confirmed, the S8 tension persist, and the Hubble "
+        "tension be resolved by a local void.",
+        "The calibration is confirmed, and we require that the Hubble tension "
+        "be resolved by a local void.",
+        "Our hypothesis is confirmed: the Hubble tension may weaken, and the "
+        "remaining discrepancy be resolved by a local void.",
+        # A Chinese comma with no connective is a clause of its own.
+        "哈勃张力可能减弱，剩余的差异被局部空洞解决。",
+    ]
+    for sentence in asserted:
+        assert _strong_conclusion_from_sentence(sentence) is not None, sentence

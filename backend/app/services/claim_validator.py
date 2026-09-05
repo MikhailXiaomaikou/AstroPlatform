@@ -3612,6 +3612,12 @@ _NONASSERTIVE_COSMOLOGY_CONTEXT_RE = re.compile(
     # the sentence ("... evolves, and this result should appear in the
     # abstract") must not wash an assertive conclusion.
     r"(?:may|might|could|would|should)(?:\s+not)?"
+    # An interposed parenthetical is part of the same hedge: "may, after
+    # recalibration, be resolved" is "may be resolved" (Codex review
+    # 2026-09-03; a pre-existing gap, present on main too).  Comma-anchored
+    # and bounded, so nothing here can be split ambiguously with the
+    # whitespace runs around it.
+    r"(?:\s*,[^,;:\n]{0,40},)?"
     r"(?:\s+(?:be|been|have|still|also|yet|then|instead|plausibly|possibly|"
     r"eventually|partially|fully))*"
     r"\s+(?:evolv\w*|resolv\w*|alleviat\w*|eliminat\w*|indicat\w*|"
@@ -3619,15 +3625,133 @@ _NONASSERTIVE_COSMOLOGY_CONTEXT_RE = re.compile(
     r"show\w*|reject\w*|exclud\w*|rule\s+out|reconcil\w*|explain\w*|"
     r"remain\w*|persist\w*|disappear\w*|weaken\w*|strengthen\w*|point\w*|"
     r"hint\w*|deviat\w*|differ\w*|change\w*|shift\w*|vary\w*|help\w*)|"
-    r"hypothesis|forecast|"
+    # A hypothesis / forecast word hedges only in label or predicate form
+    # ("a hypothesis worth testing", "the model forecasts that ...").  The
+    # bare noun ("Our hypothesis is confirmed: the Hubble tension is
+    # resolved ...") must not wash an assertive conclusion (2026-09-02 review
+    # H9).  "we hypothesise that" is deliberately NOT exempt.  A
+    # sentence-initial "Hypothesis:" label is handled by
+    # _HYPOTHESIS_LABEL_RE in _strong_conclusion_from_sentence.
+    r"a\s+hypothesis\s+worth\s+testing|forecast\s+that|"
+    # "Our hypothesis is that X" is ordinary hedged prose that main
+    # exempted; the narrowing above dropped the predicate form by
+    # accident (Codex review 2026-09-03).  Restoring it cannot reopen
+    # the washing hole: "Our hypothesis is confirmed: X" carries a
+    # confirmed assertion, which cancels the hedge and keeps it a
+    # violation.  The verb form "we hypothesise that" stays NOT exempt.
+    # Singular nouns only, and only the two main already exempted as bare
+    # words: main's `\bhypothesis\b|\bforecast\b` never matched
+    # "hypotheses", "forecasts", "prediction" or "conjecture", so admitting
+    # them here would have been a relaxation the PR body denied (audit
+    # 2026-09-03).  The predicate form is a strict subset of the bare word.
+    r"(?:hypothesis|forecast)\s+(?:is|was)\s+that|"
+    # "confirmed / shown / found not to <verb>" is deliberately NOT a hedge.
+    # Round seven (PRRT_kwDORoeoE86eypXG) read it as a negative result, and
+    # every relaxation found afterwards -- "confirmed not to resolve the S8
+    # tension yet resolves the Hubble tension" and thirty more -- came from
+    # that one alternative, so it was withdrawn (2026-09-03) and the phrase
+    # is read exactly as origin/main reads it.  A user-signed relaxation may
+    # reinstate it; do not add it back as a fix.
     r"not\s+ruled\s+out|consistent\s+with\s+zero|does\s+not\s+evolve|"
     r"(?:is|are|remains?)\s+unresolved|(?:is|are)\s+not\s+(?:resolved|detected))\b",
     re.I,
 )
 _ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE = re.compile(
     r"(?:没有|并无|无)(?:统计显著|显著)?证据|证据不足|无法(?:得出|断定|证明)|"
-    r"不能(?:得出|断定|证明)|尚未|未能|是否|可能|或许|假设|预测|"
+    r"不能(?:得出|断定|证明)|尚未|未能|是否|可能|或许|"
+    r"^\s*假设[:：]|值得(?:检验|验证)的假设|预测[^。；;.!！？\n]{0,20}将|"
+    # The Chinese predicate form, counterpart of "our hypothesis is that X".
+    # Narrowing the bare 假设 alternative left ordinary hypothetical prose
+    # with no hedge at all (Codex review 2026-09-03).
+    # 猜想 was never exempt on main; 假设/预测 were exempt as bare words, so
+    # the predicate form is a strict subset of what main allowed.
+    r"(?:假设|预测)是|"
     r"仍未解决|没有解决|未(?:探测|检测)到|与零一致|不随时间演化|未被排除"
+)
+# Sentence-initial "Hypothesis:" (optionally bold or as a list item) marks the
+# whole sentence as a labelled hypothesis, not a conclusion.
+# The bold marker is part of each literal alternative rather than an optional
+# group between two \s* runs: the latter shape backtracks polynomially on
+# "hypothesis" followed by a long run of spaces (CodeQL py/polynomial-redos).
+# All three Markdown shapes a model actually writes are accepted, including a
+# bold span that swallows the colon inside a list item
+# ("- **Hypothesis:** ...", review 2026-09-03).
+# The label is closed by a colon or by a dash -- ASCII (also "--"), en dash or
+# em dash (also the Chinese "——"), with optional spaces around it.  Requiring
+# the colon turned "**Hypothesis** — a local void ..." into a blocked
+# conclusion (Codex review 2026-09-04, thread fJuvl).  An ASCII hyphen joined
+# to the next word is a compound ("Hypothesis-driven analysis ..."), not a
+# label.  Only this anchored label learns the dash: a dash in the middle of a
+# sentence ("The hypothesis — X — is confirmed") is ordinary punctuation.
+_HYPOTHESIS_LABEL_SEPARATOR = r"(?::|-+(?![A-Za-z0-9])|[\u2013\u2014]+)"
+_ZH_HYPOTHESIS_LABEL_SEPARATOR = r"(?:[:：]|\u2014+)"
+_HYPOTHESIS_LABEL_RE = re.compile(
+    r"^[ \t]*(?:(?:[-*>#]+|\d+[.)])[ \t]*)?"
+    r"(?:\*\*[ \t]*hypothesis[ \t]*" + _HYPOTHESIS_LABEL_SEPARATOR + r"[ \t]*\*\*"
+    r"|\*\*[ \t]*hypothesis[ \t]*\*\*[ \t]*" + _HYPOTHESIS_LABEL_SEPARATOR
+    + r"|hypothesis[ \t]*" + _HYPOTHESIS_LABEL_SEPARATOR
+    # The Chinese label is written in the same Markdown forms; recognising
+    # only the bare form blocked "- **假设：** ..." as a strong conclusion
+    # (review 2026-09-03).
+    + r"|\*\*[ \t]*假设[ \t]*" + _ZH_HYPOTHESIS_LABEL_SEPARATOR + r"[ \t]*\*\*"
+    r"|\*\*[ \t]*假设[ \t]*\*\*[ \t]*" + _ZH_HYPOTHESIS_LABEL_SEPARATOR
+    + r"|假设[ \t]*" + _ZH_HYPOTHESIS_LABEL_SEPARATOR + r")",
+    re.I,
+)
+# A confirmation only cancels a hedge when the sentence is not itself denying
+# the conclusion.  "Although the calibration is confirmed, there is no
+# evidence the Hubble tension is resolved" confirms an unrelated premise
+# (review 2026-09-03).
+_EXPLICIT_DENIAL_RE = re.compile(
+    r"\bno\s+(?:statistically\s+significant\s+)?evidence\b"
+    r"|\binsufficient\s+evidence\b"
+    r"|\bcan(?:not|'t)\s+conclude\b"
+    # The resolve-family verbs were missing here while
+    # _NONASSERTIVE_COSMOLOGY_CONTEXT_RE already treated them as a hedge, so
+    # reading the denial in the conclusion's clause turned "the data do not
+    # resolve the Hubble tension" into a strong conclusion whenever anything
+    # else in the sentence was confirmed (Codex review 2026-09-03).
+    r"|\bdo(?:es)?\s+not\s+(?:show|support|establish|favou?r|indicate"
+    r"|resolve|alleviate|eliminate|remove)\b"
+    r"|\bfailed?\s+to\s+(?:show|establish|detect|resolve|alleviate)\b"
+    # "confirmed / shown / found not to <verb>" is deliberately absent here
+    # too: see the note in _NONASSERTIVE_COSMOLOGY_CONTEXT_RE (withdrawn
+    # 2026-09-03).  "The void model is shown not to resolve the Hubble
+    # tension" is caught, as on main; "Our hypothesis is confirmed not to
+    # resolve the Hubble tension" is caught here through the narrowed
+    # bare-noun hedge (origin/main still exempts it via the bare noun).
+    r"|没有(?:统计显著|显著)?证据|证据不足|无法(?:得出|断定|证明)",
+    re.I,
+)
+# A hedge word does not hedge a sentence that also announces a confirmation:
+# "The forecast that X is resolved is now confirmed" is an assertion.  Checked
+# after the hedge patterns so it can only REMOVE an exemption.
+_CONFIRMED_ASSERTION_RE = re.compile(
+    r"\b(?:is|are|was|were|has|have|had|now)"
+    r"(?:\s+(?:now|since|already|finally|independently|subsequently))?"
+    r"(?:\s+been)?\s+(?:now\s+)?confirmed\b"
+    r"|\bconfirms?\s+that\b|\bconfirmed\s*[:\u2014-]"
+    r"|(?:得到|已被|已经?)证实|已证实",
+    re.I,
+)
+# A confirmation in an EARLIER clause cancels the hedge only when what it
+# confirms is the hypothesis itself ("Our forecast is confirmed: X",
+# "假设：已被证实，X").  A confirmation of some other noun ("The calibration is
+# confirmed, while our hypothesis is that X") confirms a premise and must
+# leave the hedge standing (Codex review 2026-09-03).
+# The Chinese label's confirmation is read through the same separator the
+# label itself accepts: once _HYPOTHESIS_LABEL_RE learned "假设——", reading
+# only "假设：" here left "假设——已被证实，X" exempt while "假设：已被证实，X"
+# stayed caught (verifier 2026-09-04, thread fJuvl).
+_CONFIRMED_HYPOTHESIS_RE = re.compile(
+    r"\b(?:hypothes[ei]s|forecasts?|predictions?|claims?|conjectures?)\b[^\n;]{0,24}?"
+    r"\b(?:is|are|was|were|has|have|had|now)"
+    r"(?:\s+(?:now|since|already|finally|independently|subsequently))?"
+    r"(?:\s+been)?\s+(?:now\s+)?confirmed\b"
+    r"|\bconfirms?\s+(?:the|our|this)\s+(?:hypothes[ei]s|forecast|prediction|claim)\b"
+    r"|^[^\n]{0,24}?(?:假设|预测|猜想)" + _ZH_HYPOTHESIS_LABEL_SEPARATOR
+    + r"[^\n]{0,12}?(?:得到|已被|已经?)?证实",
+    re.IGNORECASE,
 )
 _ZH_HUBBLE_TENSION_RESOLUTION_RE = re.compile(
     r"(?:哈勃|H\s*0)张力[^。；;.!！？\n]{0,80}(?:已)?(?:解决|缓解|消除|解除|终结)|"
@@ -3865,61 +3989,358 @@ def _validated_conclusion_attestations(tool_results: Any) -> dict[str, dict[str,
     return indexed
 
 
-def _strong_conclusion_from_sentence(sentence: str) -> dict[str, str | None] | None:
-    if (
-        not sentence
-        or "?" in sentence
-        or "？" in sentence
-        or _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(sentence)
-        or _ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(sentence)
-    ):
-        return None
-    kind: str | None = None
-    subject: str | None = None
-    baseline: str | None = None
-    alternative: str | None = None
-    if _HUBBLE_TENSION_RESOLUTION_RE.search(sentence) or _ZH_HUBBLE_TENSION_RESOLUTION_RE.search(sentence):
-        kind = "hubble_tension_resolution"
-        subject = "hubble_tension"
-    elif _SPATIAL_CURVATURE_CONCLUSION_RE.search(sentence) or _ZH_SPATIAL_CURVATURE_CONCLUSION_RE.search(sentence):
-        kind = "spatial_curvature_preference"
-        subject = "spatial_curvature"
-        baseline = "lcdm"
-        alternative = "ok_lcdm"
-    elif _NEUTRINO_MASS_DETECTION_RE.search(sentence) or _ZH_NEUTRINO_MASS_DETECTION_RE.search(sentence):
-        kind = "neutrino_mass_detection"
-        subject = "neutrino_mass"
-        baseline = "lcdm"
-        alternative = "lcdm_mnu"
-    elif _GENERAL_RELATIVITY_REJECTION_RE.search(sentence) or _ZH_GENERAL_RELATIVITY_REJECTION_RE.search(sentence):
-        kind = "general_relativity_rejection"
-        subject = "general_relativity"
-        baseline = "gr"
-        alternative = "modified_gravity"
-    elif _BASELINE_REJECTION_RE.search(sentence) or _ZH_BASELINE_REJECTION_RE.search(sentence):
-        kind = "baseline_rejection"
-    elif _MODEL_PREFERENCE_RE.search(sentence) or _ZH_MODEL_PREFERENCE_RE.search(sentence):
-        kind = "extended_model_preference"
-    elif _dark_energy_evolution_claim(sentence) or _ZH_DARK_ENERGY_EVOLUTION_RE.search(sentence):
-        kind = "dark_energy_evolution"
-    if kind is None:
-        return None
-    if baseline is None and kind not in _CONCLUSION_CLAIM_SUBJECTS:
-        baseline = "lcdm" if _LCDM_RE.search(sentence) else None
-    if alternative is None and kind not in _CONCLUSION_CLAIM_SUBJECTS:
-        alternative = (
-            "w0wa_cdm"
-            if _W0WA_RE.search(sentence)
-            else "wcdm"
-            if _WCDM_RE.search(sentence)
-            else None
+# A conclusion sits in one clause of its sentence.  Splitting on these marks
+# is only used to decide WHICH clause an explicit denial governs; it never
+# decides whether a conclusion exists.
+# Clause boundaries for the hedge decision.  Punctuation, and the
+# coordinating words that join two propositions without any: "The
+# calibration is confirmed and our hypothesis is that X" is two
+# propositions and was being read as one, so the confirmation of the first
+# cancelled the hedge on the second (Codex review 2026-09-03).
+_CONCLUSION_CLAUSE_BREAK_RE = re.compile(
+    r"[,;:\u2014\uff0c\uff1b\uff1a]"
+    r"|\b(?:but|while|whereas|although|though|however|so\s+that)\b"
+    # "and"/"yet" split a sentence into propositions only when a new SUBJECT
+    # follows.  Treating every "and" as a boundary detached a coordinated
+    # predicate from its own modal -- "may weaken and ultimately be resolved"
+    # lost the "may" (Codex review 2026-09-03).
+    r"|\b(?:and|yet)\b(?=\s+(?:the|a|an|our|its|their|his|her|this|that|these|"
+    r"those|it|we|they|he|she|there|no)\b)",
+    re.IGNORECASE,
+)
+# A comma pair with no coordinating word between them is a parenthetical, not
+# a clause boundary: "The Hubble tension may, after recalibration, be resolved
+# by a local void" was reduced to " be resolved by a local void" and lost its
+# own hedge (Codex review 2026-09-03).
+# A conjunct whose verb is a bare infinitive -- be / get / become plus its
+# complement, or a bare stem such as "persist" -- has no finite verb of its
+# own, so its modal (if any) came from a conjunct before it
+# (``_conjunct_inherits_a_modal``).  "been" is not a bare infinitive ("has
+# been resolved" is finite), and a stem after "to" is a marked infinitive.
+_BARE_INFINITIVE_RE = re.compile(
+    r"(?<!\bto\s)\b(?:(?:be|get|become)\s+\w"
+    r"|(?:remain|persist|weaken|strengthen|evolve|resolve)\b)",
+    re.IGNORECASE,
+)
+# The Chinese counterpart: a conjunct that 而 / 并 / 且 continues.  Chinese
+# marks the continuation on the connective, not on the verb.
+_ZH_CONTINUED_CONJUNCT_RE = re.compile(r"^\s*(?:而|并|且)")
+_MODAL_RE = re.compile(r"\b(?:may|might|could|would|should|can|will)\b", re.IGNORECASE)
+# A comma pair whose content STARTS with a coordinating word is not a
+# parenthetical either: ", and after repeated checks," in "The calibration is
+# confirmed, and after repeated checks, the Hubble tension may be resolved"
+# opens a new proposition.  Reading it as an aside reverted the clause to the
+# sentence start, where the unrelated confirmation cancelled the hedge (Codex
+# review 2026-09-03, PRRT_kwDORoeoE86etYLJ).  The same word list decides, in
+# _prefix_confirmation_introduces_the_clause, whether a confirmation in an
+# earlier clause introduces the conclusion or merely sits beside it.
+_COORDINATING_WORDS = r"(?:and|but|while|whereas|although|though|yet|so)"
+_COORDINATING_WORD_RE = re.compile(rf"\b{_COORDINATING_WORDS}\b", re.IGNORECASE)
+_PARENTHETICAL_RE = re.compile(
+    rf",(?!\s*{_COORDINATING_WORDS}\b)[^,;:\n]{{0,60}},$",
+    re.IGNORECASE,
+)
+# What the clause split leaves behind that carries no proposition: an empty
+# piece after a comma, or a coordinating word on its own.
+_BARE_CONJUNCT_RE = re.compile(rf"\s*{_COORDINATING_WORDS}?\s*", re.IGNORECASE)
+
+
+def _clause_bounds(sentence: str, start: int, end: int) -> tuple[int, int]:
+    """Offsets of the clause of ``sentence`` containing the span ``start:end``."""
+    left = 0
+    previous_left = 0
+    for mark in _CONCLUSION_CLAUSE_BREAK_RE.finditer(sentence):
+        if mark.end() > start:
+            break
+        # A comma that CLOSES a parenthetical is not a clause start: the
+        # clause reverts to where it began before the parenthetical opened.
+        head = sentence[:mark.end()]
+        parenthetical = _PARENTHETICAL_RE.search(head)
+        if parenthetical is not None and parenthetical.start() + 1 >= left:
+            left = previous_left
+            continue
+        previous_left = left
+        left = mark.end()
+    right = len(sentence)
+    after = _CONCLUSION_CLAUSE_BREAK_RE.search(sentence, end)
+    if after is not None:
+        right = after.start()
+    return left, right
+
+
+def _clause_around(sentence: str, start: int, end: int) -> str:
+    """The clause of ``sentence`` that contains the span ``start:end``."""
+    left, right = _clause_bounds(sentence, start, end)
+    return sentence[left:right]
+
+
+def _conjunct_inherits_a_modal(sentence: str, clause: str, clause_start: int) -> bool:
+    """True when ``clause`` has no finite verb and a conjunct before it has a modal.
+
+    "The Hubble tension may weaken, and the remaining discrepancy be resolved
+    by a local void" is one hedged prediction: "be resolved" is a bare
+    infinitive and "may" scopes over both conjuncts.  The clause split left
+    the second conjunct with no modal of its own, and reading only the piece
+    just before it (" and") lost the hedge; origin/main exempts the sentence
+    (Codex review 2026-09-03, round seven).
+
+    A conjunct whose verb is a bare infinitive (``_BARE_INFINITIVE_RE`` with
+    no finite modal) -- or, in Chinese, one that 而 / 并 / 且 continues --
+    inherits the modal of the nearest earlier conjunct that has one, walking
+    back across consecutive such conjuncts and the empty pieces the split
+    leaves behind.  The walk stops at the first conjunct with a finite verb
+    and reads it exactly as it would be read in its own clause: only a MODAL
+    hedge is inherited (a negation does not reach across a clause break),
+    and not one that a confirmation cancelled.  A conjunct with a finite
+    verb of its own inherits nothing: "..., and a local void resolves it"
+    stands alone.
+    """
+
+    def _has_no_finite_verb(text: str) -> bool:
+        return bool(
+            (_BARE_INFINITIVE_RE.search(text) and not _MODAL_RE.search(text))
+            or _ZH_CONTINUED_CONJUNCT_RE.match(text)
         )
-    return {
-        "kind": kind,
-        "subject": subject,
-        "baseline_model": baseline,
-        "alternative_model": alternative,
+
+    if not _has_no_finite_verb(clause):
+        return False
+    prefix = sentence[:clause_start]
+    pieces: list[tuple[int, str]] = []
+    start = 0
+    for mark in _CONCLUSION_CLAUSE_BREAK_RE.finditer(prefix):
+        pieces.append((start, prefix[start : mark.start()]))
+        start = mark.end()
+    pieces.append((start, prefix[start:]))
+    for piece_start, piece in reversed(pieces):
+        if _BARE_CONJUNCT_RE.fullmatch(piece) or _has_no_finite_verb(piece):
+            continue
+        confirmed = _CONFIRMED_ASSERTION_RE.search(piece) is not None or (
+            _prefix_confirmation_introduces_the_clause(sentence[:piece_start])
+        )
+        if confirmed:
+            return False
+        return any(
+            _MODAL_RE.match(match.group(0)) is not None
+            for match in _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.finditer(piece)
+        ) or any(
+            match.group(0) in ("可能", "或许")
+            for match in _ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE.finditer(piece)
+        )
+    return False
+
+
+def _dark_energy_evolution_anchor(sentence: str) -> int | None:
+    """Character offset just past the evolution word the claim is built on.
+
+    ``_dark_energy_evolution_claim`` is a token scan that returns a bool, so
+    the conclusion has no span to take a clause from.  The anchor is the
+    first evolution or variation word AFTER a "dark energy" / "equation of
+    state" subject, within the gap the detector pairs across: that is the
+    word the subject's own clause asserts.  Taking the LAST such word in the
+    sentence anchored "Dark energy may evolve with time, while galaxy
+    formation evolves nonlinearly" in the unrelated second clause, and the
+    conclusion lost its own "may" (Codex review 2026-09-03,
+    PRRT_kwDORoeoE86etYLM).  When no evolution word follows a subject (the
+    "evolving dark energy" order, or the w_a path, which has no subject
+    phrase) the last one in the sentence remains the anchor, as before.
+    """
+    records = _scientific_word_tokens(sentence)
+    tokens = [token for token, _, _ in records]
+    words = {
+        "evolve", "evolves", "evolved", "evolving", "dynamical",
+        "vary", "varies", "varied", "variation",
+        "timevarying", "timedependent", "varying", "dependent",
+        "wa", "nonzero",
     }
+    subject_ends: list[int] = []
+    for index in range(len(tokens)):
+        if tokens[index : index + 2] == ["dark", "energy"]:
+            subject_ends.append(records[index + 1][2])
+        elif tokens[index : index + 3] == ["equation", "of", "state"]:
+            subject_ends.append(records[index + 2][2])
+    end: int | None = None
+    for token, start, stop in records:
+        if token not in words:
+            continue
+        # The same 120-character gap _dark_energy_evolution_claim pairs across.
+        if any(0 <= start - subject_end <= 120 for subject_end in subject_ends):
+            return stop
+        end = stop
+    return end
+
+
+def _strong_conclusion_from_sentence(sentence: str) -> dict[str, str | None] | None:
+    """The first strong conclusion in ``sentence`` that its own clause asserts.
+
+    Every candidate is considered, not just the first that matches.  One
+    sentence can carry a DENIED conclusion and an ASSERTED one -- "Although
+    there is no evidence for spatial curvature, our forecast is confirmed:
+    dark energy evolves with time" -- and stopping at the first match reported
+    the denied curvature claim, whose clause is exempt, and never looked at
+    the dark-energy claim the sentence actually asserts (Codex review
+    2026-09-03).
+    """
+    if not sentence or "?" in sentence or "？" in sentence:
+        return None
+    for candidate in _conclusion_candidates(sentence):
+        kind, subject, baseline, alternative, conclusion_end = candidate
+        if _clause_hedges_the_conclusion(sentence, conclusion_end):
+            continue
+        if baseline is None and kind not in _CONCLUSION_CLAIM_SUBJECTS:
+            baseline = "lcdm" if _LCDM_RE.search(sentence) else None
+        if alternative is None and kind not in _CONCLUSION_CLAIM_SUBJECTS:
+            alternative = (
+                "w0wa_cdm"
+                if _W0WA_RE.search(sentence)
+                else "wcdm"
+                if _WCDM_RE.search(sentence)
+                else None
+            )
+        return {
+            "kind": kind,
+            "subject": subject,
+            "baseline_model": baseline,
+            "alternative_model": alternative,
+        }
+    return None
+
+
+def _conclusion_candidates(
+    sentence: str,
+) -> list[tuple[str, str | None, str | None, str | None, int | None]]:
+    """``(kind, subject, baseline, alternative, end offset)`` for every match.
+
+    Order is the historical priority order; the caller takes the first
+    candidate whose own clause asserts it.
+    """
+    found: list[tuple[str, str | None, str | None, str | None, int | None]] = []
+
+    def _end(*matches: "re.Match[str] | None") -> int | None:
+        for item in matches:
+            if item is not None:
+                return item.end()
+        return None
+
+    hubble = _end(
+        _HUBBLE_TENSION_RESOLUTION_RE.search(sentence),
+        _ZH_HUBBLE_TENSION_RESOLUTION_RE.search(sentence),
+    )
+    if hubble is not None:
+        found.append(("hubble_tension_resolution", "hubble_tension", None, None, hubble))
+    curvature = _end(
+        _SPATIAL_CURVATURE_CONCLUSION_RE.search(sentence),
+        _ZH_SPATIAL_CURVATURE_CONCLUSION_RE.search(sentence),
+    )
+    if curvature is not None:
+        found.append((
+            "spatial_curvature_preference", "spatial_curvature", "lcdm", "ok_lcdm", curvature,
+        ))
+    neutrino = _end(
+        _NEUTRINO_MASS_DETECTION_RE.search(sentence),
+        _ZH_NEUTRINO_MASS_DETECTION_RE.search(sentence),
+    )
+    if neutrino is not None:
+        found.append((
+            "neutrino_mass_detection", "neutrino_mass", "lcdm", "lcdm_mnu", neutrino,
+        ))
+    relativity = _end(
+        _GENERAL_RELATIVITY_REJECTION_RE.search(sentence),
+        _ZH_GENERAL_RELATIVITY_REJECTION_RE.search(sentence),
+    )
+    if relativity is not None:
+        found.append((
+            "general_relativity_rejection", "general_relativity", "gr",
+            "modified_gravity", relativity,
+        ))
+    baseline_rejection = _end(
+        _BASELINE_REJECTION_RE.search(sentence),
+        _ZH_BASELINE_REJECTION_RE.search(sentence),
+    )
+    if baseline_rejection is not None:
+        found.append(("baseline_rejection", None, None, None, baseline_rejection))
+    preference = _end(
+        _MODEL_PREFERENCE_RE.search(sentence),
+        _ZH_MODEL_PREFERENCE_RE.search(sentence),
+    )
+    if preference is not None:
+        found.append(("extended_model_preference", None, None, None, preference))
+    if _dark_energy_evolution_claim(sentence) or _ZH_DARK_ENERGY_EVOLUTION_RE.search(sentence):
+        zh = _ZH_DARK_ENERGY_EVOLUTION_RE.search(sentence)
+        # The English detector is a token scan with no span, so the last
+        # evolution word is the anchor its clause is built around.
+        found.append((
+            "dark_energy_evolution", None, None, None,
+            zh.end() if zh is not None else _dark_energy_evolution_anchor(sentence),
+        ))
+    return found
+
+
+def _clause_hedges_the_conclusion(sentence: str, conclusion_end: int | None) -> bool:
+    """True when the conclusion's own clause hedges, denies or labels it.
+
+    Every term describes a specific proposition, so all three are read in the
+    conclusion's clause: reading them across the whole sentence attached a
+    denial of another topic to a confirmed conclusion, and a confirmation of
+    another topic to a real hedge (Codex review 2026-09-03).  The clause is
+    taken from the conclusion's END, because the subject regexes may run
+    across a comma.
+
+    Two sentence-scoped exceptions, both of which label the WHOLE sentence:
+    a sentence-initial "Hypothesis:" marker, and a hedge that introduces the
+    conclusion through a colon ("This is a hypothesis worth testing: ...").
+    The colon prefix counts only when it carries no confirmation of its own,
+    which is what separates it from "our forecast is confirmed: ...".
+    """
+    if conclusion_end is None:
+        clause, clause_start = sentence, 0
+    else:
+        clause_start, clause_end = _clause_bounds(
+            sentence, max(0, conclusion_end - 1), conclusion_end
+        )
+        clause = sentence[clause_start:clause_end]
+    prefix = sentence[:clause_start]
+    confirmed = bool(
+        _CONFIRMED_ASSERTION_RE.search(clause)
+    ) or _prefix_confirmation_introduces_the_clause(prefix)
+    if confirmed and not _EXPLICIT_DENIAL_RE.search(clause):
+        return False
+    if _HYPOTHESIS_LABEL_RE.search(sentence):
+        return True
+    if _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(clause) or _ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(clause):
+        return True
+    # One modal can scope two coordinated conjuncts: "The Hubble tension may
+    # weaken, and the remaining discrepancy be resolved by a local void"
+    # leaves the second with a BARE infinitive and no modal of its own, so
+    # its hedge lives in a conjunct before it (Codex review 2026-09-03).
+    # Only a conjunct with no finite verb inherits, so "... and the Hubble
+    # tension IS resolved" still stands on its own.
+    if _conjunct_inherits_a_modal(sentence, clause, clause_start):
+        return True
+    if prefix.rstrip().endswith((":", "\uff1a")) and not _CONFIRMED_ASSERTION_RE.search(prefix):
+        return bool(
+            _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(prefix)
+            or _ZH_NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(prefix)
+        )
+    return False
+
+
+def _prefix_confirmation_introduces_the_clause(prefix: str) -> bool:
+    """True when a confirmed hypothesis in ``prefix`` introduces the clause after it.
+
+    "Our hypothesis is confirmed: X" and "假设：已被证实，X" confirm X itself.
+    "Our dark-energy forecast is confirmed, while our hypothesis is that X"
+    confirms one proposition and hedges another, and the coordinating word is
+    what says so; searching the whole prefix cancelled the hedge on X (Codex
+    review 2026-09-03, PRRT_kwDORoeoE86eypXC).  A confirmation introduces the
+    clause when the prefix ends with a colon or dash, or when no coordinating
+    word stands between the confirmation and the clause.
+    """
+    match = _CONFIRMED_HYPOTHESIS_RE.search(prefix)
+    if match is None:
+        return False
+    if prefix.rstrip().endswith((":", "\uff1a", "\u2014")):
+        return True
+    return _COORDINATING_WORD_RE.search(prefix, match.end()) is None
 
 
 def _attestation_matches_claim(
